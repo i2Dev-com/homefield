@@ -15,7 +15,11 @@ base: template://_images/ubuntu-24.04
 vmType: vz
 arch: aarch64
 cpus: 6
-memory: 12GiB
+# Apple's Virtualization.framework never takes back memory the guest has used,
+# and Linux fills spare RAM with page cache, so after a few jobs the VM holds
+# this whole amount on the Mac even when idle. Keep it near what jobs need
+# (observed peak ~4 GiB including cache), not "as much as can be spared".
+memory: 8GiB
 disk: 60GiB
 
 mounts: []
