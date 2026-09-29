@@ -176,6 +176,20 @@ service ports never appear there.
   be safe if a job starts during it. For that reason it never removes tagged
   images. After a service image version bump, clear the old tags by hand while
   idle: `limactl shell i2dev-ci-runner sudo docker image prune --all --force`.
+- **Host memory.** The VM process on the Mac ("Virtual Machine Service") sits
+  at roughly the configured `memory` even while idle. The guest fills spare RAM
+  with page cache, and Virtualization.framework does not return pages to the
+  host once the guest has used them; dropping caches in the guest does not
+  lower it either. The size is therefore the idle footprint: `memory` in
+  `vm/lima.yaml` is kept close to what jobs need. Restarting the VM while the
+  runner is idle resets the footprint until the next jobs refill the cache. To
+  resize an existing VM, while idle:
+  `limactl stop i2dev-ci-runner && limactl edit i2dev-ci-runner --memory 8 && limactl start i2dev-ci-runner`.
+  Queued PR jobs wait through the restart and are then picked up.
+  If `limactl stop` hangs ("did not receive an event with the `exiting`
+  status"), power the guest off cleanly with
+  `limactl shell i2dev-ci-runner sudo systemctl poweroff`, then clear the
+  leftover host agent with `limactl stop --force i2dev-ci-runner`.
 
 ## Moving a registration
 
