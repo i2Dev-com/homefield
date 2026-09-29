@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Lint & test
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Shellcheck
+        run: shellcheck vm/provision.sh verify-routing/tests/run.sh
+
+      - name: actionlint
+        run: |
+          bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+          ./actionlint -color
+
+      - name: verify_routing.py fixture suite
+        run: bash verify-routing/tests/run.sh
+
+      # The action as consumers call it, not just the script behind it: inputs
+      # through env, $GITHUB_ACTION_PATH resolution, composite wiring.
+      - name: Action against the clean fixture
+        uses: ./verify-routing
+        with:
+          workflows-dir: verify-routing/tests/base
+          expected: |
+            ci.yml:changes
+            ci.yml:checks
+
+      # And on this repo, which routes nothing: any runs-on that asks for the
+      # local runner here is a mistake.
+      - name: Action against this repo's workflows
+        uses: ./verify-routing

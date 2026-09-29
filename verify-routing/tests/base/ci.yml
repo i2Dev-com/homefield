@@ -1,0 +1,25 @@
+name: Fixture CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+jobs:
+  # A comment naming i2dev-ci and self-hosted must not count as routing.
+  changes:
+    runs-on: ${{ vars.CI_RUNNER == 'local' && github.event_name == 'pull_request' && github.actor != 'dependabot[bot]' && !startsWith(github.head_ref, 'dependabot/') && fromJSON('["self-hosted","linux","arm64","i2dev-ci"]') || 'ubuntu-latest' }}
+    steps:
+      - run: echo changes
+
+  checks:
+    needs: changes
+    runs-on: ${{ vars.CI_RUNNER == 'local' && github.event_name == 'pull_request' && github.actor != 'dependabot[bot]' && !startsWith(github.head_ref, 'dependabot/') && fromJSON('["self-hosted","linux","arm64","i2dev-ci"]') || 'ubuntu-latest' }}
+    steps:
+      - run: echo checks
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo docker
