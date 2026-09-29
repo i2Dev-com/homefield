@@ -16,10 +16,15 @@ guarantees that nothing else enforces:
      bring in unreviewed install scripts, and the local VM, unlike a hosted
      one, is not thrown away after the job.
 
-Any `runs-on` mentioning the routing label *or* `self-hosted` must equal the
-canonical expression. `self-hosted` matters on its own: GitHub gives a job any
-runner whose labels are a superset of the requested ones, so a bare
-`runs-on: self-hosted` would land on the local VM with none of the guards.
+Every `runs-on` must be either the canonical expression or a GitHub-hosted
+image name (ubuntu-*, windows-*, macos-*). It is an allowlist because the ways
+to reach the local runner are open-ended: GitHub matches labels
+case-insensitively and gives a job any runner whose labels are a superset of
+the requested ones, so `Self-Hosted`, `[linux, ARM64]` or `group: local-ci`
+all land on the VM with none of the guards. Anything not on the list fails,
+including an expression this check cannot evaluate and a multi-line `runs-on`
+(a list or mapping on the following lines). Write those on one line, or keep
+the job on a hosted image name.
 
 The set of opted-in jobs must equal EXPECTED exactly, so routing a job to the
 local runner is always a deliberate, reviewed change.
@@ -30,6 +35,11 @@ import argparse
 import os
 import re
 import sys
+
+# A GitHub-hosted image label, optionally quoted. Case-insensitive, as GitHub's
+# label matching is. None of these can name the local runner, whose labels are
+# self-hosted, Linux, ARM64 and the routing label.
+HOSTED = re.compile(r"""^(['"]?)(ubuntu|windows|macos)-[a-z0-9._-]+\1$""", re.IGNORECASE)
 
 
 def canonical_expression(label: str, arch: str) -> str:
@@ -110,17 +120,24 @@ def main() -> int:
                 m = re.match(r"^  ([A-Za-z0-9_-]+):\s*$", code)
                 if in_jobs and m:
                     job = m.group(1)
-                if args.label not in code and "self-hosted" not in code:
-                    continue
-                m = re.match(r"^\s*runs-on:\s*(.*?)\s*$", code)
                 where = f"{name}:{lineno} (job {job})"
+                m = re.match(r"^\s*runs-on:\s*(.*?)\s*$", code)
                 if not m:
-                    fail(f"{where}: self-hosted/{args.label} label outside a runs-on line")
+                    # A continuation line of a multi-line runs-on, or anything
+                    # else naming the runner. The runs-on line itself already
+                    # failed if it was multi-line; this names the label too.
+                    low = code.lower()
+                    if args.label.lower() in low or "self-hosted" in low:
+                        fail(f"{where}: self-hosted/{args.label} label outside a runs-on line")
                     continue
-                if m.group(1) != canonical:
+                value = m.group(1)
+                if HOSTED.match(value):
+                    continue
+                if value != canonical:
                     fail(
-                        f"{where}: runs-on differs from the canonical expression\n"
-                        f"         got:  {m.group(1)}\n         want: {canonical}"
+                        f"{where}: runs-on is neither a GitHub-hosted image nor the"
+                        " canonical expression\n"
+                        f"         got:  {value or '(multi-line)'}\n         want: {canonical}"
                     )
                     continue
                 found.append(f"{name}:{job}")

@@ -15,9 +15,12 @@ sed --version >/dev/null 2>&1 || SED_INPLACE=(sed -i '')
 pass=0
 fail=0
 
-# case <name> <want: pass|fail> <expected list> [sed expression]
+# case <name> <want: pass|fail> <expected list> [sed expression] [job to append]
+# The append form exists for multi-line YAML, which BSD and GNU sed cannot both
+# write through one `s` command. Jobs are last in base/ci.yml, so an appended
+# job lands under `jobs:`.
 case_() {
-  local name="$1" want="$2" expected="$3" mutation="${4:-}"
+  local name="$1" want="$2" expected="$3" mutation="${4:-}" append="${5:-}"
   local dir
   dir="$(mktemp -d)"
   cp "${HERE}/base/"*.yml "$dir/"
@@ -31,6 +34,9 @@ case_() {
       rm -rf "$dir"
       return
     fi
+  fi
+  if [ -n "$append" ]; then
+    printf '\n%s\n' "$append" >>"$dir/ci.yml"
   fi
   local got=pass
   python3 "$SCRIPT" --workflows-dir "$dir" --expected "$expected" >"$dir/out" 2>&1 || got=fail
@@ -55,6 +61,20 @@ case_ "label outside runs-on"            fail "$EXPECTED" "s/^      - run: echo 
 case_ "opted-in job not in expected"     fail "ci.yml:changes"
 case_ "expected job not opted in"        fail "$EXPECTED ci.yml:docker"
 case_ "job id with trailing comment"     pass "$EXPECTED" "s/^  checks:$/  checks: # lint and test/"
+# Ways to reach the runner without writing `self-hosted` or the label as-is.
+# GitHub matches labels case-insensitively and by superset, and the runner is
+# in the local-ci group, so each of these would run unguarded on the VM.
+case_ "Self-Hosted in other case"        fail "$EXPECTED" "s/^    runs-on: ubuntu-latest$/    runs-on: Self-Hosted/"
+case_ "label in other case"              fail "$EXPECTED" "s/^    runs-on: ubuntu-latest$/    runs-on: [self-hosted, I2DEV-CI]/"
+case_ "default labels only"              fail "$EXPECTED" "s/^    runs-on: ubuntu-latest$/    runs-on: [linux, ARM64]/"
+case_ "runner group, inline"             fail "$EXPECTED" "s/^    runs-on: ubuntu-latest$/    runs-on: { group: local-ci }/"
+case_ "runner group, multi-line"         fail "$EXPECTED" "" "$(printf '  grouped:\n    runs-on:\n      group: local-ci\n    steps:\n      - run: echo grouped')"
+case_ "label list, multi-line"           fail "$EXPECTED" "" "$(printf '  listed:\n    runs-on:\n      - linux\n      - arm64\n    steps:\n      - run: echo listed')"
+case_ "unevaluable expression"           fail "$EXPECTED" "s/^    runs-on: ubuntu-latest$/    runs-on: \${{ matrix.os }}/"
+# Hosted forms that must keep passing.
+case_ "hosted image, quoted and pinned"  pass "$EXPECTED" "s/^    runs-on: ubuntu-latest$/    runs-on: 'ubuntu-24.04'/"
+case_ "hosted image, other case"         pass "$EXPECTED" "s/^    runs-on: ubuntu-latest$/    runs-on: Ubuntu-Latest/"
+case_ "hosted arm image"                 pass "$EXPECTED" "s/^    runs-on: ubuntu-latest$/    runs-on: ubuntu-24.04-arm/"
 case_ "empty expected, nothing routed"   pass "" "/runs-on: \${{ vars.CI_RUNNER/s/.*/    runs-on: ubuntu-latest/"
 
 # A missing directory must fail, not pass vacuously.

@@ -192,6 +192,10 @@ limactl shell i2dev-ci-runner sudo RUNNER_REREGISTER=1 RUNNER_REMOVE_TOKEN="$REM
 unset REMOVE TOKEN
 ```
 
+If a later step fails, for example the service does not come up, re-run the
+same command. A runner already registered at the new scope is not removed
+again, so the stale remove token does no harm.
+
 ## Removing the runner
 
 ```bash

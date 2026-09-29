@@ -96,7 +96,21 @@ fi
 chown -R "$RUNNER_USER:$RUNNER_USER" "$RUNNER_HOME"
 
 # ── Registration + service ──────────────────────────────────────────────────
-if [ "${RUNNER_REREGISTER:-0}" = "1" ] && [ -f "$RUNNER_HOME/.runner" ]; then
+# The scope the runner is registered at now, from its own config (a JSON file
+# written with a BOM, hence utf-8-sig).
+registered_url() {
+  python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8-sig"))["gitHubUrl"])' \
+    "$RUNNER_HOME/.runner"
+}
+# A move is done once the runner is registered at RUNNER_URL. Re-running the
+# same command after a later step failed (say, the service did not start) must
+# not remove that new registration with a remove token for the *old* scope,
+# which would fail and leave the runner offline. So it only moves what has not
+# moved yet.
+if [ "${RUNNER_REREGISTER:-0}" = "1" ] && [ -f "$RUNNER_HOME/.runner" ] \
+  && [ "$(registered_url)" = "${RUNNER_URL%/}" ]; then
+  echo "provision.sh: already registered at ${RUNNER_URL}; skipping re-registration"
+elif [ "${RUNNER_REREGISTER:-0}" = "1" ] && [ -f "$RUNNER_HOME/.runner" ]; then
   : "${RUNNER_REMOVE_TOKEN:?RUNNER_REMOVE_TOKEN is required to re-register}"
   : "${RUNNER_TOKEN:?RUNNER_TOKEN is required to re-register}"
   if [ -f "$RUNNER_HOME/.service" ]; then
