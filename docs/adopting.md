@@ -57,6 +57,14 @@ restore each other's build outputs, which can include native binaries. Add
 `${{ runner.arch }}` to every cache key and restore-key in the routed jobs.
 `actions/setup-node`'s own cache already includes the architecture.
 
+**Clean up what outlives the job.** The VM is not thrown away between jobs,
+and the next job may belong to another repository. `services:` containers are
+removed by the runner, but anything a step starts itself (`docker run -d`,
+`docker compose up`) is not. A leftover container keeps its name and its host
+port, so the next job that needs that port fails. Remove such containers in an
+`if: always()` step. If they were started in the background, wait for the
+starting process to exit first. snap#886 is the example.
+
 ## 5. Allow the repository in the runner group
 
 *Organization settings → Actions → Runner groups → `local-ci` → Repository
@@ -86,3 +94,4 @@ to [`runbook.md`](runbook.md). Add a line to the table below.
 | Repository | Routed jobs | Since |
 |---|---|---|
 | i2Dev-com/i2dev | `ci.yml:changes`, `ci-checks.yml:checks` | 2026-09-29 (i2dev#891) |
+| i2Dev-com/snap | `ci.yml:ci` | 2026-09-29 (snap#886) |
