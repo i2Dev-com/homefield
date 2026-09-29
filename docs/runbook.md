@@ -92,10 +92,11 @@ limactl shell i2dev-ci-runner -- sh -c 'mount | grep -Ec "virtiofs|9p|sshfs|reve
 # expect: 0, and "No such file or directory"
 
 # 3. Provision: packages, Docker, runner binary (checksum-verified), systemd
-#    service, registration at the organization. The token must never be
-#    printed; see "Registration tokens" below for where to get it.
+#    service, registration at the organization in group local-ci. The token
+#    goes in on stdin, never on a command line, where any process in the guest
+#    could read it; see "Registration tokens" below for where to get it.
 limactl copy vm/provision.sh i2dev-ci-runner:/tmp/provision.sh
-limactl shell i2dev-ci-runner sudo RUNNER_TOKEN="$TOKEN" RUNNER_GROUP=local-ci bash /tmp/provision.sh
+printf 'RUNNER_TOKEN=%s\n' "$TOKEN" | limactl shell i2dev-ci-runner sudo bash /tmp/provision.sh
 unset TOKEN
 ```
 
@@ -185,10 +186,13 @@ scope (for a repository: `gh api -X POST repos/i2Dev-com/<repo>/actions/runners/
 which needs repository admin). `TOKEN` is a registration token for the new
 scope (see "Registration tokens").
 
+Move it while no job is running: the script refuses otherwise, then stops the
+runner before anything else.
+
 ```bash
 limactl copy vm/provision.sh i2dev-ci-runner:/tmp/provision.sh
-limactl shell i2dev-ci-runner sudo RUNNER_REREGISTER=1 RUNNER_REMOVE_TOKEN="$REMOVE" \
-  RUNNER_TOKEN="$TOKEN" RUNNER_GROUP=local-ci bash /tmp/provision.sh
+printf 'RUNNER_REMOVE_TOKEN=%s\nRUNNER_TOKEN=%s\n' "$REMOVE" "$TOKEN" |
+  limactl shell i2dev-ci-runner sudo RUNNER_REREGISTER=1 bash /tmp/provision.sh
 unset REMOVE TOKEN
 ```
 
@@ -202,7 +206,8 @@ again, so the stale remove token does no harm.
 # Every repository that routes to it: switch to hosted first
 GITHUB_TOKEN='' gh variable set CI_RUNNER --repo i2Dev-com/<repo> --body hosted
 # REMOVE: org remove-token (orgs/i2Dev-com/actions/runners/remove-token, admin:org)
-limactl shell i2dev-ci-runner sudo sh -c "cd /opt/actions-runner && ./svc.sh stop && ./svc.sh uninstall && sudo -u runner ./config.sh remove --token $REMOVE"
+printf '%s\n' "$REMOVE" | limactl shell i2dev-ci-runner sudo sh -c 'cd /opt/actions-runner && ./svc.sh uninstall && read -r t && ACTIONS_RUNNER_INPUT_TOKEN="$t" sudo --preserve-env=ACTIONS_RUNNER_INPUT_TOKEN -u runner ./config.sh remove'
+unset REMOVE
 limactl delete --force i2dev-ci-runner
 ```
 

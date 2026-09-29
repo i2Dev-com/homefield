@@ -17,14 +17,14 @@ guarantees that nothing else enforces:
      one, is not thrown away after the job.
 
 Every `runs-on` must be either the canonical expression or a GitHub-hosted
-image name (ubuntu-*, windows-*, macos-*). It is an allowlist because the ways
-to reach the local runner are open-ended: GitHub matches labels
-case-insensitively and gives a job any runner whose labels are a superset of
-the requested ones, so `Self-Hosted`, `[linux, ARM64]` or `group: local-ci`
-all land on the VM with none of the guards. Anything not on the list fails,
-including an expression this check cannot evaluate and a multi-line `runs-on`
-(a list or mapping on the following lines). Write those on one line, or keep
-the job on a hosted image name.
+image name (ubuntu-*, windows-*, macos-*, alone or as a one-item list). It is
+an allowlist because the ways to reach the local runner are open-ended: GitHub
+matches labels case-insensitively and gives a job any runner whose labels are
+a superset of the requested ones, so `Self-Hosted`, `[linux, ARM64]` or
+`group: local-ci` all land on the VM with none of the guards. Anything not on
+the list fails, including an expression this check cannot evaluate and a
+multi-line `runs-on` (a list or mapping on the following lines). Write those
+on one line, or keep the job on a hosted image name.
 
 The set of opted-in jobs must equal EXPECTED exactly, so routing a job to the
 local runner is always a deliberate, reviewed change.
@@ -39,7 +39,11 @@ import sys
 # A GitHub-hosted image label, optionally quoted. Case-insensitive, as GitHub's
 # label matching is. None of these can name the local runner, whose labels are
 # self-hosted, Linux, ARM64 and the routing label.
-HOSTED = re.compile(r"""^(['"]?)(ubuntu|windows|macos)-[a-z0-9._-]+\1$""", re.IGNORECASE)
+# Also accepted as a one-element flow list, `[ubuntu-latest]`.
+HOSTED = re.compile(
+    r"""^(\[\s*)?(['"]?)(ubuntu|windows|macos)-[a-z0-9._-]+\2(?(1)\s*\])$""",
+    re.IGNORECASE,
+)
 
 
 def canonical_expression(label: str, arch: str) -> str:
@@ -117,18 +121,18 @@ def main() -> int:
                 if top:
                     in_jobs = top.group(1) == "jobs"
                     job = None
-                m = re.match(r"^  ([A-Za-z0-9_-]+):\s*$", code)
+                # Keys may be quoted (`"checks":`); a quoted key missed here
+                # would credit its runs-on to the previous job.
+                m = re.match(r"""^  (['"]?)([A-Za-z0-9_-]+)\1:\s*$""", code)
                 if in_jobs and m:
-                    job = m.group(1)
+                    job = m.group(2)
                 where = f"{name}:{lineno} (job {job})"
                 m = re.match(r"^\s*runs-on:\s*(.*?)\s*$", code)
+                # Only runs-on lines matter. Every one is checked against the
+                # allowlist below, and a multi-line runs-on already fails on
+                # its first line, so the label appearing elsewhere (a step
+                # name, a docs URL in a run string) is not routing.
                 if not m:
-                    # A continuation line of a multi-line runs-on, or anything
-                    # else naming the runner. The runs-on line itself already
-                    # failed if it was multi-line; this names the label too.
-                    low = code.lower()
-                    if args.label.lower() in low or "self-hosted" in low:
-                        fail(f"{where}: self-hosted/{args.label} label outside a runs-on line")
                     continue
                 value = m.group(1)
                 if HOSTED.match(value):

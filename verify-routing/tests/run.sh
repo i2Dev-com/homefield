@@ -57,10 +57,12 @@ case_ "pull-request-only rule dropped"   fail "$EXPECTED" "s/github.event_name =
 case_ "Dependabot actor check dropped"   fail "$EXPECTED" "s/github.actor != 'dependabot\[bot\]' \&\& //"
 case_ "Dependabot branch check dropped"  fail "$EXPECTED" "s/!startsWith(github.head_ref, 'dependabot\/') \&\& //"
 case_ "bare self-hosted job"             fail "$EXPECTED" "s/^    runs-on: ubuntu-latest$/    runs-on: [self-hosted, linux, arm64]/"
-case_ "label outside runs-on"            fail "$EXPECTED" "s/^      - run: echo docker$/      - run: echo i2dev-ci/"
+case_ "label in a step, not routing"     pass "$EXPECTED" "s/^      - run: echo docker$/      - name: Verify self-hosted i2dev-ci routing/"
 case_ "opted-in job not in expected"     fail "ci.yml:changes"
 case_ "expected job not opted in"        fail "$EXPECTED ci.yml:docker"
 case_ "job id with trailing comment"     pass "$EXPECTED" "s/^  checks:$/  checks: # lint and test/"
+case_ "quoted job id, not expected"      fail "ci.yml:changes" "s/^  checks:$/  \"checks\":/"
+case_ "quoted job id, expected"          pass "$EXPECTED" "s/^  checks:$/  'checks':/"
 # Ways to reach the runner without writing `self-hosted` or the label as-is.
 # GitHub matches labels case-insensitively and by superset, and the runner is
 # in the local-ci group, so each of these would run unguarded on the VM.
@@ -75,6 +77,9 @@ case_ "unevaluable expression"           fail "$EXPECTED" "s/^    runs-on: ubunt
 case_ "hosted image, quoted and pinned"  pass "$EXPECTED" "s/^    runs-on: ubuntu-latest$/    runs-on: 'ubuntu-24.04'/"
 case_ "hosted image, other case"         pass "$EXPECTED" "s/^    runs-on: ubuntu-latest$/    runs-on: Ubuntu-Latest/"
 case_ "hosted arm image"                 pass "$EXPECTED" "s/^    runs-on: ubuntu-latest$/    runs-on: ubuntu-24.04-arm/"
+case_ "hosted image as one-item list"    pass "$EXPECTED" "s/^    runs-on: ubuntu-latest$/    runs-on: [ ubuntu-latest ]/"
+case_ "list mixing hosted and local"     fail "$EXPECTED" "s/^    runs-on: ubuntu-latest$/    runs-on: [ubuntu-latest, self-hosted]/"
+case_ "unbalanced bracket"               fail "$EXPECTED" "s/^    runs-on: ubuntu-latest$/    runs-on: [ubuntu-latest/"
 case_ "empty expected, nothing routed"   pass "" "/runs-on: \${{ vars.CI_RUNNER/s/.*/    runs-on: ubuntu-latest/"
 
 # A missing directory must fail, not pass vacuously.
