@@ -1,0 +1,44 @@
+# Lima VM for the local GitHub Actions runner (i2Dev-com/i2dev#879).
+#
+# The VM is the isolation boundary: CI jobs run pull-request code, so nothing
+# of the host's — home directory, SSH keys, AWS profile, gh auth — may be
+# reachable from inside. Everything below that looks like a missing default is
+# deliberate. Setup and recovery: docs/runbook.md.
+#
+# Requires Lima >= 1.1 (for `base:`). Create with --mount-none as well, so a
+# future change to Lima's defaults cannot quietly bring the home mount back.
+
+# Image list only. The `ubuntu-24.04` template would also pull in
+# `_default/mounts`, which mounts $HOME into the guest.
+base: template://_images/ubuntu-24.04
+
+vmType: vz
+arch: aarch64
+cpus: 6
+memory: 12GiB
+disk: 60GiB
+
+mounts: []
+
+ssh:
+  # An agent forwarded into the guest is usable by any process in it.
+  forwardAgent: false
+  loadDotSSHPubKeys: false
+
+# Lima's bundled containerd/nerdctl is not what the runner uses; Docker Engine
+# is installed by provision.sh, because job `services:` need the docker CLI.
+containerd:
+  system: false
+  user: false
+
+# Lima forwards every guest listener to the host's localhost by default. Job
+# service containers publish 5432 and 6379, which would land on the host —
+# colliding with a local dev Postgres/Redis, or worse, being mistaken for them.
+portForwards:
+  - guestIP: "127.0.0.1"
+    guestPortRange: [1, 65535]
+    ignore: true
+  - guestIP: "0.0.0.0"
+    guestIPMustBeZero: false
+    guestPortRange: [1, 65535]
+    ignore: true

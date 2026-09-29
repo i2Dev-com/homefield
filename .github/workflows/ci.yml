@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Lint & test
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Shellcheck
+        run: shellcheck vm/provision.sh verify-routing/tests/run.sh
+
+      # Pinned and checksum-verified. Other repositories run this repository's
+      # action to guard their routing, so nothing in its CI executes a download
+      # that has not been verified. A new actionlint version is a deliberate
+      # bump of both values (the asset's `digest` in the GitHub release API).
+      - name: actionlint
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          set -euo pipefail
+          tarball="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -fsSL -o "$tarball" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${tarball}"
+          echo "${ACTIONLINT_SHA256}  ${tarball}" | sha256sum -c -
+          tar -xzf "$tarball" actionlint
+          ./actionlint -color
+
+      - name: verify_routing.py fixture suite
+        run: bash verify-routing/tests/run.sh
+
+      # The action as consumers call it, not just the script behind it: inputs
+      # through env, $GITHUB_ACTION_PATH resolution, composite wiring.
+      - name: Action against the clean fixture
+        uses: ./verify-routing
+        with:
+          workflows-dir: verify-routing/tests/base
+          expected: |
+            ci.yml:changes
+            ci.yml:checks
+
+      # And on this repo, which routes nothing: any runs-on that asks for the
+      # local runner here is a mistake.
+      - name: Action against this repo's workflows
+        uses: ./verify-routing
