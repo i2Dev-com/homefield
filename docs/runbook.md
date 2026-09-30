@@ -166,9 +166,25 @@ service ports never appear there.
   `gh api repos/actions/runner/releases/latest`). Re-running `provision.sh`
   after a bump stops the service, replaces the binary and starts it again.
   Stopping cancels any job in progress, so do it while the runner is idle.
-- **Guest OS updates.** Re-run `provision.sh`. It is idempotent and skips
-  registration when the runner already exists. Or run `sudo apt-get upgrade`
-  in the guest.
+- **Guest OS updates.** Automatic. Ubuntu's own `unattended-upgrades` is
+  switched off, because it restarts the runner, containerd and Docker at
+  06:00–07:00 whether or not a job is running. On 2026-09-30 it failed a snap
+  PR that way (ci-runner#8). In its place, `ci-runner-maintenance.timer` runs
+  daily at 07:00 guest time, which Lima takes from the Mac. That is the one
+  hour in which no PR run has started. If a job is running it skips the day.
+  Otherwise it stops the runner, runs `apt-get upgrade`, and then either
+  starts the runner again or, if the update needs one
+  (`/var/run/reboot-required`), reboots the guest. The runner starts on boot.
+  Queued jobs wait through it, typically under a minute and longer on a
+  reboot. To update now, while idle:
+  `limactl shell i2dev-ci-runner sudo systemctl start --no-block ci-runner-maintenance`.
+  (`--no-block`, because the upgrade may restart D-Bus and drop a client
+  waiting on the unit.)
+  Its log: `limactl shell i2dev-ci-runner sudo journalctl -u ci-runner-maintenance`.
+  To check whether a reboot is pending:
+  `limactl shell i2dev-ci-runner ls /var/run/reboot-required`.
+  To reboot by hand while idle, run `limactl shell i2dev-ci-runner sudo systemctl reboot`.
+  A guest reboot keeps the VM running under `vz`.
 - **Cleanup.** A daily systemd timer (`ci-runner-cleanup.timer`) prunes
   stopped containers, unused networks, dangling layers and build cache older
   than 24 h. It also removes any workspace with nothing modified inside it for

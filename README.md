@@ -8,7 +8,7 @@ changes. Background: i2Dev-com/i2dev#879.
 | Path | What it is |
 |---|---|
 | [`vm/lima.yaml`](vm/lima.yaml) | The Lima VM that isolates the runner: Ubuntu 24.04 arm64, no host mounts, no port forwarding, no SSH-agent forwarding |
-| [`vm/provision.sh`](vm/provision.sh) | Installs the toolchain, Docker, the checksum-pinned runner and a cleanup timer. Registers the runner at the org in the `local-ci` runner group. Idempotent, and handles upgrades and re-registration |
+| [`vm/provision.sh`](vm/provision.sh) | Installs the toolchain, Docker, the checksum-pinned runner, a cleanup timer and an idle-time OS update timer. Registers the runner at the org in the `local-ci` runner group. Idempotent, and handles upgrades and re-registration |
 | [`verify-routing/`](verify-routing/action.yml) | Composite action that fails a repository's CI unless every `runs-on` is either a GitHub-hosted image or the canonical routing expression, and the set of routed jobs matches its reviewed list |
 | [`docs/runbook.md`](docs/runbook.md) | Setup, runner group, switching, failure modes, maintenance, removal |
 | [`docs/adopting.md`](docs/adopting.md) | Checklist for routing another repository's jobs to the runner |
