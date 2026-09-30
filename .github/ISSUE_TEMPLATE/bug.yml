@@ -5,9 +5,10 @@ body:
   - type: markdown
     attributes:
       value: >-
-        A way for job code to escape the VM, reach the host or bypass the
-        routing guard is a security issue: report it privately instead (see
-        SECURITY.md).
+        A way for job code to escape the VM, read the host's files or
+        credentials, or bypass the routing guard is a security issue: report
+        it privately instead (see SECURITY.md). Reaching the host's network
+        services is a known limitation (#18), fine to discuss here.
   - type: textarea
     id: what
     attributes:

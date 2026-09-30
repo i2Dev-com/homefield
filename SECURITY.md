@@ -7,9 +7,11 @@ point. Please report weaknesses in it privately.
 
 Use GitHub's private vulnerability reporting: the **Security** tab of this
 repository → *Report a vulnerability*. Please don't open a public issue for
-something that lets job code escape the VM, reach the host, keep a foothold
-between jobs, or bypass the routing guard. Include what you ran, what you
-expected and what happened; a reproduction from inside the guest is ideal.
+anything in scope below: escaping the VM, reading the host's files or
+credentials, or bypassing the routing guard. The known limitations further
+down are documented behaviour, so a public issue is fine for those. Include
+what you ran, what you expected and what happened; a reproduction from
+inside the guest is ideal.
 
 We aim to acknowledge reports within a week and to credit reporters unless
 they'd rather not be.
