@@ -29,7 +29,7 @@ exists to remove. So each routed job carries the routing expression inline, and
 ## Usage
 
 ```yaml
-      - uses: i2Dev-com/ci-runner/verify-routing@v1
+      - uses: i2Dev-com/ci-runner/verify-routing@v2
         with:
           expected: |
             ci.yml:lint
@@ -46,7 +46,9 @@ bash verify-routing/tests/run.sh   # fixture suite: every drift case must fail
 shellcheck vm/provision.sh verify-routing/tests/run.sh
 ```
 
-Releases: move the `v1` tag for compatible changes. A change that makes a
-previously passing workflow fail, such as a new required guard in the
-expression, is `v2`, because every consumer has to update its inline copies at
-the same time. Changes are recorded in [`CHANGELOG.md`](CHANGELOG.md).
+Releases: move the current major tag for compatible changes. A change that
+makes a previously passing workflow fail, such as a new required guard in the
+expression, is a new major, because every consumer has to update its inline
+copies at the same time. Changes are recorded in [`CHANGELOG.md`](CHANGELOG.md).
+The docs on `main` describe the next release: until `v2` is tagged, consumers
+stay on `@v1` with the v1 expression.

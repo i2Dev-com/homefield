@@ -22,7 +22,9 @@ Keep hosted:
 
 ## 2. Route them
 
-Replace each chosen job's `runs-on` with the canonical expression, verbatim:
+Replace each chosen job's `runs-on` with the canonical expression, verbatim.
+It must match the `verify-routing` version used in step 3 (`@v2` below); see
+[`CHANGELOG.md`](../CHANGELOG.md) when upgrading:
 
 ```yaml
 runs-on: ${{ vars.CI_RUNNER == 'local' && github.event_name == 'pull_request' && github.actor != 'dependabot[bot]' && !startsWith(github.head_ref, 'dependabot/') && github.event.pull_request.head.repo.full_name == github.repository && fromJSON('["self-hosted","linux","arm64","i2dev-ci"]') || 'ubuntu-latest' }}
@@ -38,7 +40,7 @@ In a job that runs on every PR, after `actions/checkout`:
 
 ```yaml
       - name: Verify local-runner routing
-        uses: i2Dev-com/ci-runner/verify-routing@v1
+        uses: i2Dev-com/ci-runner/verify-routing@v2
         with:
           expected: |
             ci.yml:lint

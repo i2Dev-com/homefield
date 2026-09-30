@@ -12,10 +12,11 @@ fail is a new major (see [README](README.md#development)).
   `github.event.pull_request.head.repo.full_name == github.repository`, so pull
   requests from forks always run hosted. Every routed job's inline `runs-on`
   must be updated to the new expression in the same change that moves to `@v2`
-  ([`docs/adopting.md`](docs/adopting.md) has it verbatim). This is defence
-  in depth for private repositories that allow forking; it does not make the
-  runner safe for public repositories (see the trust boundary in
-  [`docs/runbook.md`](docs/runbook.md)).
+  ([`docs/adopting.md`](docs/adopting.md) has the expression verbatim). Mixing
+  them fails: `@v1` rejects the new expression and `@v2` rejects the old one.
+  This is defence in depth for private repositories that allow forking; it
+  does not make the runner safe for public repositories (see the trust
+  boundary in [`docs/runbook.md`](docs/runbook.md)).
 
 ## v1
 
