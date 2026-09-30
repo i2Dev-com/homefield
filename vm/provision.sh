@@ -92,6 +92,10 @@ if [[ "$label_lc" =~ ^(self-hosted|linux|windows|macos|ubuntu|x64|x86|arm|arm64)
   exit 1
 fi
 RUNNER_LABELS="self-hosted,linux,arm64,${RUNNER_LABEL}"
+if [ -n "$RUNNER_URL" ] && ! [[ "$RUNNER_URL" =~ ^https://github\.com/[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)?/?$ ]]; then
+  echo "provision.sh: RUNNER_URL must be https://github.com/<org> or https://github.com/<owner>/<repo>, got: $RUNNER_URL" >&2
+  exit 1
+fi
 # Debian package names, checked before anything runs; the names reach
 # apt-get as arguments, so an option (`-o ...`) must not get through either.
 # Space-separated on one line: `read` stops at a newline, so a multi-line
@@ -138,9 +142,9 @@ fi
 # ── What this run has to do ─────────────────────────────────────────────────
 # The scope the runner is registered at now, from its own config (a JSON file
 # written with a BOM, hence utf-8-sig).
-# Prints the named settings, space-separated.
+# Prints the named settings, one per line: a name may contain spaces.
 runner_setting() {
-  python3 -c 'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8-sig")); print(*(d[k] for k in sys.argv[2:]))' \
+  python3 -c 'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8-sig")); print(*(d[k] for k in sys.argv[2:]), sep="\n")' \
     "$RUNNER_HOME/.runner" "$@"
 }
 registered_url() { runner_setting gitHubUrl; }
@@ -491,5 +495,5 @@ systemctl enable --now ci-runner-cleanup.timer ci-runner-maintenance.timer
 # Reports the registration as it is, which differs from the settings when an
 # existing registration was kept. Labels are not in the runner's config; the
 # runners page shows them.
-read -r reg_name reg_url < <(runner_setting agentName gitHubUrl)
+{ read -r reg_name; read -r reg_url; } < <(runner_setting agentName gitHubUrl)
 echo "provision.sh: runner ${reg_name} (${RUNNER_VERSION}) registered at ${reg_url}"

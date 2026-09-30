@@ -88,6 +88,11 @@ gh api orgs/i2Dev-com/actions/runner-groups/<id>/repositories -q '.repositories[
 Requires Lima ≥ 1.1 (`brew install lima`; verified on 2.2.0). Run from a
 checkout of this repository.
 
+**The short way:** `bin/ci-runner install --url https://github.com/<org>`
+(options: `bin/ci-runner help`) does every step below and enables autostart.
+It fetches the registration token with `gh` when it can, and otherwise asks
+you to paste one. The steps are what it does, and the way to do it by hand:
+
 ```bash
 # 1. Create and start the VM (no mounts, no port forwards, Ubuntu 24.04 arm64)
 limactl create --name=i2dev-ci-runner --mount-none vm/lima.yaml
@@ -115,7 +120,10 @@ Then, in *Organization settings → Actions → Runners*, confirm the runner
 group, with labels `self-hosted, Linux, ARM64, local-ci`.
 
 Re-running `provision.sh` on a registered runner (to upgrade it) needs no
-settings: the registration is kept as it is.
+settings: the registration is kept as it is. `bin/ci-runner upgrade` does
+that: it refuses while a job is running, then stops the runner so no job can
+start mid-upgrade, and `provision.sh` starts it again at the end (or the
+command does, if provisioning fails).
 
 **Registration tokens.** A registration token is valid for one hour, and the
 runner exchanges it for its own identity at registration. An org token needs
@@ -145,6 +153,8 @@ packages along with the rest. Passing it again replaces the list; passing it
 empty clears it. Neither uninstalls anything.
 
 ```bash
+bin/ci-runner upgrade --instance i2dev-ci-runner --packages "libpq-dev shellcheck"
+# by hand:
 limactl copy vm/provision.sh i2dev-ci-runner:/tmp/provision.sh
 limactl shell i2dev-ci-runner sudo RUNNER_EXTRA_PACKAGES="libpq-dev shellcheck" bash /tmp/provision.sh
 ```
@@ -301,6 +311,10 @@ with new values changes nothing.
   the new `RUNNER_NAME`.
 
 ## Removing the runner
+
+`bin/ci-runner uninstall` deregisters the runner (fetching or asking for a
+remove token), turns off autostart and deletes the VM; `--keep-vm` only
+deregisters. By hand:
 
 ```bash
 # Every repository that routes to it: switch to hosted first

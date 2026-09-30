@@ -1,0 +1,419 @@
+#!/usr/bin/env bash
+# Set up, upgrade, inspect and remove the local GitHub Actions runner on this
+# Mac: a Lima VM from vm/lima.yaml, provisioned by vm/provision.sh. Wraps the
+# manual steps in docs/runbook.md, which stays the reference for what each one
+# does and why.
+#
+#   bin/ci-runner install --url https://github.com/<org>[/<repo>] [options]
+#   bin/ci-runner upgrade [--packages "..."] [--force]
+#   bin/ci-runner status
+#   bin/ci-runner uninstall [--keep-vm]
+#
+# Every command takes --instance NAME (default ci-runner, or $CI_RUNNER_INSTANCE)
+# to pick the Lima VM. Run `bin/ci-runner help` for the options.
+set -euo pipefail
+# Runs on macOS's stock bash 3.2, which turns `set -e` off inside $(...). A
+# function that can fail inside one says `|| exit 1` where it calls another.
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+LIMA_YAML="$ROOT/vm/lima.yaml"
+PROVISION="$ROOT/vm/provision.sh"
+INSTANCE="${CI_RUNNER_INSTANCE:-ci-runner}"
+RUNNER_HOME="/opt/actions-runner"
+
+usage() {
+  cat <<'EOF'
+Usage: bin/ci-runner <command> [options]
+
+Commands:
+  install    Create the VM (if needed), provision it and register the runner.
+             On an instance that is already registered, this is an upgrade.
+  upgrade    Re-run provisioning on a registered runner: packages, hooks,
+             runner binary. Refuses while a job is running, unless --force.
+  status     Show the VM, the registration and whether a job is running.
+  uninstall  Deregister the runner and delete the VM.
+
+Options:
+  --instance NAME    Lima instance (default ci-runner, or $CI_RUNNER_INSTANCE)
+
+install:
+  --url URL          https://github.com/<org> or https://github.com/<owner>/<repo>
+                     (required for a new registration)
+  --label LABEL      routing label (default local-ci)
+  --name NAME        runner name (default: the guest hostname, lima-<instance>)
+  --group GROUP      org runner group (default local-ci; ignored for a repo)
+  --packages "A B"   extra apt packages (RUNNER_EXTRA_PACKAGES)
+  --cpus N           VM CPUs, when creating it (default: vm/lima.yaml)
+  --memory GIB       VM memory in GiB, when creating it (default: vm/lima.yaml)
+  --no-autostart     do not start the VM at login
+
+upgrade:
+  --packages "A B"   replace the saved extra packages
+  --force            upgrade even while a job is running (the job is cancelled)
+
+uninstall:
+  --keep-vm          only deregister; keep the VM
+
+Registration and removal need a one-hour token. It is fetched with `gh` when
+your gh credentials allow it (org owner with admin:org, or repository admin);
+otherwise you are asked to paste one from the "New runner" page. Tokens go to
+the VM on stdin, never on a command line.
+EOF
+}
+
+die() {
+  echo "ci-runner: $*" >&2
+  exit 1
+}
+log() { echo "ci-runner: $*"; }
+
+# ── Host and VM ─────────────────────────────────────────────────────────────
+check_host() {
+  [ "$(uname -s)" = "Darwin" ] || die "needs macOS (Lima with Apple's Virtualization.framework)"
+  [ "$(uname -m)" = "arm64" ] || die "needs an Apple Silicon Mac: the VM is arm64"
+  command -v limactl >/dev/null || die "needs Lima >= 1.1: brew install lima"
+  local version major minor
+  version="$(limactl --version | awk '{print $NF}')"
+  major="${version%%.*}"
+  minor="${version#*.}"
+  minor="${minor%%.*}"
+  if ! [[ "$major" =~ ^[0-9]+$ && "$minor" =~ ^[0-9]+$ ]] || [ "$major" -lt 1 ] || { [ "$major" -eq 1 ] && [ "$minor" -lt 1 ]; }; then
+    die "needs Lima >= 1.1, found ${version}"
+  fi
+}
+
+vm_status() { limactl list --format '{{.Status}}' "$INSTANCE" 2>/dev/null || true; }
+
+# --workdir /: the host's working directory does not exist in the guest, which
+# has no mounts. stdin is closed, or `limactl shell` would swallow whatever is
+# typed ahead, such as a token meant for the prompt; guest_stdin is for the
+# two calls that feed a token in on purpose.
+guest() { limactl shell --workdir / "$INSTANCE" "$@" </dev/null; }
+guest_stdin() { limactl shell --workdir / "$INSTANCE" "$@"; }
+
+ensure_vm() {
+  local cpus="$1" memory="$2" status
+  status="$(vm_status)"
+  if [ -z "$status" ]; then
+    log "creating VM ${INSTANCE}"
+    local args=(--name="$INSTANCE" --mount-none --tty=false)
+    [ -n "$cpus" ] && args+=(--cpus="$cpus")
+    [ -n "$memory" ] && args+=(--memory="$memory")
+    limactl create "${args[@]}" "$LIMA_YAML"
+    status="Stopped"
+  fi
+  if [ "$status" != "Running" ]; then
+    log "starting VM ${INSTANCE}"
+    limactl start --tty=false "$INSTANCE"
+  fi
+}
+
+# The VM is the isolation boundary, so nothing runs in it until it is shown to
+# have no host mounts and no view of the Mac's home directories.
+verify_isolation() {
+  local mounts
+  mounts="$(guest sh -c 'mount | grep -Ec "virtiofs|9p|sshfs|reverse-sshfs" || true')"
+  [ "$mounts" = "0" ] || die "VM ${INSTANCE} has host mounts; refusing to continue (see docs/runbook.md, Setup)"
+  if guest test -e /Users; then
+    die "VM ${INSTANCE} can see /Users; refusing to continue"
+  fi
+  log "isolation verified: no host mounts"
+}
+
+registered() { guest sudo test -f "$RUNNER_HOME/.runner"; }
+job_running() { guest pgrep -f Runner.Worker >/dev/null; }
+
+# Maintenance (upgrade, uninstall) takes the runner offline first, straight
+# after the idle check: a runner that is still listening can be handed a job
+# at any moment, and apt restarting Docker or the service being uninstalled
+# would then take that job down. If the command then fails, the runner is
+# started again on the way out; a command that succeeds calls runner_back.
+stopped_unit=""
+stop_runner() {
+  stopped_unit="$(guest sudo cat "$RUNNER_HOME/.service" 2>/dev/null || true)"
+  [ -n "$stopped_unit" ] || return 0
+  trap restart_runner_on_failure EXIT
+  log "stopping ${stopped_unit}: the runner takes no jobs until this finishes"
+  guest sudo systemctl stop "$stopped_unit"
+}
+restart_runner_on_failure() {
+  local rc=$?
+  if [ "$rc" -ne 0 ] && [ -n "$stopped_unit" ]; then
+    echo "ci-runner: failed; starting ${stopped_unit} again" >&2
+    guest sudo systemctl start "$stopped_unit" ||
+      echo "ci-runner: could not start ${stopped_unit}; check bin/ci-runner status" >&2
+  fi
+}
+runner_back() {
+  trap - EXIT
+  stopped_unit=""
+}
+
+# Prints the named settings from the runner's config, one per line: a name
+# may contain spaces.
+runner_setting() {
+  guest sudo python3 -c 'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8-sig")); print(*(d[k] for k in sys.argv[2:]), sep="\n")' \
+    "$RUNNER_HOME/.runner" "$@"
+}
+
+# ── Tokens ──────────────────────────────────────────────────────────────────
+# api_scope <url>: the REST path of the registration scope.
+api_scope() {
+  local url="${1%/}"
+  if [[ "$url" =~ ^https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)$ ]]; then
+    echo "repos/${BASH_REMATCH[1]}/${BASH_REMATCH[2]}"
+  elif [[ "$url" =~ ^https://github\.com/([A-Za-z0-9_.-]+)$ ]]; then
+    echo "orgs/${BASH_REMATCH[1]}"
+  else
+    die "--url must be https://github.com/<org> or https://github.com/<owner>/<repo>, got: $1"
+  fi
+}
+
+# runners_page <url>: the settings page listing the scope's runners. An
+# organization's settings live under /organizations/<org>/.
+runners_page() {
+  local scope
+  scope="$(api_scope "$1")" || exit 1
+  case "$scope" in
+    orgs/*) echo "https://github.com/organizations/${scope#orgs/}/settings/actions/runners" ;;
+    *) echo "https://github.com/${scope#repos/}/settings/actions/runners" ;;
+  esac
+}
+
+# get_token <registration|remove> <url>: prints the token. From gh when it can,
+# else pasted; never echoed.
+get_token() {
+  local kind="$1" url="$2" scope out token=""
+  scope="$(api_scope "$url")" || exit 1
+  # On an error gh prints the error body to stdout, so only its exit status
+  # says whether this is a token.
+  if command -v gh >/dev/null &&
+    out="$(gh api -X POST "${scope}/actions/runners/${kind}-token" -q .token 2>/dev/null)"; then
+    token="$out"
+  fi
+  if [ -z "$token" ]; then
+    [ -t 0 ] || die "could not get a ${kind} token with gh, and no terminal to paste one"
+    echo "ci-runner: could not get a ${kind} token with gh (needs org owner + admin:org, or repository admin)." >&2
+    echo "ci-runner: get one from $(runners_page "$url")/new and paste only the token." >&2
+    read -rsp "${kind} token: " token
+    echo >&2
+  fi
+  [[ "$token" =~ ^[A-Za-z0-9_-]+$ ]] || die "that does not look like a ${kind} token"
+  printf '%s' "$token"
+}
+
+# Personal accounts have no account-level runners: a user URL would fail at
+# registration with a confusing error, so say so up front.
+check_scope_owner() {
+  local url="${1%/}" owner out type=""
+  [[ "$url" =~ ^https://github\.com/([A-Za-z0-9_.-]+)$ ]] || return 0
+  owner="${BASH_REMATCH[1]}"
+  # gh when it works, else the public API with curl (no python3 needed: a
+  # stock Mac only has the stub that offers to install it).
+  if command -v gh >/dev/null && out="$(gh api "users/${owner}" -q .type 2>/dev/null)"; then
+    type="$out"
+  elif out="$(curl -fsS "https://api.github.com/users/${owner}" 2>/dev/null)"; then
+    type="$(printf '%s\n' "$out" | sed -n 's/^ *"type": *"\([A-Za-z]*\)".*/\1/p' | head -1)"
+  fi
+  case "$type" in
+    Organization) ;;
+    User) die "${owner} is a personal account, which cannot have account-wide runners; use a repository URL (https://github.com/${owner}/<repo>)" ;;
+    *) die "could not find ${owner} on GitHub (or reach api.github.com) to check that it is an organization" ;;
+  esac
+}
+
+# ── Provisioning ────────────────────────────────────────────────────────────
+# run_provision <stdin text> [VAR=value ...]
+run_provision() {
+  local input="$1"
+  shift
+  limactl copy "$PROVISION" "${INSTANCE}:/tmp/provision.sh"
+  printf '%s' "$input" | guest_stdin sudo "$@" bash /tmp/provision.sh
+}
+
+enable_autostart() {
+  if limactl autostart enable "$INSTANCE" >/dev/null 2>&1 ||
+    limactl start-at-login --enabled "$INSTANCE" >/dev/null 2>&1; then
+    log "VM ${INSTANCE} starts at login"
+  else
+    log "could not enable autostart; see docs/runbook.md, Setup (Autostart)" >&2
+  fi
+}
+
+# ── Commands ────────────────────────────────────────────────────────────────
+cmd_install() {
+  local url="" label="" name="" group="" packages="" packages_set=0 cpus="" memory="" autostart=1
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --url) url="${2:?--url needs a value}"; shift 2 ;;
+      --label) label="${2:?--label needs a value}"; shift 2 ;;
+      --name) name="${2:?--name needs a value}"; shift 2 ;;
+      --group) group="${2:?--group needs a value}"; shift 2 ;;
+      --packages) packages="${2?--packages needs a value (may be empty)}"; packages_set=1; shift 2 ;;
+      --cpus) cpus="${2:?--cpus needs a value}"; shift 2 ;;
+      --memory) memory="${2:?--memory needs a value}"; shift 2 ;;
+      --no-autostart) autostart=0; shift ;;
+      *) die "install: unknown option $1 (see bin/ci-runner help)" ;;
+    esac
+  done
+  check_host
+  # The scope is checked before anything is created.
+  if [ -n "$url" ]; then
+    api_scope "$url" >/dev/null
+    check_scope_owner "$url"
+  fi
+  ensure_vm "$cpus" "$memory"
+  verify_isolation
+
+  if registered; then
+    log "${INSTANCE} is already registered; upgrading instead (registration settings are kept)"
+    local args=()
+    [ "$packages_set" = 1 ] && args+=(--packages "$packages")
+    cmd_upgrade "${args[@]+"${args[@]}"}"
+    return
+  fi
+
+  [ -n "$url" ] || die "install: --url is required for a new registration"
+  local env=(RUNNER_URL="$url")
+  [ -n "$label" ] && env+=(RUNNER_LABEL="$label")
+  [ -n "$name" ] && env+=(RUNNER_NAME="$name")
+  [ -n "$group" ] && env+=(RUNNER_GROUP="$group")
+  [ "$packages_set" = 1 ] && env+=(RUNNER_EXTRA_PACKAGES="$packages")
+
+  local token
+  token="$(get_token registration "$url")"
+  log "provisioning ${INSTANCE} and registering at ${url}"
+  run_provision "RUNNER_TOKEN=${token}"$'\n' "${env[@]}"
+  token=""
+  [ "$autostart" = 1 ] && enable_autostart
+  cat <<EOF
+
+Registered. Next:
+  - Organization runner: make sure its runner group admits only the
+    repositories that should use it (docs/runbook.md, "Runner group").
+  - Route jobs from a repository: docs/adopting.md.
+  - bin/ci-runner status   shows the runner at any time.
+EOF
+}
+
+cmd_upgrade() {
+  local packages="" packages_set=0 force=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --packages) packages="${2?--packages needs a value (may be empty)}"; packages_set=1; shift 2 ;;
+      --force) force=1; shift ;;
+      *) die "upgrade: unknown option $1 (see bin/ci-runner help)" ;;
+    esac
+  done
+  check_host
+  [ -n "$(vm_status)" ] || die "no VM ${INSTANCE}; run bin/ci-runner install"
+  ensure_vm "" ""
+  verify_isolation
+  registered || die "${INSTANCE} is not registered; run bin/ci-runner install --url ..."
+  # An upgrade can restart Docker (apt) or the runner (a new binary), which
+  # would take down a running job.
+  if job_running && [ "$force" != 1 ]; then
+    die "a job is running on ${INSTANCE}; try again when it is idle, or pass --force"
+  fi
+  stop_runner
+  local env=()
+  [ "$packages_set" = 1 ] && env+=(RUNNER_EXTRA_PACKAGES="$packages")
+  log "upgrading ${INSTANCE}"
+  # provision.sh starts the service again at the end, and waits until it is
+  # listening for jobs.
+  run_provision "" "${env[@]+"${env[@]}"}"
+  runner_back
+}
+
+cmd_status() {
+  [ $# -eq 0 ] || die "status takes no options besides --instance"
+  command -v limactl >/dev/null || die "Lima is not installed"
+  local status
+  status="$(vm_status)"
+  if [ -z "$status" ]; then
+    echo "VM ${INSTANCE}: not created"
+    return
+  fi
+  echo "VM ${INSTANCE}: ${status}"
+  [ "$status" = "Running" ] || return 0
+  if ! registered; then
+    echo "runner: not registered"
+    return
+  fi
+  local name url svc
+  { read -r name; read -r url; } < <(runner_setting agentName gitHubUrl)
+  echo "runner: ${name}, registered at ${url}"
+  svc="$(guest sudo cat "$RUNNER_HOME/.service" 2>/dev/null || true)"
+  if [ -n "$svc" ] && guest systemctl is-active --quiet "$svc"; then
+    echo "service: running"
+  else
+    echo "service: NOT running (${svc:-no service installed})"
+  fi
+  if job_running; then echo "job: running"; else echo "job: idle"; fi
+  echo "runner version: $(guest sudo cat "$RUNNER_HOME/.provisioned-version" 2>/dev/null || echo unknown)"
+  echo "extra packages: $(guest sh -c 'cat /etc/ci-runner/extra-packages 2>/dev/null | tr "\n" " "')"
+  echo "labels: see $(runners_page "$url") (not stored in the VM)"
+}
+
+cmd_uninstall() {
+  local keep_vm=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --keep-vm) keep_vm=1; shift ;;
+      *) die "uninstall: unknown option $1 (see bin/ci-runner help)" ;;
+    esac
+  done
+  check_host
+  local status
+  status="$(vm_status)"
+  [ -n "$status" ] || die "no VM ${INSTANCE}"
+  [ "$status" = "Running" ] || limactl start --tty=false "$INSTANCE"
+  if registered; then
+    job_running && die "a job is running on ${INSTANCE}; uninstall when it is idle"
+    local url token
+    url="$(runner_setting gitHubUrl)"
+    echo "ci-runner: switch every repository that routes to this runner to hosted first:" >&2
+    echo "ci-runner:   gh variable set CI_RUNNER --repo <owner>/<repo> --body hosted" >&2
+    # Offline before the token is fetched or typed, which can take a while.
+    stop_runner
+    token="$(get_token remove "$url")"
+    log "deregistering from ${url}"
+    printf '%s\n' "$token" | guest_stdin sudo sh -c "cd $RUNNER_HOME && { [ ! -f .service ] || ./svc.sh uninstall; } && read -r t && ACTIONS_RUNNER_INPUT_TOKEN=\"\$t\" sudo --preserve-env=ACTIONS_RUNNER_INPUT_TOKEN -u runner ./config.sh remove"
+    token=""
+    runner_back
+  else
+    log "${INSTANCE} is not registered; nothing to deregister"
+  fi
+  if [ "$keep_vm" = 1 ]; then
+    log "kept VM ${INSTANCE}"
+    return
+  fi
+  limactl autostart disable "$INSTANCE" >/dev/null 2>&1 || limactl start-at-login --enabled=false "$INSTANCE" >/dev/null 2>&1 || true
+  limactl stop --force "$INSTANCE" >/dev/null 2>&1 || true
+  limactl delete --force "$INSTANCE"
+  log "deleted VM ${INSTANCE}"
+}
+
+# ── Main ────────────────────────────────────────────────────────────────────
+# --instance may come before or after the command.
+cmd=""
+rest=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --instance) INSTANCE="${2:?--instance needs a value}"; shift 2 ;;
+    *)
+      if [ -z "$cmd" ]; then cmd="$1"; else rest+=("$1"); fi
+      shift
+      ;;
+  esac
+done
+[ -n "$cmd" ] || { usage >&2; exit 1; }
+set -- "${rest[@]+"${rest[@]}"}"
+case "$cmd" in
+  install) cmd_install "$@" ;;
+  upgrade) cmd_upgrade "$@" ;;
+  status) cmd_status "$@" ;;
+  uninstall) cmd_uninstall "$@" ;;
+  help | -h | --help) usage ;;
+  *) usage >&2; exit 1 ;;
+esac
