@@ -23,7 +23,8 @@ exists to remove. So each routed job carries the routing expression inline, and
 
 - a hosted fallback;
 - pull requests only;
-- Dependabot excluded.
+- Dependabot excluded;
+- pull requests from forks excluded.
 
 ## Usage
 
@@ -48,4 +49,4 @@ shellcheck vm/provision.sh verify-routing/tests/run.sh
 Releases: move the `v1` tag for compatible changes. A change that makes a
 previously passing workflow fail, such as a new required guard in the
 expression, is `v2`, because every consumer has to update its inline copies at
-the same time.
+the same time. Changes are recorded in [`CHANGELOG.md`](CHANGELOG.md).

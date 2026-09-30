@@ -56,6 +56,8 @@ case_ "hosted fallback dropped"          fail "$EXPECTED" "s/ || 'ubuntu-latest'
 case_ "pull-request-only rule dropped"   fail "$EXPECTED" "s/github.event_name == 'pull_request' \&\& //"
 case_ "Dependabot actor check dropped"   fail "$EXPECTED" "s/github.actor != 'dependabot\[bot\]' \&\& //"
 case_ "Dependabot branch check dropped"  fail "$EXPECTED" "s/!startsWith(github.head_ref, 'dependabot\/') \&\& //"
+case_ "fork guard dropped"               fail "$EXPECTED" "s/github.event.pull_request.head.repo.full_name == github.repository \&\& //"
+case_ "fork guard weakened to !="        fail "$EXPECTED" "s/head.repo.full_name == github.repository/head.repo.full_name != github.repository/"
 case_ "bare self-hosted job"             fail "$EXPECTED" "s/^    runs-on: ubuntu-latest$/    runs-on: [self-hosted, linux, arm64]/"
 case_ "label in a step, not routing"     pass "$EXPECTED" "s/^      - run: echo docker$/      - name: Verify self-hosted i2dev-ci routing/"
 case_ "opted-in job not in expected"     fail "ci.yml:changes"

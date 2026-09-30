@@ -4,7 +4,7 @@ canonical `runs-on` expression.
 
 GitHub evaluates `runs-on` before any step runs, so no action can choose a
 job's runner: each opted-in job has to carry the expression inline. This check
-is what keeps those inline copies honest. The expression carries three
+is what keeps those inline copies honest. The expression carries four
 guarantees that nothing else enforces:
 
   1. A hosted fallback. With the repository variable CI_RUNNER unset or
@@ -15,6 +15,13 @@ guarantees that nothing else enforces:
   3. Dependabot stays hosted, checked by actor and by branch. Its branches
      bring in unreviewed install scripts, and the local VM, unlike a hosted
      one, is not thrown away after the job.
+  4. Pull requests from forks stay hosted: only a branch of the repository
+     itself, pushed by someone with write access, is routed. A deleted fork
+     leaves head.repo null, which also fails the comparison and runs hosted.
+     This is defence in depth, not a boundary: a fork PR runs the workflow
+     files from its own merge commit, so it can rewrite runs-on altogether.
+     What keeps strangers off the runner is the runner group admitting
+     private repositories only.
 
 Every `runs-on` must be either the canonical expression or a GitHub-hosted
 image name (ubuntu-*, windows-*, macos-*, alone or as a one-item list). It is
@@ -52,6 +59,7 @@ def canonical_expression(label: str, arch: str) -> str:
         "${{ vars.CI_RUNNER == 'local' && github.event_name == 'pull_request'"
         " && github.actor != 'dependabot[bot]'"
         " && !startsWith(github.head_ref, 'dependabot/')"
+        " && github.event.pull_request.head.repo.full_name == github.repository"
         f" && fromJSON('[{labels}]') || 'ubuntu-latest' }}}}"
     )
 
@@ -65,6 +73,10 @@ GUARDS = [
     ("github.event_name == 'pull_request'", "pull-request-only rule"),
     ("github.actor != 'dependabot[bot]'", "Dependabot actor excluded"),
     ("!startsWith(github.head_ref, 'dependabot/')", "Dependabot branch excluded"),
+    (
+        "github.event.pull_request.head.repo.full_name == github.repository",
+        "fork pull requests excluded",
+    ),
 ]
 
 

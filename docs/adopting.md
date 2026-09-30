@@ -25,7 +25,7 @@ Keep hosted:
 Replace each chosen job's `runs-on` with the canonical expression, verbatim:
 
 ```yaml
-runs-on: ${{ vars.CI_RUNNER == 'local' && github.event_name == 'pull_request' && github.actor != 'dependabot[bot]' && !startsWith(github.head_ref, 'dependabot/') && fromJSON('["self-hosted","linux","arm64","i2dev-ci"]') || 'ubuntu-latest' }}
+runs-on: ${{ vars.CI_RUNNER == 'local' && github.event_name == 'pull_request' && github.actor != 'dependabot[bot]' && !startsWith(github.head_ref, 'dependabot/') && github.event.pull_request.head.repo.full_name == github.repository && fromJSON('["self-hosted","linux","arm64","i2dev-ci"]') || 'ubuntu-latest' }}
 ```
 
 Put a comment above it that says why the job is routed and points to this
