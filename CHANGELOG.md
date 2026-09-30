@@ -4,7 +4,20 @@ Versions are the tags consumers pin, `verify-routing@vN`. A compatible change
 moves the current major tag; a change that makes a previously passing workflow
 fail is a new major (see [README](README.md#development)).
 
-## Unreleased (v2)
+## Unreleased
+
+## v2 (2026-09-30)
+
+### Upgrading from v1
+
+In one pull request per consuming repository:
+
+1. Make sure the runner has the label your expression will use: `local-ci`
+   by default (add it on the runners page if it was registered with another
+   label), or keep your label and pass it as `label:` below.
+2. Replace every routed job's `runs-on` with the v2 expression from
+   [`docs/adopting.md`](docs/adopting.md), using that label.
+3. Change `verify-routing@v1` to `verify-routing@v2`.
 
 ### Breaking
 
