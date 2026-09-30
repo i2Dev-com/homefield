@@ -12,9 +12,11 @@ inputs:
     required: false
     default: ''
   label:
-    description: The custom runner label the workflows route on.
+    description: >-
+      The custom runner label the workflows route on: RUNNER_LABEL in
+      provision.sh, and the last label in every inline expression.
     required: false
-    default: i2dev-ci
+    default: local-ci
   arch:
     description: The runner's architecture label (arm64 or x64).
     required: false

@@ -83,7 +83,7 @@ GUARDS = [
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--workflows-dir", default=".github/workflows")
-    ap.add_argument("--label", default="i2dev-ci")
+    ap.add_argument("--label", default="local-ci")
     ap.add_argument("--arch", default="arm64")
     ap.add_argument(
         "--expected",

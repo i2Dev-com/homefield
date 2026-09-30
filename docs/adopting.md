@@ -27,7 +27,7 @@ It must match the `verify-routing` version used in step 3 (`@v2` below); see
 [`CHANGELOG.md`](../CHANGELOG.md) when upgrading:
 
 ```yaml
-runs-on: ${{ vars.CI_RUNNER == 'local' && github.event_name == 'pull_request' && github.actor != 'dependabot[bot]' && !startsWith(github.head_ref, 'dependabot/') && github.event.pull_request.head.repo.full_name == github.repository && fromJSON('["self-hosted","linux","arm64","i2dev-ci"]') || 'ubuntu-latest' }}
+runs-on: ${{ vars.CI_RUNNER == 'local' && github.event_name == 'pull_request' && github.actor != 'dependabot[bot]' && !startsWith(github.head_ref, 'dependabot/') && github.event.pull_request.head.repo.full_name == github.repository && fromJSON('["self-hosted","linux","arm64","local-ci"]') || 'ubuntu-latest' }}
 ```
 
 Put a comment above it that says why the job is routed and points to this
@@ -48,6 +48,8 @@ In a job that runs on every PR, after `actions/checkout`:
 ```
 
 `expected` lists `workflow-file:job-id` for every job you routed in step 2.
+If the runner was registered with a `RUNNER_LABEL` other than `local-ci`, put
+that label in the expression in step 2 and pass it here as `label:`.
 Routing another job later means adding it here in the same PR, which keeps it
 a deliberate, reviewed change.
 

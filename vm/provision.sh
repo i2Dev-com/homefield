@@ -7,7 +7,20 @@
 #
 #   limactl copy vm/provision.sh i2dev-ci-runner:/tmp/provision.sh
 #   printf 'RUNNER_TOKEN=%s\n' "$TOKEN" |
-#     limactl shell i2dev-ci-runner sudo bash /tmp/provision.sh
+#     limactl shell i2dev-ci-runner sudo RUNNER_URL=https://github.com/<org> \
+#       bash /tmp/provision.sh
+#
+# Settings, as environment variables (after `sudo`, as above):
+#   RUNNER_URL    where to register: https://github.com/<org>, or a repository
+#                 URL. Required to register or move; not needed to re-run on a
+#                 runner that is already registered.
+#   RUNNER_LABEL  the custom label workflows route on (default local-ci). Must
+#                 match verify-routing's `label` input and the label in every
+#                 inline expression.
+#   RUNNER_NAME   default: the guest's hostname (lima-<instance>).
+#   RUNNER_GROUP  org runner group to join (default local-ci).
+# Name, label and group are fixed at registration; changing them later means a
+# move (below) with the new values.
 #
 # Tokens arrive on stdin, one KEY=VALUE per line (RUNNER_TOKEN, and
 # RUNNER_REMOVE_TOKEN for a move), and nowhere else. A token on a command line
@@ -25,20 +38,22 @@
 # keeps: config.sh exchanges it for the runner's own identity. Idempotent:
 # re-running upgrades packages and skips registration if already registered.
 #
-# Scope: registers at the organization by default, so one runner can serve
-# every repository its runner group allows (docs/runbook.md, "Runner group").
-# Set RUNNER_URL to a repository URL for a runner scoped to one repo.
+# Scope: an organization URL lets one runner serve every repository its runner
+# group allows (docs/runbook.md, "Runner group"). A repository URL gives a
+# runner scoped to that one repository.
 #
 # Moving an existing runner (repo -> org, or to another org): run with
 # RUNNER_REREGISTER=1 and both tokens on stdin, RUNNER_REMOVE_TOKEN for its
 # current scope and RUNNER_TOKEN for the new one. The old registration is
-# removed and the runner registered again under the same name and labels.
+# removed and the runner registered again under RUNNER_NAME and RUNNER_LABEL,
+# so pass the current values to keep them.
 set -euo pipefail
 
 RUNNER_VERSION="2.337.0"
 RUNNER_SHA256="9b1dc70626422526e3c94767cf024896beb15da5342a3f4819bf2feac13e0393"
-RUNNER_URL="${RUNNER_URL:-https://github.com/i2Dev-com}"
-RUNNER_NAME="${RUNNER_NAME:-i2dev-ci-lima}"
+RUNNER_URL="${RUNNER_URL:-}"
+RUNNER_NAME="${RUNNER_NAME:-$(hostname)}"
+RUNNER_LABEL="${RUNNER_LABEL:-local-ci}"
 # Org registrations join the runner group that limits which repositories may
 # use the runner (docs/runbook.md, "Runner group"). Without one the runner
 # lands in Default, usable by every repository in the organization. Runner
@@ -48,9 +63,21 @@ if [[ "$RUNNER_URL" =~ ^https://github\.com/[^/]+/?$ ]]; then
 else
   RUNNER_GROUP=""
 fi
-# `i2dev-ci` is the label the workflows route on. The others are GitHub's
-# defaults for this platform, repeated so the list is explicit.
-RUNNER_LABELS="self-hosted,linux,arm64,i2dev-ci"
+# RUNNER_LABEL is the label the workflows route on. The others are GitHub's
+# defaults for this platform, repeated so the list is explicit. It must be a
+# single custom label: a comma would smuggle in extra labels, and a default
+# label would route nothing that the defaults do not already match.
+if ! [[ "$RUNNER_LABEL" =~ ^[A-Za-z0-9._-]+$ ]]; then
+  echo "provision.sh: RUNNER_LABEL must be one label of letters, digits, '.', '_' or '-'" >&2
+  exit 1
+fi
+case "$(printf '%s' "$RUNNER_LABEL" | tr '[:upper:]' '[:lower:]')" in
+  self-hosted | linux | arm64 | x64)
+    echo "provision.sh: RUNNER_LABEL must be a custom label, not a default one ($RUNNER_LABEL)" >&2
+    exit 1
+    ;;
+esac
+RUNNER_LABELS="self-hosted,linux,arm64,${RUNNER_LABEL}"
 RUNNER_USER="runner"
 RUNNER_HOME="/opt/actions-runner"
 
@@ -81,10 +108,11 @@ fi
 # ── What this run has to do ─────────────────────────────────────────────────
 # The scope the runner is registered at now, from its own config (a JSON file
 # written with a BOM, hence utf-8-sig).
-registered_url() {
-  python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8-sig"))["gitHubUrl"])' \
-    "$RUNNER_HOME/.runner"
+runner_setting() {
+  python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8-sig"))[sys.argv[2]])' \
+    "$RUNNER_HOME/.runner" "$1"
 }
+registered_url() { runner_setting gitHubUrl; }
 job_running() { pgrep -f Runner.Worker >/dev/null; }
 svc_unit=""
 if [ -f "$RUNNER_HOME/.service" ]; then
@@ -96,6 +124,12 @@ fi
 # not remove that new registration with a remove token for the *old* scope,
 # which would fail and leave the runner offline. So it only moves what has not
 # moved yet.
+# RUNNER_URL has no default: a guess would register the runner, possibly at
+# the wrong organization, and a move compares against it.
+if [ -z "$RUNNER_URL" ] && { [ "${RUNNER_REREGISTER:-0}" = "1" ] || [ ! -f "$RUNNER_HOME/.runner" ]; }; then
+  echo "provision.sh: set RUNNER_URL (https://github.com/<org> or a repository URL) to register" >&2
+  exit 1
+fi
 move=0
 if [ "${RUNNER_REREGISTER:-0}" = "1" ] && [ -f "$RUNNER_HOME/.runner" ]; then
   if [ "$(registered_url)" = "${RUNNER_URL%/}" ]; then
@@ -381,6 +415,7 @@ EOF
 systemctl daemon-reload
 systemctl enable --now ci-runner-cleanup.timer ci-runner-maintenance.timer
 
-# Reports where the runner is actually registered, which differs from
-# RUNNER_URL when an existing registration was kept.
-echo "provision.sh: runner ${RUNNER_NAME} (${RUNNER_VERSION}) registered at $(registered_url), labels ${RUNNER_LABELS}"
+# Reports the registration as it is, which differs from the settings when an
+# existing registration was kept. Labels are not in the runner's config; the
+# runners page shows them.
+echo "provision.sh: runner $(runner_setting agentName) (${RUNNER_VERSION}) registered at $(registered_url)"

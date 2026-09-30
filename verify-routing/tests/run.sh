@@ -16,6 +16,7 @@ pass=0
 fail=0
 
 # case <name> <want: pass|fail> <expected list> [sed expression] [job to append]
+# LABEL in the environment is passed as --label; unset uses the default.
 # The append form exists for multi-line YAML, which BSD and GNU sed cannot both
 # write through one `s` command. Jobs are last in base/ci.yml, so an appended
 # job lands under `jobs:`.
@@ -39,7 +40,7 @@ case_() {
     printf '\n%s\n' "$append" >>"$dir/ci.yml"
   fi
   local got=pass
-  python3 "$SCRIPT" --workflows-dir "$dir" --expected "$expected" >"$dir/out" 2>&1 || got=fail
+  python3 "$SCRIPT" --workflows-dir "$dir" --expected "$expected" ${LABEL:+--label "$LABEL"} >"$dir/out" 2>&1 || got=fail
   if [ "$got" = "$want" ]; then
     echo "  ok   ${name} (${got})"
     pass=$((pass + 1))
@@ -59,7 +60,7 @@ case_ "Dependabot branch check dropped"  fail "$EXPECTED" "s/!startsWith(github.
 case_ "fork guard dropped"               fail "$EXPECTED" "s/github.event.pull_request.head.repo.full_name == github.repository \&\& //"
 case_ "fork guard weakened to !="        fail "$EXPECTED" "s/head.repo.full_name == github.repository/head.repo.full_name != github.repository/"
 case_ "bare self-hosted job"             fail "$EXPECTED" "s/^    runs-on: ubuntu-latest$/    runs-on: [self-hosted, linux, arm64]/"
-case_ "label in a step, not routing"     pass "$EXPECTED" "s/^      - run: echo docker$/      - name: Verify self-hosted i2dev-ci routing/"
+case_ "label in a step, not routing"     pass "$EXPECTED" "s/^      - run: echo docker$/      - name: Verify self-hosted local-ci routing/"
 case_ "opted-in job not in expected"     fail "ci.yml:changes"
 case_ "expected job not opted in"        fail "$EXPECTED ci.yml:docker"
 case_ "job id with trailing comment"     pass "$EXPECTED" "s/^  checks:$/  checks: # lint and test/"
@@ -69,7 +70,7 @@ case_ "quoted job id, expected"          pass "$EXPECTED" "s/^  checks:$/  'chec
 # GitHub matches labels case-insensitively and by superset, and the runner is
 # in the local-ci group, so each of these would run unguarded on the VM.
 case_ "Self-Hosted in other case"        fail "$EXPECTED" "s/^    runs-on: ubuntu-latest$/    runs-on: Self-Hosted/"
-case_ "label in other case"              fail "$EXPECTED" "s/^    runs-on: ubuntu-latest$/    runs-on: [self-hosted, I2DEV-CI]/"
+case_ "label in other case"              fail "$EXPECTED" "s/^    runs-on: ubuntu-latest$/    runs-on: [self-hosted, LOCAL-CI]/"
 case_ "default labels only"              fail "$EXPECTED" "s/^    runs-on: ubuntu-latest$/    runs-on: [linux, ARM64]/"
 case_ "runner group, inline"             fail "$EXPECTED" "s/^    runs-on: ubuntu-latest$/    runs-on: { group: local-ci }/"
 case_ "runner group, multi-line"         fail "$EXPECTED" "" "$(printf '  grouped:\n    runs-on:\n      group: local-ci\n    steps:\n      - run: echo grouped')"
@@ -83,6 +84,10 @@ case_ "hosted image as one-item list"    pass "$EXPECTED" "s/^    runs-on: ubunt
 case_ "list mixing hosted and local"     fail "$EXPECTED" "s/^    runs-on: ubuntu-latest$/    runs-on: [ubuntu-latest, self-hosted]/"
 case_ "unbalanced bracket"               fail "$EXPECTED" "s/^    runs-on: ubuntu-latest$/    runs-on: [ubuntu-latest/"
 case_ "empty expected, nothing routed"   pass "" "/runs-on: \${{ vars.CI_RUNNER/s/.*/    runs-on: ubuntu-latest/"
+# A custom label: it has to be passed, and the expression has to carry it.
+LABEL=acme-ci case_ "custom label, passed"     pass "$EXPECTED" 's/"local-ci"/"acme-ci"/'
+case_ "custom label, not passed"                fail "$EXPECTED" 's/"local-ci"/"acme-ci"/'
+LABEL=acme-ci case_ "custom label, stale copy" fail "$EXPECTED"
 
 # A missing directory must fail, not pass vacuously.
 if python3 "$SCRIPT" --workflows-dir /nonexistent --expected "" >/dev/null 2>&1; then

@@ -18,12 +18,13 @@ follow [`adopting.md`](adopting.md).
 Every opted-in job uses this `runs-on`, inline:
 
 ```yaml
-runs-on: ${{ vars.CI_RUNNER == 'local' && github.event_name == 'pull_request' && github.actor != 'dependabot[bot]' && !startsWith(github.head_ref, 'dependabot/') && github.event.pull_request.head.repo.full_name == github.repository && fromJSON('["self-hosted","linux","arm64","i2dev-ci"]') || 'ubuntu-latest' }}
+runs-on: ${{ vars.CI_RUNNER == 'local' && github.event_name == 'pull_request' && github.actor != 'dependabot[bot]' && !startsWith(github.head_ref, 'dependabot/') && github.event.pull_request.head.repo.full_name == github.repository && fromJSON('["self-hosted","linux","arm64","local-ci"]') || 'ubuntu-latest' }}
 ```
 
 - The **repository** variable `CI_RUNNER` is the switch, so each repository
   opts in and out on its own. `local` sends pull-request jobs to the runner
-  with label `i2dev-ci`. Unset, or any other value, sends them to hosted
+  with the routing label, `local-ci` unless the runner was registered with
+  another `RUNNER_LABEL`. Unset, or any other value, sends them to hosted
   `ubuntu-latest`.
 - **Pushes always run hosted**, whatever `CI_RUNNER` says. Deploys wait on the
   default branch's CI, and a merge must not sit queued behind a sleeping laptop.
@@ -100,14 +101,21 @@ limactl shell i2dev-ci-runner -- sh -c 'mount | grep -Ec "virtiofs|9p|sshfs|reve
 #    service, registration at the organization in group local-ci. The token
 #    goes in on stdin, never on a command line, where any process in the guest
 #    could read it; see "Registration tokens" below for where to get it.
+#    RUNNER_URL is required. RUNNER_LABEL (default local-ci), RUNNER_NAME
+#    (default: the guest hostname) and RUNNER_GROUP (default local-ci) are
+#    optional; see the top of provision.sh.
 limactl copy vm/provision.sh i2dev-ci-runner:/tmp/provision.sh
-printf 'RUNNER_TOKEN=%s\n' "$TOKEN" | limactl shell i2dev-ci-runner sudo bash /tmp/provision.sh
+printf 'RUNNER_TOKEN=%s\n' "$TOKEN" |
+  limactl shell i2dev-ci-runner sudo RUNNER_URL=https://github.com/i2Dev-com bash /tmp/provision.sh
 unset TOKEN
 ```
 
-Then, in *Organization settings → Actions → Runners*, confirm `i2dev-ci-lima`
-is **Idle** in the `local-ci` group, with labels
-`self-hosted, Linux, ARM64, i2dev-ci`.
+Then, in *Organization settings → Actions → Runners*, confirm the runner
+(`lima-i2dev-ci-runner`, or its `RUNNER_NAME`) is **Idle** in the `local-ci`
+group, with labels `self-hosted, Linux, ARM64, local-ci`.
+
+Re-running `provision.sh` on a registered runner (to upgrade it) needs no
+settings: the registration is kept as it is.
 
 **Registration tokens.** A registration token is valid for one hour, and the
 runner exchanges it for its own identity at registration. An org token needs
@@ -134,7 +142,7 @@ GITHUB_TOKEN='' gh variable set CI_RUNNER --repo i2Dev-com/<repo> --body hosted
 ```
 
 `runs-on` is evaluated when a job is queued. **A job that is already queued for
-`i2dev-ci` stays queued after the switch.** Cancel the run and re-run it:
+the local runner stays queued after the switch.** Cancel the run and re-run it:
 
 ```bash
 GITHUB_TOKEN='' gh run cancel <run-id> --repo i2Dev-com/<repo>
@@ -215,8 +223,8 @@ service ports never appear there.
 ## Moving a registration
 
 To move the runner to another scope (for example from one repository to the
-organization), re-register it in place. It keeps its name and labels, so no
-workflow changes are needed. `REMOVE` is a remove-token for the **current**
+organization), re-register it in place. Pass its current `RUNNER_NAME` and
+`RUNNER_LABEL` so it keeps them and no workflow changes are needed. `REMOVE` is a remove-token for the **current**
 scope (for a repository: `gh api -X POST repos/i2Dev-com/<repo>/actions/runners/remove-token -q .token`,
 which needs repository admin). `TOKEN` is a registration token for the new
 scope (see "Registration tokens").
@@ -227,7 +235,9 @@ runner before anything else.
 ```bash
 limactl copy vm/provision.sh i2dev-ci-runner:/tmp/provision.sh
 printf 'RUNNER_REMOVE_TOKEN=%s\nRUNNER_TOKEN=%s\n' "$REMOVE" "$TOKEN" |
-  limactl shell i2dev-ci-runner sudo RUNNER_REREGISTER=1 bash /tmp/provision.sh
+  limactl shell i2dev-ci-runner sudo RUNNER_REREGISTER=1 \
+    RUNNER_URL=https://github.com/<new-scope> RUNNER_NAME=<name> RUNNER_LABEL=<label> \
+    bash /tmp/provision.sh
 unset REMOVE TOKEN
 ```
 
@@ -256,5 +266,5 @@ repeat Setup. On a Linux box, run `provision.sh` directly on an Ubuntu 24.04
 host or VM. It hardcodes the linux-arm64 tarball, so an x86-64 host needs a
 different tarball and checksum, and consumers' `verify-routing` then takes
 `arch: x64` along with the matching expression. Register the new runner with
-the same `i2dev-ci` label, confirm it is online, then remove the old one. The
+the same `RUNNER_LABEL`, confirm it is online, then remove the old one. The
 decision to buy hardware waits on i2dev#890's measurement.

@@ -17,6 +17,17 @@ fail is a new major (see [README](README.md#development)).
   This is defence in depth for private repositories that allow forking; it
   does not make the runner safe for public repositories (see the trust
   boundary in [`docs/runbook.md`](docs/runbook.md)).
+- The default routing label is `local-ci` instead of `i2dev-ci`, in
+  `verify-routing` (`label` input) and in `provision.sh` (new `RUNNER_LABEL`
+  setting). A runner registered with `i2dev-ci` keeps working in either of two
+  ways: pass `label: i2dev-ci` to `verify-routing@v2` and keep that label in
+  the expression, or add `local-ci` to the runner's labels (*Settings →
+  Actions → Runners →* the runner *→ Labels*) and use the default.
+- `provision.sh` no longer defaults `RUNNER_URL` to an organization: it is
+  required to register or move, and not needed to re-run on a registered
+  runner. `RUNNER_NAME` defaults to the guest's hostname instead of
+  `i2dev-ci-lima`. Existing registrations are unaffected: both are only read
+  at registration.
 
 ## v1
 
