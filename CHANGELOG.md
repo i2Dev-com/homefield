@@ -19,7 +19,9 @@ fail is a new major (see [README](README.md#development)).
   boundary in [`docs/runbook.md`](docs/runbook.md)).
 - The default routing label is `local-ci` instead of `i2dev-ci`, in
   `verify-routing` (`label` input) and in `provision.sh` (new `RUNNER_LABEL`
-  setting). A runner registered with `i2dev-ci` keeps working in either of two
+  setting). Both reject anything but one custom label, including GitHub's
+  default labels and hosted image names such as `ubuntu-latest`, which would
+  make the runner take plain hosted jobs. A runner registered with `i2dev-ci` keeps working in either of two
   ways: pass `label: i2dev-ci` to `verify-routing@v2` and keep that label in
   the expression, or add `local-ci` to the runner's labels (*Settings →
   Actions → Runners →* the runner *→ Labels*) and use the default.

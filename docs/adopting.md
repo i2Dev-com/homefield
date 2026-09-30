@@ -81,8 +81,9 @@ online but will not take them.
    the guard runs.
 2. Set the repository variable:
    `GITHUB_TOKEN='' gh variable set CI_RUNNER --repo i2Dev-com/<repo> --body local`.
-3. Open or re-run a PR, and confirm in the job log that the runner name is
-   `i2dev-ci-lima`.
+3. Open or re-run a PR, and confirm that the job log's *Runner name* is the
+   local runner's (for i2dev: `i2dev-ci-lima`). If the job waits for a runner
+   instead, see "Failure modes" in [`runbook.md`](runbook.md).
 4. **Find toolchain gaps by running, not by reading.** The VM has what
    [`vm/provision.sh`](../vm/provision.sh) installs, which is less than
    `ubuntu-latest`. i2dev's grep-based inventory missed Docker Compose, which

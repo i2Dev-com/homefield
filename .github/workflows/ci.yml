@@ -17,7 +17,7 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Shellcheck
-        run: shellcheck vm/provision.sh verify-routing/tests/run.sh
+        run: shellcheck vm/provision.sh verify-routing/tests/run.sh tests/label-rule.sh
 
       # Pinned and checksum-verified. Other repositories run this repository's
       # action to guard their routing, so nothing in its CI executes a download
@@ -38,6 +38,9 @@ jobs:
 
       - name: verify_routing.py fixture suite
         run: bash verify-routing/tests/run.sh
+
+      - name: Routing label rule, provision.sh and verify_routing.py agree
+        run: bash tests/label-rule.sh
 
       # The action as consumers call it, not just the script behind it: inputs
       # through env, $GITHUB_ACTION_PATH resolution, composite wiring.

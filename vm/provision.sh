@@ -19,8 +19,10 @@
 #                 inline expression.
 #   RUNNER_NAME   default: the guest's hostname (lima-<instance>).
 #   RUNNER_GROUP  org runner group to join (default local-ci).
-# Name, label and group are fixed at registration; changing them later means a
-# move (below) with the new values.
+# Name, label and group are read only at registration. To change the label
+# later, edit the runner's labels on GitHub (runners page or REST API); to
+# change the name or group, remove the runner and register it again
+# (docs/runbook.md). Re-running with new values changes nothing.
 #
 # Tokens arrive on stdin, one KEY=VALUE per line (RUNNER_TOKEN, and
 # RUNNER_REMOVE_TOKEN for a move), and nowhere else. A token on a command line
@@ -65,18 +67,22 @@ else
 fi
 # RUNNER_LABEL is the label the workflows route on. The others are GitHub's
 # defaults for this platform, repeated so the list is explicit. It must be a
-# single custom label: a comma would smuggle in extra labels, and a default
-# label would route nothing that the defaults do not already match.
+# single custom label: a comma would smuggle in extra labels. It must not be a
+# GitHub default label or a hosted image name either, because GitHub gives a
+# job any runner whose labels are a superset of the request: a runner labelled
+# `ubuntu-latest` would take every plain `runs-on: ubuntu-latest` job in the
+# organization, with none of the expression's guards. verify_routing.py
+# applies the same rule to its `label` input; keep the two in step.
 if ! [[ "$RUNNER_LABEL" =~ ^[A-Za-z0-9._-]+$ ]]; then
   echo "provision.sh: RUNNER_LABEL must be one label of letters, digits, '.', '_' or '-'" >&2
   exit 1
 fi
-case "$(printf '%s' "$RUNNER_LABEL" | tr '[:upper:]' '[:lower:]')" in
-  self-hosted | linux | arm64 | x64)
-    echo "provision.sh: RUNNER_LABEL must be a custom label, not a default one ($RUNNER_LABEL)" >&2
-    exit 1
-    ;;
-esac
+label_lc="$(printf '%s' "$RUNNER_LABEL" | tr '[:upper:]' '[:lower:]')"
+if [[ "$label_lc" =~ ^(self-hosted|linux|windows|macos|ubuntu|x64|x86|arm|arm64)$ ]] ||
+  [[ "$label_lc" =~ ^(ubuntu|windows|macos)- ]]; then
+  echo "provision.sh: RUNNER_LABEL must be a custom label, not a GitHub default label or hosted image name ($RUNNER_LABEL)" >&2
+  exit 1
+fi
 RUNNER_LABELS="self-hosted,linux,arm64,${RUNNER_LABEL}"
 RUNNER_USER="runner"
 RUNNER_HOME="/opt/actions-runner"
@@ -108,9 +114,10 @@ fi
 # ── What this run has to do ─────────────────────────────────────────────────
 # The scope the runner is registered at now, from its own config (a JSON file
 # written with a BOM, hence utf-8-sig).
+# Prints the named settings, space-separated.
 runner_setting() {
-  python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8-sig"))[sys.argv[2]])' \
-    "$RUNNER_HOME/.runner" "$1"
+  python3 -c 'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8-sig")); print(*(d[k] for k in sys.argv[2:]))' \
+    "$RUNNER_HOME/.runner" "$@"
 }
 registered_url() { runner_setting gitHubUrl; }
 job_running() { pgrep -f Runner.Worker >/dev/null; }
@@ -133,7 +140,7 @@ fi
 move=0
 if [ "${RUNNER_REREGISTER:-0}" = "1" ] && [ -f "$RUNNER_HOME/.runner" ]; then
   if [ "$(registered_url)" = "${RUNNER_URL%/}" ]; then
-    echo "provision.sh: already registered at ${RUNNER_URL}; skipping re-registration"
+    echo "provision.sh: already registered at ${RUNNER_URL}; skipping re-registration (name and labels unchanged)"
   else
     move=1
   fi
@@ -418,4 +425,5 @@ systemctl enable --now ci-runner-cleanup.timer ci-runner-maintenance.timer
 # Reports the registration as it is, which differs from the settings when an
 # existing registration was kept. Labels are not in the runner's config; the
 # runners page shows them.
-echo "provision.sh: runner $(runner_setting agentName) (${RUNNER_VERSION}) registered at $(registered_url)"
+read -r reg_name reg_url < <(runner_setting agentName gitHubUrl)
+echo "provision.sh: runner ${reg_name} (${RUNNER_VERSION}) registered at ${reg_url}"

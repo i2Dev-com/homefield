@@ -53,6 +53,28 @@ HOSTED = re.compile(
 )
 
 
+# The routing label must be one custom label, the rule provision.sh applies to
+# RUNNER_LABEL; keep the two in step. A comma would make the label several
+# labels, and a GitHub default label or hosted image name would make the runner
+# match jobs that never asked for it: GitHub gives a job any runner whose
+# labels are a superset of the request, so a runner labelled `ubuntu-latest`
+# takes plain `runs-on: ubuntu-latest` jobs, which HOSTED above lets through.
+LABEL_CHARS = re.compile(r"^[A-Za-z0-9._-]+$")
+RESERVED_LABEL = re.compile(
+    r"^(self-hosted|linux|windows|macos|ubuntu|x64|x86|arm|arm64)$"
+    r"|^(ubuntu|windows|macos)-",
+    re.IGNORECASE,
+)
+
+
+def label_problem(label: str) -> str:
+    if not LABEL_CHARS.match(label):
+        return "must be one label of letters, digits, '.', '_' or '-'"
+    if RESERVED_LABEL.match(label):
+        return "must be a custom label, not a GitHub default label or hosted image name"
+    return ""
+
+
 def canonical_expression(label: str, arch: str) -> str:
     labels = ",".join(f'"{x}"' for x in ("self-hosted", "linux", arch, label))
     return (
@@ -92,6 +114,10 @@ def main() -> int:
     )
     args = ap.parse_args()
 
+    problem = label_problem(args.label)
+    if problem:
+        print(f"  \033[31mFAIL\033[0m label {args.label!r} {problem}")
+        return 1
     canonical = canonical_expression(args.label, args.arch)
     expected = [e for e in re.split(r"[\s,]+", args.expected) if e]
 

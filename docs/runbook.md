@@ -155,6 +155,7 @@ GITHUB_TOKEN='' gh run rerun <run-id> --repo i2Dev-com/<repo>
 |---|---|---|---|
 | PR job "Waiting for a runner to pick up this job" | VM stopped, Mac asleep or offline, runner service down | The PR's check waits in the queue, and after 24 h GitHub fails it. Merges and deploys are unaffected, because pushes run hosted. | Start the VM (`limactl start i2dev-ci-runner`), or switch to hosted and re-run. |
 | Waiting forever although the runner is online and idle | The repository is not in the runner group | Same as above | Add the repository to the group, or switch it to hosted |
+| Waiting forever although the runner is online and idle, and the repository is in the group | The label in the expression is not one of the runner's labels. For example, a repository moved to `verify-routing@v2`, whose default label is `local-ci`, while the runner was registered with `i2dev-ci` | Same as above | Add the label to the runner (*Settings → Actions → Runners →* the runner *→ Labels*), or pass the runner's label to `verify-routing` as `label:` and use it in the expression |
 | A PR job waits while another runs | One runner runs one job at a time, across all repositories | Serialised, not failed | Accept it, or switch the less urgent repository to hosted |
 | Job fails only on the local runner | Toolchain or arch gap between the VM and `ubuntu-latest` (arm64 vs x86-64) | Red check | Re-run hosted to confirm. Then fix `provision.sh` or keep that job hosted |
 | `No space left on device` in the VM | Docker images and old workspaces | Red check | `limactl shell i2dev-ci-runner sudo /usr/local/sbin/ci-runner-cleanup` |
@@ -224,7 +225,8 @@ service ports never appear there.
 
 To move the runner to another scope (for example from one repository to the
 organization), re-register it in place. Pass its current `RUNNER_NAME` and
-`RUNNER_LABEL` so it keeps them and no workflow changes are needed. `REMOVE` is a remove-token for the **current**
+`RUNNER_LABEL` so it keeps them and no workflow changes are needed.
+`REMOVE` is a remove-token for the **current**
 scope (for a repository: `gh api -X POST repos/i2Dev-com/<repo>/actions/runners/remove-token -q .token`,
 which needs repository admin). `TOKEN` is a registration token for the new
 scope (see "Registration tokens").
@@ -244,6 +246,19 @@ unset REMOVE TOKEN
 If a later step fails, for example the service does not come up, re-run the
 same command. A runner already registered at the new scope is not removed
 again, so the stale remove token does no harm.
+
+## Changing the label or name
+
+`provision.sh` reads `RUNNER_NAME`, `RUNNER_LABEL` and `RUNNER_GROUP` only at
+registration, and a move at the same `RUNNER_URL` is skipped, so re-running it
+with new values changes nothing.
+
+- **Label:** edit it on GitHub, no re-registration needed: *Settings →
+  Actions → Runners →* the runner *→ Labels*. Add the new label, move every
+  consumer's expression and `label:` to it, then remove the old one.
+- **Name or group:** the group can be changed on the same page. For a new
+  name, remove the runner (below, keeping the VM) and register it again with
+  the new `RUNNER_NAME`.
 
 ## Removing the runner
 
