@@ -41,7 +41,9 @@ install:
                      (required for a new registration)
   --label LABEL      routing label (default local-ci)
   --name NAME        runner name (default: the guest hostname, lima-<instance>)
-  --group GROUP      org runner group (default local-ci; ignored for a repo)
+  --group GROUP      org runner group (default local-ci; ignored for a repo).
+                     On the GitHub Free plan, use Default: custom groups
+                     need Team or Enterprise
   --packages "A B"   extra apt packages (RUNNER_EXTRA_PACKAGES)
   --cpus N           VM CPUs, when creating it (default: vm/lima.yaml)
   --memory GIB       VM memory in GiB, when creating it (default: vm/lima.yaml)

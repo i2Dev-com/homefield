@@ -6,6 +6,23 @@ fail is a new major (see [README](README.md#development)).
 
 ## Unreleased
 
+### Changed
+
+- Docs are written for any organization or account, not one deployment: a
+  README with a quick start, requirements and limitations (Apple Silicon,
+  private repositories only, one job at a time, offline behaviour, plans and
+  personal accounts), the security model, cost and alternatives; the runbook
+  and adoption guide use placeholders and the default VM name, and no longer
+  link to private issues. The adopters table is gone: each adopting
+  repository documents its own routing.
+- The guest OS maintenance hour (07:00) is documented as adjustable with a
+  systemd drop-in.
+- The security model now states that the VM's network is not isolated: jobs
+  can reach the Mac's services through `host.lima.internal`, including
+  loopback-only ones, and the LAN (#18). The earlier docs said the VM had no
+  access to the Mac's ports.
+- Free-plan organizations are told to register with `--group Default`.
+
 ### Added
 
 - `bin/ci-runner`: `install`, `upgrade`, `status` and `uninstall` the runner

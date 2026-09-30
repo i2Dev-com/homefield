@@ -1,9 +1,13 @@
-# Lima VM for the local GitHub Actions runner (i2Dev-com/i2dev#879).
+# Lima VM for the local GitHub Actions runner.
 #
 # The VM is the isolation boundary: CI jobs run pull-request code, so nothing
 # of the host's — home directory, SSH keys, AWS profile, gh auth — may be
 # reachable from inside. Everything below that looks like a missing default is
 # deliberate. Setup and recovery: docs/runbook.md.
+#
+# Not yet covered: the guest's outbound network. Lima's user-mode network maps
+# host.lima.internal (192.168.5.2) to the host's loopback, so services on the
+# host, even 127.0.0.1-only ones, are reachable from the guest (ci-runner#18).
 #
 # Requires Lima >= 1.1 (for `base:`). Create with --mount-none as well, so a
 # future change to Lima's defaults cannot quietly bring the home mount back.

@@ -1,11 +1,10 @@
 # Adopting the local runner in a repository
 
-A checklist for routing a repository's pull-request CI to the shared local
-runner. i2dev did this first (i2Dev-com/i2dev#887). Its
-`.github/workflows/ci.yml` and `ci-checks.yml` are the worked example.
+A checklist for routing a repository's pull-request CI to the local runner,
+once it is installed ([README: Quick start](../README.md#quick-start)).
 
 The repository must be **private** (see the trust boundary in
-[`runbook.md`](runbook.md)).
+[`runbook.md`](runbook.md#trust-boundary)).
 
 ## 1. Choose the jobs
 
@@ -67,27 +66,30 @@ removed by the runner, but anything a step starts itself (`docker run -d`,
 `docker compose up`) is not. A leftover container keeps its name and its host
 port, so the next job that needs that port fails. Remove such containers in an
 `if: always()` step. If they were started in the background, wait for the
-starting process to exit first. snap#886 is the example.
+starting process to exit first.
 
 ## 5. Allow the repository in the runner group
 
-*Organization settings → Actions → Runner groups → `local-ci` → Repository
-access* → add the repository. Until then its jobs wait for a runner that is
-online but will not take them.
+For an organization runner in a custom group: *Organization settings →
+Actions → Runner groups → `local-ci` → Repository access* → add the
+repository. Until then its jobs wait for a runner that is online but will not
+take them. A repository-scoped runner, or one in the Default group, needs
+nothing here.
 
 ## 6. Run it, then switch it on
 
 1. Merge steps 2–4 with `CI_RUNNER` unset. Everything still runs hosted, and
    the guard runs.
 2. Set the repository variable:
-   `GITHUB_TOKEN='' gh variable set CI_RUNNER --repo i2Dev-com/<repo> --body local`.
+   `gh variable set CI_RUNNER --repo <owner>/<repo> --body local`.
 3. Open or re-run a PR, and confirm that the job log's *Runner name* is the
-   local runner's (for i2dev: `i2dev-ci-lima`). If the job waits for a runner
-   instead, see "Failure modes" in [`runbook.md`](runbook.md).
+   local runner's (`bin/ci-runner status` shows it). If the job waits for a
+   runner instead, see "Failure modes" in [`runbook.md`](runbook.md).
 4. **Find toolchain gaps by running, not by reading.** The VM has what
    [`vm/provision.sh`](../vm/provision.sh) installs, which is less than
-   `ubuntu-latest`. i2dev's grep-based inventory missed Docker Compose, which
-   one shell test called for real, and the first local run failed on it. If a
+   `ubuntu-latest`. Grepping the workflows for the commands they call misses
+   things: that is how Docker Compose, which one shell test ran for real, was
+   missed once, and the first local run failed on it. If a
    job fails locally but passes hosted, add what is missing through
    `RUNNER_EXTRA_PACKAGES` or a hook ("Adding tools" in
    [`runbook.md`](runbook.md)), or keep that job hosted. Only propose a
@@ -96,10 +98,6 @@ online but will not take them.
 
 ## 7. Record it
 
-In the adopting repository, document which jobs are routed and why, and link
-to [`runbook.md`](runbook.md). Add a line to the table below.
-
-| Repository | Routed jobs | Since |
-|---|---|---|
-| i2Dev-com/i2dev | `ci.yml:changes`, `ci-checks.yml:checks` | 2026-09-29 (i2dev#891) |
-| i2Dev-com/snap | `ci.yml:ci` | 2026-09-29 (snap#886) |
+In the adopting repository, document which jobs are routed and why, how to
+switch back to hosted, and link to [`runbook.md`](runbook.md). The routed
+jobs themselves are already listed in the guard's `expected`.
