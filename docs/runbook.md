@@ -121,7 +121,9 @@ group, with labels `self-hosted, Linux, ARM64, local-ci`.
 
 Re-running `provision.sh` on a registered runner (to upgrade it) needs no
 settings: the registration is kept as it is. `bin/ci-runner upgrade` does
-that, and refuses while a job is running.
+that: it refuses while a job is running, then stops the runner so no job can
+start mid-upgrade, and `provision.sh` starts it again at the end (or the
+command does, if provisioning fails).
 
 **Registration tokens.** A registration token is valid for one hour, and the
 runner exchanges it for its own identity at registration. An org token needs

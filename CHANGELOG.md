@@ -12,8 +12,10 @@ fail is a new major (see [README](README.md#development)).
   on a Mac in one command each. It checks prerequisites, creates the VM,
   verifies its isolation before running anything in it, fetches tokens with
   `gh` or prompts for them (never on a command line), refuses to upgrade or
-  remove while a job is running, and refuses a personal account's URL,
-  which cannot have account-wide runners. Runs on macOS's stock bash 3.2.
+  remove while a job is running and takes the runner offline for the
+  duration (starting it again if the command fails), and refuses a personal
+  account's URL, which cannot have account-wide runners (checked with `gh`,
+  or `curl` without it). Runs on macOS's stock bash 3.2.
 - `provision.sh` rejects a `RUNNER_URL` that is not a github.com organization
   or repository.
 

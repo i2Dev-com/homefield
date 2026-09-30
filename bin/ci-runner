@@ -49,7 +49,7 @@ install:
 
 upgrade:
   --packages "A B"   replace the saved extra packages
-  --force            upgrade even while a job is running (it may be cancelled)
+  --force            upgrade even while a job is running (the job is cancelled)
 
 uninstall:
   --keep-vm          only deregister; keep the VM
@@ -123,9 +123,36 @@ verify_isolation() {
 registered() { guest sudo test -f "$RUNNER_HOME/.runner"; }
 job_running() { guest pgrep -f Runner.Worker >/dev/null; }
 
-# Prints the named settings from the runner's config, space-separated.
+# Maintenance (upgrade, uninstall) takes the runner offline first, straight
+# after the idle check: a runner that is still listening can be handed a job
+# at any moment, and apt restarting Docker or the service being uninstalled
+# would then take that job down. If the command then fails, the runner is
+# started again on the way out; a command that succeeds calls runner_back.
+stopped_unit=""
+stop_runner() {
+  stopped_unit="$(guest sudo cat "$RUNNER_HOME/.service" 2>/dev/null || true)"
+  [ -n "$stopped_unit" ] || return 0
+  trap restart_runner_on_failure EXIT
+  log "stopping ${stopped_unit}: the runner takes no jobs until this finishes"
+  guest sudo systemctl stop "$stopped_unit"
+}
+restart_runner_on_failure() {
+  local rc=$?
+  if [ "$rc" -ne 0 ] && [ -n "$stopped_unit" ]; then
+    echo "ci-runner: failed; starting ${stopped_unit} again" >&2
+    guest sudo systemctl start "$stopped_unit" ||
+      echo "ci-runner: could not start ${stopped_unit}; check bin/ci-runner status" >&2
+  fi
+}
+runner_back() {
+  trap - EXIT
+  stopped_unit=""
+}
+
+# Prints the named settings from the runner's config, one per line: a name
+# may contain spaces.
 runner_setting() {
-  guest sudo python3 -c 'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8-sig")); print(*(d[k] for k in sys.argv[2:]))' \
+  guest sudo python3 -c 'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8-sig")); print(*(d[k] for k in sys.argv[2:]), sep="\n")' \
     "$RUNNER_HOME/.runner" "$@"
 }
 
@@ -178,14 +205,21 @@ get_token() {
 # Personal accounts have no account-level runners: a user URL would fail at
 # registration with a confusing error, so say so up front.
 check_scope_owner() {
-  local url="${1%/}" owner type
+  local url="${1%/}" owner out type=""
   [[ "$url" =~ ^https://github\.com/([A-Za-z0-9_.-]+)$ ]] || return 0
   owner="${BASH_REMATCH[1]}"
-  command -v gh >/dev/null || return 0
-  type="$(gh api "users/${owner}" -q .type 2>/dev/null || true)"
-  if [ "$type" = "User" ]; then
-    die "${owner} is a personal account, which cannot have account-wide runners; use a repository URL (https://github.com/${owner}/<repo>)"
+  # gh when it works, else the public API with curl (no python3 needed: a
+  # stock Mac only has the stub that offers to install it).
+  if command -v gh >/dev/null && out="$(gh api "users/${owner}" -q .type 2>/dev/null)"; then
+    type="$out"
+  elif out="$(curl -fsS "https://api.github.com/users/${owner}" 2>/dev/null)"; then
+    type="$(printf '%s\n' "$out" | sed -n 's/^ *"type": *"\([A-Za-z]*\)".*/\1/p' | head -1)"
   fi
+  case "$type" in
+    Organization) ;;
+    User) die "${owner} is a personal account, which cannot have account-wide runners; use a repository URL (https://github.com/${owner}/<repo>)" ;;
+    *) die "could not find ${owner} on GitHub (or reach api.github.com) to check that it is an organization" ;;
+  esac
 }
 
 # ── Provisioning ────────────────────────────────────────────────────────────
@@ -281,10 +315,14 @@ cmd_upgrade() {
   if job_running && [ "$force" != 1 ]; then
     die "a job is running on ${INSTANCE}; try again when it is idle, or pass --force"
   fi
+  stop_runner
   local env=()
   [ "$packages_set" = 1 ] && env+=(RUNNER_EXTRA_PACKAGES="$packages")
   log "upgrading ${INSTANCE}"
+  # provision.sh starts the service again at the end, and waits until it is
+  # listening for jobs.
   run_provision "" "${env[@]+"${env[@]}"}"
+  runner_back
 }
 
 cmd_status() {
@@ -303,7 +341,7 @@ cmd_status() {
     return
   fi
   local name url svc
-  read -r name url < <(runner_setting agentName gitHubUrl)
+  { read -r name; read -r url; } < <(runner_setting agentName gitHubUrl)
   echo "runner: ${name}, registered at ${url}"
   svc="$(guest sudo cat "$RUNNER_HOME/.service" 2>/dev/null || true)"
   if [ -n "$svc" ] && guest systemctl is-active --quiet "$svc"; then
@@ -336,10 +374,13 @@ cmd_uninstall() {
     url="$(runner_setting gitHubUrl)"
     echo "ci-runner: switch every repository that routes to this runner to hosted first:" >&2
     echo "ci-runner:   gh variable set CI_RUNNER --repo <owner>/<repo> --body hosted" >&2
+    # Offline before the token is fetched or typed, which can take a while.
+    stop_runner
     token="$(get_token remove "$url")"
     log "deregistering from ${url}"
     printf '%s\n' "$token" | guest_stdin sudo sh -c "cd $RUNNER_HOME && { [ ! -f .service ] || ./svc.sh uninstall; } && read -r t && ACTIONS_RUNNER_INPUT_TOKEN=\"\$t\" sudo --preserve-env=ACTIONS_RUNNER_INPUT_TOKEN -u runner ./config.sh remove"
     token=""
+    runner_back
   else
     log "${INSTANCE} is not registered; nothing to deregister"
   fi

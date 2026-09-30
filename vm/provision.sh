@@ -142,9 +142,9 @@ fi
 # ── What this run has to do ─────────────────────────────────────────────────
 # The scope the runner is registered at now, from its own config (a JSON file
 # written with a BOM, hence utf-8-sig).
-# Prints the named settings, space-separated.
+# Prints the named settings, one per line: a name may contain spaces.
 runner_setting() {
-  python3 -c 'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8-sig")); print(*(d[k] for k in sys.argv[2:]))' \
+  python3 -c 'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8-sig")); print(*(d[k] for k in sys.argv[2:]), sep="\n")' \
     "$RUNNER_HOME/.runner" "$@"
 }
 registered_url() { runner_setting gitHubUrl; }
@@ -495,5 +495,5 @@ systemctl enable --now ci-runner-cleanup.timer ci-runner-maintenance.timer
 # Reports the registration as it is, which differs from the settings when an
 # existing registration was kept. Labels are not in the runner's config; the
 # runners page shows them.
-read -r reg_name reg_url < <(runner_setting agentName gitHubUrl)
+{ read -r reg_name; read -r reg_url; } < <(runner_setting agentName gitHubUrl)
 echo "provision.sh: runner ${reg_name} (${RUNNER_VERSION}) registered at ${reg_url}"
