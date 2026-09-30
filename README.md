@@ -8,7 +8,7 @@ changes. Background: i2Dev-com/i2dev#879.
 | Path | What it is |
 |---|---|
 | [`vm/lima.yaml`](vm/lima.yaml) | The Lima VM that isolates the runner: Ubuntu 24.04 arm64, no host mounts, no port forwarding, no SSH-agent forwarding |
-| [`vm/provision.sh`](vm/provision.sh) | Installs the toolchain, Docker, the checksum-pinned runner, a cleanup timer and an idle-time OS update timer. Registers the runner at the org in the `local-ci` runner group. Idempotent, and handles upgrades and re-registration |
+| [`vm/provision.sh`](vm/provision.sh) | Installs the toolchain, Docker, the checksum-pinned runner, a cleanup timer and an idle-time OS update timer. Registers the runner at `RUNNER_URL` (an organization, in runner group `local-ci`, or one repository) with routing label `RUNNER_LABEL` (default `local-ci`). Idempotent, and handles upgrades and moves |
 | [`verify-routing/`](verify-routing/action.yml) | Composite action that fails a repository's CI unless every `runs-on` is either a GitHub-hosted image or the canonical routing expression, and the set of routed jobs matches its reviewed list |
 | [`docs/runbook.md`](docs/runbook.md) | Setup, runner group, switching, failure modes, maintenance, removal |
 | [`docs/adopting.md`](docs/adopting.md) | Checklist for routing another repository's jobs to the runner |
@@ -43,7 +43,8 @@ the organization: *Settings → Actions → General → Access*.
 
 ```bash
 bash verify-routing/tests/run.sh   # fixture suite: every drift case must fail
-shellcheck vm/provision.sh verify-routing/tests/run.sh
+bash tests/label-rule.sh           # provision.sh and verify-routing accept the same labels
+shellcheck vm/provision.sh verify-routing/tests/run.sh tests/label-rule.sh
 ```
 
 Releases: move the current major tag for compatible changes. A change that
