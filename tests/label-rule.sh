@@ -4,34 +4,18 @@
 # one side accepts and the other rejects is a runner no workflow can reach, or
 # a check that passes for a runner that cannot be registered.
 #
-# provision.sh validates the label before its root check, so as a normal user
-# it stops at "run as root" for a valid label and never touches the machine.
-# Refuses to run as root for the same reason.
-#
 # Run:  bash tests/label-rule.sh
 set -uo pipefail
+# shellcheck source=tests/lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-if [ "$(id -u)" -eq 0 ]; then
-  echo "label-rule.sh: run as a normal user; as root provision.sh would provision this machine" >&2
-  exit 1
-fi
-
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 EMPTY="$(mktemp -d)"
 trap 'rm -rf "$EMPTY"' EXIT
-
-pass=0
-fail=0
 
 # check <label> <want: ok|reject>
 check() {
   local label="$1" want="$2" prov verify
-  prov="$(RUNNER_LABEL="$label" bash "$ROOT/vm/provision.sh" </dev/null 2>&1 | head -1)"
-  case "$prov" in
-    *"run as root"*) prov=ok ;;
-    *RUNNER_LABEL*) prov=reject ;;
-    *) prov="unexpected: $prov" ;;
-  esac
+  prov="$(provision_verdict RUNNER_LABEL "$label")"
   # An empty workflows dir, so only the label decides.
   if python3 "$ROOT/verify-routing/verify_routing.py" --workflows-dir "$EMPTY" \
     --label "$label" --expected "" >/dev/null 2>&1; then
@@ -39,13 +23,7 @@ check() {
   else
     verify=reject
   fi
-  if [ "$prov" = "$want" ] && [ "$verify" = "$want" ]; then
-    echo "  ok   ${label} (${want})"
-    pass=$((pass + 1))
-  else
-    echo "  FAIL ${label}: wanted ${want}, provision.sh ${prov}, verify_routing.py ${verify}"
-    fail=$((fail + 1))
-  fi
+  record "$label" "$want" "$([ "$prov" = "$verify" ] && echo "$prov" || echo "provision.sh $prov, verify_routing.py $verify")"
 }
 
 for label in local-ci i2dev-ci acme.ci_2 LOCAL-CI ubuntu2 macos_runner; do
@@ -64,6 +42,4 @@ for label in ubuntu-latest Ubuntu-24.04 ubuntu-24.04-arm windows-latest macos-15
   check "$label" reject
 done
 
-echo
-echo "${pass} passed, ${fail} failed"
-[ "$fail" -eq 0 ]
+summary

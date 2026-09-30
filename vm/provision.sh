@@ -94,6 +94,12 @@ fi
 RUNNER_LABELS="self-hosted,linux,arm64,${RUNNER_LABEL}"
 # Debian package names, checked before anything runs; the names reach
 # apt-get as arguments, so an option (`-o ...`) must not get through either.
+# Space-separated on one line: `read` stops at a newline, so a multi-line
+# value would silently lose everything after its first line.
+if [[ "${RUNNER_EXTRA_PACKAGES:-}" == *$'\n'* ]]; then
+  echo "provision.sh: RUNNER_EXTRA_PACKAGES: separate packages with spaces, on one line" >&2
+  exit 1
+fi
 read -ra requested_packages <<<"${RUNNER_EXTRA_PACKAGES:-}"
 for pkg in ${requested_packages[@]+"${requested_packages[@]}"}; do
   if ! [[ "$pkg" =~ ^[a-z0-9][a-z0-9+.-]+$ ]]; then
@@ -163,6 +169,13 @@ if [ "${RUNNER_REREGISTER:-0}" = "1" ] && [ -f "$RUNNER_HOME/.runner" ]; then
     move=1
   fi
 fi
+restart_old_on_failure() {
+  local rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "provision.sh: move failed before the old registration was removed; restarting ${svc_unit}" >&2
+    systemctl start "$svc_unit" || true
+  fi
+}
 if [ "$move" = "1" ]; then
   if [ -z "$RUNNER_REMOVE_TOKEN" ] || [ -z "$RUNNER_TOKEN" ]; then
     echo "provision.sh: a move needs RUNNER_REMOVE_TOKEN and RUNNER_TOKEN on stdin" >&2
@@ -173,8 +186,12 @@ if [ "$move" = "1" ]; then
     exit 1
   fi
   # Stopped before anything else, so no job can start while the tokens exist.
+  # Until the old registration is removed below, the old runner is still
+  # whole, so a failure on the way there (apt, a hook, the runner binary)
+  # starts it again instead of leaving it offline.
   if [ -n "$svc_unit" ]; then
     systemctl stop "$svc_unit"
+    trap restart_old_on_failure EXIT
   fi
 elif [ ! -f "$RUNNER_HOME/.runner" ] && [ -z "$RUNNER_TOKEN" ]; then
   echo "provision.sh: first registration needs RUNNER_TOKEN on stdin" >&2
@@ -190,12 +207,13 @@ fi
 # hosted runner. python3 is also what this script reads the runner's config
 # with.
 mkdir -p "$CONFIG_DIR/provision.d"
-if [ -n "${RUNNER_EXTRA_PACKAGES+set}" ]; then
-  # Replaces the saved list; an empty value clears it.
-  printf '%s\n' ${requested_packages[@]+"${requested_packages[@]}"} | sed '/^$/d' >"$CONFIG_DIR/extra-packages"
-fi
+# This run's extras: RUNNER_EXTRA_PACKAGES when set (even empty), else the list
+# saved by the last run that set it. Saved only once apt has installed it, so
+# a misspelt name or a network failure leaves the saved list as it was.
 extra_packages=()
-if [ -f "$CONFIG_DIR/extra-packages" ]; then
+if [ -n "${RUNNER_EXTRA_PACKAGES+set}" ]; then
+  extra_packages=(${requested_packages[@]+"${requested_packages[@]}"})
+elif [ -f "$CONFIG_DIR/extra-packages" ]; then
   mapfile -t extra_packages <"$CONFIG_DIR/extra-packages"
 fi
 export DEBIAN_FRONTEND=noninteractive
@@ -204,6 +222,9 @@ apt-get install -y -q \
   ca-certificates curl git jq python3 tar zip unzip dnsutils build-essential \
   docker.io docker-compose-v2 \
   ${extra_packages[@]+"${extra_packages[@]}"}
+if [ -n "${RUNNER_EXTRA_PACKAGES+set}" ]; then
+  printf '%s\n' ${extra_packages[@]+"${extra_packages[@]}"} | sed '/^$/d' >"$CONFIG_DIR/extra-packages"
+fi
 systemctl enable --now docker
 
 # ── Runner user ─────────────────────────────────────────────────────────────
@@ -270,6 +291,9 @@ runner_config() {
     "$RUNNER_HOME/config.sh" "$@"
 }
 if [ "$move" = "1" ]; then
+  # From here on the old registration is being dismantled; there is nothing
+  # left to restart. A failure now needs the same command re-run (runbook).
+  trap - EXIT
   if [ -f "$RUNNER_HOME/.service" ]; then
     (cd "$RUNNER_HOME" && ./svc.sh uninstall)
   fi

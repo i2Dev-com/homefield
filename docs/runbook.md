@@ -153,8 +153,13 @@ limactl shell i2dev-ci-runner sudo RUNNER_EXTRA_PACKAGES="libpq-dev shellcheck" 
 ending in `.sh`. Hooks run as root, in name order, on every provisioning run,
 after the packages and the `runner` user and before the runner itself is
 installed or upgraded. Make them idempotent (skip if already installed). A
-failing hook stops provisioning with an error, and the runner keeps running
-the version it had.
+failing hook stops provisioning with an error before the runner is touched.
+A move (`RUNNER_REREGISTER=1`) has already stopped the runner by then, and
+starts it again on any failure until the old registration is removed.
+
+The package list is saved only after apt has installed it, so a misspelt name
+fails that run and leaves the saved list as it was. Packages go on one line,
+separated by spaces.
 
 ```bash
 limactl copy 50-awscli.sh i2dev-ci-runner:/tmp/50-awscli.sh
@@ -311,8 +316,18 @@ If the VM is already gone, delete the stale registration in
 
 ## Moving to dedicated hardware
 
-The VM definition and `provision.sh` are the whole machine. On another Mac,
-repeat Setup. On a Linux box, run `provision.sh` directly on an Ubuntu 24.04
+The VM definition and `provision.sh`, plus what was added under "Adding tools",
+make up the machine. The additions live only in the guest
+(`/etc/ci-runner/extra-packages` and `/etc/ci-runner/provision.d/`), so copy
+them out first, and keep hooks somewhere versioned rather than only in the VM:
+
+```bash
+limactl shell i2dev-ci-runner cat /etc/ci-runner/extra-packages   # pass as RUNNER_EXTRA_PACKAGES
+limactl shell i2dev-ci-runner sudo tar -C /etc/ci-runner -cf - provision.d > provision.d.tar
+```
+
+On another Mac, repeat Setup with the same `RUNNER_EXTRA_PACKAGES` and the
+hooks installed before provisioning. On a Linux box, run `provision.sh` directly on an Ubuntu 24.04
 host or VM. It hardcodes the linux-arm64 tarball, so an x86-64 host needs a
 different tarball and checksum, and consumers' `verify-routing` then takes
 `arch: x64` along with the matching expression. Register the new runner with
