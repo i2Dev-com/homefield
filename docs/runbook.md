@@ -131,6 +131,41 @@ it. Run `limactl autostart enable i2dev-ci-runner` (Lima 2.x; 1.x called it
 `start-at-login`). Inside the VM, the runner is a systemd service and starts
 with the guest.
 
+## Adding tools
+
+The VM starts with a small base set (see "Packages" in
+[`provision.sh`](../vm/provision.sh)), which is less than `ubuntu-latest`.
+Add what your jobs need without editing the script. Per-job toolchains
+(`actions/setup-node`, `setup-python`, ...) need nothing here.
+
+**Apt packages:** pass `RUNNER_EXTRA_PACKAGES` when provisioning. The list is
+saved in the guest (`/etc/ci-runner/extra-packages`), so upgrade runs keep it
+without passing it again, and the idle-time maintenance upgrades these
+packages along with the rest. Passing it again replaces the list; passing it
+empty clears it. Neither uninstalls anything.
+
+```bash
+limactl copy vm/provision.sh i2dev-ci-runner:/tmp/provision.sh
+limactl shell i2dev-ci-runner sudo RUNNER_EXTRA_PACKAGES="libpq-dev shellcheck" bash /tmp/provision.sh
+```
+
+**Anything else:** a hook, a bash script in `/etc/ci-runner/provision.d/`
+ending in `.sh`. Hooks run as root, in name order, on every provisioning run,
+after the packages and the `runner` user and before the runner itself is
+installed or upgraded. Make them idempotent (skip if already installed). A
+failing hook stops provisioning with an error, and the runner keeps running
+the version it had.
+
+```bash
+limactl copy 50-awscli.sh i2dev-ci-runner:/tmp/50-awscli.sh
+limactl shell i2dev-ci-runner sudo install -D -m 755 /tmp/50-awscli.sh /etc/ci-runner/provision.d/50-awscli.sh
+limactl shell i2dev-ci-runner sudo bash /tmp/provision.sh   # runs it now
+```
+
+Provision while the runner is idle, as for any upgrade (see "Maintenance").
+Everything added here is available to every repository's jobs, so keep
+credentials out of hooks.
+
 ## Switching (per repository)
 
 ```bash
