@@ -25,6 +25,11 @@ fail is a new major (see [README](README.md#development)).
 
 ### Added
 
+- `bin/ci-runner route <hosted|local> --repo <owner>/<repo>`: switches
+  repositories' pull-request jobs (the `CI_RUNNER` variable), and on a switch
+  to hosted cancels and re-runs runs that are stuck waiting for the local
+  runner. `--dry-run` previews it. It works without the VM, for a Mac that is
+  asleep.
 - MIT `LICENSE`, `SECURITY.md` (private reporting, scope, known
   limitations), `CONTRIBUTING.md`, issue forms and a pull request template.
 - `bin/ci-runner`: `install`, `upgrade`, `status` and `uninstall` the runner

@@ -201,17 +201,23 @@ credentials out of hooks.
 ## Switching (per repository)
 
 ```bash
-# To the local runner
-gh variable set CI_RUNNER --repo <owner>/<repo> --body local
-
 # Back to hosted: the recovery path, and the safe default
-gh variable set CI_RUNNER --repo <owner>/<repo> --body hosted
+bin/ci-runner route hosted --repo <owner>/<repo> [--repo ...]
+
+# To the local runner
+bin/ci-runner route local --repo <owner>/<repo>
 ```
 
 `runs-on` is evaluated when a job is queued. **A job that is already queued for
-the local runner stays queued after the switch.** Cancel the run and re-run it:
+the local runner stays queued after the switch.** `route hosted` therefore
+also looks for runs with a job still queued for the routing label (`--label`,
+default `local-ci`), cancels them and re-runs them, and the re-run goes to
+hosted. `--dry-run` shows what it would do. It needs `gh` with write access to
+the repositories, not the VM, so it works while the Mac hosting the runner is
+asleep, from any machine with a checkout. By hand:
 
 ```bash
+gh variable set CI_RUNNER --repo <owner>/<repo> --body hosted   # or local
 gh run cancel <run-id> --repo <owner>/<repo>
 gh run rerun <run-id> --repo <owner>/<repo>
 ```
@@ -220,7 +226,7 @@ gh run rerun <run-id> --repo <owner>/<repo>
 
 | Symptom | Cause | What happens | Recovery |
 |---|---|---|---|
-| PR job "Waiting for a runner to pick up this job" | VM stopped, Mac asleep or offline, runner service down | The PR's check waits in the queue, and after 24 h GitHub fails it. Merges and deploys are unaffected, because pushes run hosted. | Start the VM (`limactl start ci-runner`), or switch to hosted and re-run. |
+| PR job "Waiting for a runner to pick up this job" | VM stopped, Mac asleep or offline, runner service down | The PR's check waits in the queue, and after 24 h GitHub fails it. Merges and deploys are unaffected, because pushes run hosted. | Start the VM (`limactl start ci-runner`), or `bin/ci-runner route hosted --repo <owner>/<repo>`. |
 | Waiting forever although the runner is online and idle | The repository is not in the runner group | Same as above | Add the repository to the group, or switch it to hosted |
 | Waiting forever although the runner is online and idle, and the repository is in the group | The label in the expression is not one of the runner's labels. For example, a repository moved to `verify-routing@v2`, whose default label is `local-ci`, while the runner was registered with another label | Same as above | Add the label to the runner (*Settings → Actions → Runners →* the runner *→ Labels*), or pass the runner's label to `verify-routing` as `label:` and use it in the expression |
 | A PR job waits while another runs | One runner runs one job at a time, across all repositories | Serialised, not failed | Accept it, or switch the less urgent repository to hosted |
