@@ -17,6 +17,11 @@ fail is a new major (see [README](README.md#development)).
   repository documents its own routing.
 - The guest OS maintenance hour (07:00) is documented as adjustable with a
   systemd drop-in.
+- The security model now states that the VM's network is not isolated: jobs
+  can reach the Mac's services through `host.lima.internal`, including
+  loopback-only ones, and the LAN (#18). The earlier docs said the VM had no
+  access to the Mac's ports.
+- Free-plan organizations are told to register with `--group Default`.
 
 ### Added
 

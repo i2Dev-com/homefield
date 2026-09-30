@@ -9,8 +9,9 @@ one repository variable and everything runs hosted again.
 It has three parts:
 
 - **An isolated runner VM** ([`vm/`](vm)): Ubuntu 24.04 arm64 in
-  [Lima](https://lima-vm.io), with no access to the Mac's files, SSH keys,
-  credentials or ports.
+  [Lima](https://lima-vm.io), with no access to the Mac's files, SSH keys or
+  credentials. It does have network access, including to the Mac's own
+  services ([Security model](#security-model)).
 - **A one-command setup** ([`bin/ci-runner`](bin/ci-runner)): install,
   upgrade, status, uninstall.
 - **A routing guard** ([`verify-routing`](verify-routing/action.yml)): a
@@ -68,7 +69,8 @@ gh variable set CI_RUNNER --repo <owner>/<repo> --body local    # hosted again: 
   limits which repositories can use the runner; custom groups need the GitHub
   Team plan or Enterprise. On the Free plan there is only the Default group,
   which every repository in the organization can use, so only register there
-  if you trust all of them. A **personal account** cannot have an
+  if you trust all of them, and pass `--group Default` (the default,
+  `local-ci`, does not exist there and registration would fail). A **personal account** cannot have an
   account-wide runner: register per repository (`--url
   https://github.com/<you>/<repo>`), one VM per repository.
 - **Less software than `ubuntu-latest`.** The VM starts small. Add what your
@@ -77,12 +79,20 @@ gh variable set CI_RUNNER --repo <owner>/<repo> --body local    # hosted again: 
 
 ## Security model
 
-The VM is the boundary. Jobs run pull-request code, so nothing of the Mac's is
-reachable from inside: no mounts (`mounts: []` plus `--mount-none`, and
-`bin/ci-runner` refuses to continue if it finds any), no SSH-agent forwarding,
-no host SSH keys, and no port forwarding in either direction. Inside the
-guest, jobs are root-equivalent (the `docker` group), which is why the VM and
-not a user account is the boundary.
+The VM is the boundary. Jobs run pull-request code, so the Mac's files and
+credentials are not reachable from inside: no mounts (`mounts: []` plus
+`--mount-none`, and `bin/ci-runner` refuses to continue if it finds any), no
+SSH-agent forwarding and no host SSH keys. Services started by a job are not
+forwarded to the Mac's `localhost`. Inside the guest, jobs are
+root-equivalent (the `docker` group), which is why the VM and not a user
+account is the boundary.
+
+**The network is not isolated.** Jobs can reach the internet, your LAN, and,
+through `host.lima.internal`, **every service listening on the Mac, including
+ones bound only to `127.0.0.1`** (local databases, development servers, local
+AI or tool APIs). Until that is closed ([#18](https://github.com/i2Dev-com/ci-runner/issues/18)), don't run anything on the
+Mac hosting the runner that the repositories using it shouldn't be able to
+reach.
 
 The routing expression keeps pushes, Dependabot and pull requests from forks
 on hosted runners. The fork rule is defence in depth only: what keeps
@@ -158,7 +168,7 @@ pull-request code away from the Mac it runs on.
 | Path | What it is |
 |---|---|
 | [`bin/ci-runner`](bin/ci-runner) | Install, upgrade, inspect and remove the runner on this Mac |
-| [`vm/lima.yaml`](vm/lima.yaml) | The VM: Ubuntu 24.04 arm64, no host mounts, no port forwarding, no SSH-agent forwarding |
+| [`vm/lima.yaml`](vm/lima.yaml) | The VM: Ubuntu 24.04 arm64, no host mounts, no forwarding of guest ports to the Mac, no SSH-agent forwarding |
 | [`vm/provision.sh`](vm/provision.sh) | Runs inside the VM: packages, Docker, the checksum-pinned runner, cleanup and idle-time OS update timers, registration. Settings: `RUNNER_URL`, `RUNNER_LABEL`, `RUNNER_NAME`, `RUNNER_GROUP`, `RUNNER_EXTRA_PACKAGES`; hooks in `/etc/ci-runner/provision.d/` |
 | [`verify-routing/`](verify-routing/action.yml) | The routing guard action |
 | [`docs/adopting.md`](docs/adopting.md) | Checklist for routing a repository's jobs to the runner |

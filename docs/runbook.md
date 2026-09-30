@@ -57,7 +57,8 @@ every job holding cloud or production credentials.
 | Who can run code on the runner | Only repositories in the runner group. Keep them **private**, and the group at `allows_public_repositories: false`: that is the boundary, because a PR runs the workflow files from its own branch and can therefore rewrite any `runs-on`. The expression's fork guard adds defence in depth for private repositories that allow forking. |
 | Unreviewed dependency code | Dependabot PRs are routed hosted (see above). |
 | Host files and credentials | Lima VM with **no mounts** (`mounts: []` + `--mount-none`), no SSH-agent forwarding, and no host SSH keys. `~/.aws`, `gh` auth, `.env` files and working trees on the Mac are not reachable from the guest. |
-| Host ports | Guest→host port forwarding is disabled, so a job's service containers never appear on the Mac's `localhost`. |
+| Guest ports on the Mac | Guest→host port forwarding is disabled, so a job's service containers never appear on the Mac's `localhost`. |
+| **Mac and LAN services from the guest** | **Not isolated.** The guest reaches the Mac at `host.lima.internal` (192.168.5.2, also its gateway and DNS), which Lima maps to the Mac's loopback: every service listening on the Mac is reachable, including ones bound only to `127.0.0.1`, as is the LAN. A firewall inside the guest would not hold, since jobs are root-equivalent there. Until [#18](https://github.com/i2Dev-com/ci-runner/issues/18) is closed, keep sensitive services off the Mac that hosts the runner. |
 | Production | The VM holds no cloud credentials and no AWS CLI. Deploy jobs stay hosted and get their credentials through OIDC. |
 | Secrets in jobs | Jobs on the runner receive the secrets their workflow passes, on same-repo PRs. Push-only secrets never reach it, because pushes run hosted. |
 | Across repositories | Every allowed repository's PR jobs share one VM, one after another. Workspaces are per repository, but anything a job leaves in the guest (Docker images, `/tmp`) is visible to the next job from another repository. Allow only repositories you would trust with each other's PR code. |
@@ -72,7 +73,9 @@ restricted group is usable by every repository in the organization.
 Custom runner groups need the GitHub Team plan or Enterprise. On the Free plan
 an organization has only the Default group, which every repository in it can
 use: register there only if you would trust every repository with the others'
-pull-request code, and keep **Allow public repositories** off on it. The
+pull-request code, keep **Allow public repositories** off on it, and register
+with `--group Default` (`RUNNER_GROUP=Default` by hand): the default group
+name, `local-ci`, does not exist there and registration fails. The
 alternative is a repository-scoped runner, which only that repository can use.
 A personal account has no account-wide runners at all: register per
 repository, one VM per repository.
