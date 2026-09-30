@@ -347,7 +347,7 @@ apt-get autoremove -y -q --purge
 if [ -f /var/run/reboot-required ]; then
   echo "ci-runner-maintenance: rebooting to finish the upgrade"
   trap - EXIT
-  systemctl reboot
+  systemctl reboot || systemctl start "$unit"
 fi
 EOF
 chmod 755 /usr/local/sbin/ci-runner-maintenance
