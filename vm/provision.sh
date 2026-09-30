@@ -19,6 +19,14 @@
 #                 inline expression.
 #   RUNNER_NAME   default: the guest's hostname (lima-<instance>).
 #   RUNNER_GROUP  org runner group to join (default local-ci).
+#   RUNNER_EXTRA_PACKAGES
+#                 apt packages to install on top of the base set, space-
+#                 separated. Saved in the guest, so later runs keep them
+#                 without passing it again; setting it replaces the saved
+#                 list, and setting it empty clears it (nothing is removed).
+# Tools apt does not have go in hooks: /etc/ci-runner/provision.d/*.sh, run
+# as root in name order after the packages. See docs/runbook.md, "Adding
+# tools".
 # Name, label and group are read only at registration. To change the label
 # later, edit the runner's labels on GitHub (runners page or REST API); to
 # change the name or group, remove the runner and register it again
@@ -84,6 +92,22 @@ if [[ "$label_lc" =~ ^(self-hosted|linux|windows|macos|ubuntu|x64|x86|arm|arm64)
   exit 1
 fi
 RUNNER_LABELS="self-hosted,linux,arm64,${RUNNER_LABEL}"
+# Debian package names, checked before anything runs; the names reach
+# apt-get as arguments, so an option (`-o ...`) must not get through either.
+# Space-separated on one line: `read` stops at a newline, so a multi-line
+# value would silently lose everything after its first line.
+if [[ "${RUNNER_EXTRA_PACKAGES:-}" == *$'\n'* ]]; then
+  echo "provision.sh: RUNNER_EXTRA_PACKAGES: separate packages with spaces, on one line" >&2
+  exit 1
+fi
+read -ra requested_packages <<<"${RUNNER_EXTRA_PACKAGES:-}"
+for pkg in ${requested_packages[@]+"${requested_packages[@]}"}; do
+  if ! [[ "$pkg" =~ ^[a-z0-9][a-z0-9+.-]+$ ]]; then
+    echo "provision.sh: RUNNER_EXTRA_PACKAGES: not a package name: $pkg" >&2
+    exit 1
+  fi
+done
+CONFIG_DIR="/etc/ci-runner"
 RUNNER_USER="runner"
 RUNNER_HOME="/opt/actions-runner"
 
@@ -145,6 +169,13 @@ if [ "${RUNNER_REREGISTER:-0}" = "1" ] && [ -f "$RUNNER_HOME/.runner" ]; then
     move=1
   fi
 fi
+restart_old_on_failure() {
+  local rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "provision.sh: move failed before the old registration was removed; restarting ${svc_unit}" >&2
+    systemctl start "$svc_unit" || true
+  fi
+}
 if [ "$move" = "1" ]; then
   if [ -z "$RUNNER_REMOVE_TOKEN" ] || [ -z "$RUNNER_TOKEN" ]; then
     echo "provision.sh: a move needs RUNNER_REMOVE_TOKEN and RUNNER_TOKEN on stdin" >&2
@@ -155,8 +186,12 @@ if [ "$move" = "1" ]; then
     exit 1
   fi
   # Stopped before anything else, so no job can start while the tokens exist.
+  # Until the old registration is removed below, the old runner is still
+  # whole, so a failure on the way there (apt, a hook, the runner binary)
+  # starts it again instead of leaving it offline.
   if [ -n "$svc_unit" ]; then
     systemctl stop "$svc_unit"
+    trap restart_old_on_failure EXIT
   fi
 elif [ ! -f "$RUNNER_HOME/.runner" ] && [ -z "$RUNNER_TOKEN" ]; then
   echo "provision.sh: first registration needs RUNNER_TOKEN on stdin" >&2
@@ -164,18 +199,32 @@ elif [ ! -f "$RUNNER_HOME/.runner" ] && [ -z "$RUNNER_TOKEN" ]; then
 fi
 
 # ── Packages ────────────────────────────────────────────────────────────────
-# What the CI checks job calls that ubuntu-latest has and a minimal Ubuntu does
-# not (i2dev#886 inventory). The tests stub aws and dig on PATH, so the AWS CLI
-# is deliberately absent. Docker is for job `services:`, and Compose v2 is not
-# optional: i2dev's production-log-rotation.test.sh runs a real `docker compose
-# config` (Ubuntu's docker.io ships without the plugin, and the first local run
-# failed on exactly that). dnsutils is cheap and keeps `dig` as on a hosted
-# runner.
+# The base set: common tools that ubuntu-latest has and a minimal Ubuntu does
+# not, kept small on purpose. Everything else a repository needs goes in
+# RUNNER_EXTRA_PACKAGES or a hook, not here. Docker is for job `services:`, and
+# Compose v2 is not optional: Ubuntu's docker.io ships without the plugin, and
+# `docker compose` in a job fails without it. dnsutils keeps `dig` as on a
+# hosted runner. python3 is also what this script reads the runner's config
+# with.
+mkdir -p "$CONFIG_DIR/provision.d"
+# This run's extras: RUNNER_EXTRA_PACKAGES when set (even empty), else the list
+# saved by the last run that set it. Saved only once apt has installed it, so
+# a misspelt name or a network failure leaves the saved list as it was.
+extra_packages=()
+if [ -n "${RUNNER_EXTRA_PACKAGES+set}" ]; then
+  extra_packages=(${requested_packages[@]+"${requested_packages[@]}"})
+elif [ -f "$CONFIG_DIR/extra-packages" ]; then
+  mapfile -t extra_packages <"$CONFIG_DIR/extra-packages"
+fi
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -q
 apt-get install -y -q \
   ca-certificates curl git jq python3 tar zip unzip dnsutils build-essential \
-  docker.io docker-compose-v2
+  docker.io docker-compose-v2 \
+  ${extra_packages[@]+"${extra_packages[@]}"}
+if [ -n "${RUNNER_EXTRA_PACKAGES+set}" ]; then
+  printf '%s\n' ${extra_packages[@]+"${extra_packages[@]}"} | sed '/^$/d' >"$CONFIG_DIR/extra-packages"
+fi
 systemctl enable --now docker
 
 # ── Runner user ─────────────────────────────────────────────────────────────
@@ -185,6 +234,20 @@ if ! id "$RUNNER_USER" >/dev/null 2>&1; then
   useradd --create-home --shell /bin/bash "$RUNNER_USER"
 fi
 usermod -aG docker "$RUNNER_USER"
+
+# ── Hooks ───────────────────────────────────────────────────────────────────
+# For tools apt does not have. Each runs as root on every provisioning run, so
+# it has to be idempotent, and a failing one stops provisioning here, before
+# the runner is installed or upgraded. They run after the runner user exists,
+# so a hook can install into its home.
+for hook in "$CONFIG_DIR"/provision.d/*.sh; do
+  [ -e "$hook" ] || continue
+  echo "provision.sh: running hook $hook"
+  if ! bash "$hook"; then
+    echo "provision.sh: hook $hook failed; stopping before the runner is installed or upgraded" >&2
+    exit 1
+  fi
+done
 
 # ── Runner binary ───────────────────────────────────────────────────────────
 # Download and verify *before* touching the running service, so a bad pin or a
@@ -228,6 +291,9 @@ runner_config() {
     "$RUNNER_HOME/config.sh" "$@"
 }
 if [ "$move" = "1" ]; then
+  # From here on the old registration is being dismantled; there is nothing
+  # left to restart. A failure now needs the same command re-run (runbook).
+  trap - EXIT
   if [ -f "$RUNNER_HOME/.service" ]; then
     (cd "$RUNNER_HOME" && ./svc.sh uninstall)
   fi

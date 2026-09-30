@@ -6,6 +6,14 @@ fail is a new major (see [README](README.md#development)).
 
 ## Unreleased
 
+### Added
+
+- `provision.sh`: `RUNNER_EXTRA_PACKAGES` installs extra apt packages on top
+  of the base set. The list is saved in the guest and kept by later runs.
+  Hooks in `/etc/ci-runner/provision.d/*.sh` install anything apt does not
+  have. See "Adding tools" in [`docs/runbook.md`](docs/runbook.md). Nothing
+  changes for existing runners: the base set is the same.
+
 ## v2 (2026-09-30)
 
 ### Upgrading from v1

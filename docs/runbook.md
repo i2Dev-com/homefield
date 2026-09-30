@@ -131,6 +131,46 @@ it. Run `limactl autostart enable i2dev-ci-runner` (Lima 2.x; 1.x called it
 `start-at-login`). Inside the VM, the runner is a systemd service and starts
 with the guest.
 
+## Adding tools
+
+The VM starts with a small base set (see "Packages" in
+[`provision.sh`](../vm/provision.sh)), which is less than `ubuntu-latest`.
+Add what your jobs need without editing the script. Per-job toolchains
+(`actions/setup-node`, `setup-python`, ...) need nothing here.
+
+**Apt packages:** pass `RUNNER_EXTRA_PACKAGES` when provisioning. The list is
+saved in the guest (`/etc/ci-runner/extra-packages`), so upgrade runs keep it
+without passing it again, and the idle-time maintenance upgrades these
+packages along with the rest. Passing it again replaces the list; passing it
+empty clears it. Neither uninstalls anything.
+
+```bash
+limactl copy vm/provision.sh i2dev-ci-runner:/tmp/provision.sh
+limactl shell i2dev-ci-runner sudo RUNNER_EXTRA_PACKAGES="libpq-dev shellcheck" bash /tmp/provision.sh
+```
+
+**Anything else:** a hook, a bash script in `/etc/ci-runner/provision.d/`
+ending in `.sh`. Hooks run as root, in name order, on every provisioning run,
+after the packages and the `runner` user and before the runner itself is
+installed or upgraded. Make them idempotent (skip if already installed). A
+failing hook stops provisioning with an error before the runner is touched.
+A move (`RUNNER_REREGISTER=1`) has already stopped the runner by then, and
+starts it again on any failure until the old registration is removed.
+
+The package list is saved only after apt has installed it, so a misspelt name
+fails that run and leaves the saved list as it was. Packages go on one line,
+separated by spaces.
+
+```bash
+limactl copy 50-awscli.sh i2dev-ci-runner:/tmp/50-awscli.sh
+limactl shell i2dev-ci-runner sudo install -D -m 755 /tmp/50-awscli.sh /etc/ci-runner/provision.d/50-awscli.sh
+limactl shell i2dev-ci-runner sudo bash /tmp/provision.sh   # runs it now
+```
+
+Provision while the runner is idle, as for any upgrade (see "Maintenance").
+Everything added here is available to every repository's jobs, so keep
+credentials out of hooks.
+
 ## Switching (per repository)
 
 ```bash
@@ -276,8 +316,18 @@ If the VM is already gone, delete the stale registration in
 
 ## Moving to dedicated hardware
 
-The VM definition and `provision.sh` are the whole machine. On another Mac,
-repeat Setup. On a Linux box, run `provision.sh` directly on an Ubuntu 24.04
+The VM definition and `provision.sh`, plus what was added under "Adding tools",
+make up the machine. The additions live only in the guest
+(`/etc/ci-runner/extra-packages` and `/etc/ci-runner/provision.d/`), so copy
+them out first, and keep hooks somewhere versioned rather than only in the VM:
+
+```bash
+limactl shell i2dev-ci-runner cat /etc/ci-runner/extra-packages   # pass as RUNNER_EXTRA_PACKAGES
+limactl shell i2dev-ci-runner sudo tar -C /etc/ci-runner -cf - provision.d > provision.d.tar
+```
+
+On another Mac, repeat Setup with the same `RUNNER_EXTRA_PACKAGES` and the
+hooks installed before provisioning. On a Linux box, run `provision.sh` directly on an Ubuntu 24.04
 host or VM. It hardcodes the linux-arm64 tarball, so an x86-64 host needs a
 different tarball and checksum, and consumers' `verify-routing` then takes
 `arch: x64` along with the matching expression. Register the new runner with
