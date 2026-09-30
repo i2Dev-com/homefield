@@ -18,7 +18,7 @@ follow [`adopting.md`](adopting.md).
 Every opted-in job uses this `runs-on`, inline:
 
 ```yaml
-runs-on: ${{ vars.CI_RUNNER == 'local' && github.event_name == 'pull_request' && github.actor != 'dependabot[bot]' && !startsWith(github.head_ref, 'dependabot/') && fromJSON('["self-hosted","linux","arm64","i2dev-ci"]') || 'ubuntu-latest' }}
+runs-on: ${{ vars.CI_RUNNER == 'local' && github.event_name == 'pull_request' && github.actor != 'dependabot[bot]' && !startsWith(github.head_ref, 'dependabot/') && github.event.pull_request.head.repo.full_name == github.repository && fromJSON('["self-hosted","linux","arm64","i2dev-ci"]') || 'ubuntu-latest' }}
 ```
 
 - The **repository** variable `CI_RUNNER` is the switch, so each repository
@@ -28,6 +28,11 @@ runs-on: ${{ vars.CI_RUNNER == 'local' && github.event_name == 'pull_request' &&
 - **Pushes always run hosted**, whatever `CI_RUNNER` says. Deploys wait on the
   default branch's CI, and a merge must not sit queued behind a sleeping laptop.
 - **Dependabot always runs hosted.** Checked by actor and by branch name.
+- **Pull requests from forks always run hosted.** Only a branch of the
+  repository itself is routed, which covers private repositories that allow
+  forking. It does not make a public repository safe: a fork PR runs the
+  workflow files from its own merge commit, so it can rewrite `runs-on`
+  altogether. See the trust boundary below.
 - The [`verify-routing`](../verify-routing/action.yml) action, run in each
   repository's CI, enforces three things:
   - every copy of the expression is identical to the canonical one;
@@ -48,7 +53,7 @@ every job holding cloud or production credentials.
 
 | Concern | Control |
 |---|---|
-| Who can run code on the runner | Only repositories in the runner group. Keep them **private**: then only collaborators can open PRs, so there are no fork PRs. The group must have `allows_public_repositories: false`. |
+| Who can run code on the runner | Only repositories in the runner group. Keep them **private**, and the group at `allows_public_repositories: false`: that is the boundary, because a PR runs the workflow files from its own branch and can therefore rewrite any `runs-on`. The expression's fork guard adds defence in depth for private repositories that allow forking. |
 | Unreviewed dependency code | Dependabot PRs are routed hosted (see above). |
 | Host files and credentials | Lima VM with **no mounts** (`mounts: []` + `--mount-none`), no SSH-agent forwarding, and no host SSH keys. `~/.aws`, `gh` auth, `.env` files and working trees on the Mac are not reachable from the guest. |
 | Host ports | Guest→host port forwarding is disabled, so a job's service containers never appear on the Mac's `localhost`. |
