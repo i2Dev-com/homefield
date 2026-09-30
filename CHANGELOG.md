@@ -8,6 +8,15 @@ fail is a new major (see [README](README.md#development)).
 
 ### Added
 
+- `bin/ci-runner`: `install`, `upgrade`, `status` and `uninstall` the runner
+  on a Mac in one command each. It checks prerequisites, creates the VM,
+  verifies its isolation before running anything in it, fetches tokens with
+  `gh` or prompts for them (never on a command line), refuses to upgrade or
+  remove while a job is running, and refuses a personal account's URL,
+  which cannot have account-wide runners. Runs on macOS's stock bash 3.2.
+- `provision.sh` rejects a `RUNNER_URL` that is not a github.com organization
+  or repository.
+
 - `provision.sh`: `RUNNER_EXTRA_PACKAGES` installs extra apt packages on top
   of the base set. The list is saved in the guest and kept by later runs.
   Hooks in `/etc/ci-runner/provision.d/*.sh` install anything apt does not

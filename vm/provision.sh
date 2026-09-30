@@ -92,6 +92,10 @@ if [[ "$label_lc" =~ ^(self-hosted|linux|windows|macos|ubuntu|x64|x86|arm|arm64)
   exit 1
 fi
 RUNNER_LABELS="self-hosted,linux,arm64,${RUNNER_LABEL}"
+if [ -n "$RUNNER_URL" ] && ! [[ "$RUNNER_URL" =~ ^https://github\.com/[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)?/?$ ]]; then
+  echo "provision.sh: RUNNER_URL must be https://github.com/<org> or https://github.com/<owner>/<repo>, got: $RUNNER_URL" >&2
+  exit 1
+fi
 # Debian package names, checked before anything runs; the names reach
 # apt-get as arguments, so an option (`-o ...`) must not get through either.
 # Space-separated on one line: `read` stops at a newline, so a multi-line
