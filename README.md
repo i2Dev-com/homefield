@@ -51,5 +51,5 @@ Releases: move the current major tag for compatible changes. A change that
 makes a previously passing workflow fail, such as a new required guard in the
 expression, is a new major, because every consumer has to update its inline
 copies at the same time. Changes are recorded in [`CHANGELOG.md`](CHANGELOG.md).
-The docs on `main` describe the next release: until `v2` is tagged, consumers
-stay on `@v1` with the v1 expression.
+The docs on `main` can run ahead of the latest tag; anything not yet released
+is listed under *Unreleased* in the changelog.
