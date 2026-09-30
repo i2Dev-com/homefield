@@ -304,8 +304,82 @@ Persistent=true
 WantedBy=timers.target
 EOF
 
+# ── OS updates ──────────────────────────────────────────────────────────────
+# Ubuntu's unattended-upgrades runs at a random time between 06:00 and 07:00
+# and restarts whatever it upgrades, plus everything needrestart finds, with
+# no regard for the runner. On 2026-09-30 that stopped the runner, containerd
+# and Docker in the middle of a job and failed an unrelated snap PR
+# (ci-runner#8). So automatic upgrades are off, and ci-runner-maintenance
+# installs updates instead. It runs only while the runner is idle, and stops
+# the runner first, so no job can be caught by a restart during the upgrade.
+#
+# The idle check and the stop are two steps, so a job the runner picks up in
+# the moment between them is cancelled. That window is a fraction of a second.
+# The window it replaces was the whole upgrade, roughly three minutes of
+# service restarts. The package lists are still refreshed daily, and
+# "unattended-upgrades" stays installed but inert, so `apt-config` shows the
+# override in effect.
+cat > /etc/apt/apt.conf.d/52ci-runner-no-unattended-upgrade <<'EOF'
+// ci-runner#8: upgrades run from ci-runner-maintenance.timer, only while idle.
+APT::Periodic::Unattended-Upgrade "0";
+EOF
+
+cat > /usr/local/sbin/ci-runner-maintenance <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+unit="$(cat /opt/actions-runner/.service)"
+if pgrep -f Runner.Worker >/dev/null; then
+  echo "ci-runner-maintenance: job in progress, skipping until tomorrow"
+  exit 0
+fi
+systemctl stop "$unit"
+# Whatever happens below, the runner comes back up.
+trap 'systemctl start "$unit"' EXIT
+export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a
+apt-get update -q
+apt-get upgrade -y -q --with-new-pkgs \
+  -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold
+apt-get autoremove -y -q --purge
+# A kernel or libc update asks for a reboot. The runner is still stopped, so
+# reboot now rather than start it and give it a job to lose. Its service is
+# enabled, so it comes back on boot. A guest reboot keeps the VM running
+# under Lima's vz backend (verified with Lima 2.2.0).
+if [ -f /var/run/reboot-required ]; then
+  echo "ci-runner-maintenance: rebooting to finish the upgrade"
+  trap - EXIT
+  systemctl reboot || systemctl start "$unit"
+fi
+EOF
+chmod 755 /usr/local/sbin/ci-runner-maintenance
+
+cat > /etc/systemd/system/ci-runner-maintenance.service <<'EOF'
+[Unit]
+Description=Install OS updates while the CI runner is idle
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/ci-runner-maintenance
+EOF
+
+# 07:00 guest time (Lima copies the Mac's time zone): of the ~800 i2dev and
+# snap PR runs up to 2026-09-30, none started between 07:00 and 08:00, and
+# 05:00-09:00 held five in all. The timer is not Persistent: a missed run would fire at
+# boot, just as the runner comes online and may pick up a queued job.
+cat > /etc/systemd/system/ci-runner-maintenance.timer <<'EOF'
+[Unit]
+Description=Daily idle-time OS updates for the CI runner
+
+[Timer]
+OnCalendar=*-*-* 07:00
+
+[Install]
+WantedBy=timers.target
+EOF
+
 systemctl daemon-reload
-systemctl enable --now ci-runner-cleanup.timer
+systemctl enable --now ci-runner-cleanup.timer ci-runner-maintenance.timer
 
 # Reports where the runner is actually registered, which differs from
 # RUNNER_URL when an existing registration was kept.
