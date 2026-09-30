@@ -1,0 +1,16 @@
+name: Feature request
+description: Something this should do that it does not.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What you are trying to do, and where it falls short today.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: Idea
+      description: How you would like it to work. Note anything that would change the security model or break existing consumers.

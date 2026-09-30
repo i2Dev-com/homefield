@@ -25,6 +25,8 @@ fail is a new major (see [README](README.md#development)).
 
 ### Added
 
+- MIT `LICENSE`, `SECURITY.md` (private reporting, scope, known
+  limitations), `CONTRIBUTING.md`, issue forms and a pull request template.
 - `bin/ci-runner`: `install`, `upgrade`, `status` and `uninstall` the runner
   on a Mac in one command each. It checks prerequisites, creates the VM,
   verifies its isolation before running anything in it, fetches tokens with

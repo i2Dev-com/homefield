@@ -196,3 +196,9 @@ anything not yet released is listed under *Unreleased*.
 While this repository is private, it has to allow access from the other
 repositories in the organization for them to use the action: *Settings →
 Actions → General → Access*.
+
+## Contributing, security, license
+
+Contributions are welcome: see [`CONTRIBUTING.md`](CONTRIBUTING.md). Report
+security issues privately, as described in [`SECURITY.md`](SECURITY.md), which
+also lists the known limitations. Licensed under the [MIT License](LICENSE).
