@@ -11,7 +11,7 @@ guarantees that nothing else enforces:
      anything but `local`, the job runs on ubuntu-latest. A copy without the
      `|| 'ubuntu-latest'` leg queues forever whenever the local runner is off.
   2. Pull requests only. Pushes (main, release branches) always run hosted, so
-     merging and deploying never depend on a laptop being awake.
+     merging and deploying never depend on the runner's machine being awake.
   3. Dependabot stays hosted, checked by actor and by branch. Its branches
      bring in unreviewed install scripts, and the local VM, unlike a hosted
      one, is not thrown away after the job.

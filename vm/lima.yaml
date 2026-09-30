@@ -1,4 +1,4 @@
-# Lima VM for the local GitHub Actions runner (i2Dev-com/i2dev#879).
+# Lima VM for the local GitHub Actions runner.
 #
 # The VM is the isolation boundary: CI jobs run pull-request code, so nothing
 # of the host's — home directory, SSH keys, AWS profile, gh auth — may be

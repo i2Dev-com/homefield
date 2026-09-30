@@ -6,6 +6,18 @@ fail is a new major (see [README](README.md#development)).
 
 ## Unreleased
 
+### Changed
+
+- Docs are written for any organization or account, not one deployment: a
+  README with a quick start, requirements and limitations (Apple Silicon,
+  private repositories only, one job at a time, offline behaviour, plans and
+  personal accounts), the security model, cost and alternatives; the runbook
+  and adoption guide use placeholders and the default VM name, and no longer
+  link to private issues. The adopters table is gone: each adopting
+  repository documents its own routing.
+- The guest OS maintenance hour (07:00) is documented as adjustable with a
+  systemd drop-in.
+
 ### Added
 
 - `bin/ci-runner`: `install`, `upgrade`, `status` and `uninstall` the runner

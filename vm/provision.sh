@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
-# Provision the local GitHub Actions runner inside the Lima VM
-# (i2Dev-com/i2dev#879).
+# Provision the local GitHub Actions runner inside the Lima VM.
 #
 # Runs inside the guest as root. Copy it in and run it; see docs/runbook.md
 # for the full sequence:
 #
-#   limactl copy vm/provision.sh i2dev-ci-runner:/tmp/provision.sh
+#   limactl copy vm/provision.sh ci-runner:/tmp/provision.sh
 #   printf 'RUNNER_TOKEN=%s\n' "$TOKEN" |
-#     limactl shell i2dev-ci-runner sudo RUNNER_URL=https://github.com/<org> \
+#     limactl shell ci-runner sudo RUNNER_URL=https://github.com/<org> \
 #       bash /tmp/provision.sh
 #
 # Settings, as environment variables (after `sudo`, as above):
@@ -474,10 +473,12 @@ Type=oneshot
 ExecStart=/usr/local/sbin/ci-runner-maintenance
 EOF
 
-# 07:00 guest time (Lima copies the Mac's time zone): of the ~800 i2dev and
-# snap PR runs up to 2026-09-30, none started between 07:00 and 08:00, and
-# 05:00-09:00 held five in all. The timer is not Persistent: a missed run would fire at
-# boot, just as the runner comes online and may pick up a queued job.
+# 07:00 guest time (Lima copies the Mac's time zone): in the deployment this
+# came from, none of ~800 PR runs started between 07:00 and 08:00. Change it
+# with a drop-in (`systemctl edit ci-runner-maintenance.timer`: an empty
+# `OnCalendar=` first, or the new time adds to this one), which
+# re-provisioning leaves alone. The timer is not Persistent: a missed run would
+# fire at boot, just as the runner comes online and may pick up a queued job.
 cat > /etc/systemd/system/ci-runner-maintenance.timer <<'EOF'
 [Unit]
 Description=Daily idle-time OS updates for the CI runner

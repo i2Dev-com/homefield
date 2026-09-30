@@ -1,15 +1,15 @@
-# Runbook: Local Self-Hosted CI Runner
+# Runbook: local self-hosted CI runner
 
-Run selected pull-request CI jobs on a local runner instead of GitHub-hosted,
-to cut billed Actions minutes (i2Dev-com/i2dev#879). GitHub is still where CI
-is triggered, where logs live and where checks report. Only the machine that
-executes the job changes.
+Operating the runner: one Lima VM on a Mac, registered at an **organization**
+(and limited by a runner group to the repositories allowed to use it) or at
+one repository. Selected pull-request jobs run on it instead of on
+GitHub-hosted runners; GitHub is still where CI is triggered, where logs live
+and where checks report. Which jobs a repository routes is documented in that
+repository. To add one, follow [`adopting.md`](adopting.md).
 
-One runner, `i2dev-ci-lima`, in a Lima VM on the founder's Mac, registered at
-the **organization** and limited by a runner group to the repositories allowed
-to use it. Which jobs each repository routes is documented in that repository
-(for i2dev: `docs/runbooks/self-hosted-ci-runner.md`). To add a repository,
-follow [`adopting.md`](adopting.md).
+Commands below use the default VM name, `ci-runner`. If you installed with
+`--instance NAME`, use that name instead (for `bin/ci-runner`, pass
+`--instance NAME`). `<org>`, `<owner>` and `<repo>` are yours.
 
 ---
 
@@ -27,7 +27,7 @@ runs-on: ${{ vars.CI_RUNNER == 'local' && github.event_name == 'pull_request' &&
   another `RUNNER_LABEL`. Unset, or any other value, sends them to hosted
   `ubuntu-latest`.
 - **Pushes always run hosted**, whatever `CI_RUNNER` says. Deploys wait on the
-  default branch's CI, and a merge must not sit queued behind a sleeping laptop.
+  default branch's CI, and a merge must not sit queued behind a sleeping Mac.
 - **Dependabot always runs hosted.** Checked by actor and by branch name.
 - **Pull requests from forks always run hosted.** Only a branch of the
   repository itself is routed, which covers private repositories that allow
@@ -69,6 +69,14 @@ The organization's runner group is what decides which repositories can use the
 runner. Set it up before registering, because an org runner without a
 restricted group is usable by every repository in the organization.
 
+Custom runner groups need the GitHub Team plan or Enterprise. On the Free plan
+an organization has only the Default group, which every repository in it can
+use: register there only if you would trust every repository with the others'
+pull-request code, and keep **Allow public repositories** off on it. The
+alternative is a repository-scoped runner, which only that repository can use.
+A personal account has no account-wide runners at all: register per
+repository, one VM per repository.
+
 *Organization settings → Actions → Runner groups → New runner group*:
 
 - Name `local-ci`.
@@ -76,11 +84,13 @@ restricted group is usable by every repository in the organization.
   have adopted the runner.
 - Leave **Allow public repositories** off.
 
-Check it (needs the `admin:org` scope):
+`bin/ci-runner install` passes `--group` (default `local-ci`) for an
+organization URL; a repository-scoped runner has no group. Check the group
+(needs the `admin:org` scope):
 
 ```bash
-gh api orgs/i2Dev-com/actions/runner-groups -q '.runner_groups[] | "\(.id) \(.name) \(.visibility) public=\(.allows_public_repositories)"'
-gh api orgs/i2Dev-com/actions/runner-groups/<id>/repositories -q '.repositories[].full_name'
+gh api orgs/<org>/actions/runner-groups -q '.runner_groups[] | "\(.id) \(.name) \(.visibility) public=\(.allows_public_repositories)"'
+gh api orgs/<org>/actions/runner-groups/<id>/repositories -q '.repositories[].full_name'
 ```
 
 ## Setup (once per machine)
@@ -89,17 +99,18 @@ Requires Lima ≥ 1.1 (`brew install lima`; verified on 2.2.0). Run from a
 checkout of this repository.
 
 **The short way:** `bin/ci-runner install --url https://github.com/<org>`
-(options: `bin/ci-runner help`) does every step below and enables autostart.
+(or `https://github.com/<owner>/<repo>`; options: `bin/ci-runner help`) does
+every step below and enables autostart.
 It fetches the registration token with `gh` when it can, and otherwise asks
 you to paste one. The steps are what it does, and the way to do it by hand:
 
 ```bash
 # 1. Create and start the VM (no mounts, no port forwards, Ubuntu 24.04 arm64)
-limactl create --name=i2dev-ci-runner --mount-none vm/lima.yaml
-limactl start i2dev-ci-runner
+limactl create --name=ci-runner --mount-none vm/lima.yaml
+limactl start ci-runner
 
 # 2. Confirm the isolation before anything runs in it: no mounts, no home dir
-limactl shell i2dev-ci-runner -- sh -c 'mount | grep -Ec "virtiofs|9p|sshfs|reverse-sshfs"; ls /Users 2>&1'
+limactl shell ci-runner -- sh -c 'mount | grep -Ec "virtiofs|9p|sshfs|reverse-sshfs"; ls /Users 2>&1'
 # expect: 0, and "No such file or directory"
 
 # 3. Provision: packages, Docker, runner binary (checksum-verified), systemd
@@ -109,15 +120,16 @@ limactl shell i2dev-ci-runner -- sh -c 'mount | grep -Ec "virtiofs|9p|sshfs|reve
 #    RUNNER_URL is required. RUNNER_LABEL (default local-ci), RUNNER_NAME
 #    (default: the guest hostname) and RUNNER_GROUP (default local-ci) are
 #    optional; see the top of provision.sh.
-limactl copy vm/provision.sh i2dev-ci-runner:/tmp/provision.sh
+limactl copy vm/provision.sh ci-runner:/tmp/provision.sh
 printf 'RUNNER_TOKEN=%s\n' "$TOKEN" |
-  limactl shell i2dev-ci-runner sudo RUNNER_URL=https://github.com/i2Dev-com bash /tmp/provision.sh
+  limactl shell ci-runner sudo RUNNER_URL=https://github.com/<org> bash /tmp/provision.sh
 unset TOKEN
 ```
 
-Then, in *Organization settings → Actions → Runners*, confirm the runner
-(`lima-i2dev-ci-runner`, or its `RUNNER_NAME`) is **Idle** in the `local-ci`
-group, with labels `self-hosted, Linux, ARM64, local-ci`.
+Then, on the runners page (*Organization settings → Actions → Runners*, or
+the repository's *Settings → Actions → Runners*), confirm the runner
+(`lima-ci-runner`, or its `RUNNER_NAME`) is **Idle**, in the `local-ci`
+group for an organization, with labels `self-hosted, Linux, ARM64, local-ci`.
 
 Re-running `provision.sh` on a registered runner (to upgrade it) needs no
 settings: the registration is kept as it is. `bin/ci-runner upgrade` does
@@ -126,16 +138,18 @@ start mid-upgrade, and `provision.sh` starts it again at the end (or the
 command does, if provisioning fails).
 
 **Registration tokens.** A registration token is valid for one hour, and the
-runner exchanges it for its own identity at registration. An org token needs
-an organization owner:
+runner exchanges it for its own identity at registration. An organization
+token needs an organization owner; a repository token needs the repository's
+owner, or admin access to it in an organization:
 
-- Either `gh api -X POST orgs/i2Dev-com/actions/runners/registration-token -q .token`
-  with a token that has the `admin:org` scope. The bot App cannot do it.
-- Or *Organization settings → Actions → Runners → New runner → Linux*. The page
-  shows the token in its `config.sh` line; copy only the token.
+- Either `gh api -X POST orgs/<org>/actions/runners/registration-token -q .token`
+  (with the `admin:org` scope), or `repos/<owner>/<repo>/...` for a
+  repository.
+- Or the runners page → *New runner → Linux*. The page shows the token in its
+  `config.sh` line; copy only the token.
 
 **Autostart.** The VM does not restart after a reboot unless something starts
-it. Run `limactl autostart enable i2dev-ci-runner` (Lima 2.x; 1.x called it
+it. Run `limactl autostart enable ci-runner` (Lima 2.x; 1.x called it
 `start-at-login`). Inside the VM, the runner is a systemd service and starts
 with the guest.
 
@@ -153,10 +167,10 @@ packages along with the rest. Passing it again replaces the list; passing it
 empty clears it. Neither uninstalls anything.
 
 ```bash
-bin/ci-runner upgrade --instance i2dev-ci-runner --packages "libpq-dev shellcheck"
+bin/ci-runner upgrade --instance ci-runner --packages "libpq-dev shellcheck"
 # by hand:
-limactl copy vm/provision.sh i2dev-ci-runner:/tmp/provision.sh
-limactl shell i2dev-ci-runner sudo RUNNER_EXTRA_PACKAGES="libpq-dev shellcheck" bash /tmp/provision.sh
+limactl copy vm/provision.sh ci-runner:/tmp/provision.sh
+limactl shell ci-runner sudo RUNNER_EXTRA_PACKAGES="libpq-dev shellcheck" bash /tmp/provision.sh
 ```
 
 **Anything else:** a hook, a bash script in `/etc/ci-runner/provision.d/`
@@ -172,9 +186,9 @@ fails that run and leaves the saved list as it was. Packages go on one line,
 separated by spaces.
 
 ```bash
-limactl copy 50-awscli.sh i2dev-ci-runner:/tmp/50-awscli.sh
-limactl shell i2dev-ci-runner sudo install -D -m 755 /tmp/50-awscli.sh /etc/ci-runner/provision.d/50-awscli.sh
-limactl shell i2dev-ci-runner sudo bash /tmp/provision.sh   # runs it now
+limactl copy 50-awscli.sh ci-runner:/tmp/50-awscli.sh
+limactl shell ci-runner sudo install -D -m 755 /tmp/50-awscli.sh /etc/ci-runner/provision.d/50-awscli.sh
+limactl shell ci-runner sudo bash /tmp/provision.sh   # runs it now
 ```
 
 Provision while the runner is idle, as for any upgrade (see "Maintenance").
@@ -185,39 +199,39 @@ credentials out of hooks.
 
 ```bash
 # To the local runner
-GITHUB_TOKEN='' gh variable set CI_RUNNER --repo i2Dev-com/<repo> --body local
+gh variable set CI_RUNNER --repo <owner>/<repo> --body local
 
 # Back to hosted: the recovery path, and the safe default
-GITHUB_TOKEN='' gh variable set CI_RUNNER --repo i2Dev-com/<repo> --body hosted
+gh variable set CI_RUNNER --repo <owner>/<repo> --body hosted
 ```
 
 `runs-on` is evaluated when a job is queued. **A job that is already queued for
 the local runner stays queued after the switch.** Cancel the run and re-run it:
 
 ```bash
-GITHUB_TOKEN='' gh run cancel <run-id> --repo i2Dev-com/<repo>
-GITHUB_TOKEN='' gh run rerun <run-id> --repo i2Dev-com/<repo>
+gh run cancel <run-id> --repo <owner>/<repo>
+gh run rerun <run-id> --repo <owner>/<repo>
 ```
 
 ## Failure modes
 
 | Symptom | Cause | What happens | Recovery |
 |---|---|---|---|
-| PR job "Waiting for a runner to pick up this job" | VM stopped, Mac asleep or offline, runner service down | The PR's check waits in the queue, and after 24 h GitHub fails it. Merges and deploys are unaffected, because pushes run hosted. | Start the VM (`limactl start i2dev-ci-runner`), or switch to hosted and re-run. |
+| PR job "Waiting for a runner to pick up this job" | VM stopped, Mac asleep or offline, runner service down | The PR's check waits in the queue, and after 24 h GitHub fails it. Merges and deploys are unaffected, because pushes run hosted. | Start the VM (`limactl start ci-runner`), or switch to hosted and re-run. |
 | Waiting forever although the runner is online and idle | The repository is not in the runner group | Same as above | Add the repository to the group, or switch it to hosted |
-| Waiting forever although the runner is online and idle, and the repository is in the group | The label in the expression is not one of the runner's labels. For example, a repository moved to `verify-routing@v2`, whose default label is `local-ci`, while the runner was registered with `i2dev-ci` | Same as above | Add the label to the runner (*Settings → Actions → Runners →* the runner *→ Labels*), or pass the runner's label to `verify-routing` as `label:` and use it in the expression |
+| Waiting forever although the runner is online and idle, and the repository is in the group | The label in the expression is not one of the runner's labels. For example, a repository moved to `verify-routing@v2`, whose default label is `local-ci`, while the runner was registered with another label | Same as above | Add the label to the runner (*Settings → Actions → Runners →* the runner *→ Labels*), or pass the runner's label to `verify-routing` as `label:` and use it in the expression |
 | A PR job waits while another runs | One runner runs one job at a time, across all repositories | Serialised, not failed | Accept it, or switch the less urgent repository to hosted |
-| Job fails only on the local runner | Toolchain or arch gap between the VM and `ubuntu-latest` (arm64 vs x86-64) | Red check | Re-run hosted to confirm. Then fix `provision.sh` or keep that job hosted |
-| `No space left on device` in the VM | Docker images and old workspaces | Red check | `limactl shell i2dev-ci-runner sudo /usr/local/sbin/ci-runner-cleanup` |
+| Job fails only on the local runner | Toolchain or arch gap between the VM and `ubuntu-latest` (arm64 vs x86-64) | Red check | Re-run hosted to confirm. Then add the tool ("Adding tools") or keep that job hosted |
+| `No space left on device` in the VM | Docker images and old workspaces | Red check | `limactl shell ci-runner sudo /usr/local/sbin/ci-runner-cleanup` |
 | Cancelled job still "in progress" for ~40 s | The runner gives the running step a grace period before killing it | Ends `cancelled`, and service containers are removed | Wait. Only investigate if it lasts minutes |
 
-Observed in the i2dev#889 drills: an offline runner leaves the job queued, and
+Observed in drills: an offline runner leaves the job queued, and
 after switching to hosted it stays queued until it is cancelled and re-run. A
 restarted VM's runner is back online within seconds. Two concurrent runs
 serialise.
 
 **Inspecting the guest.** The Lima login user is not in the `docker` group, so
-use `limactl shell i2dev-ci-runner sudo docker ps`. Plain `docker ps` shows
+use `limactl shell ci-runner sudo docker ps`. Plain `docker ps` shows
 nothing, which is easy to misread as "no containers". On the Mac, `limactl`
 listens only on two loopback ports for its own SSH and host agent. A job's
 service ports never appear there.
@@ -232,22 +246,25 @@ service ports never appear there.
   Stopping cancels any job in progress, so do it while the runner is idle.
 - **Guest OS updates.** Automatic. Ubuntu's own `unattended-upgrades` is
   switched off, because it restarts the runner, containerd and Docker at
-  06:00–07:00 whether or not a job is running. On 2026-09-30 it failed a snap
-  PR that way (ci-runner#8). In its place, `ci-runner-maintenance.timer` runs
-  daily at 07:00 guest time, which Lima takes from the Mac. That is the one
-  hour in which no PR run has started. If a job is running it skips the day.
+  06:00–07:00 whether or not a job is running, and has failed jobs that way
+  ([#8](https://github.com/i2Dev-com/ci-runner/issues/8)). In its place, `ci-runner-maintenance.timer` runs daily at 07:00 guest
+  time, which Lima takes from the Mac. Pick an hour when pull requests are
+  rarely opened: `limactl shell ci-runner sudo systemctl edit
+  ci-runner-maintenance.timer`, and add `[Timer]`, an empty `OnCalendar=`
+  (timers add up otherwise) and `OnCalendar=*-*-* 03:00`. Re-provisioning
+  keeps the drop-in. If a job is running it skips the day.
   Otherwise it stops the runner, runs `apt-get upgrade`, and then either
   starts the runner again or, if the update needs one
   (`/var/run/reboot-required`), reboots the guest. The runner starts on boot.
   Queued jobs wait through it, typically under a minute and longer on a
   reboot. To update now, while idle:
-  `limactl shell i2dev-ci-runner sudo systemctl start --no-block ci-runner-maintenance`.
+  `limactl shell ci-runner sudo systemctl start --no-block ci-runner-maintenance`.
   (`--no-block`, because the upgrade may restart D-Bus and drop a client
   waiting on the unit.)
-  Its log: `limactl shell i2dev-ci-runner sudo journalctl -u ci-runner-maintenance`.
+  Its log: `limactl shell ci-runner sudo journalctl -u ci-runner-maintenance`.
   To check whether a reboot is pending:
-  `limactl shell i2dev-ci-runner ls /var/run/reboot-required`.
-  To reboot by hand while idle, run `limactl shell i2dev-ci-runner sudo systemctl reboot`.
+  `limactl shell ci-runner ls /var/run/reboot-required`.
+  To reboot by hand while idle, run `limactl shell ci-runner sudo systemctl reboot`.
   A guest reboot keeps the VM running under `vz`.
 - **Cleanup.** A daily systemd timer (`ci-runner-cleanup.timer`) prunes
   stopped containers, unused networks, dangling layers and build cache older
@@ -255,7 +272,7 @@ service ports never appear there.
   7 days. It skips the run if a job is in progress, and the prune is written to
   be safe if a job starts during it. For that reason it never removes tagged
   images. After a service image version bump, clear the old tags by hand while
-  idle: `limactl shell i2dev-ci-runner sudo docker image prune --all --force`.
+  idle: `limactl shell ci-runner sudo docker image prune --all --force`.
 - **Host memory.** The VM process on the Mac ("Virtual Machine Service") sits
   at roughly the configured `memory` even while idle. The guest fills spare RAM
   with page cache, and Virtualization.framework does not return pages to the
@@ -264,12 +281,12 @@ service ports never appear there.
   `vm/lima.yaml` is kept close to what jobs need. Restarting the VM while the
   runner is idle resets the footprint until the next jobs refill the cache. To
   resize an existing VM, while idle:
-  `limactl stop i2dev-ci-runner && limactl edit i2dev-ci-runner --memory 8 && limactl start i2dev-ci-runner`.
+  `limactl stop ci-runner && limactl edit ci-runner --memory 8 && limactl start ci-runner`.
   Queued PR jobs wait through the restart and are then picked up.
   If `limactl stop` hangs ("did not receive an event with the `exiting`
   status"), power the guest off cleanly with
-  `limactl shell i2dev-ci-runner sudo systemctl poweroff`, then clear the
-  leftover host agent with `limactl stop --force i2dev-ci-runner`.
+  `limactl shell ci-runner sudo systemctl poweroff`, then clear the
+  leftover host agent with `limactl stop --force ci-runner`.
 
 ## Moving a registration
 
@@ -277,7 +294,7 @@ To move the runner to another scope (for example from one repository to the
 organization), re-register it in place. Pass its current `RUNNER_NAME` and
 `RUNNER_LABEL` so it keeps them and no workflow changes are needed.
 `REMOVE` is a remove-token for the **current**
-scope (for a repository: `gh api -X POST repos/i2Dev-com/<repo>/actions/runners/remove-token -q .token`,
+scope (for a repository: `gh api -X POST repos/<owner>/<repo>/actions/runners/remove-token -q .token`,
 which needs repository admin). `TOKEN` is a registration token for the new
 scope (see "Registration tokens").
 
@@ -285,9 +302,9 @@ Move it while no job is running: the script refuses otherwise, then stops the
 runner before anything else.
 
 ```bash
-limactl copy vm/provision.sh i2dev-ci-runner:/tmp/provision.sh
+limactl copy vm/provision.sh ci-runner:/tmp/provision.sh
 printf 'RUNNER_REMOVE_TOKEN=%s\nRUNNER_TOKEN=%s\n' "$REMOVE" "$TOKEN" |
-  limactl shell i2dev-ci-runner sudo RUNNER_REREGISTER=1 \
+  limactl shell ci-runner sudo RUNNER_REREGISTER=1 \
     RUNNER_URL=https://github.com/<new-scope> RUNNER_NAME=<name> RUNNER_LABEL=<label> \
     bash /tmp/provision.sh
 unset REMOVE TOKEN
@@ -318,15 +335,14 @@ deregisters. By hand:
 
 ```bash
 # Every repository that routes to it: switch to hosted first
-GITHUB_TOKEN='' gh variable set CI_RUNNER --repo i2Dev-com/<repo> --body hosted
-# REMOVE: org remove-token (orgs/i2Dev-com/actions/runners/remove-token, admin:org)
-printf '%s\n' "$REMOVE" | limactl shell i2dev-ci-runner sudo sh -c 'cd /opt/actions-runner && ./svc.sh uninstall && read -r t && ACTIONS_RUNNER_INPUT_TOKEN="$t" sudo --preserve-env=ACTIONS_RUNNER_INPUT_TOKEN -u runner ./config.sh remove'
+gh variable set CI_RUNNER --repo <owner>/<repo> --body hosted
+# REMOVE: org remove-token (orgs/<org>/actions/runners/remove-token, admin:org)
+printf '%s\n' "$REMOVE" | limactl shell ci-runner sudo sh -c 'cd /opt/actions-runner && ./svc.sh uninstall && read -r t && ACTIONS_RUNNER_INPUT_TOKEN="$t" sudo --preserve-env=ACTIONS_RUNNER_INPUT_TOKEN -u runner ./config.sh remove'
 unset REMOVE
-limactl delete --force i2dev-ci-runner
+limactl delete --force ci-runner
 ```
 
-If the VM is already gone, delete the stale registration in
-*Organization settings → Actions → Runners*.
+If the VM is already gone, delete the stale registration on the runners page.
 
 ## Moving to dedicated hardware
 
@@ -336,14 +352,13 @@ make up the machine. The additions live only in the guest
 them out first, and keep hooks somewhere versioned rather than only in the VM:
 
 ```bash
-limactl shell i2dev-ci-runner cat /etc/ci-runner/extra-packages   # pass as RUNNER_EXTRA_PACKAGES
-limactl shell i2dev-ci-runner sudo tar -C /etc/ci-runner -cf - provision.d > provision.d.tar
+limactl shell ci-runner cat /etc/ci-runner/extra-packages   # pass as RUNNER_EXTRA_PACKAGES
+limactl shell ci-runner sudo tar -C /etc/ci-runner -cf - provision.d > provision.d.tar
 ```
 
 On another Mac, repeat Setup with the same `RUNNER_EXTRA_PACKAGES` and the
-hooks installed before provisioning. On a Linux box, run `provision.sh` directly on an Ubuntu 24.04
-host or VM. It hardcodes the linux-arm64 tarball, so an x86-64 host needs a
+hooks installed before provisioning. On a Linux box, run `provision.sh`
+directly on an Ubuntu 24.04 host or VM. It hardcodes the linux-arm64 tarball, so an x86-64 host needs a
 different tarball and checksum, and consumers' `verify-routing` then takes
 `arch: x64` along with the matching expression. Register the new runner with
-the same `RUNNER_LABEL`, confirm it is online, then remove the old one. The
-decision to buy hardware waits on i2dev#890's measurement.
+the same `RUNNER_LABEL`, confirm it is online, then remove the old one.
