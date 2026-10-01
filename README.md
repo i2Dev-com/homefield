@@ -63,7 +63,9 @@ gh variable set CI_RUNNER --repo <owner>/<repo> --body local    # hosted again: 
 - **Only while the Mac is up.** Routed jobs wait while the Mac sleeps or the
   VM is stopped, and GitHub fails them after 24 hours. Pushes to the default
   branch always run hosted, so merging and deploying never wait on the Mac.
-  To route around a sleeping runner, set `CI_RUNNER` to `hosted` and re-run
+  To route around a sleeping runner, `bin/ci-runner route hosted --repo
+  <owner>/<repo>` switches the repository to hosted and re-runs whatever was
+  already waiting for the local runner
   ([runbook: Switching](docs/runbook.md#switching-per-repository)).
 - **Organizations and plans.** On an organization, a custom runner group
   limits which repositories can use the runner; custom groups need the GitHub
