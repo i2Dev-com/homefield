@@ -412,21 +412,24 @@ cmd_uninstall() {
 # waiting after a switch to hosted, because runs-on was decided when they
 # were queued.
 stuck_runs() {
-  local repo="$1" label="$2" status ids id n
+  local repo="$1" label="$2" status ids id waiting
   label="$(printf '%s' "$label" | tr '[:upper:]' '[:lower:]')"
+  # --paginate: after a long outage there can be more than one page of
+  # active runs, or of jobs in a run. With --paginate, --jq runs per page,
+  # so both filters emit one line per match and a match on any page counts.
   for status in queued in_progress; do
-    ids="$(gh api "repos/${repo}/actions/runs?status=${status}&per_page=100" --jq '.workflow_runs[].id')" || exit 1
+    ids="$(gh api --paginate "repos/${repo}/actions/runs?status=${status}&per_page=100" --jq '.workflow_runs[].id')" || exit 1
     for id in $ids; do
-      n="$(gh api "repos/${repo}/actions/runs/${id}/jobs?per_page=100" \
-        --jq "[.jobs[] | select(.status == \"queued\" and ((.labels | map(ascii_downcase)) | index(\"${label}\")))] | length")" || exit 1
-      [ "$n" -gt 0 ] && echo "$id"
+      waiting="$(gh api --paginate "repos/${repo}/actions/runs/${id}/jobs?per_page=100" \
+        --jq ".jobs[] | select(.status == \"queued\" and ((.labels | map(ascii_downcase)) | index(\"${label}\"))) | .id")" || exit 1
+      [ -n "$waiting" ] && echo "$id"
     done
   done
   return 0
 }
 
 cmd_route() {
-  local target="${1:-}" label="local-ci" dry=0 repos=() repo current stuck id status
+  local target="${1:-}" label="local-ci" dry=0 repos=() repo current stuck id status tries
   [ $# -gt 0 ] && shift
   case "$target" in
     hosted | local) ;;
@@ -467,11 +470,15 @@ cmd_route() {
       fi
       log "${repo}: run ${id} has jobs waiting for ${label}; cancelling and re-running it"
       gh run cancel "$id" --repo "$repo" >/dev/null
+      # Up to a minute for the cancel to land; a re-run is refused before.
+      # A shell counter, so nothing outside bash can make the wait vanish.
       status=""
-      for _ in $(seq 1 30); do
+      tries=0
+      while [ "$tries" -lt 30 ]; do
         status="$(gh run view "$id" --repo "$repo" --json status --jq .status)" || exit 1
         [ "$status" = completed ] && break
         sleep 2
+        tries=$((tries + 1))
       done
       if [ "$status" != completed ]; then
         log "${repo}: run ${id} is still ${status} after a minute; re-run it yourself: gh run rerun ${id} --repo ${repo}" >&2
