@@ -48,6 +48,14 @@ fail is a new major (see [README](README.md#development)).
   Hooks in `/etc/ci-runner/provision.d/*.sh` install anything apt does not
   have. See "Adding tools" in [`docs/runbook.md`](docs/runbook.md). Nothing
   changes for existing runners: the base set is the same.
+- `bin/ci-runner memory`: per-day average and peak memory of the VM, the peak
+  during jobs and out-of-memory kills, from a new guest sampler
+  (`ci-runner-memwatch.service`) that logs the per-minute peak of 2-second
+  samples to `/var/log/ci-runner/`. Existing runners get it with
+  `bin/ci-runner upgrade`.
+- `bin/ci-runner report`: queue wait, duration and minutes per repository,
+  workflow and job, local against hosted, from the GitHub API, for measuring
+  whether the runner saves money and keeps up.
 
 ## v2 (2026-09-30)
 

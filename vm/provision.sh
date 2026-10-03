@@ -490,8 +490,100 @@ OnCalendar=*-*-* 07:00
 WantedBy=timers.target
 EOF
 
+# ── Memory sampler ──────────────────────────────────────────────────────────
+# One line per minute in /var/log/ci-runner/memwatch-<date>.csv, taken from
+# samples every 2 seconds. sysstat's 10-minute samples miss the short spikes
+# (a build, a test run) that decide how small the VM's memory can be set, so
+# this keeps the per-minute *peak*. "Used" is MemTotal - MemAvailable: what
+# cannot be reclaimed, and so what an out-of-memory kill is about. `job` is 1
+# if a job ran at any time in the minute; `oom_kills` is the kernel's
+# cumulative counter (it restarts at 0 after a reboot). Files older than 90
+# days are deleted. Read it with `bin/ci-runner memory`.
+cat > /usr/local/sbin/ci-runner-memwatch <<'EOF'
+#!/usr/bin/env bash
+# The MEMWATCH_* variables exist for tests/memwatch.sh; the service sets none.
+set -u
+dir="${MEMWATCH_DIR:-/var/log/ci-runner}"
+interval="${MEMWATCH_INTERVAL:-2}"
+period="${MEMWATCH_PERIOD:-60}"
+meminfo="${MEMWATCH_MEMINFO:-/proc/meminfo}"
+vmstat="${MEMWATCH_VMSTAT:-/proc/vmstat}"
+mkdir -p "$dir"
+chmod 755 "$dir"
+
+oom_kills() {
+  local key value
+  while read -r key value; do
+    if [ "$key" = oom_kill ]; then
+      echo "$value"
+      return
+    fi
+  done <"$vmstat"
+  echo 0
+}
+
+now=0
+printf -v now '%(%s)T' -1
+slot=$((now / period))
+n=0 sum=0 max=0 min_avail=-1 job=0 total=0
+
+emit() {
+  local file day stamp
+  printf -v day '%(%F)T' $((slot * period))
+  printf -v stamp '%(%Y-%m-%dT%H:%M:%S%z)T' $((slot * period))
+  file="$dir/memwatch-${day}.csv"
+  if [ ! -e "$file" ]; then
+    echo "ts,samples,total_mib,used_avg_mib,used_max_mib,avail_min_mib,oom_kills,job" >"$file"
+    chmod 644 "$file"
+    find "$dir" -name 'memwatch-*.csv' -mtime +90 -delete
+  fi
+  echo "${stamp},${n},$((total / 1024)),$((sum / n / 1024)),$((max / 1024)),$((min_avail / 1024)),$(oom_kills),${job}" >>"$file"
+}
+
+while :; do
+  {
+    read -r _ total _
+    read -r _ _ _
+    read -r _ avail _
+  } <"$meminfo"
+  used=$((total - avail))
+  n=$((n + 1))
+  sum=$((sum + used))
+  [ "$used" -gt "$max" ] && max=$used
+  if [ "$min_avail" -lt 0 ] || [ "$avail" -lt "$min_avail" ]; then min_avail=$avail; fi
+  if pgrep -f Runner.Worker >/dev/null; then job=1; fi
+  sleep "$interval"
+  printf -v now '%(%s)T' -1
+  if [ $((now / period)) -ne "$slot" ]; then
+    emit
+    slot=$((now / period))
+    n=0 sum=0 max=0 min_avail=-1 job=0
+  fi
+done
+EOF
+chmod 755 /usr/local/sbin/ci-runner-memwatch
+
+cat > /etc/systemd/system/ci-runner-memwatch.service <<'EOF'
+[Unit]
+Description=Per-minute peak memory log for the CI runner
+
+[Service]
+ExecStart=/usr/local/sbin/ci-runner-memwatch
+Restart=always
+RestartSec=5
+Nice=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
 systemctl daemon-reload
 systemctl enable --now ci-runner-cleanup.timer ci-runner-maintenance.timer
+# restart, not just enable: a re-run may have changed the script, and the
+# running copy would keep the old one. Nothing depends on it, so it never
+# blocks a job; the minute in progress is lost.
+systemctl enable ci-runner-memwatch.service
+systemctl restart ci-runner-memwatch.service
 
 # Reports the registration as it is, which differs from the settings when an
 # existing registration was kept. Labels are not in the runner's config; the
