@@ -58,11 +58,30 @@ every job holding cloud or production credentials.
 | Unreviewed dependency code | Dependabot PRs are routed hosted (see above). |
 | Host files and credentials | Lima VM with **no mounts** (`mounts: []` + `--mount-none`), no SSH-agent forwarding, and no host SSH keys. `~/.aws`, `gh` auth, `.env` files and working trees on the Mac are not reachable from the guest. |
 | Guest ports on the Mac | Guest→host port forwarding is disabled, so a job's service containers never appear on the Mac's `localhost`. |
-| **Mac and LAN services from the guest** | **Not isolated.** The guest reaches the Mac at `host.lima.internal` (192.168.5.2, also its gateway and DNS), which Lima maps to the Mac's loopback: every service listening on the Mac is reachable, including ones bound only to `127.0.0.1`, as is the LAN. A firewall inside the guest would not hold, since jobs are root-equivalent there. Until [#18](https://github.com/i2Dev-com/ci-runner/issues/18) is closed, keep sensitive services off the Mac that hosts the runner. |
+| **Mac and LAN services from the guest** | **Not isolated.** The guest reaches the Mac at `host.lima.internal` (192.168.5.2, also its gateway and DNS), which Lima maps to the Mac's loopback: every service listening on the Mac is reachable, including ones bound only to `127.0.0.1`, as is the LAN. A firewall inside the guest would not hold, since jobs are root-equivalent there. Until [#18](https://github.com/i2Dev-com/ci-runner/issues/18) is closed, keep sensitive services off the Mac that hosts the runner. The mapping is hardcoded in Lima (no option turns it off yet); omitting it was tested to close the loopback exposure without breaking DNS, package installs or `limactl shell`, and is being proposed upstream. Even then, a service bound to all interfaces stays reachable through the Mac's LAN address. |
 | Production | The VM holds no cloud credentials and no AWS CLI. Deploy jobs stay hosted and get their credentials through OIDC. |
 | Secrets in jobs | Jobs on the runner receive the secrets their workflow passes, on same-repo PRs. Push-only secrets never reach it, because pushes run hosted. |
 | Across repositories | Every allowed repository's PR jobs share one VM, one after another. Workspaces are per repository, but anything a job leaves in the guest (Docker images, `/tmp`) is visible to the next job from another repository. Allow only repositories you would trust with each other's PR code. |
 | Inside the VM | Jobs run as user `runner`, which is in the `docker` group and therefore root-equivalent **inside the guest**. The VM is the boundary, not the user. |
+
+**Access checklist.** Check these when something changes (a repository added,
+an owner left, a Mac replaced) and now and then regardless. The first two
+need an organization owner (`admin:org`):
+
+- The runner group admits exactly the repositories that should use the
+  runner, and refuses public ones:
+  `gh api orgs/<org>/actions/runner-groups --jq '.runner_groups[] | {name, visibility, allows_public_repositories}'`
+  and `gh api orgs/<org>/actions/runner-groups/<id>/repositories --jq '.repositories[].full_name'`.
+- Every repository on that list is private.
+- Each adopting repository has `CI_RUNNER` set the way you expect
+  (`gh variable get CI_RUNNER --repo <owner>/<repo>`), and its
+  `verify-routing` step passes on `main`.
+- The VM has no mounts: `bin/ci-runner upgrade` and `install` check this and
+  refuse to continue otherwise.
+- Nothing on the Mac listens that PR code should not reach (see the
+  network row above), and the Mac holds no credentials the VM could use.
+- People who can edit workflow files in an adopting repository are people you
+  trust with the runner: a PR runs the workflow from its own branch.
 
 ## Runner group
 
@@ -275,6 +294,20 @@ service ports never appear there.
   `limactl shell ci-runner ls /var/run/reboot-required`.
   To reboot by hand while idle, run `limactl shell ci-runner sudo systemctl reboot`.
   A guest reboot keeps the VM running under `vz`.
+- **Checking health after an update.** After a runner bump, a guest upgrade
+  or a reboot (the 07:00 maintenance may do any of them):
+  `bin/ci-runner status` should show the VM running, the service running and
+  the job state. The runner's own version, which moves when it updates itself,
+  is `limactl shell ci-runner sudo -u runner /opt/actions-runner/bin/Runner.Listener --version`;
+  compare it with `gh api repos/actions/runner/releases/latest --jq .tag_name`.
+  (`bin/ci-runner status` shows the version `provision.sh` installed, which
+  stays put.) The maintenance run's log is
+  `limactl shell ci-runner sudo journalctl -u ci-runner-maintenance`, and the
+  runner's diagnostic logs are in `/opt/actions-runner/_diag/` (root-readable).
+  Then look at the next PR jobs: queued jobs should have started, and
+  `bin/ci-runner memory --days 1` and `bin/ci-runner report --repo
+  <owner>/<repo> [--repo ...] --since <date>` show whether anything looks off
+  since.
 - **Cleanup.** A daily systemd timer (`ci-runner-cleanup.timer`) prunes
   stopped containers, unused networks, dangling layers and build cache older
   than 24 h. It also removes any workspace with nothing modified inside it for
@@ -390,3 +423,31 @@ directly on an Ubuntu 24.04 host or VM. It hardcodes the linux-arm64 tarball, so
 different tarball and checksum, and consumers' `verify-routing` then takes
 `arch: x64` along with the matching expression. Register the new runner with
 the same `RUNNER_LABEL`, confirm it is online, then remove the old one.
+
+As a checklist:
+
+1. Copy the extra-packages list and the hooks out of the old guest (above),
+   and keep the hooks in version control.
+2. Provision the new machine with the same `RUNNER_LABEL` and group, a
+   different `RUNNER_NAME`, and the same extra packages and hooks. Two runners
+   with one label share the queue, so it starts taking jobs once it is online.
+3. Confirm it is online on the runners page.
+4. Same CPU architecture: jobs go to whichever runner is free, so to see a
+   job from each adopting repository pass on the new one, stop the old
+   runner's service while it is idle
+   (`limactl shell ci-runner sudo systemctl stop "$(limactl shell ci-runner sudo cat /opt/actions-runner/.service)"`),
+   run a PR in each repository, and check that the run's log names the new
+   runner. If it fails, start the old service again.
+   Different architecture: the expression's labels name the old one, so no job
+   can reach the new runner yet. Once it is online, change the `verify-routing`
+   `arch` and the expression's labels in each adopting repository, one PR
+   each. That PR's own routed jobs then run on the new runner and are the
+   validation. Jobs from repositories not yet changed keep going to the old
+   runner, so nothing waits.
+5. Retire the old runner while it is idle: `bin/ci-runner uninstall` on the old
+   Mac. If the new runner is not up yet, switch the repositories to hosted
+   first.
+6. The memory log (`/var/log/ci-runner/`) stays with the old guest. Copy it
+   out first if you want the history for comparison.
+7. Re-check "Access checklist" for the new machine, and compare `bin/ci-runner
+   report` before and after.
