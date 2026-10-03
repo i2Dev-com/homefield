@@ -557,7 +557,9 @@ cmd_memory() {
       *) die "memory: unknown option $1 (see bin/ci-runner help)" ;;
     esac
   done
-  [[ "$days" =~ ^[0-9]+$ ]] && [ "$days" -ge 1 ] || die "memory: --days must be a positive number"
+  if ! [[ "$days" =~ ^[0-9]+$ ]] || [ "$days" -lt 1 ]; then
+    die "memory: --days must be a positive number"
+  fi
   check_host
   [ "$(vm_status)" = "Running" ] || die "memory: VM ${INSTANCE} is not running"
   # BSD date, as on macOS: today minus (days - 1), so --days 1 is today.
