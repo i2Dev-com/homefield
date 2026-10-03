@@ -305,8 +305,9 @@ service ports never appear there.
   `limactl shell ci-runner sudo journalctl -u ci-runner-maintenance`, and the
   runner's diagnostic logs are in `/opt/actions-runner/_diag/` (root-readable).
   Then look at the next PR jobs: queued jobs should have started, and
-  `bin/ci-runner memory --days 1` and `bin/ci-runner report` show whether
-  anything looks off since.
+  `bin/ci-runner memory --days 1` and `bin/ci-runner report --repo
+  <owner>/<repo> [--repo ...] --since <date>` show whether anything looks off
+  since.
 - **Cleanup.** A daily systemd timer (`ci-runner-cleanup.timer`) prunes
   stopped containers, unused networks, dangling layers and build cache older
   than 24 h. It also removes any workspace with nothing modified inside it for
@@ -430,13 +431,22 @@ As a checklist:
 2. Provision the new machine with the same `RUNNER_LABEL` and group, a
    different `RUNNER_NAME`, and the same extra packages and hooks. Two runners
    with one label share the queue, so it starts taking jobs once it is online.
-3. Confirm it is online on the runners page, and that a job from each adopting
-   repository passes on it (the run's log names the runner).
-4. For a different CPU architecture: change the `verify-routing` `arch` and
-   the expression's labels in every adopting repository first, in one PR each.
+3. Confirm it is online on the runners page.
+4. Same CPU architecture: jobs go to whichever runner is free, so to see a
+   job from each adopting repository pass on the new one, stop the old
+   runner's service while it is idle
+   (`limactl shell ci-runner sudo systemctl stop "$(limactl shell ci-runner sudo cat /opt/actions-runner/.service)"`),
+   run a PR in each repository, and check that the run's log names the new
+   runner. If it fails, start the old service again.
+   Different architecture: the expression's labels name the old one, so no job
+   can reach the new runner yet. Once it is online, change the `verify-routing`
+   `arch` and the expression's labels in each adopting repository, one PR
+   each. That PR's own routed jobs then run on the new runner and are the
+   validation. Jobs from repositories not yet changed keep going to the old
+   runner, so nothing waits.
 5. Retire the old runner while it is idle: `bin/ci-runner uninstall` on the old
-   Mac (switch the repositories to hosted first if the new runner is not up
-   yet).
+   Mac. If the new runner is not up yet, switch the repositories to hosted
+   first.
 6. The memory log (`/var/log/ci-runner/`) stays with the old guest. Copy it
    out first if you want the history for comparison.
 7. Re-check "Access checklist" for the new machine, and compare `bin/ci-runner
