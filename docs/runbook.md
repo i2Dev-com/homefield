@@ -296,6 +296,25 @@ service ports never appear there.
   status"), power the guest off cleanly with
   `limactl shell ci-runner sudo systemctl poweroff`, then clear the
   leftover host agent with `limactl stop --force ci-runner`.
+- **Measuring it.** Two commands answer "is the runner big enough, and is it
+  paying for itself?":
+  - `bin/ci-runner memory [--days N]` summarises the guest's memory log: per
+    day, the average, the highest minute, the highest minute during a job, the
+    lowest available memory and any out-of-memory kills. The guest writes one
+    line a minute to `/var/log/ci-runner/memwatch-<date>.csv` (kept 90 days)
+    from samples taken every 2 seconds, so a short spike is kept; the usual
+    system statistics, at 10 minutes, miss it. "Used" is total minus
+    available memory, which is what an out-of-memory kill is about. The
+    sampler (`ci-runner-memwatch.service`) is installed by provisioning, so an
+    existing runner needs `bin/ci-runner upgrade` first. Read the peak before
+    lowering `memory`: with no swap, a job that outgrows the VM is killed.
+  - `bin/ci-runner report --repo <owner>/<repo> [--repo ...] [--since DATE]`
+    lists, per repository, workflow and job, how many jobs ran locally and
+    on GitHub's runners, how long they queued and ran, and how many minutes
+    they used (for local jobs, what they would have cost hosted). Queue wait
+    is what shows whether one runner is enough. It reads the GitHub API with
+    `gh`, so it needs no access to the VM, and takes a few minutes a month of
+    runs. Pull requests are counted as distinct head branches.
 
 ## Moving a registration
 

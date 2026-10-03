@@ -9,6 +9,8 @@
 #   bin/ci-runner status
 #   bin/ci-runner uninstall [--keep-vm]
 #   bin/ci-runner route <hosted|local> --repo <owner>/<repo> [--repo ...]
+#   bin/ci-runner memory [--days N]
+#   bin/ci-runner report --repo <owner>/<repo> [--repo ...] [--since DATE]
 #
 # Every command takes --instance NAME (default ci-runner, or $CI_RUNNER_INSTANCE)
 # to pick the Lima VM. Run `bin/ci-runner help` for the options.
@@ -36,6 +38,10 @@ Commands:
   route      Switch repositories' pull-request jobs to hosted or local
              (the CI_RUNNER variable). Switching to hosted also cancels and
              re-runs runs whose jobs are stuck waiting for the local runner.
+  memory     Show the VM's memory use from its per-minute log: average and
+             peak per day, and out-of-memory kills.
+  report     Queue wait, duration and minutes of the jobs in repositories,
+             local against hosted, from the GitHub API.
 
 Options:
   --instance NAME    Lima instance (default ci-runner, or $CI_RUNNER_INSTANCE)
@@ -66,6 +72,23 @@ route <hosted|local>:
   --dry-run          show what would change, change nothing
   Needs gh with write access to the repositories' variables and runs. Does
   not need the VM.
+
+memory:
+  --days N           how many days to show (default 7)
+  The log is written by the guest every minute from samples taken every 2
+  seconds, so a short spike is kept. "Used" is total minus available memory.
+
+report:
+  --repo OWNER/REPO  repository to include (repeat for several; required)
+  --since DATE       first day, YYYY-MM-DD, UTC (default: the 1st of this month)
+  --until DATE       last day, inclusive (default: today)
+  --label LABEL      routing label that marks a job as local (default local-ci)
+  --json             machine-readable output
+  Needs gh with read access to the repositories' runs. Does not need the VM.
+  Queue wait is from a job being queued to it starting; minutes are each
+  job's duration rounded up to the minute, as GitHub bills hosted jobs. For
+  local jobs that is what they would have cost. Looks at every attempt of
+  every run, so it makes one API call per run: allow a few minutes a month.
 
 Registration and removal need a one-hour token. It is fetched with `gh` when
 your gh credentials allow it (org owner with admin:org, or repository admin);
@@ -490,6 +513,72 @@ cmd_route() {
   done
 }
 
+# Per-day summary of the guest's memwatch rows (vm/provision.sh,
+# ci-runner-memwatch): ts,samples,total_mib,used_avg_mib,used_max_mib,
+# avail_min_mib,oom_kills,job. Files sort by date, so rows arrive in time
+# order and the cumulative oom counter can be diffed row to row; a smaller
+# value than before means the guest rebooted and the counter restarted from
+# 0, so the new value is itself the kills since boot.
+# shellcheck disable=SC2016  # awk, not shell, expands the $n fields
+MEMORY_AWK='
+BEGIN { FS = ","; prev = -1 }
+$1 == "ts" || NF != 8 { next }
+{
+  day = substr($1, 1, 10)
+  if (day < cutoff) { prev = $7; next }
+  if (!(day in n)) { order[++days] = day; mn[day] = -1 }
+  n[day]++
+  sum[day] += $4
+  if ($5 > peak[day]) { peak[day] = $5; at[day] = substr($1, 12, 5) }
+  if (mn[day] < 0 || $6 < mn[day]) mn[day] = $6
+  if ($8 == 1) { busy[day]++; if ($5 > bpeak[day]) bpeak[day] = $5 }
+  if (prev >= 0) oom[day] += ($7 >= prev ? $7 - prev : $7)
+  prev = $7
+  total = $3
+  tn++
+  tsum += $4
+  if ($5 > tpeak) { tpeak = $5; tday = day; tat = substr($1, 12, 5) }
+}
+END {
+  if (days == 0) exit 3
+  printf "%-10s %8s %9s %9s %10s %9s %5s\n", "day", "minutes", "avg MiB", "peak MiB", "job peak", "min avail", "OOM"
+  for (i = 1; i <= days; i++) {
+    d = order[i]
+    printf "%-10s %8d %9d %9d %10s %9d %5d\n", d, n[d], sum[d] / n[d], peak[d], (busy[d] ? bpeak[d] : "-"), mn[d], oom[d]
+    allOom += oom[d]
+  }
+  printf "\nVM memory %d MiB. Over %d minutes: average %d MiB, highest minute %d MiB (%d%%) on %s at %s, %d out-of-memory kills.\n", total, tn, tsum / tn, tpeak, tpeak * 100 / total, tday, tat, allOom
+}'
+
+cmd_memory() {
+  local days=7 cutoff rows rc
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --days) days="${2:?--days needs a value}"; shift 2 ;;
+      *) die "memory: unknown option $1 (see bin/ci-runner help)" ;;
+    esac
+  done
+  if ! [[ "$days" =~ ^[0-9]+$ ]] || [ "$days" -lt 1 ]; then
+    die "memory: --days must be a positive number"
+  fi
+  check_host
+  [ "$(vm_status)" = "Running" ] || die "memory: VM ${INSTANCE} is not running"
+  # BSD date, as on macOS: today minus (days - 1), so --days 1 is today.
+  cutoff="$(date -v-"$((days - 1))"d +%F)"
+  rows="$(guest sh -c 'cat /var/log/ci-runner/memwatch-*.csv 2>/dev/null; true')" || exit 1
+  [ -n "$rows" ] || die "memory: no samples in ${INSTANCE} yet; the sampler is installed by bin/ci-runner upgrade"
+  rc=0
+  printf '%s\n' "$rows" | awk -v cutoff="$cutoff" "$MEMORY_AWK" || rc=$?
+  [ "$rc" -ne 3 ] || die "memory: no samples since ${cutoff}"
+  [ "$rc" -eq 0 ] || exit "$rc"
+}
+
+cmd_report() {
+  command -v python3 >/dev/null || die "report needs python3"
+  command -v gh >/dev/null || die "report needs gh (https://cli.github.com)"
+  exec python3 "$ROOT/tools/report.py" "$@"
+}
+
 # ── Main ────────────────────────────────────────────────────────────────────
 # --instance may come before or after the command.
 cmd=""
@@ -511,6 +600,8 @@ case "$cmd" in
   status) cmd_status "$@" ;;
   uninstall) cmd_uninstall "$@" ;;
   route) cmd_route "$@" ;;
+  memory) cmd_memory "$@" ;;
+  report) cmd_report "$@" ;;
   help | -h | --help) usage ;;
   *) usage >&2; exit 1 ;;
 esac

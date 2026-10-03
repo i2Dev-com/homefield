@@ -183,6 +183,9 @@ bash verify-routing/tests/run.sh   # fixture suite: every drift case must fail
 bash tests/label-rule.sh           # provision.sh and verify-routing accept the same labels
 bash tests/extra-packages.sh       # RUNNER_EXTRA_PACKAGES accepts package names only
 bash tests/runner-url.sh           # RUNNER_URL accepts github.com orgs and repos only
+bash tests/memwatch.sh             # the guest's memory sampler (needs bash >= 4.2 to run)
+bash tests/memory-summary.sh       # `bin/ci-runner memory` per-day summary
+bash tests/report.sh               # `bin/ci-runner report` against a fixture
 shellcheck bin/ci-runner vm/provision.sh verify-routing/tests/run.sh tests/*.sh
 ```
 

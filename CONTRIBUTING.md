@@ -10,6 +10,9 @@ bash verify-routing/tests/run.sh   # routing guard fixtures
 bash tests/label-rule.sh           # label rule, provision.sh and verify-routing agree
 bash tests/extra-packages.sh       # RUNNER_EXTRA_PACKAGES validation
 bash tests/runner-url.sh           # RUNNER_URL validation
+bash tests/memwatch.sh             # memory sampler (needs bash >= 4.2 to run)
+bash tests/memory-summary.sh       # `bin/ci-runner memory` summary
+bash tests/report.sh               # `bin/ci-runner report`
 shellcheck bin/ci-runner vm/provision.sh verify-routing/tests/run.sh tests/*.sh
 actionlint
 ```
