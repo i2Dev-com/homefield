@@ -8,6 +8,9 @@ fail is a new major (see [README](README.md#development)).
 
 ### Changed
 
+- Runbook: an access checklist, a health check after updates, a step list for
+  moving to dedicated hardware, and the Lima loopback opt-out's status in the
+  trust-boundary table.
 - Docs are written for any organization or account, not one deployment: a
   README with a quick start, requirements and limitations (Apple Silicon,
   private repositories only, one job at a time, offline behaviour, plans and
