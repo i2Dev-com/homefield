@@ -8,10 +8,11 @@ busy repository can pass in a month. Jobs are fetched with filter=all, so a
 re-run's earlier attempts count too.
 
 A job is *local* if the routing label is among the labels it asked for, and
-*hosted* if a GitHub-hosted runner picked it up. Skipped jobs, and jobs that
-were cancelled before any runner took them, are not counted as runs; local
-jobs that never started are reported separately, because they are the ones a
-stopped VM leaves behind.
+*hosted* if a GitHub-hosted runner picked it up. Skipped jobs are not counted.
+Jobs that finished without starting (cancelled while queued) and jobs queued
+or running at the time of the report are reported separately, not as runs:
+the first are what a stopped VM leaves behind. Matrix jobs keep their full
+names, so each combination is its own row.
 
 Minutes are each job's duration rounded up to a whole minute, times GitHub's
 multiplier for the OS (Linux 1, Windows 2, macOS 10). For hosted jobs that is
@@ -39,7 +40,7 @@ RUN_FIELDS = (
     "{id, path, event, created_at, branch: .head_branch}"
 )
 JOB_FIELDS = (
-    "{id, name, conclusion, created_at, started_at, completed_at,"
+    "{id, name, status, conclusion, created_at, started_at, completed_at,"
     " runner_name, labels}"
 )
 
@@ -124,18 +125,16 @@ def classify(job, label):
     """"local", "hosted", "skipped" (not counted) or "other"."""
     labels = [item.lower() for item in job.get("labels") or []]
     runner = job.get("runner_name") or ""
+    # A skipped job keeps the labels it asked for, so this comes first.
+    if job.get("conclusion") == "skipped":
+        return "skipped"
     if label in labels:
         return "local"
-    if job.get("conclusion") == "skipped" or not runner:
+    if not runner:
         return "skipped"
     if runner.startswith(("GitHub Actions", "GitHub-hosted", "Hosted Compute Agent")):
         return "hosted"
     return "other"
-
-
-def job_family(name):
-    """Matrix jobs are one row: "test (node 22)" and "test (node 24)" -> "test"."""
-    return re.sub(r"\s*\(.*\)\s*$", "", name)
 
 
 def aggregate(runs_by_repo, label):
@@ -154,16 +153,20 @@ def aggregate(runs_by_repo, label):
                 where = classify(job, label)
                 if where in ("skipped", "other"):
                     continue
-                key = (repo, workflow, job_family(job["name"]), where)
+                key = (repo, workflow, job["name"], where)
                 row = rows.setdefault(
                     key,
-                    {"jobs": 0, "unstarted": 0, "waits": [], "seconds": 0,
+                    {"jobs": 0, "unstarted": 0, "pending": 0, "waits": [], "seconds": 0,
                      "minutes": 0, "failed": 0, "cancelled": 0},
                 )
+                if job.get("status") != "completed":
+                    # Queued or running now: not a result yet.
+                    row["pending"] += 1
+                    continue
                 started = parse_time(job.get("started_at"))
                 completed = parse_time(job.get("completed_at"))
                 if started is None or completed is None:
-                    # Queued and never taken, or cancelled while queued.
+                    # Finished without ever starting: cancelled while queued.
                     row["unstarted"] += 1
                     continue
                 queued = parse_time(job["created_at"])
@@ -194,6 +197,7 @@ def summarise(row):
     return {
         "jobs": row["jobs"],
         "unstarted": row["unstarted"],
+        "pending": row["pending"],
         "wait_p50": percentile(waits, 0.5),
         "wait_p95": percentile(waits, 0.95),
         "wait_max": waits[-1] if waits else None,
@@ -213,11 +217,12 @@ def as_data(rows, prs):
         out["jobs"].append({"repo": repo, "workflow": workflow, "job": job,
                             "where": where, **summarise(row)})
         total = totals.setdefault((repo, where), {"jobs": 0, "minutes": 0, "waits": [],
-                                                  "unstarted": 0, "failed": 0, "cancelled": 0})
+                                                  "unstarted": 0, "pending": 0, "failed": 0, "cancelled": 0})
         total["jobs"] += row["jobs"]
         total["minutes"] += row["minutes"]
         total["waits"].extend(row["waits"])
         total["unstarted"] += row["unstarted"]
+        total["pending"] += row["pending"]
         total["failed"] += row["failed"]
         total["cancelled"] += row["cancelled"]
     for (repo, where), total in sorted(totals.items()):
@@ -226,6 +231,7 @@ def as_data(rows, prs):
         out["totals"].append({
             "repo": repo, "where": where, "jobs": total["jobs"],
             "minutes": total["minutes"], "unstarted": total["unstarted"],
+            "pending": total["pending"],
             "failed": total["failed"], "cancelled": total["cancelled"],
             "pull_requests": count,
             "minutes_per_pr": round(total["minutes"] / count, 1) if count else None,
@@ -255,7 +261,8 @@ def render(data, first, last, label):
     lines += ["", "Totals", ""]
     for item in data["totals"]:
         per_pr = "" if item["minutes_per_pr"] is None else f", {item['minutes_per_pr']} min per PR"
-        never = f", {item['unstarted']} never started" if item["unstarted"] else ""
+        never = f", {item['unstarted']} cancelled before starting" if item["unstarted"] else ""
+        never += f", {item['pending']} queued or running now" if item["pending"] else ""
         lines.append(
             f"  {item['repo']} {item['where']}: {item['jobs']} jobs, {item['minutes']} min"
             f"{per_pr}, queue p50 {duration(item['wait_p50'])} / p95 {duration(item['wait_p95'])}"

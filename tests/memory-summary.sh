@@ -21,7 +21,7 @@ rows='ts,samples,total_mib,used_avg_mib,used_max_mib,avail_min_mib,oom_kills,job
 ts,samples,total_mib,used_avg_mib,used_max_mib,avail_min_mib,oom_kills,job
 2026-10-02T11:20:00-0400,30,8000,500,1300,6000,2,1
 2026-10-02T11:21:00-0400,30,8000,200,300,7500,2,0
-2026-10-03T00:00:00-0400,30,8000,100,200,7700,0,0
+2026-10-03T00:00:00-0400,30,8000,100,200,7700,1,0
 2026-10-03T00:01:00-0400,30,8000,300,400,7600,1,0'
 
 out="$(printf '%s\n' "$rows" | awk -v cutoff=2026-10-02 "$prog")"
@@ -32,7 +32,7 @@ row() { echo "$out" | awk -v d="$1" '$1 == d { $1 = ""; print }' | tr -s ' ' | s
 # minutes, avg, peak, job peak, min avail, OOM
 record "10-01 is before the cutoff" "" "$(row 2026-10-01)"
 record "10-02: peak, job peak and OOM kills" "2 350 1300 1300 6000 2" "$(row 2026-10-02)"
-record "10-03: a reboot resets the counter; no job, so no job peak" "2 200 400 - 7600 1" "$(row 2026-10-03)"
+record "10-03: a reboot restarts the counter at 1: that kill counts; no job, so no job peak" "2 200 400 - 7600 1" "$(row 2026-10-03)"
 record "summary line" \
   "VM memory 8000 MiB. Over 4 minutes: average 275 MiB, highest minute 1300 MiB (16%) on 2026-10-02 at 11:20, 3 out-of-memory kills." \
   "$(echo "$out" | tail -1)"
