@@ -54,9 +54,11 @@ printf 'nr_free_pages 1\noom_kill 3\npgfault 9\n' >"$work/vmstat"
 (
   sleep 1.7
   fake_meminfo 6000000
+  touch "$work/job"
 ) &
 MEMWATCH_DIR="$work/log" MEMWATCH_INTERVAL=0.2 MEMWATCH_PERIOD=1 \
   MEMWATCH_MEMINFO="$work/meminfo" MEMWATCH_VMSTAT="$work/vmstat" \
+  MEMWATCH_JOB_FILE="$work/job" \
   timeout 5 "$new_bash" "$script" >/dev/null 2>&1
 wait
 
@@ -72,6 +74,10 @@ record "first row peak is the lower level" "976" "$(echo "$rows" | head -1 | cut
 record "a later row peak is the raised level" "1953" "$(echo "$rows" | cut -d, -f5 | sort -n | tail -1)"
 record "avail_min follows the same drop" "5859" "$(echo "$rows" | cut -d, -f6 | sort -n | head -1)"
 record "oom_kills read from vmstat" "3" "$(echo "$rows" | head -1 | cut -d, -f7)"
-record "job is 0 with no job running" "0" "$(echo "$rows" | cut -d, -f8 | sort -u | tr -d '\n')"
+# The job marker appears with the memory drop: the first row has none, the
+# last row (which ends after it) has one. The machine running this test may
+# be a runner itself, so the sampler's own process check is not used.
+record "no job in the first row" "0" "$(echo "$rows" | head -1 | cut -d, -f8)"
+record "a job seen in a later row" "1" "$(echo "$rows" | cut -d, -f8 | sort -n | tail -1)"
 
 summary

@@ -508,8 +508,20 @@ interval="${MEMWATCH_INTERVAL:-2}"
 period="${MEMWATCH_PERIOD:-60}"
 meminfo="${MEMWATCH_MEMINFO:-/proc/meminfo}"
 vmstat="${MEMWATCH_VMSTAT:-/proc/vmstat}"
+job_file="${MEMWATCH_JOB_FILE:-}"
 mkdir -p "$dir"
 chmod 755 "$dir"
+
+# A job is running if the runner has a worker process. A test points
+# MEMWATCH_JOB_FILE at a file instead, because the machine it runs on may
+# itself be a runner.
+job_running() {
+  if [ -n "$job_file" ]; then
+    [ -e "$job_file" ]
+  else
+    pgrep -f Runner.Worker >/dev/null
+  fi
+}
 
 oom_kills() {
   local key value
@@ -551,7 +563,7 @@ while :; do
   sum=$((sum + used))
   [ "$used" -gt "$max" ] && max=$used
   if [ "$min_avail" -lt 0 ] || [ "$avail" -lt "$min_avail" ]; then min_avail=$avail; fi
-  if pgrep -f Runner.Worker >/dev/null; then job=1; fi
+  if job_running; then job=1; fi
   sleep "$interval"
   printf -v now '%(%s)T' -1
   if [ $((now / period)) -ne "$slot" ]; then
