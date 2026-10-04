@@ -8,6 +8,11 @@ fail is a new major (see [README](README.md#development)).
 
 ### Changed
 
+- The base package set includes `docker-buildx`: Ubuntu's `docker.io` has no
+  buildx, so `docker buildx build` (and `docker build --secret`) failed in
+  jobs, as it did for one repository's browser test. Existing runners get it
+  from `bin/ci-runner upgrade`, which is a no-op if it was already passed as
+  an extra package.
 - Runbook: an access checklist, a health check after updates, a step list for
   moving to dedicated hardware, and the Lima loopback opt-out's status in the
   trust-boundary table.
