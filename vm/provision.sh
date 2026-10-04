@@ -204,11 +204,13 @@ fi
 # ── Packages ────────────────────────────────────────────────────────────────
 # The base set: common tools that ubuntu-latest has and a minimal Ubuntu does
 # not, kept small on purpose. Everything else a repository needs goes in
-# RUNNER_EXTRA_PACKAGES or a hook, not here. Docker is for job `services:`, and
-# Compose v2 is not optional: Ubuntu's docker.io ships without the plugin, and
-# `docker compose` in a job fails without it. dnsutils keeps `dig` as on a
-# hosted runner. python3 is also what this script reads the runner's config
-# with.
+# RUNNER_EXTRA_PACKAGES or a hook, not here. Docker is for job `services:`.
+# Compose v2 and buildx are not optional: Ubuntu's docker.io ships without
+# either plugin, so `docker compose` and `docker buildx` (which `docker build
+# --secret` needs) fail in a job without them. A job can still bring its own
+# buildx, as docker/setup-buildx-action does, and that copy wins. dnsutils
+# keeps `dig` as on a hosted runner. python3 is also what this script reads
+# the runner's config with.
 mkdir -p "$CONFIG_DIR/provision.d"
 # This run's extras: RUNNER_EXTRA_PACKAGES when set (even empty), else the list
 # saved by the last run that set it. Saved only once apt has installed it, so
@@ -223,7 +225,7 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -q
 apt-get install -y -q \
   ca-certificates curl git jq python3 tar zip unzip dnsutils build-essential \
-  docker.io docker-compose-v2 \
+  docker.io docker-compose-v2 docker-buildx \
   ${extra_packages[@]+"${extra_packages[@]}"}
 if [ -n "${RUNNER_EXTRA_PACKAGES+set}" ]; then
   printf '%s\n' ${extra_packages[@]+"${extra_packages[@]}"} | sed '/^$/d' >"$CONFIG_DIR/extra-packages"
