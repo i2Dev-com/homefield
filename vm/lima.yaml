@@ -21,9 +21,12 @@ arch: aarch64
 cpus: 6
 # Apple's Virtualization.framework never takes back memory the guest has used,
 # and Linux fills spare RAM with page cache, so after a few jobs the VM holds
-# this whole amount on the Mac even when idle. Keep it near what jobs need
-# (observed peak ~4 GiB including cache), not "as much as can be spared".
-memory: 8GiB
+# this whole amount on the Mac even when idle. Keep it near what jobs need,
+# not "as much as can be spared". 5 GiB matches GitHub's `ubuntu-slim` runner.
+# Measured over 2026-10-01..14, the highest minute used 4.4 GiB (MemTotal -
+# MemAvailable, so cache excluded); if `bin/ci-runner memory` shows OOM kills,
+# raise it (runbook, "Host memory").
+memory: 5GiB
 disk: 60GiB
 
 mounts: []

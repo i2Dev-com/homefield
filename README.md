@@ -141,7 +141,7 @@ month on Free, 3,000 on Pro and Team). Self-hosted runner usage is free. So
 this pays off for repositories that exhaust their included minutes with many
 short pull-request jobs, where the per-job minute floor dominates. It does not
 help a repository that stays within them, and it costs the Mac's resources
-while the VM runs (it holds its configured memory, 8 GiB by default).
+while the VM runs (it holds its configured memory, 5 GiB by default).
 
 GitHub announced a per-minute platform charge for self-hosted runners on
 private repositories for March 2026, then postponed it indefinitely. Check

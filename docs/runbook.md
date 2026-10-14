@@ -323,7 +323,7 @@ service ports never appear there.
   `vm/lima.yaml` is kept close to what jobs need. Restarting the VM while the
   runner is idle resets the footprint until the next jobs refill the cache. To
   resize an existing VM, while idle:
-  `limactl stop ci-runner && limactl edit ci-runner --memory 8 && limactl start ci-runner`.
+  `limactl stop ci-runner && limactl edit ci-runner --memory 5 && limactl start ci-runner`.
   Queued PR jobs wait through the restart and are then picked up.
   If `limactl stop` hangs ("did not receive an event with the `exiting`
   status"), power the guest off cleanly with
