@@ -52,12 +52,12 @@ check_host() {
 # The values end up in URLs, paths and a generated script, so they are
 # checked against a short list of characters.
 check_settings() {
-  [[ "$REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] && [[ "$REPO" != *..* ]] ||
+  [[ "$REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ && "$REPO" != *..* ]] ||
     die "CI_RUNNER_REPO must be <owner>/<repo>, got: $REPO"
-  [[ "$REF" =~ ^[A-Za-z0-9_./-]+$ ]] && [[ "$REF" != *..* ]] && [[ "$REF" != -* ]] ||
+  [[ "$REF" =~ ^[A-Za-z0-9_./-]+$ && "$REF" != *..* && "$REF" != -* ]] ||
     die "CI_RUNNER_REF must be a branch, tag or commit name (letters, digits, '_', '.', '/', '-'), got: $REF"
   local dir_re='^/[A-Za-z0-9_./@+ -]+$'
-  [[ "$INSTALL_DIR" =~ $dir_re ]] && [[ "$INSTALL_DIR" != *..* ]] ||
+  [[ "$INSTALL_DIR" =~ $dir_re && "$INSTALL_DIR" != *..* ]] ||
     die "CI_RUNNER_HOME must be an absolute path of letters, digits and _./@+- (and spaces), got: $INSTALL_DIR"
   if [ -n "${CI_RUNNER_BIN_DIR:-}" ]; then
     [[ "$CI_RUNNER_BIN_DIR" =~ ^/ ]] || die "CI_RUNNER_BIN_DIR must be an absolute path, got: $CI_RUNNER_BIN_DIR"
