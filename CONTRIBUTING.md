@@ -15,6 +15,7 @@ bash tests/memory-summary.sh       # `bin/ci-runner memory` summary
 bash tests/report.sh               # `bin/ci-runner report`
 bash tests/install-sh.sh           # install.sh
 bash tests/runner-group.sh         # runner group, wait for online, `version`
+bash tests/adopt.sh                # `bin/ci-runner adopt`
 shellcheck bin/ci-runner install.sh vm/provision.sh verify-routing/tests/run.sh tests/*.sh
 actionlint
 ```

@@ -63,6 +63,9 @@ jobs:
       - name: Runner group, wait for online, version
         run: bash tests/runner-group.sh
 
+      - name: bin/ci-runner adopt
+        run: bash tests/adopt.sh
+
       # The action as consumers call it, not just the script behind it: inputs
       # through env, $GITHUB_ACTION_PATH resolution, composite wiring.
       - name: Action against the clean fixture

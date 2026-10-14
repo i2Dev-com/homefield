@@ -90,7 +90,8 @@ runner, because an org runner without a restricted group is usable by every
 repository in the organization. `bin/ci-runner install` looks the group up
 before registering and creates it if it is missing: **selected
 repositories**, **Allow public repositories** off, so that no repository can
-use it until you add one ([adopting, step 5](adopting.md#5-allow-the-repository-in-the-runner-group)).
+use it until you add one: `bin/ci-runner adopt --repo <owner>/<repo>` adds a repository
+([adopting, step 5](adopting.md#5-merge-then-run-ci-runner-adopt)).
 If the group already exists and is open to all repositories (or to public ones),
 it prints a warning and goes on; narrowing it is up to you. The steps below
 are the manual way, and the reference for what the group should look like.
@@ -240,6 +241,12 @@ credentials out of hooks.
 
 ## Switching (per repository)
 
+`bin/ci-runner adopt --repo <owner>/<repo>` is the first switch to local: it
+also checks the repository's routing and runner group access first, and
+refuses to switch until the routing is merged
+([adopting, step 5](adopting.md#5-merge-then-run-ci-runner-adopt)). After
+that, `route` flips a repository either way:
+
 ```bash
 # Back to hosted: the recovery path, and the safe default
 bin/ci-runner route hosted --repo <owner>/<repo> [--repo ...]
@@ -267,7 +274,7 @@ gh run rerun <run-id> --repo <owner>/<repo>
 | Symptom | Cause | What happens | Recovery |
 |---|---|---|---|
 | PR job "Waiting for a runner to pick up this job" | VM stopped, Mac asleep or offline, runner service down | The PR's check waits in the queue, and after 24 h GitHub fails it. Merges and deploys are unaffected, because pushes run hosted. | Start the VM (`limactl start ci-runner`), or `bin/ci-runner route hosted --repo <owner>/<repo>`. |
-| Waiting forever although the runner is online and idle | The repository is not in the runner group | Same as above | Add the repository to the group, or switch it to hosted |
+| Waiting forever although the runner is online and idle | The repository is not in the runner group | Same as above | `bin/ci-runner adopt --repo <owner>/<repo>` adds it (or add it in the organization settings), or switch the repository to hosted |
 | Waiting forever although the runner is online and idle, and the repository is in the group | The label in the expression is not one of the runner's labels. For example, a repository moved to `verify-routing@v2`, whose default label is `local-ci`, while the runner was registered with another label | Same as above | Add the label to the runner (*Settings → Actions → Runners →* the runner *→ Labels*), or pass the runner's label to `verify-routing` as `label:` and use it in the expression |
 | A PR job waits while another runs | One runner runs one job at a time, across all repositories | Serialised, not failed | Accept it, or switch the less urgent repository to hosted |
 | Job fails only on the local runner | Toolchain or arch gap between the VM and `ubuntu-latest` (arm64 vs x86-64) | Red check | Re-run hosted to confirm. Then add the tool ("Adding tools") or keep that job hosted |

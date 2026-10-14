@@ -37,6 +37,10 @@ The set of opted-in jobs must equal EXPECTED exactly, so routing a job to the
 local runner is always a deliberate, reviewed change.
 
 Exit status: 0 if every check passes, 1 otherwise.
+
+Two flags print instead of checking, for tools that build on the same rules
+(bin/ci-runner adopt): --list names the jobs that carry the canonical
+expression, and --print-expression prints the expression itself.
 """
 import argparse
 import os
@@ -112,6 +116,17 @@ def main() -> int:
         default="",
         help="file:job entries that opt in, separated by newlines, commas or spaces",
     )
+    ap.add_argument(
+        "--list",
+        action="store_true",
+        help="print the jobs that carry the canonical expression, one file:job per"
+        " line, and exit 0; checks nothing else",
+    )
+    ap.add_argument(
+        "--print-expression",
+        action="store_true",
+        help="print the canonical runs-on expression for --label and --arch and exit",
+    )
     args = ap.parse_args()
 
     problem = label_problem(args.label)
@@ -119,24 +134,34 @@ def main() -> int:
         print(f"  \033[31mFAIL\033[0m label {args.label!r} {problem}")
         return 1
     canonical = canonical_expression(args.label, args.arch)
+    if args.print_expression:
+        print(canonical)
+        return 0
     expected = [e for e in re.split(r"[\s,]+", args.expected) if e]
+    quiet = args.list
 
     failed = 0
     passed = 0
 
     def fail(msg: str) -> None:
         nonlocal failed
-        print(f"  \033[31mFAIL\033[0m {msg}")
+        if not quiet:
+            print(f"  \033[31mFAIL\033[0m {msg}")
         failed += 1
 
     def ok(msg: str) -> None:
         nonlocal passed
-        print(f"  \033[32mPASS\033[0m {msg}")
+        if not quiet:
+            print(f"  \033[32mPASS\033[0m {msg}")
         passed += 1
 
-    print(f"self-hosted runner routing (label {args.label}, {args.workflows_dir})")
+    if not quiet:
+        print(f"self-hosted runner routing (label {args.label}, {args.workflows_dir})")
 
     if not os.path.isdir(args.workflows_dir):
+        if quiet:
+            print(f"workflows dir {args.workflows_dir} not found", file=sys.stderr)
+            return 1
         fail(f"workflows dir {args.workflows_dir} not found")
         return 1
 
@@ -184,6 +209,11 @@ def main() -> int:
                     continue
                 found.append(f"{name}:{job}")
                 ok(f"{where} uses the canonical expression")
+
+    if args.list:
+        for key in found:
+            print(key)
+        return 0
 
     for key in expected:
         if key in found:

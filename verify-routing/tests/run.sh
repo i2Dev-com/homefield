@@ -89,6 +89,48 @@ LABEL=acme-ci case_ "custom label, passed"     pass "$EXPECTED" 's/"local-ci"/"a
 case_ "custom label, not passed"                fail "$EXPECTED" 's/"local-ci"/"acme-ci"/'
 LABEL=acme-ci case_ "custom label, stale copy" fail "$EXPECTED"
 
+# check <name> <want> <got>: a fixed expectation, for the print-only flags.
+check() {
+  if [ "$2" = "$3" ]; then
+    echo "  ok   $1"; pass=$((pass + 1))
+  else
+    echo "  FAIL $1"; printf '       wanted: %s\n       got:    %s\n' "$2" "$3"; fail=$((fail + 1))
+  fi
+}
+
+# --list names the jobs that carry the canonical expression, checks nothing
+# else, and stays quiet otherwise: the output is for scripts to read.
+mutated="$(mktemp -d)"
+cp "${HERE}/base/"*.yml "$mutated/"
+check "--list: the routed jobs of the clean base" "ci.yml:changes
+ci.yml:checks" "$(python3 "$SCRIPT" --workflows-dir "${HERE}/base" --list)"
+"${SED_INPLACE[@]}" -e "/^  checks:\$/,\$ s/ || 'ubuntu-latest' }}/ }}/" "$mutated/ci.yml"
+got_rc=0
+got="$(python3 "$SCRIPT" --workflows-dir "$mutated" --list 2>&1)" || got_rc=$?
+check "--list: a drifted copy is not listed, and is not a failure" "ci.yml:changes|0" "$(echo "$got" | tr '\n' ' ' | sed 's/ *$//')|${got_rc}"
+check "--list: a custom label lists only jobs on it" "ci.yml:changes
+ci.yml:checks" "$(python3 "$SCRIPT" --workflows-dir "${HERE}/base" --label local-ci --list)"
+check "--list: nothing for another label" "" "$(python3 "$SCRIPT" --workflows-dir "${HERE}/base" --label acme-ci --list)"
+check "--list ignores --expected" "ci.yml:changes
+ci.yml:checks" "$(python3 "$SCRIPT" --workflows-dir "${HERE}/base" --expected "ci.yml:docker" --list)"
+rm -rf "$mutated"
+if python3 "$SCRIPT" --workflows-dir /nonexistent --list >/dev/null 2>&1; then
+  echo "  FAIL --list on a missing directory: wanted fail, got pass"; fail=$((fail + 1))
+else
+  echo "  ok   --list on a missing directory (fail)"; pass=$((pass + 1))
+fi
+
+# --print-expression is the expression the fixtures carry, for any label.
+base_expr="$(sed -n 's/^    runs-on: \(\${{ vars.CI_RUNNER.*}}\)$/\1/p' "${HERE}/base/ci.yml" | head -1)"
+check "--print-expression equals the fixture's copy" "$base_expr" "$(python3 "$SCRIPT" --print-expression)"
+check "--print-expression carries the label and arch" "yes" \
+  "$(python3 "$SCRIPT" --print-expression --label acme-ci --arch x64 | grep -c '\["self-hosted","linux","x64","acme-ci"\]' | sed 's/1/yes/')"
+if python3 "$SCRIPT" --print-expression --label linux >/dev/null 2>&1; then
+  echo "  FAIL --print-expression with a reserved label: wanted fail, got pass"; fail=$((fail + 1))
+else
+  echo "  ok   --print-expression with a reserved label (fail)"; pass=$((pass + 1))
+fi
+
 # A missing directory must fail, not pass vacuously.
 if python3 "$SCRIPT" --workflows-dir /nonexistent --expected "" >/dev/null 2>&1; then
   echo "  FAIL missing workflows dir: wanted fail, got pass"; fail=$((fail + 1))
