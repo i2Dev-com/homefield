@@ -135,7 +135,7 @@ runs `install.sh`, which downloads the tool for a ref (`CI_RUNNER_REF`,
 default `v2`) into `~/.local/share/ci-runner` (`CI_RUNNER_HOME`), writes a
 `ci-runner` command into Homebrew's `bin` or `~/.local/bin`
 (`CI_RUNNER_BIN_DIR`; it prints the line to add to `~/.zshrc` if that is not
-on your PATH), installs Lima if you agree, and runs `ci-runner install`.
+on your PATH), installs or upgrades Lima (1.1 or later) if you agree, and runs `ci-runner install`.
 Running it again replaces the tool, which is how it is upgraded; with no
 arguments it leaves an existing VM alone (`ci-runner upgrade` updates that).
 `ci-runner version` shows the ref and commit. From a checkout,

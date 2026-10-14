@@ -312,6 +312,15 @@ ask_url() {
   printf '%s' "$url"
 }
 
+# prepare_registration: for cmd_install, whose url and group it reads and
+# sets (bash functions see their caller's locals). Asks for the URL if there
+# is none, validates it and sorts out the runner group.
+prepare_registration() {
+  [ -n "$url" ] || url="$(ask_url)" || exit 1
+  validate_scope "$url"
+  ensure_group "$url" "${group:-local-ci}"
+}
+
 # ── Runner group ────────────────────────────────────────────────────────────
 # The group is what keeps an organization's other repositories off the runner
 # (docs/runbook.md, "Runner group"), so install makes sure it exists before
@@ -339,15 +348,31 @@ group_unchecked() {
   esac
 }
 
+# lower <text>: in lower case (bash 3.2 has no ${var,,}).
+lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
+
+# What ensure_group found, for the closing message: "repo" (no groups),
+# "default" (every repository in the org), "wide" (warned about), "narrow",
+# "created" or "unchecked".
+GROUP_STATE=""
+
 # ensure_group <url> <group>: for an organization URL, finds the group by name
 # and warns when it is wider than it should be, or creates it. A repository
-# URL has no groups, and Default always exists.
+# URL has no groups, and Default always exists. GitHub treats group names
+# case-insensitively, so they are compared that way.
 ensure_group() {
   local url="$1" group="${2:-local-ci}" scope org groups="" name vis pub found=0 why="" out
   scope="$(api_scope "$url")" || exit 1
-  [[ "$scope" == orgs/* ]] || return 0
-  [ "$group" != "Default" ] || return 0
+  if [[ "$scope" != orgs/* ]]; then
+    GROUP_STATE=repo
+    return 0
+  fi
+  if [ "$(lower "$group")" = default ]; then
+    GROUP_STATE=default
+    return 0
+  fi
   org="${scope#orgs/}"
+  GROUP_STATE=unchecked
 
   if ! command -v gh >/dev/null; then
     group_unchecked "$group" "gh is not installed"
@@ -364,9 +389,12 @@ ensure_group() {
       return 0
     fi
   fi
+  # Listing groups needs admin:org, so the scope is there: a later failure
+  # (the registration token) has another cause, and a refresh would not help.
+  scope_refresh_asked=1
 
   while IFS=$'\t' read -r name vis pub; do
-    [ "$name" = "$group" ] || continue
+    [ "$(lower "$name")" = "$(lower "$group")" ] || continue
     found=1
     why=""
     case "$vis" in
@@ -375,10 +403,12 @@ ensure_group() {
     esac
     [ "$pub" != true ] || why="${why:+${why}, and }public repositories can use it"
     if [ -n "$why" ]; then
-      echo "ci-runner: warning: runner group ${group} is wider than it should be: ${why}." >&2
+      GROUP_STATE=wide
+      echo "ci-runner: warning: runner group ${name} is wider than it should be: ${why}." >&2
       echo "ci-runner: narrow it to selected repositories with public ones off (docs/runbook.md, \"Runner group\")." >&2
     else
-      log "runner group ${group} exists (selected repositories only, no public ones)"
+      GROUP_STATE=narrow
+      log "runner group ${name} exists (selected repositories only, no public ones)"
     fi
   done <<<"$groups"
   [ "$found" = 0 ] || return 0
@@ -386,21 +416,24 @@ ensure_group() {
   log "creating runner group ${group}: selected repositories, public repositories off"
   if ! out="$(gh api -X POST "orgs/${org}/actions/runner-groups" -f name="$group" -f visibility=selected \
     -F allows_public_repositories=false 2>&1)"; then
-    case "$(printf '%s' "$out" | tr '[:upper:]' '[:lower:]')" in
-      *scope* | *"not accessible"*)
-        group_unchecked "$group" "gh may not create runner groups: ${out}"
-        return 0
+    # Only wording about the plan counts as a plan problem. A bare 403 or 422
+    # can be SAML enforcement, a missing permission or a taken name, and the
+    # plan advice (--group Default) would open the runner to every repository.
+    case "$(lower "$out")" in
+      *saml*)
+        group_unchecked "$group" "the organization enforces SAML single sign-on and gh's token is not authorized for it (authorize it for SSO, or gh auth refresh): ${out}"
         ;;
-      *plan* | *upgrade* | *"not available"* | *enterprise* | *"http 403"* | *"http 422"*)
+      *plan* | *upgrade* | *"not available"*)
         echo "ci-runner: gh said: ${out}" >&2
         die "could not create runner group ${group}: custom runner groups need the GitHub Team plan or Enterprise. On the Free plan, pass --group Default (every repository in ${org} can then use the runner, so only do that if you trust them all) or use a repository URL (https://github.com/<owner>/<repo>)"
         ;;
       *)
-        group_unchecked "$group" "gh said: ${out}"
-        return 0
+        group_unchecked "$group" "gh said: ${out} (custom runner groups need the Team plan or Enterprise)"
         ;;
     esac
+    return 0
   fi
+  GROUP_STATE=created
   log "created runner group ${group}. No repository can use it yet: add the ones that should (docs/adopting.md, step 5)"
 }
 
@@ -487,16 +520,12 @@ cmd_install() {
   # in that case it all happens first. With a VM already there, a URL that
   # was given is still validated before the VM is started, and the rest waits
   # for the answer to "registered?" (a registered instance is just upgraded).
-  local validated=0 group_done=0
+  local prepared=0
   if [ -z "$(vm_status)" ]; then
-    [ -n "$url" ] || url="$(ask_url)" || exit 1
-    validate_scope "$url"
-    ensure_group "$url" "${group:-local-ci}"
-    validated=1
-    group_done=1
+    prepare_registration
+    prepared=1
   elif [ -n "$url" ]; then
     validate_scope "$url"
-    validated=1
   fi
   ensure_vm "$cpus" "$memory"
   verify_isolation
@@ -509,9 +538,7 @@ cmd_install() {
     return
   fi
 
-  [ -n "$url" ] || url="$(ask_url)" || exit 1
-  [ "$validated" = 1 ] || validate_scope "$url"
-  [ "$group_done" = 1 ] || ensure_group "$url" "${group:-local-ci}"
+  [ "$prepared" = 1 ] || prepare_registration
   local env=(RUNNER_URL="$url")
   [ -n "$label" ] && env+=(RUNNER_LABEL="$label")
   [ -n "$name" ] && env+=(RUNNER_NAME="$name")
@@ -528,12 +555,27 @@ cmd_install() {
   local registered_name=""
   registered_name="$(runner_setting agentName)" || registered_name=""
   wait_online "$url" "$registered_name" "${group:-local-ci}"
+  echo
+  echo "Registered. Next:"
+  case "$GROUP_STATE" in
+    narrow | created)
+      echo "  - It is in the runner group ${group:-local-ci}, which admits only the"
+      echo "    repositories added to it (docs/adopting.md, step 5)."
+      ;;
+    default)
+      echo "  - It is in the Default group: every repository in the organization can"
+      echo "    use it (docs/runbook.md, \"Runner group\")."
+      ;;
+    wide)
+      echo "  - Narrow the runner group ${group:-local-ci} as warned above, then add"
+      echo "    the repositories that should use it (docs/runbook.md, \"Runner group\")."
+      ;;
+    unchecked)
+      echo "  - Check the runner group ${group:-local-ci} by hand: selected repositories,"
+      echo "    public ones off (docs/runbook.md, \"Runner group\")."
+      ;;
+  esac
   cat <<EOF
-
-Registered. Next:
-  - Organization runner: it joined the runner group ${group:-local-ci}, which
-    admits only the repositories added to it (docs/adopting.md, step 5;
-    docs/runbook.md, "Runner group").
   - Route jobs from a repository: docs/adopting.md.
   - bin/ci-runner status   shows the runner at any time.
 EOF

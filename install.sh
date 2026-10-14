@@ -109,8 +109,11 @@ install_tree() {
   printf 'repo=%s\nref=%s\ncommit=%s\n' "$REPO" "$REF" "$commit" >"$stage/.ci-runner-ref"
   COMMIT="$commit"
 
-  if [ -e "$INSTALL_DIR" ] && [ ! -f "$INSTALL_DIR/bin/ci-runner" ]; then
-    die "$INSTALL_DIR exists and is not a ci-runner install; remove it or set CI_RUNNER_HOME"
+  # Only a copy this script installed (it writes .ci-runner-ref) is replaced:
+  # anything else there, such as a git checkout of this repository, could be
+  # someone's work, and the old copy is deleted once the new one is in.
+  if [ -e "$INSTALL_DIR" ] && [ ! -f "$INSTALL_DIR/.ci-runner-ref" ]; then
+    die "$INSTALL_DIR exists and was not installed by this script; remove it or set CI_RUNNER_HOME"
   fi
   if [ -e "$INSTALL_DIR" ]; then
     mv "$INSTALL_DIR" "$WORK/old"
@@ -158,21 +161,38 @@ path_hint() {
   echo "  export PATH=\"$shown:\$PATH\""
 }
 
+# lima_new_enough: limactl reports 1.1 or later, the minimum bin/ci-runner's
+# check_host asks for (same parsing).
+lima_new_enough() {
+  local version major minor
+  version="$(limactl --version 2>/dev/null | awk '{print $NF}')"
+  major="${version%%.*}"
+  minor="${version#*.}"
+  minor="${minor%%.*}"
+  [[ "$major" =~ ^[0-9]+$ && "$minor" =~ ^[0-9]+$ ]] || return 1
+  [ "$major" -gt 1 ] || { [ "$major" -eq 1 ] && [ "$minor" -ge 1 ]; }
+}
+
 ensure_lima() {
-  command -v limactl >/dev/null 2>&1 && return 0
+  local verb=install what="is not installed"
+  if command -v limactl >/dev/null 2>&1; then
+    lima_new_enough && return 0
+    verb=upgrade
+    what="is older than 1.1"
+  fi
   command -v brew >/dev/null 2>&1 ||
-    die "Lima is not installed. Install it (https://lima-vm.io/docs/installation/, or install Homebrew from https://brew.sh and run: brew install lima), then run this again"
+    die "Lima ${what}. Install 1.1 or later (https://lima-vm.io/docs/installation/, or install Homebrew from https://brew.sh and run: brew install lima), then run this again"
   if [ "${CI_RUNNER_YES:-}" != 1 ]; then
-    have_tty || die "Lima is not installed and there is no terminal to ask on. Run: brew install lima   (or run this again with CI_RUNNER_YES=1 to have it installed)"
+    have_tty || die "Lima ${what} and there is no terminal to ask on. Run: brew ${verb} lima   (or run this again with CI_RUNNER_YES=1 to have it done)"
     local answer
-    printf 'Install Lima with Homebrew (brew install lima)? [Y/n] ' >&2
+    printf 'Lima %s. Run brew %s lima? [Y/n] ' "$what" "$verb" >&2
     read -r answer <"$TTY" || answer=""
     case "$answer" in
       "" | [Yy]*) ;;
-      *) die "Lima is required. Install it with: brew install lima" ;;
+      *) die "Lima 1.1 or later is required. Run: brew ${verb} lima" ;;
     esac
   fi
-  brew install lima || die "brew install lima failed"
+  brew "$verb" lima || die "brew ${verb} lima failed"
 }
 
 vm_exists() {
@@ -213,7 +233,10 @@ main() {
     # runner, which nobody asked for.
     if [ $# -eq 0 ] && vm_exists; then
       echo
-      echo "The VM ${CI_RUNNER_INSTANCE:-ci-runner} already exists and was not changed. To update it too: ci-runner upgrade"
+      echo "The VM ${CI_RUNNER_INSTANCE:-ci-runner} already exists and was not changed. To update it too:"
+      echo "  ci-runner upgrade"
+      echo "If its setup never finished (ci-runner status shows no registration), finish it with:"
+      echo "  ci-runner install"
       return 0
     fi
     echo

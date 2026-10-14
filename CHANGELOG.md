@@ -44,7 +44,7 @@ fail is a new major (see [README](README.md#development)).
   once the repository is public). It downloads the tool for a ref
   (`CI_RUNNER_REPO`, `CI_RUNNER_REF`; `gh` for a private repository, `curl`
   otherwise) into `~/.local/share/ci-runner`, puts a `ci-runner` command on
-  the PATH, installs Lima with Homebrew if you agree, and runs
+  the PATH, installs or upgrades Lima (1.1 or later) with Homebrew if you agree, and runs
   `ci-runner install`; arguments after `bash -s --` go to it. Run it again to
   upgrade the tool; with no arguments, an existing VM is left alone.
 - `bin/ci-runner version`: the installed ref and commit, or the checkout's.

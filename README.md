@@ -34,7 +34,7 @@ Once the repository is public, `curl` does the same without `gh`:
 curl -fsSL https://raw.githubusercontent.com/i2Dev-com/ci-runner/v2/install.sh | bash
 ```
 
-This installs [Lima](https://lima-vm.io) with Homebrew if it is missing (it
+This installs or upgrades [Lima](https://lima-vm.io) with Homebrew if it is missing or older than 1.1 (it
 asks first), puts the tool in `~/.local/share/ci-runner` with a `ci-runner`
 command on your PATH, and then runs `ci-runner install`. That asks for your
 organization or repository URL, creates the VM, checks its isolation,

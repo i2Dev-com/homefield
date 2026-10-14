@@ -115,12 +115,39 @@ record "...offers --group Default and what it means" "yes/yes" "$(has "$out" '--
 record "...offers a repository URL" "yes" "$(has "$out" 'https://github.com/<owner>/<repo>')"
 record "...and shows what gh said" "yes" "$(has "$out" 'Upgrade to GitHub Team or Enterprise to use runner groups')"
 
+# A bare 403 or 422 is not taken for the plan: the plan advice opens the
+# runner to every repository, so it needs the plan's own wording.
 run_fn GH_GROUPS="$work/groups-none" "GH_CREATE_ERR=gh: Validation Failed (HTTP 422)" -- ensure_group https://github.com/acme local-ci
-record "a 422 is read as the plan too" "nonzero/yes" "$(nonzero "$rc")/$(has "$out" 'need the GitHub Team plan or Enterprise')"
+record "a bare 422 is not read as the plan" "nonzero/no/yes" "$(nonzero "$rc")/$(has "$out" '--group Default')/$(has "$out" 'Validation Failed')"
+
+run_fn GH_GROUPS="$work/groups-none" "GH_CREATE_ERR=Resource protected by organization SAML enforcement. You must grant your Personal Access token access to this organization. (HTTP 403)" -- ensure_group https://github.com/acme local-ci
+record "SAML enforcement is named, without the plan advice" "nonzero/yes/no" "$(nonzero "$rc")/$(has "$out" 'SAML single sign-on')/$(has "$out" '--group Default')"
 
 run_fn GH_GROUPS="$work/groups-none" "GH_CREATE_ERR=gh: Server Error (HTTP 500)" -- ensure_group https://github.com/acme local-ci
-record "any other creation error is not called a plan problem" "nonzero/no/yes" "$(nonzero "$rc")/$(has "$out" 'Team plan')/$(has "$out" 'Server Error')"
+record "any other creation error is not called a plan problem" "nonzero/no/yes" "$(nonzero "$rc")/$(has "$out" '--group Default')/$(has "$out" 'Server Error')"
 record "...and, without a terminal to ask, stops" "yes" "$(has "$out" 'no terminal to ask')"
+
+# GitHub compares group names case-insensitively.
+printf 'Default\tall\tfalse\nLocal-CI\tselected\tfalse\n' >"$work/groups-case"
+run_fn GH_GROUPS="$work/groups-case" -- ensure_group https://github.com/acme local-ci
+record "a group that differs only in case is found, not created again" "0/yes/0" "$rc/$(has "$out" 'runner group Local-CI exists')/$(called POST)"
+run_fn GH_GROUPS="$work/groups-ok" -- ensure_group https://github.com/acme default
+record "--group default (any case) is the Default group: skipped" "0/0" "$rc/$(called 'runner-groups')"
+
+# GROUP_STATE drives install's closing message.
+# shellcheck disable=SC2016  # expanded by the inner bash
+state_of() { run_fn "$@" -- eval 'ensure_group "$URL" "$GROUP"; echo "state=$GROUP_STATE"'; echo "$out" | sed -n 's/^state=//p'; }
+record "state: an existing narrow group" "narrow" "$(state_of GH_GROUPS="$work/groups-ok" URL=https://github.com/acme GROUP=local-ci)"
+record "state: a group open to every repository" "wide" "$(state_of GH_GROUPS="$work/groups-all" URL=https://github.com/acme GROUP=local-ci)"
+record "state: created" "created" "$(state_of GH_GROUPS="$work/groups-none" URL=https://github.com/acme GROUP=local-ci)"
+record "state: Default" "default" "$(state_of GH_GROUPS="$work/groups-ok" URL=https://github.com/acme GROUP=Default)"
+record "state: a repository URL" "repo" "$(state_of GH_GROUPS="$work/groups-ok" URL=https://github.com/acme/app GROUP=local-ci)"
+
+# A successful list proves admin:org, so the token step must not offer a
+# scope refresh afterwards.
+# shellcheck disable=SC2016  # expanded by the inner bash
+run_fn GH_GROUPS="$work/groups-ok" -- eval 'ensure_group https://github.com/acme local-ci; echo "asked=$scope_refresh_asked"'
+record "after a successful list, the scope refresh is not offered again" "asked=1" "$(echo "$out" | grep '^asked=' || true)"
 
 run_fn GH_GROUPS="$work/groups-none" -- ensure_group https://github.com/acme Default
 record "Default is skipped: no gh call at all" "0/0" "$rc/$(wc -l <"$calls" | tr -d ' ')"

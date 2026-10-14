@@ -62,6 +62,7 @@ EOF
 cat >"$tpl/limactl" <<'EOF'
 #!/bin/sh
 echo "limactl $*" >>"$CALLS"
+[ "$1" != --version ] || echo "limactl version ${FAKE_LIMA_VERSION:-2.2.0}"
 # `limactl list --format ... <name>` prints the status of an existing VM only.
 [ "$1" != list ] || [ -z "${FAKE_VM_STATUS:-}" ] || echo "$FAKE_VM_STATUS"
 EOF
@@ -80,7 +81,7 @@ new_env() {
   : >"$calls"
   for t in "$@"; do cp "$tpl/$t" "$stubs/$t"; done
   [ -e "$stubs/uname" ] || cp "$tpl/uname" "$stubs/uname"
-  for t in cat chmod cp cut dirname grep gzip head mkdir mktemp mv rm sed tar tr; do
+  for t in awk cat chmod cp cut dirname grep gzip head mkdir mktemp mv rm sed tar tr; do
     ln -s "$(command -v "$t")" "$stubs/$t"
   done
 }
@@ -197,6 +198,14 @@ mkdir -p "$home/share"
 echo precious >"$home/share/file"
 run_install
 record "a CI_RUNNER_HOME holding something else is left alone" "nonzero/precious" "$(nonzero "$rc")/$(cat "$home/share/file")"
+# Nor is a checkout of this repository: it has bin/ci-runner, but it is
+# someone's work, not a copy this script installed.
+new_env gh curl limactl
+mkdir -p "$home/share/bin" "$home/share/.git"
+echo '#!/bin/sh' >"$home/share/bin/ci-runner"
+echo unpushed >"$home/share/work"
+run_install
+record "a checkout with bin/ci-runner but no .ci-runner-ref is left alone" "nonzero/unpushed/yes" "$(nonzero "$rc")/$(cat "$home/share/work")/$([ -d "$home/share/.git" ] && echo yes || echo no)"
 
 # A download that is not the tool.
 new_env gh curl limactl
@@ -255,7 +264,13 @@ run_install
 record "no Lima and no brew: stops, pointing at Lima's install page" "nonzero/yes" "$(nonzero "$rc")/$(has "$out" 'lima-vm.io')"
 new_env gh curl limactl brew
 run_install
-record "Lima present: nothing is installed, and its version is not checked here" "0/0/0" "$rc/$(called '^brew install')/$(called '^limactl')"
+record "Lima 1.1 or later present: nothing is installed or upgraded" "0/0/0" "$rc/$(called '^brew install')/$(called '^brew upgrade')"
+new_env gh curl limactl brew
+run_install FAKE_LIMA_VERSION=0.23.2
+record "Lima older than 1.1, no terminal: stops, naming brew upgrade" "nonzero/yes/0" "$(nonzero "$rc")/$(has "$out" 'brew upgrade lima')/$(called '^brew upgrade')"
+new_env gh curl limactl brew
+run_install FAKE_LIMA_VERSION=1.0.7 CI_RUNNER_YES=1
+record "Lima 1.0 with CI_RUNNER_YES=1: upgraded" "0/1" "$rc/$(called '^brew upgrade lima$')"
 
 # ── Running it again ───────────────────────────────────────────────────────
 echo "running it again"
