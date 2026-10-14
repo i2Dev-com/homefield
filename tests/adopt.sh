@@ -16,6 +16,13 @@ trap 'rm -rf "$work"' EXIT
 
 has() { case "$1" in *"$2"*) echo yes ;; *) echo no ;; esac; }
 nonzero() { [ "$1" -ne 0 ] && echo nonzero || echo "$1"; }
+# before <text> <a> <b>: yes when line a comes before line b (both must be there).
+before() {
+  local la lb
+  la="$(printf '%s\n' "$1" | grep -n -m1 -F -e "$2" | cut -d: -f1)"
+  lb="$(printf '%s\n' "$1" | grep -n -m1 -F -e "$3" | cut -d: -f1)"
+  if [ -n "$la" ] && [ -n "$lb" ] && [ "$la" -lt "$lb" ]; then echo yes; else echo "no ($la, $lb)"; fi
+}
 
 stubs="$work/stubs"
 calls="$work/calls"
@@ -85,9 +92,11 @@ emit_job() {
 }
 header() { printf 'name: CI\non: [pull_request]\njobs:\n'; }
 # guard <expected block lines> or guard_label <label> <block lines>
-guard() {
-  printf '      - name: Verify local-runner routing\n        uses: i2Dev-com/ci-runner/verify-routing@v2\n        with:\n          expected: |\n'
-  local e
+guard() { guard_uses i2Dev-com/ci-runner/verify-routing@v2 "$@"; }
+guard_uses() {
+  local uses="$1" e
+  shift
+  printf '      - name: Verify local-runner routing\n        uses: %s\n        with:\n          expected: |\n' "$uses"
   for e in "$@"; do printf '            %s\n' "$e"; done
 }
 guard_label() {
@@ -140,6 +149,118 @@ cache_line_restore="$(grep -nxF "            ${os_key}-npm-" "$work/wf-cache/ci.
 # A workflow with no routed job (a nightly that stays hosted): its keys are
 # not the routed jobs' concern, so they are not reported once jobs are routed.
 { header; emit_job e2e ubuntu-latest "$(cache_step "${os_key}-pw-${hash_key}")"; } >"$work/wf-cache/nightly.yml"
+
+# Fixtures for what makes a step a guard: the action it uses, and whether its
+# workflow runs on pull requests. wf_guard <dir> <on-line> <uses> writes a
+# ci.yml with the given `on:` line verbatim, one routed job and a guard step
+# that uses <uses>.
+wf_guard() {
+  mkdir -p "$work/$1"
+  {
+    printf 'name: CI\n%s\njobs:\n' "$2"
+    emit_job lint "$expr" "$(guard_uses "$3" ci.yml:lint)"
+  } >"$work/$1/ci.yml"
+}
+action="i2Dev-com/ci-runner/verify-routing@v2"
+sha40="0123456789abcdef0123456789abcdef01234567"
+wf_guard wf-src-other 'on: [pull_request]' other-org/ci-runner/verify-routing@v2
+wf_guard wf-src-v1 'on: [pull_request]' i2Dev-com/ci-runner/verify-routing@v1
+wf_guard wf-src-main 'on: [pull_request]' i2Dev-com/ci-runner/verify-routing@main
+wf_guard wf-src-short 'on: [pull_request]' i2Dev-com/ci-runner/verify-routing@${sha40%?}
+wf_guard wf-src-sha 'on: [pull_request]' "i2Dev-com/ci-runner/verify-routing@${sha40}"
+wf_guard wf-src-quoted 'on: [pull_request]' "'${action}'"
+wf_guard wf-src-dquoted 'on: [pull_request]' "\"${action}\""
+wf_guard wf-src-case 'on: [pull_request]' I2DEV-COM/CI-Runner/verify-routing@v2
+wf_guard wf-on-push 'on: [push]' "$action"
+wf_guard wf-on-prt 'on: pull_request_target' "$action"
+wf_guard wf-on-list 'on: [push, pull_request]' "$action"
+wf_guard wf-on-quoted '"on": pull_request' "$action"
+wf_guard wf-on-squoted "'on': [push, pull_request]" "$action"
+wf_guard wf-on-block "$(printf 'on:\n  push:\n    branches: [main]\n  pull_request:')" "$action"
+wf_guard wf-on-items "$(printf 'on:\n  - push\n  - pull_request')" "$action"
+wf_guard wf-on-filter "$(printf 'on:\n  pull_request:\n    paths-ignore:\n      - docs/**')" "$action"
+wf_guard wf-on-flowfilter 'on: {pull_request: {branches: [main]}}' "$action"
+
+# A guard step with an `if:` of its own, or in a job with one.
+wf_stepif() {
+  mkdir -p "$work/$1"
+  { printf 'name: CI\non: [pull_request]\njobs:\n'; emit_job lint "$expr" "$(guard ci.yml:lint)" "        if: $2"; } >"$work/$1/ci.yml"
+}
+# wf_jobif <dir> <if> <before|after>: the job's `if:` above runs-on or below the steps.
+wf_jobif() {
+  mkdir -p "$work/$1"
+  {
+    printf 'name: CI\non: [pull_request]\njobs:\n  lint:\n'
+    [ "$3" != before ] || printf '    if: %s\n' "$2"
+    printf '    runs-on: %s\n    steps:\n      - uses: actions/checkout@v5\n%s\n' "$expr" "$(guard ci.yml:lint)"
+    [ "$3" != after ] || printf '    if: %s\n' "$2"
+  } >"$work/$1/ci.yml"
+}
+wf_stepif wf-stepif-false 'false'
+wf_stepif wf-stepif-expr "\${{ false }}"
+wf_stepif wf-stepif-quoted "\"\${{ false }}\""
+wf_stepif wf-stepif-cond "github.event_name == 'pull_request'"
+wf_jobif wf-jobif-false 'false' before
+wf_jobif wf-jobif-false-after "\${{ false }}" after
+wf_jobif wf-jobif-cond "github.actor != 'dependabot[bot]'" before
+
+# The guard in a reusable workflow, called from a pull_request workflow.
+# wf_reuse <dir> <caller on:> <extra keys of the calling job, \n-terminated>
+wf_reuse() {
+  mkdir -p "$work/$1"
+  printf 'name: CI\n%s\njobs:\n  checks:\n%b    uses: ./.github/workflows/checks.yml\n' "$2" "$3" >"$work/$1/ci.yml"
+  { printf 'name: Checks\non: workflow_call\njobs:\n'; emit_job lint "$expr" "$(guard checks.yml:lint)"; } >"$work/$1/checks.yml"
+}
+wf_reuse wf-reuse-ok 'on: pull_request' ''
+wf_reuse wf-reuse-push 'on: push' ''
+wf_reuse wf-reuse-false 'on: pull_request' "    if: \${{ false }}\n"
+wf_reuse wf-reuse-cond 'on: pull_request' "    needs: x\n    if: github.event_name != 'push'\n"
+wf_reuse wf-reuse-filter "$(printf 'on:\n  pull_request:\n    branches: [main]')" ''
+mkdir -p "$work/wf-reuse-uncalled" "$work/wf-reuse-chain"
+cp "$work/wf-reuse-ok/checks.yml" "$work/wf-reuse-uncalled/checks.yml"
+{ header; emit_job lint ubuntu-latest; } >"$work/wf-reuse-uncalled/ci.yml"
+# Two levels: ci.yml calls outer.yml, which calls checks.yml. Not followed.
+cp "$work/wf-reuse-ok/checks.yml" "$work/wf-reuse-chain/checks.yml"
+printf 'name: CI\non: pull_request\njobs:\n  outer:\n    uses: ./.github/workflows/outer.yml\n' >"$work/wf-reuse-chain/ci.yml"
+printf 'name: Outer\non: workflow_call\njobs:\n  checks:\n    uses: ./.github/workflows/checks.yml\n' >"$work/wf-reuse-chain/outer.yml"
+
+# Shaped like i2Dev-com/i2dev: the guard is in a reusable workflow, called by
+# a job that waits for a change filter, from a pull_request trigger with
+# branch and path filters.
+mkdir -p "$work/wf-i2dev" "$work/wf-snap"
+cat >"$work/wf-i2dev/ci.yml" <<'EOF'
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '*.md'
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@v5
+  checks:
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' && github.event_name != 'push' }}
+    uses: ./.github/workflows/ci-checks.yml
+EOF
+{
+  printf 'name: Checks\non: workflow_call\njobs:\n'
+  emit_job lint "$expr" "$(guard ci-checks.yml:lint ci-checks.yml:test)"
+  emit_job test "$expr"
+} >"$work/wf-i2dev/ci-checks.yml"
+# Shaped like i2Dev-com/snap: a bare pull_request trigger and no conditions.
+{
+  printf 'name: CI\non:\n  push:\n    branches: [main]\n  pull_request:\njobs:\n'
+  emit_job lint "$expr" "$(guard ci.yml:lint ci.yml:test)"
+  emit_job test "$expr"
+} >"$work/wf-snap/ci.yml"
 
 # run_fn [VAR=value ...] -- <function> [args]: sets out and rc. No terminal.
 # TMPDIR is a directory of ours, to see that adopt cleans up after itself.
@@ -299,6 +420,100 @@ record "...--label that agrees is fine" "0/1" "$rc/$(called 'variable set CI_RUN
 adopt GH_WF="$work/wf-noguard" -- --label acme-ci
 record "snippets carry the chosen label in the expression and the guard" "yes/yes" "$(has "$out" "runs-on: $expr_acme")/$(has "$out" '          label: acme-ci')"
 
+# ── Group access waits for the routing ─────────────────────────────────────
+echo "group access order"
+adopt GH_WF="$work/wf-noguard" --
+record "routing not ready, not a member: no PUT, said so, exit 1" "nonzero/0/yes" \
+  "$(nonzero "$rc")/$(called 'X PUT')/$(has "$out" 'runner group: not added, because the routing is not ready')"
+record "...the group's members were still read, to tell" "1" "$(called 'repositories?per_page=100')"
+record "...routing is reported before the runner group" "yes" \
+  "$(before "$out" 'routing: not ready' 'runner group: not added')"
+adopt GH_WF="$work/wf-noguard" -- --dry-run
+record "...the same in a dry run" "nonzero/0/yes" "$(nonzero "$rc")/$(called 'X PUT')/$(has "$out" 'runner group: not added')"
+adopt GH_WF="$work/wf-noguard" GH_MEMBERS="$work/members-with" --
+record "routing not ready but already a member: a warning that it can reach the runner" "nonzero/0/yes/yes" \
+  "$(nonzero "$rc")/$(called 'X PUT')/$(has "$out" 'warning: acme/app is already in runner group local-ci')/$(has "$out" 'although its routing is not ready')"
+adopt GH_WF="$work/wf-noguard" GH_LIST_FAIL=1 --
+record "routing not ready and groups not readable: a warning that does not send you to add it" "nonzero/0/yes/no" \
+  "$(nonzero "$rc")/$(called 'X PUT')/$(has "$out" 'could not check runner group access')/$(has "$out" 'by hand')"
+adopt GH_WF="$work/wf-noguard" GH_GROUPS="$work/groups-all" --
+record "routing not ready, group open to all: the existing warning, no PUT" "nonzero/0/yes" \
+  "$(nonzero "$rc")/$(called 'X PUT')/$(has "$out" 'is open to all')"
+adopt --
+record "routing ready: the PUT comes after the routing is reported" "1/yes" \
+  "$(called "gh api -X PUT $put_path")/$(before "$out" 'routing: ready' 'runner group: added')"
+record "...and the cache keys, then the switch, follow the group" "yes/yes" \
+  "$(before "$out" 'cache keys:' 'runner group: added')/$(before "$out" 'runner group: added' 'CI_RUNNER')"
+adopt GH_WF="$work/wf-src-v1" --
+record "a guard that is not the pinned action: nothing added to the group" "nonzero/0" "$(nonzero "$rc")/$(called 'X PUT')"
+
+# ── What counts as a guard ─────────────────────────────────────────────────
+echo "guard source and triggers"
+# route_case <description> <fixture> <ready|not> <text in the output, or !text>
+route_case() {
+  local desc="$1" dir="$2" want="$3" needle="$4" wanth=yes wantrc
+  if [ "${needle#!}" != "$needle" ]; then
+    wanth=no
+    needle="${needle#!}"
+  fi
+  adopt GH_WF="$work/$dir" --
+  if [ "$want" = ready ]; then wantrc="0/1/1"; else wantrc="nonzero/0/0"; fi
+  record "$desc" "$wantrc/$wanth" "$(nonzero "$rc")/$(called 'variable set')/$(called 'X PUT')/$(has "$out" "$needle")"
+}
+may_not_run='the verify-routing guard may not run on every pull request'
+recognizes="adopt recognizes $action"
+route_case "another repository's verify-routing: not a guard, and says what it uses" wf-src-other not "ci.yml:9 uses other-org/ci-runner/verify-routing@v2, but $recognizes"
+route_case "@v1: not a guard" wf-src-v1 not "uses i2Dev-com/ci-runner/verify-routing@v1, but $recognizes"
+route_case "@main: not a guard" wf-src-main not "uses i2Dev-com/ci-runner/verify-routing@main, but $recognizes"
+route_case "...and nothing else is said to be usable" wf-src-main not "no verify-routing step that runs on pull requests"
+route_case "a 39-character ref is not a commit: not a guard" wf-src-short not "but $recognizes"
+route_case "a full commit SHA: ready, with a warning naming the line" wf-src-sha ready "ci.yml:9: pinned to a commit (adopt checks it with v2's rules)"
+route_case "a single-quoted uses: a guard" wf-src-quoted ready "!$recognizes"
+route_case "a double-quoted uses: a guard" wf-src-dquoted ready "!$recognizes"
+route_case "the owner and repository are compared without case" wf-src-case ready "!$recognizes"
+route_case "...with no warning about the guard" wf-src-case ready "!$may_not_run"
+
+route_case "a push-only workflow: the guard does not run on pull requests" wf-on-push not "ci.yml:9 does not run on pull requests: ci.yml does not run on pull_request"
+route_case "...so there is no guard" wf-on-push not "no verify-routing step that runs on pull requests"
+route_case "pull_request_target: not a guard, and the reason says why" wf-on-prt not "runs on pull_request_target, which runs the base branch's workflow files"
+route_case "on: [push, pull_request]" wf-on-list ready "!$may_not_run"
+route_case "\"on\": quoted" wf-on-quoted ready "!$may_not_run"
+route_case "'on': quoted, as a list" wf-on-squoted ready "!$may_not_run"
+route_case "on: as a block, with the options of push" wf-on-block ready "!$may_not_run"
+route_case "on: as a list of items" wf-on-items ready "!$may_not_run"
+route_case "pull_request with paths-ignore: ready, with a warning" wf-on-filter ready "ci.yml:3: the pull_request trigger has paths-ignore filters"
+route_case "...that says what to check" wf-on-filter ready "Check that every pull request that changes .github/workflows still runs it"
+route_case "pull_request in a flow mapping with branches: ready, with a warning" wf-on-flowfilter ready "the pull_request trigger has branches filters"
+
+route_case "if: false on the step: not a guard" wf-stepif-false not "never runs: its step has an if: that is false"
+route_case "if: \${{ false }} on the step: not a guard" wf-stepif-expr not "has an if: that is false"
+route_case "if: \"\${{ false }}\" on the step: not a guard" wf-stepif-quoted not "has an if: that is false"
+route_case "another if: on the step: ready, with a warning" wf-stepif-cond ready "ci.yml:13: its step has an if: condition"
+route_case "if: false on the job, above runs-on: not a guard" wf-jobif-false not "never runs: its job lint has an if: that is false"
+route_case "if: \${{ false }} on the job, after the steps: not a guard" wf-jobif-false-after not "never runs: its job lint has an if: that is false"
+route_case "another if: on the job: ready, with a warning" wf-jobif-cond ready "ci.yml:5: its job lint has an if: condition"
+
+route_case "a reusable workflow called from a pull_request workflow: ready" wf-reuse-ok ready "!$may_not_run"
+route_case "a reusable workflow that nothing calls: not a guard" wf-reuse-uncalled not "only reusable (workflow_call) and no workflow that runs on pull_request calls it with uses: ./.github/workflows/checks.yml"
+route_case "...called only from a push workflow: not a guard" wf-reuse-push not "only reusable (workflow_call)"
+route_case "...called through another reusable workflow: not followed, not a guard" wf-reuse-chain not "adopt follows one level of calls"
+route_case "...called by a job with if: false: not a guard" wf-reuse-false not "job checks at ci.yml:4, which calls checks.yml, has an if: that is false"
+route_case "...called by a job with another if: ready, with a warning" wf-reuse-cond ready "ci.yml:6: job checks, which calls checks.yml, has an if: condition"
+route_case "...called from a pull_request with branches: ready, with a warning" wf-reuse-filter ready "ci.yml:3: the pull_request trigger has branches filters"
+
+echo "adopter shapes"
+adopt GH_WF="$work/wf-i2dev" --
+record "guard in a reusable workflow, called by a conditional job: ready" "0/1/1" "$rc/$(called 'variable set')/$(called 'X PUT')"
+record "...with a warning for the trigger's filters" "yes/yes" \
+  "$(has "$out" 'ci.yml:5: the pull_request trigger has branches, paths-ignore filters')/$(has "$out" 'Check that every pull request that changes .github/workflows still runs it')"
+record "...and one for the calling job's condition" "yes" "$(has "$out" 'ci.yml:19: job checks, which calls ci-checks.yml, has an if: condition')"
+adopt GH_WF="$work/wf-snap" --
+record "guard beside a bare pull_request trigger: ready, and no warning about it" "0/1/no" "$rc/$(called 'variable set')/$(has "$out" "$may_not_run")"
+adopt GH_WF="$work/wf-snap" -- --dry-run
+record "...in a dry run too" "0/no" "$rc/$(has "$out" "$may_not_run")"
+adopt GH_WF="$work/wf-src-main" GH_CI_RUNNER=hosted -- --dry-run
+record "a guard that is not the pinned action in a dry run: not ready, nothing written" "nonzero/0/0" "$(nonzero "$rc")/$(called 'X PUT')/$(called 'variable set')"
+
 # ── The switch ─────────────────────────────────────────────────────────────
 echo "switch"
 adopt GH_CI_RUNNER=local --
@@ -342,11 +557,12 @@ echo "tools/adopt.py"
 shapes="$work/shapes"
 mkdir -p "$shapes"
 cat >"$shapes/a.yml" <<'EOF'
+on: pull_request
 jobs:
   one:
     steps:
       # - uses: x/ci-runner/verify-routing@v2   (commented out)
-      - uses: org/ci-runner/verify-routing@v2
+      - uses: i2Dev-com/ci-runner/verify-routing@v2
         with:
           expected: a.yml:one a.yml:two
   two:
@@ -355,14 +571,14 @@ jobs:
         with:
           label: "acme-ci"
           expected: "a.yml:one, a.yml:two"
-        uses: 'org/ci-runner/verify-routing@v2'
+        uses: 'i2Dev-com/ci-runner/verify-routing@v2'
       - uses: actions/checkout@v5
         with:
           expected: not-a-guard
   three:
     steps:
       - name: Guard, comments in and after the block
-        uses: org/ci-runner/verify-routing@v2 # pinned
+        uses: i2Dev-com/ci-runner/verify-routing@v2 # pinned
         with:
           expected: |-
             a.yml:one
@@ -370,12 +586,19 @@ jobs:
           # a comment at the key's depth ends the scalar
       - run: echo done
 EOF
-printf 'jobs:\r\n  j:\r\n    steps:\r\n      - uses: o/r/verify-routing@v3\r\n        with:\r\n          expected: |\r\n            b.yml:j\r\n' >"$shapes/b.yaml"
+printf 'on: [push, pull_request]\r\njobs:\r\n  j:\r\n    steps:\r\n      - uses: i2dev-com/ci-runner/verify-routing@v2\r\n        with:\r\n          expected: |\r\n            b.yml:j\r\n' >"$shapes/b.yaml"
 printf 'jobs:\n  j:\n    steps:\n      - uses: o/r/verify-routing@v2\n' >"$shapes/c.yml"
 echo "not a workflow" >"$shapes/d.txt"
 got="$(python3 -I "$ROOT/tools/adopt.py" guards "$shapes")"
-want="$(printf 'a.yml:5\tlocal-ci\ta.yml:one a.yml:two\na.yml:14\tacme-ci\ta.yml:one a.yml:two\na.yml:21\tlocal-ci\ta.yml:one\nb.yaml:4\tlocal-ci\tb.yml:j\nc.yml:4\tlocal-ci\t')"
-record "guards: shapes of the step (block, inline, quoted, uses after with, CRLF, none)" "$want" "$got"
+want="$(printf 'a.yml:6\tok\tlocal-ci\t-\t-\ta.yml:one a.yml:two\na.yml:15\tok\tacme-ci\t-\t-\ta.yml:one a.yml:two\na.yml:22\tok\tlocal-ci\t-\t-\ta.yml:one\nb.yaml:5\tok\tlocal-ci\t-\t-\tb.yml:j\nc.yml:4\tsource\tlocal-ci\tthe verify-routing step at c.yml:4 uses o/r/verify-routing@v2, but adopt recognizes i2Dev-com/ci-runner/verify-routing@v2 (docs/adopting.md, step 3)\t-\t')"
+record "guards: shapes of the step (block, inline, quoted, uses after with, CRLF, none, another action)" "$want" "$got"
+got="$(python3 -I "$ROOT/tools/adopt.py" guards "$work/wf-i2dev")"
+want="$(printf 'ci-checks.yml:9\tok\tlocal-ci\t-\tci.yml:5: the pull_request trigger has branches, paths-ignore filters;ci.yml:19: job checks, which calls ci-checks.yml, has an if: condition\tci-checks.yml:lint ci-checks.yml:test')"
+record "guards: the columns of a guard behind a caller (status, blocking, warnings joined by ;)" "$want" "$got"
+mkdir -p "$work/no-on"
+printf 'jobs:\n  j:\n    steps:\n      - uses: i2Dev-com/ci-runner/verify-routing@v2\n' >"$work/no-on/ci.yml"
+record "guards: a workflow whose on: cannot be read is blocked, not trusted" "blocked/yes" \
+  "$(python3 -I "$ROOT/tools/adopt.py" guards "$work/no-on" | cut -f2)/$(has "$(python3 -I "$ROOT/tools/adopt.py" guards "$work/no-on" | cut -f4)" 'could not read the on: of ci.yml')"
 record "guards: a directory with no workflow files has none" "" "$(mkdir -p "$work/empty" && python3 -I "$ROOT/tools/adopt.py" guards "$work/empty")"
 
 cat >"$shapes/e.yml" <<'EOF'

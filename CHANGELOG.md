@@ -39,14 +39,23 @@ fail is a new major (see [README](README.md#development)).
 
 - `bin/ci-runner adopt --repo <owner>/<repo>`: does the part of
   `docs/adopting.md` that is not a workflow edit. It refuses a public
-  repository, adds the repository to the organization's runner group (needs
-  `admin:org`; without it, it warns and goes on), downloads the repository's
-  workflows and runs the `verify-routing` check on them, warns about cache
-  keys with `runner.os` and no `runner.arch` in files with routed jobs, and sets `CI_RUNNER` to `local`
-  only when the guard is present, passes and at least one job is routed.
-  Otherwise it prints the routing expression and the guard step to add, and
-  exits 1. `--jobs`, `--label`, `--group`, `--no-switch`; `--dry-run` changes
-  nothing. Needs `gh` and `python3`, not the VM. `install`'s closing message
+  repository, downloads the repository's workflows and runs the
+  `verify-routing` check on them, warns about cache keys with `runner.os` and
+  no `runner.arch` in files with routed jobs, and only when the routing is
+  ready adds the repository to the organization's runner group (needs
+  `admin:org`; without it, it warns and goes on) and sets `CI_RUNNER` to
+  `local`. The routing is ready when a guard is present, passes and at least
+  one job is routed. A guard is a step that uses
+  `i2Dev-com/ci-runner/verify-routing@v2` (a full commit SHA is accepted with
+  a warning) in a workflow that runs on `pull_request`, or in a reusable
+  workflow that one of those calls, and that is not switched off by
+  `if: false`; another repository's action, another ref, a push-only or
+  `pull_request_target` workflow does not count. Branch and path filters on
+  the trigger and other `if:` conditions are warnings. When the routing is not
+  ready, the group is only read (it warns if the repository is already in it)
+  and nothing is added; it prints the routing expression and the guard step to
+  add, and exits 1. `--jobs`, `--label`, `--group`, `--no-switch`;
+  `--dry-run` changes nothing. Needs `gh` and `python3`, not the VM. `install`'s closing message
   points to it.
 - `verify_routing.py --list` (the jobs that carry the canonical expression)
   and `--print-expression`, which `adopt` uses. Existing invocations and

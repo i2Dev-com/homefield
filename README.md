@@ -67,9 +67,9 @@ Then route jobs from a repository by following
 ci-runner adopt --repo <owner>/<repo>    # hosted again: ci-runner route hosted --repo <owner>/<repo>
 ```
 
-`adopt` adds the repository to the runner group, checks that its routing and
-guard are in place, and only then switches it to the local runner. It refuses
-a public repository. `--dry-run` shows what it would do.
+`adopt` checks that the repository's routing and guard are in place, and only
+then adds it to the runner group and switches it to the local runner. It
+refuses a public repository. `--dry-run` shows what it would do.
 
 `ci-runner help` lists the options (`--label`, `--packages`, `--cpus`,
 ...). [`docs/runbook.md`](docs/runbook.md) covers operating it.

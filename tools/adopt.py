@@ -6,8 +6,18 @@ Stdlib only, and no YAML parser: the workflow text is read line by line, which
 is enough for the shapes GitHub workflows take and fails safe (a guard it
 cannot read counts as no guard, so adopt does not switch the repository on).
 
-  adopt.py guards DIR       one line per verify-routing step:
-                            file:line <TAB> label <TAB> expected entries (spaces)
+A guard is a step that uses exactly ACTION (the owner and repository compared
+without case; a full commit SHA in place of the ref is accepted with a
+warning) and that can run on a pull request: see check_guard.
+
+  adopt.py guards DIR       one line per step that uses some verify-routing:
+                            file:line <TAB> status <TAB> label <TAB> blocking
+                            <TAB> warnings <TAB> expected entries (spaces).
+                            status is ok (a usable guard), blocked (a
+                            verify-routing@v2 step that cannot run on pull
+                            requests) or source (not the action adopt
+                            recognizes). blocking and warnings are texts joined
+                            by ";", or "-" when there are none.
   adopt.py cache-keys DIR   one line per cache key that has runner.os and not
                             runner.arch: file:line: text
   adopt.py guard-snippet [--label L] [--jobs a.yml:x,b.yml:y]
@@ -25,7 +35,13 @@ import urllib.parse
 ACTION = "i2Dev-com/ci-runner/verify-routing@v2"
 DEFAULT_LABEL = "local-ci"
 
-USES = re.compile(r"^(\s*)(-\s+)?uses:\s*['\"]?\S*/verify-routing@")
+# A step or job `uses:`; group 3 is the raw value.
+USES = re.compile(r"^(\s*)(-\s+)?uses:\s*(.*?)\s*$")
+ACTION_PATH, _, ACTION_REF = ACTION.partition("@")
+ACTION_DIR = "./.github/workflows/"
+# The trigger options after which a pull request may not run the workflow.
+FILTERS = ("branches", "branches-ignore", "paths", "paths-ignore")
+ON_KEY = re.compile(r"^([\"']?)on\1:\s*(.*?)\s*$")
 KEY = re.compile(r"^(\s*)(-\s+)?([A-Za-z0-9_-]+):\s*(.*?)\s*$")
 CACHE_KEY = re.compile(r"^(\s*)(?:-\s+)?(key|restore-keys):\s*(.*?)\s*$")
 
@@ -136,18 +152,219 @@ def with_values(lines, start, end):
     return values
 
 
+def parse_triggers(lines):
+    """The workflow's `on:` as {event: {"line": n, "filters": [names]}}, n
+    1-based. Reads `on: name`, `on: [a, b]`, `on: {a: ..}` on one line, and
+    the block forms (`a:` keys with their options nested, or `- a` items),
+    with `on`, "on" and 'on'. Anything else gives no events."""
+    events = {}
+    for i, line in enumerate(lines):
+        m = ON_KEY.match(line)
+        if not m:
+            continue
+        rest = re.sub(r"\s+#.*$", "", m.group(2)).strip()
+        if rest and rest[0] in "[{":
+            is_map = rest[0] == "{"
+            names = re.findall(r"([A-Za-z_]+)\s*:", rest) if is_map else re.split(r"[\s,\[\]]+", rest)
+            for name in (n.strip("'\"") for n in names if n):
+                if name not in FILTERS:
+                    events[name] = {"line": i + 1, "filters": []}
+            if is_map and "pull_request" in events:
+                events["pull_request"]["filters"] = [f for f in FILTERS if re.search(rf"\b{f}\s*:", rest)]
+        elif rest:
+            for name in (n.strip("'\"") for n in rest.split(",")):
+                if name:
+                    events[name] = {"line": i + 1, "filters": []}
+        else:
+            base = None
+            j = i + 1
+            while j < len(lines):
+                cur = lines[j]
+                if is_blank(cur):
+                    j += 1
+                    continue
+                if indent_of(cur) == 0:
+                    break
+                if base is None:
+                    base = indent_of(cur)
+                if indent_of(cur) == base:
+                    text = cur.strip()
+                    km = re.match(r"^[\"']?([A-Za-z0-9_-]+)[\"']?:\s*(.*)$", text)
+                    if text.startswith("- "):
+                        events[scalar(text[2:])] = {"line": j + 1, "filters": []}
+                    elif km:
+                        filters = []
+                        inline = re.sub(r"\s+#.*$", "", km.group(2))
+                        filters += [f for f in FILTERS if re.search(rf"\b{f}\s*:", inline)]
+                        k = j + 1
+                        while k < len(lines) and (is_blank(lines[k]) or indent_of(lines[k]) > base):
+                            fm = KEY.match(lines[k])
+                            if fm and fm.group(3) in FILTERS:
+                                filters.append(fm.group(3))
+                            k += 1
+                        events[km.group(1)] = {"line": j + 1, "filters": filters}
+                j += 1
+        break
+    return events
+
+
+def condition(value):
+    """How an `if:` reads: "false" when it is the literal false, which keeps
+    the step or job from ever running, and "other" for anything else."""
+    text = scalar(value)
+    m = re.fullmatch(r"\$\{\{\s*(.*?)\s*\}\}", text)
+    if m:
+        text = m.group(1)
+    return "false" if text.strip().lower() == "false" else "other"
+
+
+def parse_jobs(lines):
+    """The jobs of the workflow: id, line (1-based), first and one-past-last
+    line index, the job-level `if:` as (line, value), and a job-level
+    `uses:` (a reusable workflow it calls). A job-level key sits at the
+    indent of the job's first child; a step's keys are deeper."""
+    jobs = []
+    top = next((i for i, line in enumerate(lines) if re.match(r"^jobs:\s*(#.*)?$", line)), None)
+    if top is None:
+        return jobs
+    base = None
+    i = top + 1
+    while i < len(lines):
+        line = lines[i]
+        if is_blank(line):
+            i += 1
+            continue
+        if indent_of(line) == 0:
+            break
+        if base is None:
+            base = indent_of(line)
+        m = re.match(r"^[\"']?([^\s:#\"']+)[\"']?:\s*(#.*)?$", line.strip())
+        if indent_of(line) == base and m:
+            end = i + 1
+            while end < len(lines) and (is_blank(lines[end]) or indent_of(lines[end]) > base):
+                end += 1
+            job = {"id": m.group(1), "line": i + 1, "start": i, "end": end, "if": None, "uses": None}
+            child = next((indent_of(lines[k]) for k in range(i + 1, end) if not is_blank(lines[k])), None)
+            for k in range(i + 1, end):
+                km = KEY.match(lines[k])
+                if km and not km.group(2) and len(km.group(1)) == child:
+                    if km.group(3) == "if":
+                        job["if"] = (k + 1, km.group(4))
+                    elif km.group(3) == "uses":
+                        job["uses"] = scalar(km.group(4))
+            jobs.append(job)
+            i = end
+            continue
+        i += 1
+    return jobs
+
+
+def step_if(lines, at):
+    """(line, value) of the `if:` of the step with its `uses:` on line index
+    `at`, or None."""
+    start, end = step_bounds(lines, at)
+    m = USES.match(lines[at])
+    key_indent = len(m.group(1)) + (len(m.group(2)) if m.group(2) else 0)
+    for i in range(start, end):
+        km = KEY.match(lines[i])
+        if km and km.group(3) == "if" and len(km.group(1)) + (len(km.group(2)) if km.group(2) else 0) == key_indent:
+            return i + 1, km.group(4)
+    return None
+
+
+def check_guard(name, at, files):
+    """(blocking, warnings) for the verify-routing step on line index `at` of
+    file `name`, given files = {name: {"lines", "events", "jobs"}}: whether it
+    can run on a pull request, and what to check when it may not on all of
+    them. A workflow with no `pull_request` trigger of its own counts only
+    when it is `workflow_call` and a workflow that does trigger on
+    `pull_request` calls it from a job (`uses: ./.github/workflows/<file>`).
+    That is one level; a deeper chain is not followed, so it fails safe."""
+    lines, events, jobs = files[name]["lines"], files[name]["events"], files[name]["jobs"]
+    where = f"{name}:{at + 1}"
+    blocks, warns = [], []
+    job = next((j for j in jobs if j["start"] < at < j["end"]), None)
+    conditions = [(step_if(lines, at), "its step")]
+    if job:
+        conditions.append((job["if"], f"its job {job['id']}"))
+    for found, what in conditions:
+        if not found:
+            continue
+        if condition(found[1]) == "false":
+            blocks.append(f"the verify-routing step at {where} never runs: {what} has an if: that is false (line {found[0]})")
+        else:
+            warns.append(f"{name}:{found[0]}: {what} has an if: condition")
+
+    def trigger(owner, event):
+        filters = ", ".join(event["filters"])
+        if filters:
+            warns.append(f"{owner}:{event['line']}: the pull_request trigger has {filters} filters")
+
+    if "pull_request" in events:
+        trigger(name, events["pull_request"])
+    else:
+        callers = []
+        if "workflow_call" in events:
+            for other, info in sorted(files.items()):
+                if other == name or "pull_request" not in info["events"]:
+                    continue
+                for caller in info["jobs"]:
+                    if caller["uses"] == ACTION_DIR + name:
+                        callers.append((other, caller))
+        usable = []
+        for other, caller in callers:
+            cwhere = f"job {caller['id']} at {other}:{caller['line']}"
+            if caller["if"] and condition(caller["if"][1]) == "false":
+                blocks.append(f"the verify-routing step at {where} never runs: {cwhere}, which calls {name}, has an if: that is false")
+            else:
+                usable.append((other, caller, cwhere))
+        for other, caller, cwhere in usable:
+            trigger(other, files[other]["events"]["pull_request"])
+            if caller["if"]:
+                warns.append(f"{other}:{caller['if'][0]}: job {caller['id']}, which calls {name}, has an if: condition")
+        if not usable and not callers:
+            tail = []
+            if "pull_request_target" in events:
+                tail.append("it runs on pull_request_target, which runs the base branch's workflow files, so the guard would not check the pull request's own")
+            if "workflow_call" in events:
+                tail.append(f"{name} is only reusable (workflow_call) and no workflow that runs on pull_request calls it with uses: {ACTION_DIR}{name} (adopt follows one level of calls)")
+            if not tail:
+                tail.append(f"{name} does not run on pull_request" if events else f"adopt could not read the on: of {name}")
+            blocks.append(f"the verify-routing step at {where} does not run on pull requests: " + " and ".join(tail))
+    return blocks, warns
+
+
 def guards(directory):
-    """(file:line, label, expected entries) for every verify-routing step."""
-    found = []
+    """(file:line, status, label, blocking, warnings, expected entries) for
+    every step that uses some verify-routing. The status is "source" for one
+    that is not ACTION (another repository or ref), "blocked" for one that
+    cannot run on a pull request, and "ok" for a usable guard."""
+    files = {}
     for name in workflow_files(directory):
         lines = read_lines(os.path.join(directory, name))
+        files[name] = {"lines": lines, "events": parse_triggers(lines), "jobs": parse_jobs(lines)}
+    found = []
+    for name, info in files.items():
+        lines = info["lines"]
         for at, line in enumerate(lines):
-            if line.lstrip().startswith("#") or not USES.match(line):
+            m = USES.match(line)
+            value = scalar(m.group(3)) if m else ""
+            if line.lstrip().startswith("#") or "/verify-routing@" not in value:
                 continue
-            start, end = step_bounds(lines, at)
-            values = with_values(lines, start, end)
+            where = f"{name}:{at + 1}"
+            path, _, ref = value.partition("@")
+            values = with_values(lines, *step_bounds(lines, at))
             expected = [e for e in re.split(r"[\s,]+", values.get("expected", "")) if e]
-            found.append((f"{name}:{at + 1}", values.get("label") or DEFAULT_LABEL, expected))
+            label = values.get("label") or DEFAULT_LABEL
+            sha = re.fullmatch(r"[0-9a-fA-F]{40}", ref) is not None
+            if path.lower() != ACTION_PATH.lower() or (ref != ACTION_REF and not sha):
+                reason = f"the verify-routing step at {where} uses {value}, but adopt recognizes {ACTION} (docs/adopting.md, step 3)"
+                found.append((where, "source", label, [reason], [], expected))
+                continue
+            blocks, warns = check_guard(name, at, files)
+            if sha:
+                warns.append(f"{where}: pinned to a commit (adopt checks it with {ACTION_REF}'s rules)")
+            found.append((where, "blocked" if blocks else "ok", label, blocks, warns, expected))
     return found
 
 
@@ -208,8 +425,9 @@ def main():
     args = ap.parse_args()
 
     if args.cmd == "guards":
-        for where, label, expected in guards(args.dir):
-            print(f"{where}\t{label}\t{' '.join(expected)}")
+        for where, status, label, blocks, warns, expected in guards(args.dir):
+            joined = [";".join(t.replace(";", ",") for t in texts) or "-" for texts in (blocks, warns)]
+            print("\t".join([where, status, label, *joined, " ".join(expected)]))
     elif args.cmd == "cache-keys":
         for hit in cache_keys(args.dir):
             print(hit)

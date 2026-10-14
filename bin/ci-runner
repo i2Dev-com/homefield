@@ -45,8 +45,8 @@ Commands:
   route      Switch repositories' pull-request jobs to hosted or local
              (the CI_RUNNER variable). Switching to hosted also cancels and
              re-runs runs whose jobs are stuck waiting for the local runner.
-  adopt      Prepare a repository to use the runner: give it access to the
-             runner group, check that its routing is merged, and only then
+  adopt      Prepare a repository to use the runner: check that its routing is
+             merged, and only then give it access to the runner group and
              switch it to local. Refuses a public repository.
   memory     Show the VM's memory use from its per-minute log: average and
              peak per day, and out-of-memory kills.
@@ -95,11 +95,13 @@ adopt:
                      prints when the routing is not in place yet
   --no-switch        do everything except set CI_RUNNER
   --dry-run          read-only: report what would change, change nothing
-  Reads the repository's workflows on its default branch and switches only
-  when the verify-routing guard is there, passes and at least one job is
-  routed; otherwise it prints what to add and exits 1. Adding the repository
-  to the group needs admin:org; without it, it says so and goes on. Needs gh
-  and python3. Does not need the VM.
+  Reads the repository's workflows on its default branch. Only when the
+  verify-routing guard is there (the pinned action, in a workflow that runs
+  on pull requests), passes and at least one job is routed does it add the
+  repository to the group and switch it; otherwise it prints what to add and
+  exits 1, having changed nothing. Adding the repository to the group needs
+  admin:org; without it, it says so and goes on. Needs gh and python3. Does
+  not need the VM.
 
 memory:
   --days N           how many days to show (default 7)
@@ -791,11 +793,11 @@ cmd_route() {
 }
 
 # ── adopt ───────────────────────────────────────────────────────────────────
-# Everything docs/adopting.md asks for that is not a workflow edit: the runner
-# group's access list, a check that the routing is merged, and the switch. The
-# switch waits for the routing, because a repository whose variable is `local`
-# before its jobs carry the guarded expression has nothing keeping the runner
-# to pull requests from its own branches.
+# Everything docs/adopting.md asks for that is not a workflow edit: a check that
+# the routing is merged, the runner group's access list, and the switch. The
+# group and the switch both wait for the routing: a repository that can reach
+# the runner before its jobs carry the guarded expression has nothing keeping
+# the runner to pull requests from its own branches.
 
 # Set by the steps below, for the ones after them and the summary.
 ADOPT_TMP=""
@@ -806,6 +808,7 @@ ADOPT_GROUP_OUTCOME=""
 ADOPT_SWITCH_OUTCOME=""
 ADOPT_READY=0
 ADOPT_REASONS=""
+ADOPT_NOTES=""
 ADOPT_LABEL=""
 ADOPT_GUARDS=0
 ADOPT_ROUTED=""
@@ -831,12 +834,18 @@ adopt_repository() {
 }
 
 # adopt_group_access <owner/repo> <group> <dry>: makes sure the runner group
-# admits the repository. Not being able to check is a warning, not an error:
-# group access is an organization-admin matter that the person running this
-# may not be, and the rest of the checks are still worth having.
+# admits the repository, but only writes to it (the PUT) when the routing is
+# ready (ADOPT_READY): group access is what lets a repository's jobs reach the
+# runner, so it must not come before the routing that keeps them to its own
+# pull requests. When the routing is not ready this still reads the group, to
+# say whether the repository is already in it. Not being able to check is a
+# warning, not an error: group access is an organization-admin matter that the
+# person running this may not be, and the rest of the checks are still worth
+# having.
 adopt_group_access() {
   local repo="$1" group="$2" dry="$3" org="${1%%/*}" rows="" listed=0 name vis pub gid
-  local found="" members
+  local found="" members byhand=""
+  [ "$ADOPT_READY" = 0 ] || byhand="; add ${repo} by hand (docs/adopting.md step 5)"
   if [ "$ADOPT_OWNER_TYPE" != Organization ]; then
     ADOPT_GROUP_OUTCOME="none needed (${org} is a personal account)"
     log "runner group: skipped, ${org} is a personal account and has no runner groups"
@@ -854,7 +863,7 @@ adopt_group_access() {
   fi
   if [ "$listed" = 0 ]; then
     ADOPT_GROUP_OUTCOME="not checked"
-    adopt_warn "could not check runner group access; add ${repo} by hand (docs/adopting.md step 5)"
+    adopt_warn "could not check runner group access${byhand}"
     return 0
   fi
   while IFS=$'\t' read -r name vis pub gid; do
@@ -875,12 +884,18 @@ adopt_group_access() {
   fi
   if ! members="$(gh api --paginate "orgs/${org}/actions/runner-groups/${gid}/repositories?per_page=100" --jq '.repositories[].id' 2>/dev/null)"; then
     ADOPT_GROUP_OUTCOME="not checked"
-    adopt_warn "could not read the repositories of runner group ${found}; add ${repo} by hand (docs/adopting.md step 5)"
+    adopt_warn "could not read the repositories of runner group ${found}${byhand}"
     return 0
   fi
   if printf '%s\n' "$members" | grep -qx "$ADOPT_REPO_ID"; then
     ADOPT_GROUP_OUTCOME="already a member"
     log "runner group: ${repo} already has access to ${found}"
+    if [ "$ADOPT_READY" = 0 ]; then
+      adopt_warn "${repo} is already in runner group ${found}, so its workflows can already send jobs to the runner although its routing is not ready; take it out of the group until the routing is merged (docs/runbook.md, \"Runner group\")"
+    fi
+  elif [ "$ADOPT_READY" = 0 ]; then
+    ADOPT_GROUP_OUTCOME="not added (the routing is not ready)"
+    log "runner group: not added, because the routing is not ready"
   elif [ "$dry" = 1 ]; then
     ADOPT_GROUP_OUTCOME="would be added (dry run)"
     log "runner group: would add ${repo} to ${found} (dry run)"
@@ -928,25 +943,62 @@ adopt_reason() {
   ADOPT_REASONS="${ADOPT_REASONS}  - $1"$'\n'
 }
 
+# adopt_note <text>: one thing to check about the guard, once.
+adopt_note() {
+  case $'\n'"$ADOPT_NOTES" in
+    *$'\n'"$1"$'\n'*) ;;
+    *) ADOPT_NOTES="${ADOPT_NOTES}$1"$'\n' ;;
+  esac
+}
+
+# adopt_each <command> <items>: runs the command on each of the items, which
+# tools/adopt.py joins with ";" ("-" is none).
+adopt_each() {
+  local cmd="$1" rest="$2" item
+  [ "$rest" != - ] || return 0
+  while [ -n "$rest" ]; do
+    item="${rest%%;*}"
+    if [ "$item" = "$rest" ]; then rest=""; else rest="${rest#*;}"; fi
+    [ -z "$item" ] || "$cmd" "$item"
+  done
+}
+
 # adopt_routing_check <dir> <label> <label_given>: sets ADOPT_READY (1 when a
-# verify-routing step is there, passes, and at least one job is routed),
+# usable verify-routing step is there, passes, and at least one job is routed),
 # ADOPT_REASONS (why not), ADOPT_LABEL and ADOPT_ROUTED. The workflows' own
 # guard says which label and jobs to expect; the checks are verify_routing.py,
-# the same script the guard runs in CI.
+# the same script the guard runs in CI. A usable step is the pinned action in
+# a workflow that runs on pull requests (tools/adopt.py says which are).
 adopt_routing_check() {
-  local dir="$1" label="$2" label_given="$3" rows where glabel gexpected out rc lines
+  local dir="$1" label="$2" label_given="$3" rows where gstatus glabel gblocks gwarns gexpected out rc lines
+  local candidates=0 deferred=""
   ADOPT_READY=1
   ADOPT_REASONS=""
+  ADOPT_NOTES=""
   ADOPT_LABEL="$label"
   ADOPT_GUARDS=0
   ADOPT_ROUTED=""
   rows="$(python3 -I "$ROOT/tools/adopt.py" guards "$dir")" || die "adopt: could not read the downloaded workflows"
-  while IFS=$'\t' read -r where glabel gexpected; do
+  while IFS=$'\t' read -r where gstatus glabel gblocks gwarns gexpected; do
     [ -n "$where" ] || continue
+    candidates=$((candidates + 1))
+    case "$gstatus" in
+      source)
+        adopt_each adopt_reason "$gblocks"
+        continue
+        ;;
+      blocked)
+        # Only a reason when no step is usable: a leftover that cannot run is
+        # not a guard, and does no harm next to one that can.
+        [ "$gblocks" = - ] || deferred="${deferred:+${deferred};}${gblocks}"
+        continue
+        ;;
+    esac
     if [ "$ADOPT_GUARDS" = 0 ] && [ "$label_given" = 0 ]; then
       ADOPT_LABEL="$glabel"
     fi
     ADOPT_GUARDS=$((ADOPT_GUARDS + 1))
+    adopt_each adopt_note "$gwarns"
     if [ "$label_given" = 1 ] && [ "$glabel" != "$label" ]; then
       adopt_reason "the verify-routing step at ${where} uses label ${glabel}, but --label is ${label}"
     fi
@@ -960,7 +1012,12 @@ adopt_routing_check() {
     ADOPT_REASONS="${ADOPT_REASONS}$(printf '%s\n' "$lines" | sed 's/^ */      /')"$'\n'
   done <<<"$rows"
   if [ "$ADOPT_GUARDS" = 0 ]; then
-    adopt_reason "no verify-routing step in .github/workflows (docs/adopting.md, step 3)"
+    adopt_each adopt_reason "${deferred:--}"
+    if [ "$candidates" = 0 ]; then
+      adopt_reason "no verify-routing step in .github/workflows (docs/adopting.md, step 3)"
+    else
+      adopt_reason "no verify-routing step that runs on pull requests (docs/adopting.md, step 3)"
+    fi
   fi
   ADOPT_ROUTED="$(python3 -I "$ROOT/verify-routing/verify_routing.py" --workflows-dir "$dir" --label "$ADOPT_LABEL" --list 2>/dev/null)" || ADOPT_ROUTED=""
   if [ -z "$ADOPT_ROUTED" ]; then
@@ -971,6 +1028,10 @@ adopt_routing_check() {
   else
     log "routing: not ready"
     printf '%s' "$ADOPT_REASONS"
+  fi
+  if [ -n "$ADOPT_NOTES" ]; then
+    adopt_warn "the verify-routing guard may not run on every pull request. Check that every pull request that changes .github/workflows still runs it:"
+    printf '%s' "$ADOPT_NOTES" | sed 's/^/ci-runner:   /' >&2
   fi
 }
 
@@ -1081,10 +1142,10 @@ cmd_adopt() {
   ADOPT_TMP="$(mktemp -d)"
   trap 'rm -rf "$ADOPT_TMP"' EXIT
   adopt_repository "$repo"
-  adopt_group_access "$repo" "$group" "$dry"
   adopt_fetch_workflows "$repo" "$ADOPT_BRANCH" "$ADOPT_TMP/workflows"
   adopt_routing_check "$ADOPT_TMP/workflows" "$label" "$label_given"
   adopt_cache_keys "$ADOPT_TMP/workflows"
+  adopt_group_access "$repo" "$group" "$dry"
   adopt_switch "$repo" "$ADOPT_LABEL" "$dry" "$switch" "$jobs"
 
   log "done: ${repo}: runner group ${ADOPT_GROUP_OUTCOME}; routing ready; CI_RUNNER ${ADOPT_SWITCH_OUTCOME}"
