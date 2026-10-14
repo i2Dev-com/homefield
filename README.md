@@ -61,11 +61,15 @@ the scope. The group admits no repository until you add one; the next step
 does that for each repository.
 
 Then route jobs from a repository by following
-[`docs/adopting.md`](docs/adopting.md), and switch it on:
+[`docs/adopting.md`](docs/adopting.md), and once that is merged:
 
 ```bash
-gh variable set CI_RUNNER --repo <owner>/<repo> --body local    # hosted again: --body hosted
+ci-runner adopt --repo <owner>/<repo>    # hosted again: ci-runner route hosted --repo <owner>/<repo>
 ```
+
+`adopt` adds the repository to the runner group, checks that its routing and
+guard are in place, and only then switches it to the local runner. It refuses
+a public repository. `--dry-run` shows what it would do.
 
 `ci-runner help` lists the options (`--label`, `--packages`, `--cpus`,
 ...). [`docs/runbook.md`](docs/runbook.md) covers operating it.
@@ -194,10 +198,11 @@ pull-request code away from the Mac it runs on.
 | Path | What it is |
 |---|---|
 | [`install.sh`](install.sh) | The one-line installer: downloads the tool, puts `ci-runner` on the PATH, installs Lima, runs `ci-runner install` |
-| [`bin/ci-runner`](bin/ci-runner) | Install, upgrade, inspect and remove the runner on this Mac |
+| [`bin/ci-runner`](bin/ci-runner) | Install, upgrade, inspect and remove the runner on this Mac; adopt and switch repositories |
 | [`vm/lima.yaml`](vm/lima.yaml) | The VM: Ubuntu 24.04 arm64, no host mounts, no forwarding of guest ports to the Mac, no SSH-agent forwarding |
 | [`vm/provision.sh`](vm/provision.sh) | Runs inside the VM: packages, Docker, the checksum-pinned runner, cleanup and idle-time OS update timers, registration. Settings: `RUNNER_URL`, `RUNNER_LABEL`, `RUNNER_NAME`, `RUNNER_GROUP`, `RUNNER_EXTRA_PACKAGES`; hooks in `/etc/ci-runner/provision.d/` |
 | [`verify-routing/`](verify-routing/action.yml) | The routing guard action |
+| [`tools/`](tools) | Python helpers behind `ci-runner report` and `ci-runner adopt` |
 | [`docs/adopting.md`](docs/adopting.md) | Checklist for routing a repository's jobs to the runner |
 | [`docs/runbook.md`](docs/runbook.md) | Operating it: setup, runner group, switching, failure modes, maintenance, moving, removal |
 
@@ -213,6 +218,7 @@ bash tests/memory-summary.sh       # `bin/ci-runner memory` per-day summary
 bash tests/report.sh               # `bin/ci-runner report` against a fixture
 bash tests/install-sh.sh           # install.sh, with stub gh, curl, brew and Lima
 bash tests/runner-group.sh         # runner group, wait for online, `version`, install's check order
+bash tests/adopt.sh                # `bin/ci-runner adopt` and tools/adopt.py, with a stub gh
 shellcheck bin/ci-runner install.sh vm/provision.sh verify-routing/tests/run.sh tests/*.sh
 ```
 

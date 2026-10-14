@@ -37,6 +37,20 @@ fail is a new major (see [README](README.md#development)).
 
 ### Added
 
+- `bin/ci-runner adopt --repo <owner>/<repo>`: does the part of
+  `docs/adopting.md` that is not a workflow edit. It refuses a public
+  repository, adds the repository to the organization's runner group (needs
+  `admin:org`; without it, it warns and goes on), downloads the repository's
+  workflows and runs the `verify-routing` check on them, warns about cache
+  keys with `runner.os` and no `runner.arch` in files with routed jobs, and sets `CI_RUNNER` to `local`
+  only when the guard is present, passes and at least one job is routed.
+  Otherwise it prints the routing expression and the guard step to add, and
+  exits 1. `--jobs`, `--label`, `--group`, `--no-switch`; `--dry-run` changes
+  nothing. Needs `gh` and `python3`, not the VM. `install`'s closing message
+  points to it.
+- `verify_routing.py --list` (the jobs that carry the canonical expression)
+  and `--print-expression`, which `adopt` uses. Existing invocations and
+  their output are unchanged, so the action stays `@v2`.
 - `install.sh`, a one-line installer: `gh api
   'repos/i2Dev-com/ci-runner/contents/install.sh?ref=v2' -H 'Accept:
   application/vnd.github.raw' | bash` (or `curl -fsSL
