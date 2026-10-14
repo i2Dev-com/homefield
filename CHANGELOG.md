@@ -8,6 +8,10 @@ fail is a new major (see [README](README.md#development)).
 
 ### Changed
 
+- The VM's default memory is 5 GiB instead of 8, the same as GitHub's
+  `ubuntu-slim` runner, which lowers the VM's idle footprint on the Mac. The
+  highest minute measured on a live runner over two weeks used 4.4 GiB. An
+  existing VM keeps its size until resized (runbook, "Host memory").
 - The base package set includes `docker-buildx`: Ubuntu's `docker.io` has no
   buildx, so `docker buildx build` (and `docker build --secret`) failed in
   jobs, as it did for one repository's browser test. Existing runners get it
