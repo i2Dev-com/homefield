@@ -13,7 +13,9 @@ bash tests/runner-url.sh           # RUNNER_URL validation
 bash tests/memwatch.sh             # memory sampler (needs bash >= 4.2 to run)
 bash tests/memory-summary.sh       # `bin/ci-runner memory` summary
 bash tests/report.sh               # `bin/ci-runner report`
-shellcheck bin/ci-runner vm/provision.sh verify-routing/tests/run.sh tests/*.sh
+bash tests/install-sh.sh           # install.sh
+bash tests/runner-group.sh         # runner group, wait for online, `version`
+shellcheck bin/ci-runner install.sh vm/provision.sh verify-routing/tests/run.sh tests/*.sh
 actionlint
 ```
 
@@ -24,7 +26,7 @@ a runner that serves real repositories.
 
 ## Conventions
 
-- **`bin/ci-runner` runs on the host**, which on a stock Mac is bash 3.2: no
+- **`bin/ci-runner` and `install.sh` run on the host**, which on a stock Mac is bash 3.2: no
   `mapfile`, no `inherit_errexit`, and `set -e` is off inside `$(...)`, so
   check failures there explicitly. **`vm/provision.sh` runs in the guest**
   (Ubuntu, bash 5) and must stay idempotent: every run is also an upgrade.

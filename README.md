@@ -12,8 +12,8 @@ It has three parts:
   [Lima](https://lima-vm.io), with no access to the Mac's files, SSH keys or
   credentials. It does have network access, including to the Mac's own
   services ([Security model](#security-model)).
-- **A one-command setup** ([`bin/ci-runner`](bin/ci-runner)): install,
-  upgrade, status, uninstall.
+- **A one-command setup** ([`install.sh`](install.sh), then
+  [`bin/ci-runner`](bin/ci-runner)): install, upgrade, status, uninstall.
 - **A routing guard** ([`verify-routing`](verify-routing/action.yml)): a
   GitHub Action that fails CI unless every job that can reach the runner uses
   the one reviewed `runs-on` expression, with its safety guards, and the set of
@@ -21,20 +21,44 @@ It has three parts:
 
 ## Quick start
 
-On an Apple Silicon Mac with Lima ≥ 1.1 (`brew install lima`), from a
-checkout of this repository:
+On an Apple Silicon Mac, in a terminal. While this repository is private, the
+installer is read with `gh`, logged in with access to it:
 
 ```bash
-bin/ci-runner install --url https://github.com/<org>      # or https://github.com/<owner>/<repo>
-bin/ci-runner status
+gh api 'repos/i2Dev-com/ci-runner/contents/install.sh?ref=v2' -H 'Accept: application/vnd.github.raw' | bash
 ```
 
-This creates the VM, checks its isolation, provisions it and registers the
-runner with the routing label `local-ci`. Registration needs a one-hour token:
-`gh` fetches it if you are an org owner (`admin:org` scope) or a repository
-admin, and otherwise you paste one from the *New runner* page. For an
-organization, first create a runner group that admits only the repositories
-that will use it ([runbook: Runner group](docs/runbook.md#runner-group)).
+Once the repository is public, `curl` does the same without `gh`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/i2Dev-com/ci-runner/v2/install.sh | bash
+```
+
+This installs or upgrades [Lima](https://lima-vm.io) with Homebrew if it is missing or older than 1.1 (it
+asks first), puts the tool in `~/.local/share/ci-runner` with a `ci-runner`
+command on your PATH, and then runs `ci-runner install`. That asks for your
+organization or repository URL, creates the VM, checks its isolation,
+provisions it, creates the `local-ci` runner group for an organization (selected
+repositories only, no public ones), registers the runner with the routing label
+`local-ci` and waits until GitHub shows it online. To give the URL up front,
+or any other option, append it:
+
+```bash
+... | bash -s -- --url https://github.com/<org>      # or https://github.com/<owner>/<repo>
+```
+
+From a checkout of this repository, with Lima ≥ 1.1 installed, run
+`bin/ci-runner install --url https://github.com/<org>` instead. Running the
+one-liner again replaces the installed tool with the current one and leaves
+an existing VM alone; `ci-runner upgrade` updates the VM. `ci-runner version`
+shows which copy you have, and `ci-runner status` the runner.
+
+Registration needs a one-hour token, and the group needs the `admin:org`
+scope: `gh` fetches the token if you are an org owner or a repository admin
+(it offers to add the scope when it is missing), and otherwise you paste a
+token from the *New runner* page. A repository URL needs neither a group nor
+the scope. The group admits no repository until you add one; the next step
+does that for each repository.
 
 Then route jobs from a repository by following
 [`docs/adopting.md`](docs/adopting.md), and switch it on:
@@ -43,7 +67,7 @@ Then route jobs from a repository by following
 gh variable set CI_RUNNER --repo <owner>/<repo> --body local    # hosted again: --body hosted
 ```
 
-`bin/ci-runner help` lists the options (`--label`, `--packages`, `--cpus`,
+`ci-runner help` lists the options (`--label`, `--packages`, `--cpus`,
 ...). [`docs/runbook.md`](docs/runbook.md) covers operating it.
 
 ## Requirements and limitations
@@ -72,7 +96,7 @@ gh variable set CI_RUNNER --repo <owner>/<repo> --body local    # hosted again: 
   Team plan or Enterprise. On the Free plan there is only the Default group,
   which every repository in the organization can use, so only register there
   if you trust all of them, and pass `--group Default` (the default,
-  `local-ci`, does not exist there and registration would fail). A **personal account** cannot have an
+  `local-ci`, cannot be created there, so `install` stops and says so). A **personal account** cannot have an
   account-wide runner: register per repository (`--url
   https://github.com/<you>/<repo>`), one VM per repository.
 - **Less software than `ubuntu-latest`.** The VM starts small. Add what your
@@ -169,6 +193,7 @@ pull-request code away from the Mac it runs on.
 
 | Path | What it is |
 |---|---|
+| [`install.sh`](install.sh) | The one-line installer: downloads the tool, puts `ci-runner` on the PATH, installs Lima, runs `ci-runner install` |
 | [`bin/ci-runner`](bin/ci-runner) | Install, upgrade, inspect and remove the runner on this Mac |
 | [`vm/lima.yaml`](vm/lima.yaml) | The VM: Ubuntu 24.04 arm64, no host mounts, no forwarding of guest ports to the Mac, no SSH-agent forwarding |
 | [`vm/provision.sh`](vm/provision.sh) | Runs inside the VM: packages, Docker, the checksum-pinned runner, cleanup and idle-time OS update timers, registration. Settings: `RUNNER_URL`, `RUNNER_LABEL`, `RUNNER_NAME`, `RUNNER_GROUP`, `RUNNER_EXTRA_PACKAGES`; hooks in `/etc/ci-runner/provision.d/` |
@@ -186,7 +211,9 @@ bash tests/runner-url.sh           # RUNNER_URL accepts github.com orgs and repo
 bash tests/memwatch.sh             # the guest's memory sampler (needs bash >= 4.2 to run)
 bash tests/memory-summary.sh       # `bin/ci-runner memory` per-day summary
 bash tests/report.sh               # `bin/ci-runner report` against a fixture
-shellcheck bin/ci-runner vm/provision.sh verify-routing/tests/run.sh tests/*.sh
+bash tests/install-sh.sh           # install.sh, with stub gh, curl, brew and Lima
+bash tests/runner-group.sh         # runner group, wait for online, `version`, install's check order
+shellcheck bin/ci-runner install.sh vm/provision.sh verify-routing/tests/run.sh tests/*.sh
 ```
 
 ## Versioning

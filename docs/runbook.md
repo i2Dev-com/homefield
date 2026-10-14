@@ -86,15 +86,22 @@ need an organization owner (`admin:org`):
 ## Runner group
 
 The organization's runner group is what decides which repositories can use the
-runner. Set it up before registering, because an org runner without a
-restricted group is usable by every repository in the organization.
+runner, because an org runner without a restricted group is usable by every
+repository in the organization. `bin/ci-runner install` looks the group up
+before registering and creates it if it is missing: **selected
+repositories**, **Allow public repositories** off, so that no repository can
+use it until you add one ([adopting, step 5](adopting.md#5-allow-the-repository-in-the-runner-group)).
+If the group already exists and is open to all repositories (or to public ones),
+it prints a warning and goes on; narrowing it is up to you. The steps below
+are the manual way, and the reference for what the group should look like.
 
 Custom runner groups need the GitHub Team plan or Enterprise. On the Free plan
 an organization has only the Default group, which every repository in it can
 use: register there only if you would trust every repository with the others'
 pull-request code, keep **Allow public repositories** off on it, and register
-with `--group Default` (`RUNNER_GROUP=Default` by hand): the default group
-name, `local-ci`, does not exist there and registration fails. The
+with `--group Default` (`RUNNER_GROUP=Default` by hand). `install` cannot
+create `local-ci` on that plan: it prints what GitHub said and stops, and
+`--group Default` skips the group step. The
 alternative is a repository-scoped runner, which only that repository can use.
 A personal account has no account-wide runners at all: register per
 repository, one VM per repository.
@@ -106,9 +113,13 @@ repository, one VM per repository.
   have adopted the runner.
 - Leave **Allow public repositories** off.
 
-`bin/ci-runner install` passes `--group` (default `local-ci`) for an
-organization URL; a repository-scoped runner has no group. Check the group
-(needs the `admin:org` scope):
+`bin/ci-runner install` registers into `--group` (default `local-ci`) for an
+organization URL; a repository-scoped runner has no group. Looking up and
+creating groups needs the `admin:org` scope. If gh lacks it, `install` on a
+terminal offers to run `gh auth refresh -h github.com -s admin:org` (it does
+not when `GITHUB_TOKEN` or `GH_TOKEN` is set, which gh uses instead of its
+stored login), and without gh it asks before going on with the group
+unchecked. Check the group by hand:
 
 ```bash
 gh api orgs/<org>/actions/runner-groups -q '.runner_groups[] | "\(.id) \(.name) \(.visibility) public=\(.allows_public_repositories)"'
@@ -117,14 +128,24 @@ gh api orgs/<org>/actions/runner-groups/<id>/repositories -q '.repositories[].fu
 
 ## Setup (once per machine)
 
-Requires Lima ≥ 1.1 (`brew install lima`; verified on 2.2.0). Run from a
-checkout of this repository.
+Requires Lima ≥ 1.1 (`brew install lima`; verified on 2.2.0).
 
-**The short way:** `bin/ci-runner install --url https://github.com/<org>`
-(or `https://github.com/<owner>/<repo>`; options: `bin/ci-runner help`) does
-every step below and enables autostart.
-It fetches the registration token with `gh` when it can, and otherwise asks
-you to paste one. The steps are what it does, and the way to do it by hand:
+**The short way:** the one-liner in the [README](../README.md#quick-start)
+runs `install.sh`, which downloads the tool for a ref (`CI_RUNNER_REF`,
+default `v2`) into `~/.local/share/ci-runner` (`CI_RUNNER_HOME`), writes a
+`ci-runner` command into Homebrew's `bin` or `~/.local/bin`
+(`CI_RUNNER_BIN_DIR`; it prints the line to add to `~/.zshrc` if that is not
+on your PATH), installs or upgrades Lima (1.1 or later) if you agree, and runs `ci-runner install`.
+Running it again replaces the tool, which is how it is upgraded; with no
+arguments it leaves an existing VM alone (`ci-runner upgrade` updates that).
+`ci-runner version` shows the ref and commit. From a checkout,
+`bin/ci-runner install --url https://github.com/<org>` (or
+`https://github.com/<owner>/<repo>`; options: `bin/ci-runner help`) is the
+same command. Either way it does every step below, asks for the URL if it
+was not given, creates the runner group, waits until the runner is online and
+enables autostart. It fetches the registration token with `gh` when it can,
+and otherwise asks you to paste one. The steps are what it does, and the way
+to do it by hand, from a checkout of this repository:
 
 ```bash
 # 1. Create and start the VM (no mounts, no port forwards, Ubuntu 24.04 arm64)
