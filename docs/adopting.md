@@ -70,7 +70,8 @@ starting process to exit first.
 
 ## 5. Allow the repository in the runner group
 
-For an organization runner in a custom group: *Organization settings →
+For an organization runner in a custom group (`ci-runner install` creates
+`local-ci` with no repositories): *Organization settings →
 Actions → Runner groups → `local-ci` → Repository access* → add the
 repository. Until then its jobs wait for a runner that is online but will not
 take them. A repository-scoped runner, or one in the Default group, needs

@@ -37,6 +37,29 @@ fail is a new major (see [README](README.md#development)).
 
 ### Added
 
+- `install.sh`, a one-line installer: `gh api
+  'repos/i2Dev-com/ci-runner/contents/install.sh?ref=v2' -H 'Accept:
+  application/vnd.github.raw' | bash` (or `curl -fsSL
+  https://raw.githubusercontent.com/i2Dev-com/ci-runner/v2/install.sh | bash`
+  once the repository is public). It downloads the tool for a ref
+  (`CI_RUNNER_REPO`, `CI_RUNNER_REF`; `gh` for a private repository, `curl`
+  otherwise) into `~/.local/share/ci-runner`, puts a `ci-runner` command on
+  the PATH, installs Lima with Homebrew if you agree, and runs
+  `ci-runner install`; arguments after `bash -s --` go to it. Run it again to
+  upgrade the tool; with no arguments, an existing VM is left alone.
+- `bin/ci-runner version`: the installed ref and commit, or the checkout's.
+- `bin/ci-runner install` asks for the URL on a terminal when `--url` is
+  missing, instead of failing, and checks it before creating anything.
+- `bin/ci-runner install` creates the organization's runner group when it is
+  missing (selected repositories, public repositories off) and warns when an
+  existing one is open to all or to public repositories. On the Free plan,
+  where custom groups cannot be created, it says so and points to
+  `--group Default`. `--group Default` skips the step.
+- `bin/ci-runner install` and `uninstall` offer `gh auth refresh -s admin:org`
+  when gh lacks the scope (unless `GITHUB_TOKEN` or `GH_TOKEN` overrides gh's
+  login), before falling back to a pasted token.
+- `bin/ci-runner install` waits up to 90 seconds for the runner to show online
+  and prints its labels and group, or the runners page to check by hand.
 - `bin/ci-runner route <hosted|local> --repo <owner>/<repo>`: switches
   repositories' pull-request jobs (the `CI_RUNNER` variable), and on a switch
   to hosted cancels and re-runs runs that are stuck waiting for the local

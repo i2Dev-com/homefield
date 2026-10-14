@@ -4,13 +4,17 @@
 # manual steps in docs/runbook.md, which stays the reference for what each one
 # does and why.
 #
-#   bin/ci-runner install --url https://github.com/<org>[/<repo>] [options]
+#   bin/ci-runner install [--url https://github.com/<org>[/<repo>]] [options]
 #   bin/ci-runner upgrade [--packages "..."] [--force]
 #   bin/ci-runner status
 #   bin/ci-runner uninstall [--keep-vm]
 #   bin/ci-runner route <hosted|local> --repo <owner>/<repo> [--repo ...]
 #   bin/ci-runner memory [--days N]
 #   bin/ci-runner report --repo <owner>/<repo> [--repo ...] [--since DATE]
+#   bin/ci-runner version
+#
+# install.sh puts this on the PATH as `ci-runner`; the messages below say
+# bin/ci-runner, which is the same file in a checkout.
 #
 # Every command takes --instance NAME (default ci-runner, or $CI_RUNNER_INSTANCE)
 # to pick the Lima VM. Run `bin/ci-runner help` for the options.
@@ -30,7 +34,9 @@ Usage: bin/ci-runner <command> [options]
 
 Commands:
   install    Create the VM (if needed), provision it and register the runner.
-             On an instance that is already registered, this is an upgrade.
+             For an organization it also creates the runner group, and it
+             waits until the runner shows online. On an instance that is
+             already registered, this is an upgrade.
   upgrade    Re-run provisioning on a registered runner: packages, hooks,
              runner binary. Refuses while a job is running, unless --force.
   status     Show the VM, the registration and whether a job is running.
@@ -42,16 +48,18 @@ Commands:
              peak per day, and out-of-memory kills.
   report     Queue wait, duration and minutes of the jobs in repositories,
              local against hosted, from the GitHub API.
+  version    Show which version of this tool is installed.
 
 Options:
   --instance NAME    Lima instance (default ci-runner, or $CI_RUNNER_INSTANCE)
 
 install:
   --url URL          https://github.com/<org> or https://github.com/<owner>/<repo>
-                     (required for a new registration)
+                     (asked for on a terminal when a new registration has none)
   --label LABEL      routing label (default local-ci)
   --name NAME        runner name (default: the guest hostname, lima-<instance>)
   --group GROUP      org runner group (default local-ci; ignored for a repo).
+                     Created if missing: selected repositories, no public ones.
                      On the GitHub Free plan, use Default: custom groups
                      need Team or Enterprise
   --packages "A B"   extra apt packages (RUNNER_EXTRA_PACKAGES)
@@ -93,7 +101,9 @@ report:
 Registration and removal need a one-hour token. It is fetched with `gh` when
 your gh credentials allow it (org owner with admin:org, or repository admin);
 otherwise you are asked to paste one from the "New runner" page. Tokens go to
-the VM on stdin, never on a command line.
+the VM on stdin, never on a command line. For an organization, gh also reads
+and creates the runner group, which needs the same admin:org scope: on a
+terminal you are offered `gh auth refresh -s admin:org` if it is missing.
 EOF
 }
 
@@ -216,6 +226,30 @@ runners_page() {
   esac
 }
 
+# The runner APIs of an organization need the admin:org scope, which gh's
+# default login does not have. offer_scope_refresh asks once per run to add
+# it, on a terminal; it succeeds when the caller should retry its gh call.
+# Callers in $(...) do not pass the flag back to their parent, which is fine:
+# the group step runs in the parent first, and get_token alone in uninstall.
+scope_refresh_asked=0
+offer_scope_refresh() {
+  [ "$scope_refresh_asked" = 0 ] || return 1
+  scope_refresh_asked=1
+  [ -t 0 ] && command -v gh >/dev/null || return 1
+  if [ -n "${GITHUB_TOKEN:-}${GH_TOKEN:-}" ]; then
+    # gh uses that variable instead of its stored login, so adding a scope to
+    # the stored login changes nothing for this command.
+    echo "ci-runner: GITHUB_TOKEN or GH_TOKEN is set, and gh uses it instead of its stored login, so" >&2
+    echo "ci-runner: 'gh auth refresh' would not help. Unset it, or use a token with admin:org." >&2
+    return 1
+  fi
+  local answer
+  read -rp "gh needs the admin:org scope. Run 'gh auth refresh -h github.com -s admin:org' now? [Y/n] " answer
+  case "$answer" in [Nn]*) return 1 ;; esac
+  # gh prints its one-time code on stdout; the caller may be in $(...).
+  gh auth refresh -h github.com -s admin:org >&2
+}
+
 # get_token <registration|remove> <url>: prints the token. From gh when it can,
 # else pasted; never echoed.
 get_token() {
@@ -223,9 +257,13 @@ get_token() {
   scope="$(api_scope "$url")" || exit 1
   # On an error gh prints the error body to stdout, so only its exit status
   # says whether this is a token.
-  if command -v gh >/dev/null &&
-    out="$(gh api -X POST "${scope}/actions/runners/${kind}-token" -q .token 2>/dev/null)"; then
-    token="$out"
+  if command -v gh >/dev/null; then
+    if out="$(gh api -X POST "${scope}/actions/runners/${kind}-token" -q .token 2>/dev/null)"; then
+      token="$out"
+    elif [[ "$scope" == orgs/* ]] && offer_scope_refresh &&
+      out="$(gh api -X POST "${scope}/actions/runners/${kind}-token" -q .token 2>/dev/null)"; then
+      token="$out"
+    fi
   fi
   if [ -z "$token" ]; then
     [ -t 0 ] || die "could not get a ${kind} token with gh, and no terminal to paste one"
@@ -256,6 +294,155 @@ check_scope_owner() {
     User) die "${owner} is a personal account, which cannot have account-wide runners; use a repository URL (https://github.com/${owner}/<repo>)" ;;
     *) die "could not find ${owner} on GitHub (or reach api.github.com) to check that it is an organization" ;;
   esac
+}
+
+# validate_scope <url>: the URL's shape, and that an organization URL is one.
+validate_scope() {
+  api_scope "$1" >/dev/null
+  check_scope_owner "$1"
+}
+
+# ask_url: prints the URL typed at the prompt. Needs a terminal; without one
+# the URL has to come from --url.
+ask_url() {
+  local url
+  [ -t 0 ] || die "install: --url is required for a new registration (no terminal to ask)"
+  read -rp "GitHub organization or repository URL (https://github.com/<org> or https://github.com/<owner>/<repo>): " url
+  [ -n "$url" ] || die "install: no URL given"
+  printf '%s' "$url"
+}
+
+# ── Runner group ────────────────────────────────────────────────────────────
+# The group is what keeps an organization's other repositories off the runner
+# (docs/runbook.md, "Runner group"), so install makes sure it exists before
+# the runner joins it, instead of leaving that to a manual step.
+
+# list_groups <org>: one line per runner group, tab separated: name,
+# visibility, allows_public_repositories. Tabs, because a name may have spaces.
+list_groups() {
+  gh api --paginate "orgs/${1}/actions/runner-groups?per_page=100" \
+    --jq '.runner_groups[] | [.name, .visibility, (.allows_public_repositories | tostring)] | @tsv' 2>/dev/null
+}
+
+# group_unchecked <group> <why>: the group could not be checked or created.
+# Registering anyway would put the runner in a group nobody has looked at, or
+# fail at the end, so ask first (default no); without a terminal, stop.
+group_unchecked() {
+  echo "ci-runner: could not check or create the runner group ${1}: ${2}" >&2
+  echo "ci-runner: create it by hand (docs/runbook.md, \"Runner group\"): selected repositories, public repositories off." >&2
+  [ -t 0 ] || die "stopping: the runner group ${1} is unchecked and there is no terminal to ask"
+  local answer
+  read -rp "Continue without checking the group? [y/N] " answer
+  case "$answer" in
+    [Yy]*) ;;
+    *) die "stopped: create the group ${1}, then run this again" ;;
+  esac
+}
+
+# ensure_group <url> <group>: for an organization URL, finds the group by name
+# and warns when it is wider than it should be, or creates it. A repository
+# URL has no groups, and Default always exists.
+ensure_group() {
+  local url="$1" group="${2:-local-ci}" scope org groups="" name vis pub found=0 why="" out
+  scope="$(api_scope "$url")" || exit 1
+  [[ "$scope" == orgs/* ]] || return 0
+  [ "$group" != "Default" ] || return 0
+  org="${scope#orgs/}"
+
+  if ! command -v gh >/dev/null; then
+    group_unchecked "$group" "gh is not installed"
+    return 0
+  fi
+  if ! groups="$(list_groups "$org")"; then
+    if offer_scope_refresh; then
+      groups="$(list_groups "$org")" || why="gh could not list the organization's runner groups, even after the scope refresh"
+    else
+      why="gh could not list the organization's runner groups (needs an org owner with the admin:org scope)"
+    fi
+    if [ -n "$why" ]; then
+      group_unchecked "$group" "$why"
+      return 0
+    fi
+  fi
+
+  while IFS=$'\t' read -r name vis pub; do
+    [ "$name" = "$group" ] || continue
+    found=1
+    why=""
+    case "$vis" in
+      all) why="every repository in ${org} can use it" ;;
+      private) why="every private repository in ${org} can use it" ;;
+    esac
+    [ "$pub" != true ] || why="${why:+${why}, and }public repositories can use it"
+    if [ -n "$why" ]; then
+      echo "ci-runner: warning: runner group ${group} is wider than it should be: ${why}." >&2
+      echo "ci-runner: narrow it to selected repositories with public ones off (docs/runbook.md, \"Runner group\")." >&2
+    else
+      log "runner group ${group} exists (selected repositories only, no public ones)"
+    fi
+  done <<<"$groups"
+  [ "$found" = 0 ] || return 0
+
+  log "creating runner group ${group}: selected repositories, public repositories off"
+  if ! out="$(gh api -X POST "orgs/${org}/actions/runner-groups" -f name="$group" -f visibility=selected \
+    -F allows_public_repositories=false 2>&1)"; then
+    case "$(printf '%s' "$out" | tr '[:upper:]' '[:lower:]')" in
+      *scope* | *"not accessible"*)
+        group_unchecked "$group" "gh may not create runner groups: ${out}"
+        return 0
+        ;;
+      *plan* | *upgrade* | *"not available"* | *enterprise* | *"http 403"* | *"http 422"*)
+        echo "ci-runner: gh said: ${out}" >&2
+        die "could not create runner group ${group}: custom runner groups need the GitHub Team plan or Enterprise. On the Free plan, pass --group Default (every repository in ${org} can then use the runner, so only do that if you trust them all) or use a repository URL (https://github.com/<owner>/<repo>)"
+        ;;
+      *)
+        group_unchecked "$group" "gh said: ${out}"
+        return 0
+        ;;
+    esac
+  fi
+  log "created runner group ${group}. No repository can use it yet: add the ones that should (docs/adopting.md, step 5)"
+}
+
+# ── Waiting for the runner ──────────────────────────────────────────────────
+ONLINE_WAIT_TRIES=18
+ONLINE_WAIT_INTERVAL=5
+
+# wait_online <url> <name> <group>: until the runner shows as online on
+# GitHub, up to about 90 seconds. Never fails: it only reports, because the
+# registration has already happened and GitHub can be slow to list it.
+wait_online() {
+  local url="$1" name="$2" group="$3" scope rows="" n status labels grp tries=0 page seen=""
+  page="$(runners_page "$url")" || exit 1
+  if [ -z "$name" ] || ! command -v gh >/dev/null; then
+    log "check that the runner is online at ${page}"
+    return 0
+  fi
+  scope="$(api_scope "$url")" || exit 1
+  log "waiting for ${name} to show as online (up to $((ONLINE_WAIT_TRIES * ONLINE_WAIT_INTERVAL)) s)"
+  while [ "$tries" -lt "$ONLINE_WAIT_TRIES" ]; do
+    if ! rows="$(gh api --paginate "${scope}/actions/runners?per_page=100" \
+      --jq '.runners[] | [.name, .status, (.labels | map(.name) | join(",")), (.runner_group_name // "")] | @tsv' 2>/dev/null)"; then
+      log "could not read the runners list with gh; check that the runner is online at ${page}"
+      return 0
+    fi
+    while IFS=$'\t' read -r n status labels grp; do
+      [ "$n" = "$name" ] || continue
+      seen="$status"
+      if [ "$status" = online ]; then
+        if [[ "$scope" == orgs/* ]]; then
+          log "${name} is online: labels ${labels}, group ${grp:-$group}"
+        else
+          log "${name} is online: labels ${labels}"
+        fi
+        return 0
+      fi
+    done <<<"$rows"
+    tries=$((tries + 1))
+    [ "$tries" -ge "$ONLINE_WAIT_TRIES" ] || sleep "$ONLINE_WAIT_INTERVAL"
+  done
+  echo "ci-runner: warning: ${name} is not online after $((ONLINE_WAIT_TRIES * ONLINE_WAIT_INTERVAL)) s (${seen:-not listed yet}); check ${page} and bin/ci-runner status" >&2
+  return 0
 }
 
 # ── Provisioning ────────────────────────────────────────────────────────────
@@ -293,10 +480,23 @@ cmd_install() {
     esac
   done
   check_host
-  # The scope is checked before anything is created.
-  if [ -n "$url" ]; then
-    api_scope "$url" >/dev/null
-    check_scope_owner "$url"
+  # Everything that can be checked is checked before anything is created: the
+  # URL (asked for if it was not given), the organization, the runner group.
+  # Whether the instance is registered is only known once its VM is up and
+  # verified, but a VM that does not exist yet is certainly not registered, so
+  # in that case it all happens first. With a VM already there, a URL that
+  # was given is still validated before the VM is started, and the rest waits
+  # for the answer to "registered?" (a registered instance is just upgraded).
+  local validated=0 group_done=0
+  if [ -z "$(vm_status)" ]; then
+    [ -n "$url" ] || url="$(ask_url)" || exit 1
+    validate_scope "$url"
+    ensure_group "$url" "${group:-local-ci}"
+    validated=1
+    group_done=1
+  elif [ -n "$url" ]; then
+    validate_scope "$url"
+    validated=1
   fi
   ensure_vm "$cpus" "$memory"
   verify_isolation
@@ -309,7 +509,9 @@ cmd_install() {
     return
   fi
 
-  [ -n "$url" ] || die "install: --url is required for a new registration"
+  [ -n "$url" ] || url="$(ask_url)" || exit 1
+  [ "$validated" = 1 ] || validate_scope "$url"
+  [ "$group_done" = 1 ] || ensure_group "$url" "${group:-local-ci}"
   local env=(RUNNER_URL="$url")
   [ -n "$label" ] && env+=(RUNNER_LABEL="$label")
   [ -n "$name" ] && env+=(RUNNER_NAME="$name")
@@ -322,11 +524,16 @@ cmd_install() {
   run_provision "RUNNER_TOKEN=${token}"$'\n' "${env[@]}"
   token=""
   [ "$autostart" = 1 ] && enable_autostart
+  # The name the runner registered under (--name, else the guest hostname).
+  local registered_name=""
+  registered_name="$(runner_setting agentName)" || registered_name=""
+  wait_online "$url" "$registered_name" "${group:-local-ci}"
   cat <<EOF
 
 Registered. Next:
-  - Organization runner: make sure its runner group admits only the
-    repositories that should use it (docs/runbook.md, "Runner group").
+  - Organization runner: it joined the runner group ${group:-local-ci}, which
+    admits only the repositories added to it (docs/adopting.md, step 5;
+    docs/runbook.md, "Runner group").
   - Route jobs from a repository: docs/adopting.md.
   - bin/ci-runner status   shows the runner at any time.
 EOF
@@ -579,29 +786,55 @@ cmd_report() {
   exec python3 "$ROOT/tools/report.py" "$@"
 }
 
+# What install.sh recorded when it installed this copy (repo, ref, commit);
+# a git checkout says where it is instead.
+cmd_version() {
+  [ $# -eq 0 ] || die "version takes no options besides --instance"
+  local key value repo="" ref="" commit=""
+  if [ -f "$ROOT/.ci-runner-ref" ]; then
+    while IFS='=' read -r key value; do
+      case "$key" in
+        repo) repo="$value" ;;
+        ref) ref="$value" ;;
+        commit) commit="$value" ;;
+      esac
+    done <"$ROOT/.ci-runner-ref"
+    echo "ci-runner ${ref:-unknown}${commit:+ (${commit:0:7})}, installed from ${repo:-unknown} in ${ROOT}"
+  elif git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1; then
+    echo "ci-runner $(git -C "$ROOT" describe --always), from a checkout in ${ROOT}"
+  else
+    echo "ci-runner (version unknown), in ${ROOT}"
+  fi
+}
+
 # ── Main ────────────────────────────────────────────────────────────────────
 # --instance may come before or after the command.
-cmd=""
-rest=()
-while [ $# -gt 0 ]; do
-  case "$1" in
-    --instance) INSTANCE="${2:?--instance needs a value}"; shift 2 ;;
-    *)
-      if [ -z "$cmd" ]; then cmd="$1"; else rest+=("$1"); fi
-      shift
-      ;;
+main() {
+  local cmd="" rest=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --instance) INSTANCE="${2:?--instance needs a value}"; shift 2 ;;
+      *)
+        if [ -z "$cmd" ]; then cmd="$1"; else rest+=("$1"); fi
+        shift
+        ;;
+    esac
+  done
+  [ -n "$cmd" ] || { usage >&2; exit 1; }
+  set -- "${rest[@]+"${rest[@]}"}"
+  case "$cmd" in
+    install) cmd_install "$@" ;;
+    upgrade) cmd_upgrade "$@" ;;
+    status) cmd_status "$@" ;;
+    uninstall) cmd_uninstall "$@" ;;
+    route) cmd_route "$@" ;;
+    memory) cmd_memory "$@" ;;
+    report) cmd_report "$@" ;;
+    version | --version) cmd_version "$@" ;;
+    help | -h | --help) usage ;;
+    *) usage >&2; exit 1 ;;
   esac
-done
-[ -n "$cmd" ] || { usage >&2; exit 1; }
-set -- "${rest[@]+"${rest[@]}"}"
-case "$cmd" in
-  install) cmd_install "$@" ;;
-  upgrade) cmd_upgrade "$@" ;;
-  status) cmd_status "$@" ;;
-  uninstall) cmd_uninstall "$@" ;;
-  route) cmd_route "$@" ;;
-  memory) cmd_memory "$@" ;;
-  report) cmd_report "$@" ;;
-  help | -h | --help) usage ;;
-  *) usage >&2; exit 1 ;;
-esac
+}
+
+# The tests source this file to call the functions above on their own.
+[ "${CI_RUNNER_SOURCE_ONLY:-}" = 1 ] || main "$@"
