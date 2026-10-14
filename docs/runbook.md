@@ -329,6 +329,14 @@ service ports never appear there.
   status"), power the guest off cleanly with
   `limactl shell ci-runner sudo systemctl poweroff`, then clear the
   leftover host agent with `limactl stop --force ci-runner`.
+  If the error came after the VM had already stopped, the next `limactl start`
+  can hang at "Explicitly start ssh ControlMaster": the old SSH multiplexer
+  still holds `~/.lima/ci-runner/ssh.sock`, pointing at the previous boot's
+  port. Close it with
+  `ssh -S ~/.lima/ci-runner/ssh.sock -O exit ci-runner` and the start
+  completes. A `limactl hostagent` for the instance whose PID is not in
+  `~/.lima/ci-runner/ha.pid` is a leftover with no VM; end it with `kill -9`,
+  because a normal shutdown can remove the live agent's files.
 - **Measuring it.** Two commands answer "is the runner big enough, and is it
   paying for itself?":
   - `bin/ci-runner memory [--days N]` summarises the guest's memory log: per
