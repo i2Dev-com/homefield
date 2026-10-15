@@ -51,7 +51,8 @@ From a checkout of this repository, with Lima ≥ 1.1 installed, run
 `bin/homefield install --url https://github.com/<org>` instead. Running the
 one-liner again replaces the installed tool with the current one and leaves
 an existing VM alone; `homefield upgrade` updates the VM. `homefield version`
-shows which copy you have, and `homefield status` the runner.
+shows which copy you have and, using `gh`, says when a newer one exists and
+prints the command that updates it; `homefield status` shows the runner.
 
 Registration needs a one-hour token, and the group needs the `admin:org`
 scope: `gh` fetches the token if you are an org owner or a repository admin
