@@ -2,7 +2,7 @@ name: Routing guard
 description: >-
   Fails if any workflow job routes to the local self-hosted runner without the
   canonical runs-on expression (hosted fallback, pull requests only, Dependabot
-  and fork pull requests excluded), or if the set of opted-in jobs differs from the expected list.
+  and fork pull requests excluded), or if the set of opted-in jobs differs from `jobs`.
 
 inputs:
   jobs:
