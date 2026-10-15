@@ -171,31 +171,51 @@ def main() -> int:
             continue
         job = None
         in_jobs = False
+        job_indent = None
         path = os.path.join(args.workflows_dir, name)
         with open(path) as fh:
             for lineno, line in enumerate(fh, 1):
                 # Comments may name the label; only code counts. Safe to cut at
                 # '#' because the canonical expression contains none.
                 code = line.split("#", 1)[0]
-                # Job ids are the two-space keys under top-level `jobs:` only,
-                # so `push:` or `workflow_call:` under `on:` are never taken
-                # for one.
-                top = re.match(r"^([A-Za-z0-9_-]+):", code)
+                # Job ids are the keys directly under top-level `jobs:` — at
+                # whatever indent the file's first such key uses, so a
+                # workflow indented other than the common two spaces still
+                # attributes its runs-on lines to the right job — while keys
+                # deeper than that (needs, steps, ...) belong to the job's
+                # body, and keys under any other top-level key (`on:` among
+                # them) are not jobs at all. Top-level keys and job ids may
+                # be quoted (`"jobs":`, `"checks":`): a quoted `jobs:` missed
+                # here would skip every runs-on in the file — none of them
+                # checked, a bare `runs-on: self-hosted` included — and a
+                # quoted key missed below would credit its runs-on to the
+                # previous job.
+                top = re.match(r"""^(['"]?)([A-Za-z0-9_-]+)\1:""", code)
                 if top:
-                    in_jobs = top.group(1) == "jobs"
+                    in_jobs = top.group(2) == "jobs"
                     job = None
-                # Keys may be quoted (`"checks":`); a quoted key missed here
-                # would credit its runs-on to the previous job.
-                m = re.match(r"""^  (['"]?)([A-Za-z0-9_-]+)\1:\s*$""", code)
+                    job_indent = None
+                m = re.match(r"""^(\s*)(['"]?)([A-Za-z0-9_-]+)\2:\s*$""", code)
                 if in_jobs and m:
-                    job = m.group(2)
+                    indent = len(m.group(1))
+                    if indent == 0:
+                        job = None
+                    elif job_indent is None:
+                        # The first key under `jobs:` is a job id; everything
+                        # at that depth is one, anything deeper is its body.
+                        job_indent = indent
+                        job = m.group(3)
+                    elif indent == job_indent:
+                        job = m.group(3)
                 where = f"{name}:{lineno} (job {job})"
                 m = re.match(r"^\s*runs-on:\s*(.*?)\s*$", code)
-                # Only runs-on lines matter. Every one is checked against the
-                # allowlist below, and a multi-line runs-on already fails on
-                # its first line, so the label appearing elsewhere (a step
-                # name, a docs URL in a run string) is not routing.
-                if not m:
+                # Only runs-on lines inside `jobs:` matter: a key named
+                # `runs-on:` under `on:` (a workflow_dispatch input, say) is
+                # not routing. Every one is checked against the allowlist
+                # below, and a multi-line runs-on already fails on its first
+                # line, so the label appearing elsewhere (a step name, a docs
+                # URL in a run string) is not routing.
+                if not in_jobs or not m:
                     continue
                 value = m.group(1)
                 if HOSTED.match(value):

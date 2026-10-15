@@ -177,10 +177,17 @@ ensure_vm() {
 }
 
 # The VM is the isolation boundary, so nothing runs in it until it is shown to
-# have no host mounts and no view of the Mac's home directories.
+# have no host mounts and no view of the Mac's home directories. A guest
+# command that cannot run at all is reported as such: treating its empty
+# output as "no mounts found" would misread a broken VM as a safe one.
 verify_isolation() {
   local mounts
-  mounts="$(guest sh -c 'mount | grep -Ec "virtiofs|9p|sshfs|reverse-sshfs" || true')"
+  if ! mounts="$(guest sh -c 'mount | grep -Ec "virtiofs|9p|sshfs|reverse-sshfs" || true')"; then
+    die "could not run the isolation check in VM ${INSTANCE}; is it running? (see docs/runbook.md, Setup)"
+  fi
+  case "$mounts" in
+    ''|*[!0-9]*) die "could not read the mount count from VM ${INSTANCE}; refusing to continue (see docs/runbook.md, Setup)" ;;
+  esac
   [ "$mounts" = "0" ] || die "VM ${INSTANCE} has host mounts; refusing to continue (see docs/runbook.md, Setup)"
   if guest test -e /Users; then
     die "VM ${INSTANCE} can see /Users; refusing to continue"
@@ -472,9 +479,12 @@ ONLINE_WAIT_INTERVAL=5
 
 # wait_online <url> <name> <group>: until the runner shows as online on
 # GitHub, up to about 90 seconds. Never fails: it only reports, because the
-# registration has already happened and GitHub can be slow to list it.
+# registration has already happened and GitHub can be slow to list it. The
+# runners list carries the group's id but not its name, so the name is
+# resolved against the runner-groups list; when that cannot be done, the
+# report says what was observed instead of assuming the expected group.
 wait_online() {
-  local url="$1" name="$2" group="$3" scope rows="" n status labels grp tries=0 page seen=""
+  local url="$1" name="$2" group="$3" scope rows="" n status labels grpid grp="" groups gid gname tries=0 page seen=""
   page="$(runners_page "$url")" || exit 1
   if [ -z "$name" ] || ! command -v gh >/dev/null; then
     log "check that the runner is online at ${page}"
@@ -484,16 +494,32 @@ wait_online() {
   log "waiting for ${name} to show as online (up to $((ONLINE_WAIT_TRIES * ONLINE_WAIT_INTERVAL)) s)"
   while [ "$tries" -lt "$ONLINE_WAIT_TRIES" ]; do
     if ! rows="$(gh api --paginate "${scope}/actions/runners?per_page=100" \
-      --jq '.runners[] | [.name, .status, (.labels | map(.name) | join(",")), (.runner_group_name // "")] | @tsv' 2>/dev/null)"; then
+      --jq '.runners[] | [.name, .status, (.labels | map(.name) | join(",")), .runner_group_id] | @tsv' 2>/dev/null)"; then
       log "could not read the runners list with gh; check that the runner is online at ${page}"
       return 0
     fi
-    while IFS=$'\t' read -r n status labels grp; do
+    while IFS=$'\t' read -r n status labels grpid; do
       [ "$n" = "$name" ] || continue
       seen="$status"
       if [ "$status" = online ]; then
         if [[ "$scope" == orgs/* ]]; then
-          log "${name} is online: labels ${labels}, group ${grp:-$group}"
+          if groups="$(gh api --paginate "${scope}/actions/runner-groups?per_page=100" \
+            --jq '.runner_groups[] | [.id, .name] | @tsv' 2>/dev/null)"; then
+            while IFS=$'\t' read -r gid gname; do
+              [ "$gid" = "$grpid" ] && grp="$gname"
+            done <<<"$groups"
+          fi
+          if [ -n "$grp" ]; then
+            if [ "$grp" = "$group" ]; then
+              log "${name} is online: labels ${labels}, group ${grp}"
+            else
+              log "${name} is online: labels ${labels}, group ${grp} (expected ${group})"
+            fi
+          elif [ -n "$grpid" ]; then
+            log "${name} is online: labels ${labels}, group id ${grpid}"
+          else
+            log "${name} is online: labels ${labels}"
+          fi
         else
           log "${name} is online: labels ${labels}"
         fi
@@ -657,7 +683,13 @@ cmd_status() {
   fi
   local name url svc
   { read -r name; read -r url; } < <(runner_setting agentName gitHubUrl)
-  echo "runner: ${name}, registered at ${url}"
+  if [ -n "$name" ] && [ -n "$url" ]; then
+    echo "runner: ${name}, registered at ${url}"
+  else
+    # The registration exists (.runner is there) but its details could not be
+    # read just now; the rest of the report still stands on its own.
+    echo "runner: registered, but its details could not be read"
+  fi
   svc="$(guest sudo cat "$RUNNER_HOME/.service" 2>/dev/null || true)"
   if [ -n "$svc" ] && guest systemctl is-active --quiet "$svc"; then
     echo "service: running"
@@ -667,7 +699,8 @@ cmd_status() {
   if job_running; then echo "job: running"; else echo "job: idle"; fi
   echo "runner version: $(guest sudo cat "$RUNNER_HOME/.provisioned-version" 2>/dev/null || echo unknown)"
   echo "extra packages: $(guest sh -c 'cat /etc/ci-runner/extra-packages 2>/dev/null | tr "\n" " "')"
-  echo "labels: see $(runners_page "$url") (not stored in the VM)"
+  [ -n "$url" ] && echo "labels: see $(runners_page "$url") (not stored in the VM)"
+  return 0
 }
 
 cmd_uninstall() {
@@ -810,6 +843,10 @@ ADOPT_READY=0
 ADOPT_REASONS=""
 ADOPT_NOTES=""
 ADOPT_LABEL=""
+# The label of the first verify-routing guard that passes its check, when
+# adopt did not get --label: a passing guard says which label the repository
+# actually routes on, and that is the one to advise with.
+ADOPT_LABEL_OK=""
 ADOPT_GUARDS=0
 ADOPT_ROUTED=""
 ADOPT_WORKFLOWS=0
@@ -971,11 +1008,12 @@ adopt_each() {
 # a workflow that runs on pull requests (tools/adopt.py says which are).
 adopt_routing_check() {
   local dir="$1" label="$2" label_given="$3" rows where gstatus glabel gblocks gwarns gexpected out rc lines
-  local candidates=0 deferred=""
+  local candidates=0 deferred="" routed routedjob
   ADOPT_READY=1
   ADOPT_REASONS=""
   ADOPT_NOTES=""
   ADOPT_LABEL="$label"
+  ADOPT_LABEL_OK=""
   ADOPT_GUARDS=0
   ADOPT_ROUTED=""
   rows="$(python3 -I "$ROOT/tools/adopt.py" guards "$dir")" || die "adopt: could not read the downloaded workflows"
@@ -1002,9 +1040,29 @@ adopt_routing_check() {
     if [ "$label_given" = 1 ] && [ "$glabel" != "$label" ]; then
       adopt_reason "the verify-routing step at ${where} uses label ${glabel}, but --label is ${label}"
     fi
+    # Collect the jobs routed under this guard's label. A repository can carry
+    # several verify-routing steps; jobs routed under any of them count, not
+    # only the first guard's — unless --label picked a label, in which case
+    # only steps carrying it speak for it and the others are already reported
+    # as a mismatch above.
+    if [ "$label_given" = 0 ] || [ "$glabel" = "$label" ]; then
+      routed="$(python3 -I "$ROOT/verify-routing/verify_routing.py" --workflows-dir "$dir" --label "$glabel" --list 2>/dev/null)" || routed=""
+      while IFS= read -r routedjob; do
+        [ -n "$routedjob" ] || continue
+        case $'\n'"$ADOPT_ROUTED"$'\n' in
+          *"$'\n'${routedjob}"$'\n'*) ;;
+          *) ADOPT_ROUTED="${ADOPT_ROUTED:+${ADOPT_ROUTED}$'\n'}${routedjob}" ;;
+        esac
+      done <<<"$routed"
+    fi
     rc=0
     out="$(python3 -I "$ROOT/verify-routing/verify_routing.py" --workflows-dir "$dir" --label "$glabel" --expected "$gexpected" 2>&1)" || rc=$?
-    [ "$rc" -ne 0 ] || continue
+    if [ "$rc" -eq 0 ]; then
+      if [ "$label_given" = 0 ] && [ -z "$ADOPT_LABEL_OK" ]; then
+        ADOPT_LABEL_OK="$glabel"
+      fi
+      continue
+    fi
     # The failure lines only: no colours, no passes, no header or totals.
     lines="$(printf '%s\n' "$out" | sed $'s/\033\\[[0-9;]*m//g' |
       grep -v -e PASS -e '^self-hosted runner routing' -e ' passed, ' -e '^$' || true)"
@@ -1018,8 +1076,11 @@ adopt_routing_check() {
     else
       adopt_reason "no verify-routing step that runs on pull requests (docs/adopting.md, step 3)"
     fi
+    # No guard to say which label applies; look with the expected one, as before.
+    ADOPT_ROUTED="$(python3 -I "$ROOT/verify-routing/verify_routing.py" --workflows-dir "$dir" --label "$ADOPT_LABEL" --list 2>/dev/null)" || ADOPT_ROUTED=""
+  elif [ "$label_given" = 0 ] && [ -n "$ADOPT_LABEL_OK" ]; then
+    ADOPT_LABEL="$ADOPT_LABEL_OK"
   fi
-  ADOPT_ROUTED="$(python3 -I "$ROOT/verify-routing/verify_routing.py" --workflows-dir "$dir" --label "$ADOPT_LABEL" --list 2>/dev/null)" || ADOPT_ROUTED=""
   if [ -z "$ADOPT_ROUTED" ]; then
     adopt_reason "no job uses the routing expression for label ${ADOPT_LABEL} (docs/adopting.md, step 2)"
   fi

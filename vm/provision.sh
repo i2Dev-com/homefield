@@ -305,12 +305,19 @@ if [ "$move" = "1" ]; then
   runner_config "$RUNNER_REMOVE_TOKEN" remove
 fi
 if [ ! -f "$RUNNER_HOME/.runner" ]; then
+  # A ${RUNNER_GROUP:+--runnergroup "$RUNNER_GROUP"} expansion would split a
+  # group name containing a space into two words; build the argument instead,
+  # so the name reaches config.sh as one.
+  group_args=()
+  if [ -n "$RUNNER_GROUP" ]; then
+    group_args+=(--runnergroup "$RUNNER_GROUP")
+  fi
   runner_config "$RUNNER_TOKEN" \
     --unattended \
     --url "$RUNNER_URL" \
     --name "$RUNNER_NAME" \
     --labels "$RUNNER_LABELS" \
-    ${RUNNER_GROUP:+--runnergroup "$RUNNER_GROUP"} \
+    "${group_args[@]}" \
     --work _work \
     --replace
 fi

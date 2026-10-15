@@ -78,7 +78,10 @@ def fetch_repo(repo, first, last):
     fixture = os.environ.get("CI_RUNNER_REPORT_FIXTURE")
     if fixture:
         with open(fixture, encoding="utf-8") as handle:
-            return json.load(handle)[repo]
+            data = json.load(handle)
+        if repo not in data:
+            die(f"the fixture {fixture} has no entry for {repo}")
+        return data[repo]
 
     def runs_of(day):
         span = f"{day}T00:00:00Z..{day}T23:59:59Z"

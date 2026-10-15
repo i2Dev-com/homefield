@@ -131,6 +131,83 @@ else
   echo "  ok   --print-expression with a reserved label (fail)"; pass=$((pass + 1))
 fi
 
+# A key named `runs-on:` outside `jobs:` — a workflow_dispatch input, say — is
+# not routing and must not fail the check (it would read as an empty, hence
+# multi-line, runs-on).
+dispatch="$(mktemp -d)"
+printf '%s\n' \
+  'on:' \
+  '  workflow_dispatch:' \
+  '    inputs:' \
+  '      runs-on:' \
+  '        description: where to run' \
+  '        default: hosted' \
+  'jobs:' \
+  '  build:' \
+  '    runs-on: ubuntu-latest' \
+  '    steps:' \
+  '      - run: echo build' >"$dispatch/ci.yml"
+if python3 "$SCRIPT" --workflows-dir "$dispatch" --expected "" >/dev/null 2>&1; then
+  echo "  ok   a runs-on key under on: is not routing (pass)"; pass=$((pass + 1))
+else
+  echo "  FAIL a runs-on key under on: is not routing: wanted pass, got fail"; fail=$((fail + 1))
+fi
+rm -rf "$dispatch"
+
+# A workflow indented four spaces: --list and the expected list must still
+# name its job, not "None".
+indent="$(mktemp -d)"
+printf '%s\n' \
+  'on: [pull_request]' \
+  'jobs:' \
+  '    changes:' \
+  "        runs-on: ${base_expr}" \
+  '        steps:' \
+  '            - run: echo changes' >"$indent/ci.yml"
+check "a four-space workflow: the job is attributed" "ci.yml:changes" \
+  "$(python3 "$SCRIPT" --workflows-dir "$indent" --list)"
+if python3 "$SCRIPT" --workflows-dir "$indent" --expected "ci.yml:changes" >/dev/null 2>&1; then
+  echo "  ok   a four-space workflow checks clean (pass)"; pass=$((pass + 1))
+else
+  echo "  FAIL a four-space workflow checks clean: wanted pass, got fail"; fail=$((fail + 1))
+fi
+rm -rf "$indent"
+
+# A quoted top-level `jobs:` key (`"jobs":`) is valid YAML. If the parser
+# missed it, every runs-on in the file would go unchecked — with an empty
+# expected list, even a bare `runs-on: self-hosted` would pass.
+quoted="$(mktemp -d)"
+printf '%s\n' \
+  'on: [pull_request]' \
+  '"jobs":' \
+  '  build:' \
+  "    runs-on: ${base_expr}" \
+  '    steps:' \
+  '      - run: echo build' >"$quoted/ci.yml"
+check "a quoted jobs key: the job is attributed" "ci.yml:build" \
+  "$(python3 "$SCRIPT" --workflows-dir "$quoted" --list)"
+if python3 "$SCRIPT" --workflows-dir "$quoted" --expected "ci.yml:build" >/dev/null 2>&1; then
+  echo "  ok   a quoted jobs key checks clean (pass)"; pass=$((pass + 1))
+else
+  echo "  FAIL a quoted jobs key checks clean: wanted pass, got fail"; fail=$((fail + 1))
+fi
+rm -rf "$quoted"
+
+quoted="$(mktemp -d)"
+printf '%s\n' \
+  'on: [pull_request]' \
+  '"jobs":' \
+  '  build:' \
+  '    runs-on: self-hosted' \
+  '    steps:' \
+  '      - run: echo build' >"$quoted/ci.yml"
+if python3 "$SCRIPT" --workflows-dir "$quoted" --expected "" >/dev/null 2>&1; then
+  echo "  FAIL a bare self-hosted under a quoted jobs key: wanted fail, got pass"; fail=$((fail + 1))
+else
+  echo "  ok   a bare self-hosted under a quoted jobs key fails (pass)"; pass=$((pass + 1))
+fi
+rm -rf "$quoted"
+
 # A missing directory must fail, not pass vacuously.
 if python3 "$SCRIPT" --workflows-dir /nonexistent --expected "" >/dev/null 2>&1; then
   echo "  FAIL missing workflows dir: wanted fail, got pass"; fail=$((fail + 1))

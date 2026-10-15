@@ -6,6 +6,44 @@ fail is a new major (see [README](README.md#development)).
 
 ## Unreleased
 
+### Fixed
+
+- `install`'s online check reported the group the runner was *expected* to
+  join as if it were the one GitHub listed: the runners list carries only the
+  group's id (no name), so the name was always read as empty and the message
+  fell back to the expected group. The group is now resolved against the
+  runner-groups list and reported as observed; a different group is shown
+  with the expected one, and an unreadable list shows the group's id.
+- The `verify-routing` check attributed runs-on lines to jobs by a fixed
+  two-space indent and matched a `runs-on:` key anywhere in the file. A
+  workflow indented by four spaces was reported as `file:None`, and a
+  workflow_dispatch input named `runs-on:` failed as a multi-line runs-on.
+  Job ids are now the keys directly under `jobs:` at whatever indent the
+  file's first such key uses, and only runs-on lines inside `jobs:` count.
+  Both cases failed safe before; both now pass when the routing is right.
+- `adopt` computed the routed-jobs list with only the first verify-routing
+  step's label, so with steps carrying different labels, jobs routed under
+  the others were missed and adopt wrongly reported "no job uses the routing
+  expression". Jobs routed under any step count now — under the steps carrying
+  the requested label, when `--label` is given — and when no `--label` was
+  given, the label of a passing step is the one advised in the snippet and
+  messages.
+- The `verify-routing` check now recognizes a top-level `jobs:` key spelled
+  with quotes (`"jobs":`), which YAML allows. Before, the runs-on lines under
+  one were attributed to no job and (in the unreleased draft) went unchecked;
+  a workflow with a quoted `jobs:` key and routing in place now passes, and a
+  bare `runs-on: self-hosted` under one still fails.
+- The isolation check read a failed guest command (a VM that is not running,
+  say) as an empty mount list and misreported it as "the VM has host
+  mounts". It now distinguishes a check that could not run from a mount
+  count, and refuses to continue either way.
+- `status` printed an empty `runner: , registered at ` line when the
+  registration's details could not be read; it now says so.
+- A runner group name with a space reached `config.sh --runnergroup` as two
+  words (provision.sh). GitHub allows spaces in group names.
+- `report` with a fixture that has no entry for the repository raised a
+  KeyError traceback instead of a message.
+
 ### Changed
 
 - The VM's default memory is 5 GiB instead of 8, the same as GitHub's
