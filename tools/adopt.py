@@ -41,7 +41,8 @@ USES = re.compile(r"^(\s*)(-\s+)?uses:\s*(.*?)\s*$")
 ACTION_PATH, _, ACTION_REF = ACTION.partition("@")
 # The repository was called ci-runner before v3 and GitHub redirects the old
 # path, so consumers may still use the action under either name.
-ACTION_PATHS = (ACTION_PATH.lower(), "i2dev-com/ci-runner/verify-routing")
+OLD_ACTION_PATH = "i2dev-com/ci-runner/verify-routing"
+ACTION_PATHS = (ACTION_PATH.lower(), OLD_ACTION_PATH)
 ACTION_DIR = "./.github/workflows/"
 # The trigger options after which a pull request may not run the workflow.
 FILTERS = ("branches", "branches-ignore", "paths", "paths-ignore")
@@ -363,6 +364,12 @@ def guards(directory):
             sha = re.fullmatch(r"[0-9a-fA-F]{40}", ref) is not None
             if path.lower() not in ACTION_PATHS or (ref != ACTION_REF and not sha):
                 reason = f"the verify-routing step at {where} uses {value}, but adopt recognizes {ACTION} (docs/adopting.md, step 3)"
+                if path.lower() == OLD_ACTION_PATH:
+                    reason += (
+                        f". That is the ci-runner v2 guard: migrating means switching the step to {ACTION} and the runs-on label"
+                        " from local-ci to homefield-ci in the same change"
+                        " (docs/runbook.md, \"Migrating from ci-runner (v2)\", step 6)"
+                    )
                 found.append((where, "source", label, [reason], [], expected))
                 continue
             blocks, warns = check_guard(name, at, files)

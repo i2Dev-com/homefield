@@ -51,6 +51,24 @@ install v3, switch each consuming repository to the new label and action, then
 adopt it again. The steps, in order, are in
 [`docs/runbook.md`](docs/runbook.md#migrating-from-ci-runner-v2).
 
+A v2 install is detected and left alone, so v3 never creates a second VM and
+runner next to it:
+
+- `install.sh` installs the tool but does not hand over to `homefield install`
+  when a Lima instance `ci-runner` exists and the target instance does not; it
+  prints the pointer to the migration and exits non-zero.
+- `homefield install` refuses in the same case. Passing `--instance` or setting
+  `HOMEFIELD_INSTANCE` is taken as deliberate and skips the check. `status`,
+  `upgrade`, `uninstall` and `memory` add the same pointer when they find no
+  `homefield` VM but a `ci-runner` one.
+- `provision.sh` exits before changing anything on a guest that has
+  `/etc/ci-runner` or `ci-runner-*` systemd units, instead of provisioning
+  next to them.
+- `adopt` says the `i2Dev-com/ci-runner/verify-routing@v2` step is the v2
+  guard, and that migrating switches the action to
+  `i2Dev-com/homefield/verify-routing@v3` and the label from `local-ci` to
+  `homefield-ci` together.
+
 ### Fixed
 
 - `install`'s online check reported the group the runner was *expected* to

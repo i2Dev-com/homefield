@@ -447,8 +447,10 @@ v3 renames the project to HomeField: the command, environment variables, VM,
 install directory, runner label and group, and the paths inside the VM all
 change (the list is in [`CHANGELOG.md`](../CHANGELOG.md)), so a v2 install is
 replaced, not upgraded. `provision.sh` does not move the old guest paths, and
-the new VM gets a new runner. Steps 1 to 3 need the old tool, so remove it
-only in step 4.
+the new VM gets a new runner. v3 enforces this: `install.sh` and `homefield
+install` stop while a `ci-runner` VM exists and no `homefield` VM does, and
+`provision.sh` exits on a guest that has `/etc/ci-runner` or `ci-runner-*`
+units. Steps 1 to 3 need the old tool, so remove it only in step 4.
 
 1. **Route every repository to hosted.** Jobs stay on GitHub-hosted runners
    while the runner is replaced. This also cancels and re-runs runs stuck
@@ -475,12 +477,19 @@ only in step 4.
    ci-runner uninstall
    ```
 
-4. **Remove the old tool:**
+4. **Remove the old tool.** The one-line installer wrote a `ci-runner`
+   wrapper on the PATH and the tool in `~/.local/share/ci-runner` (or
+   `$CI_RUNNER_HOME`). The wrapper is removed only if it is found:
 
    ```bash
-   rm "$(command -v ci-runner)"
-   rm -rf ~/.local/share/ci-runner
+   wrapper="$(command -v ci-runner)" && rm "$wrapper"
+   rm -rf "${CI_RUNNER_HOME:-$HOME/.local/share/ci-runner}"
    ```
+
+   If you ran v2 from a checkout of the repository, there is nothing to
+   remove: no wrapper was installed, so the first command finds nothing and the
+   second removes a directory that does not exist. Delete the checkout when you
+   no longer need it.
 
 5. **Install v3** with the one-liner from the [README](../README.md#quick-start).
    It creates the VM `homefield`, the runner group `homefield-ci` (selected

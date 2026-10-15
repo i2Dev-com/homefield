@@ -84,6 +84,9 @@ jobs:
       - name: RUNNER_URL validation
         run: bash tests/runner-url.sh
 
+      - name: ci-runner v2 guest refusal
+        run: bash tests/v2-guest.sh
+
       - name: Guest memory sampler
         run: bash tests/memwatch.sh
 
@@ -116,7 +119,9 @@ jobs:
       # workflows: on pull requests the test job above opts in to the local
       # runner, and it is the only job that may. Pushes to main always run
       # hosted (the expression requires a pull_request event). The published
-      # action, not the checkout's local one, so `homefield adopt` counts it.
+      # action, not the checkout's local one. It is still on the v2 path and
+      # ref: `homefield adopt` recognises only @v3, so adopt counts this step
+      # once it moves there, which is a follow-up after the v3 tag exists.
       - name: Action against this repo's workflows
         # Moves to i2Dev-com/homefield/verify-routing@v3 once that tag exists.
         uses: i2Dev-com/ci-runner/verify-routing@v2

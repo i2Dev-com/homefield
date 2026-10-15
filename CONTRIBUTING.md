@@ -10,6 +10,7 @@ bash verify-routing/tests/run.sh   # routing guard fixtures
 bash tests/label-rule.sh           # label rule, provision.sh and verify-routing agree
 bash tests/extra-packages.sh       # RUNNER_EXTRA_PACKAGES validation
 bash tests/runner-url.sh           # RUNNER_URL validation
+bash tests/v2-guest.sh            # provision.sh refuses a ci-runner v2 guest
 bash tests/memwatch.sh             # memory sampler (needs bash >= 4.2 and GNU timeout to run)
 bash tests/memory-summary.sh       # `bin/homefield memory` summary
 bash tests/report.sh               # `bin/homefield report`

@@ -199,6 +199,20 @@ vm_exists() {
   [ -n "$(limactl list --format '{{.Status}}' "${HOMEFIELD_INSTANCE:-homefield}" 2>/dev/null)" ]
 }
 
+# v2_vm_left: a ci-runner v2 VM exists and the target instance does not, with
+# no instance chosen on purpose (HOMEFIELD_INSTANCE or --instance in the
+# arguments that go to `homefield install`). Same rule as cmd_install in
+# bin/homefield, which refuses too; this one keeps the installer from handing
+# over to it at all.
+v2_vm_left() {
+  local arg
+  [ -z "${HOMEFIELD_INSTANCE:-}" ] || return 1
+  for arg in "$@"; do
+    [ "$arg" != --instance ] || return 1
+  done
+  ! vm_exists && [ -n "$(limactl list --format '{{.Status}}' ci-runner 2>/dev/null)" ]
+}
+
 main() {
   trap cleanup EXIT
   check_host
@@ -228,6 +242,14 @@ main() {
   trap - EXIT
   local installed="$INSTALL_DIR/bin/homefield"
   if [ $# -gt 0 ] || have_tty; then
+    if v2_vm_left "$@"; then
+      echo
+      echo "A ci-runner v2 VM exists. The tool is installed, but the VM was not set up: v3 does not"
+      echo "upgrade it in place, and installing now would add a second VM and runner next to it."
+      echo "Follow \"Migrating from ci-runner (v2)\" in docs/runbook.md, then run: homefield install"
+      echo "  https://github.com/${REPO}/blob/${REF}/docs/runbook.md#migrating-from-ci-runner-v2"
+      return 1
+    fi
     # Run again with no arguments on a Mac that already has the VM, this is a
     # tool update: `install` there would upgrade the VM and briefly stop the
     # runner, which nobody asked for.

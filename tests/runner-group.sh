@@ -52,7 +52,12 @@ cat >"$stubs/limactl" <<'EOF'
 echo "limactl $*" >>"$CALLS"
 case "$1" in
   --version) echo "limactl version 2.2.0" ;;
-  list) printf '%s' "${LIMA_STATUS:-}" ;;
+  list)
+    # The status of an existing VM only: LIMA_V2_STATUS for the v2 instance
+    # (ci-runner), LIMA_STATUS for any other.
+    for last; do :; done
+    if [ "$last" = ci-runner ]; then printf '%s' "${LIMA_V2_STATUS:-}"; else printf '%s' "${LIMA_STATUS:-}"; fi
+    ;;
   shell)
     case "$*" in
       *"test -e /Users"*)
@@ -191,6 +196,47 @@ record "--group Default skips the group step" "nonzero/no" "$(nonzero "$rc")/$(h
 
 run_fn LIMA_STATUS=Running -- cmd_install --url not-a-url
 record "a bad URL is refused before an existing VM is touched" "nonzero/yes/0" "$(nonzero "$rc")/$(has "$out" '--url must be')/$(called 'limactl start')"
+
+# ── a ci-runner v2 VM left behind ──────────────────────────────────────────
+echo "leftover v2 VM"
+v2_ref='Migrating from ci-runner (v2)'
+run_fn LIMA_V2_STATUS=Running -- cmd_install --url https://github.com/acme
+record "install: v2 VM and no homefield VM: refused, nothing created or started" "nonzero/yes/0/0" "$(nonzero "$rc")/$(has "$out" "$v2_ref")/$(called 'limactl create')/$(called 'limactl start')"
+record "...saying v3 does not upgrade it in place, and how to override" "yes/yes" "$(has "$out" 'does not upgrade it in place')/$(has "$out" 'pass --instance or set HOMEFIELD_INSTANCE')"
+record "...before any gh call (no group is created either)" "0" "$(called '^gh ')"
+
+run_fn LIMA_V2_STATUS=Running LIMA_STATUS=Running -- cmd_install --url not-a-url
+record "install: a homefield VM exists too: not refused for the v2 VM" "nonzero/no/yes" "$(nonzero "$rc")/$(has "$out" "$v2_ref")/$(has "$out" '--url must be')"
+
+run_fn LIMA_V2_STATUS=Running HOMEFIELD_INSTANCE=other -- cmd_install
+record "install: HOMEFIELD_INSTANCE set: the instance is deliberate, not refused" "nonzero/no/yes" "$(nonzero "$rc")/$(has "$out" "$v2_ref")/$(has "$out" '--url is required')"
+
+run_fn LIMA_V2_STATUS=Running -- main --instance other install
+record "install: --instance given: the instance is deliberate, not refused" "nonzero/no/yes" "$(nonzero "$rc")/$(has "$out" "$v2_ref")/$(has "$out" '--url is required')"
+
+run_fn LIMA_V2_STATUS=Running -- main --instance ci-runner install
+record "install: --instance ci-runner is the v2 VM itself, not a leftover" "no" "$(has "$out" 'does not upgrade it in place')"
+
+run_fn -- cmd_install
+record "install: no v2 VM: unchanged" "nonzero/no/yes" "$(nonzero "$rc")/$(has "$out" "$v2_ref")/$(has "$out" '--url is required')"
+
+# The other commands that stop on a missing VM name the v2 one.
+run_fn LIMA_V2_STATUS=Running -- cmd_upgrade
+record "upgrade: no homefield VM, v2 VM present: the hint is added" "nonzero/yes/yes" "$(nonzero "$rc")/$(has "$out" 'no VM homefield')/$(has "$out" "$v2_ref")"
+run_fn -- cmd_upgrade
+record "upgrade: no VM, no v2 VM: no hint" "nonzero/yes/no" "$(nonzero "$rc")/$(has "$out" 'no VM homefield')/$(has "$out" 'ci-runner')"
+run_fn LIMA_V2_STATUS=Running -- cmd_uninstall
+record "uninstall: the hint is added" "nonzero/yes/yes" "$(nonzero "$rc")/$(has "$out" 'no VM homefield')/$(has "$out" "$v2_ref")"
+run_fn -- cmd_uninstall
+record "uninstall: no v2 VM: no hint" "nonzero/no" "$(nonzero "$rc")/$(has "$out" 'ci-runner')"
+run_fn LIMA_V2_STATUS=Running -- cmd_status
+record "status: not created, with the hint" "0/yes/yes" "$rc/$(has "$out" 'VM homefield: not created')/$(has "$out" "$v2_ref")"
+run_fn -- cmd_status
+record "status: not created, no v2 VM: no hint" "0/yes/no" "$rc/$(has "$out" 'VM homefield: not created')/$(has "$out" 'ci-runner')"
+run_fn LIMA_V2_STATUS=Running -- cmd_memory
+record "memory: the hint is added" "nonzero/yes/yes" "$(nonzero "$rc")/$(has "$out" 'VM homefield is not running')/$(has "$out" "$v2_ref")"
+run_fn LIMA_V2_STATUS=Stopped -- main --instance ci-runner status
+record "the v2 VM asked for by name: no hint about itself" "0/no" "$rc/$(has "$out" 'does not upgrade')"
 
 # ── wait_online ────────────────────────────────────────────────────────────
 echo "wait_online"

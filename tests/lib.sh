@@ -21,7 +21,7 @@ fail=0
 # verdict, so a change in provision.sh's wording fails every case loudly.
 provision_verdict() {
   local setting="$1" value="$2" out
-  out="$(env "$setting=$value" bash "$ROOT/vm/provision.sh" </dev/null 2>&1 | head -1)"
+  out="$(env PROVISION_SYSROOT=/nonexistent-sysroot "$setting=$value" bash "$ROOT/vm/provision.sh" </dev/null 2>&1 | head -1)"
   case "$out" in
     "provision.sh: run as root (sudo)") echo ok ;;
     "provision.sh: ${setting}"*) echo reject ;;

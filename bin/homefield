@@ -27,6 +27,10 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LIMA_YAML="$ROOT/vm/lima.yaml"
 PROVISION="$ROOT/vm/provision.sh"
 INSTANCE="${HOMEFIELD_INSTANCE:-homefield}"
+# Whether the instance was chosen (HOMEFIELD_INSTANCE or --instance) rather
+# than defaulted; install uses it to tell a deliberate second VM from a leftover.
+INSTANCE_EXPLICIT=0
+[ -z "${HOMEFIELD_INSTANCE:-}" ] || INSTANCE_EXPLICIT=1
 RUNNER_HOME="/opt/actions-runner"
 
 usage() {
@@ -151,6 +155,21 @@ check_host() {
 }
 
 vm_status() { limactl list --format '{{.Status}}' "$INSTANCE" 2>/dev/null || true; }
+
+# The VM ci-runner v2 created. v3 does not upgrade it in place (new instance,
+# paths, units and label), so one left behind next to a missing homefield VM is
+# the cue to point at the migration instead of creating a second VM and runner.
+V2_INSTANCE="ci-runner"
+v2_vm_exists() {
+  [ "$INSTANCE" != "$V2_INSTANCE" ] &&
+    [ -n "$(limactl list --format '{{.Status}}' "$V2_INSTANCE" 2>/dev/null)" ]
+}
+V2_MIGRATE="v3 does not upgrade it in place: follow docs/runbook.md, \"Migrating from ci-runner (v2)\""
+# v2_hint: for the end of a "no VM" message; prints nothing without a v2 VM.
+v2_hint() {
+  v2_vm_exists || return 0
+  printf ' (a ci-runner v2 VM exists, and %s)' "$V2_MIGRATE"
+}
 
 # --workdir /: the host's working directory does not exist in the guest, which
 # has no mounts. stdin is closed, or `limactl shell` would swallow whatever is
@@ -568,6 +587,9 @@ cmd_install() {
     esac
   done
   check_host
+  if [ "$INSTANCE_EXPLICIT" != 1 ] && [ -z "$(vm_status)" ] && v2_vm_exists; then
+    die "install: a ci-runner v2 VM exists, and ${V2_MIGRATE}. Installing now would add a second VM and runner next to it. (To create ${INSTANCE} anyway, pass --instance or set HOMEFIELD_INSTANCE.)"
+  fi
   # Everything that can be checked is checked before anything is created: the
   # URL (asked for if it was not given), the organization, the runner group.
   # Whether the instance is registered is only known once its VM is up and
@@ -647,7 +669,7 @@ cmd_upgrade() {
     esac
   done
   check_host
-  [ -n "$(vm_status)" ] || die "no VM ${INSTANCE}; run bin/homefield install"
+  [ -n "$(vm_status)" ] || die "no VM ${INSTANCE}; run bin/homefield install$(v2_hint)"
   ensure_vm "" ""
   verify_isolation
   registered || die "${INSTANCE} is not registered; run bin/homefield install --url ..."
@@ -672,7 +694,7 @@ cmd_status() {
   local status
   status="$(vm_status)"
   if [ -z "$status" ]; then
-    echo "VM ${INSTANCE}: not created"
+    echo "VM ${INSTANCE}: not created$(v2_hint)"
     return
   fi
   echo "VM ${INSTANCE}: ${status}"
@@ -714,7 +736,7 @@ cmd_uninstall() {
   check_host
   local status
   status="$(vm_status)"
-  [ -n "$status" ] || die "no VM ${INSTANCE}"
+  [ -n "$status" ] || die "no VM ${INSTANCE}$(v2_hint)"
   [ "$status" = "Running" ] || limactl start --tty=false "$INSTANCE"
   if registered; then
     job_running && die "a job is running on ${INSTANCE}; uninstall when it is idle"
@@ -1262,7 +1284,7 @@ cmd_memory() {
     die "memory: --days must be a positive number"
   fi
   check_host
-  [ "$(vm_status)" = "Running" ] || die "memory: VM ${INSTANCE} is not running"
+  [ "$(vm_status)" = "Running" ] || die "memory: VM ${INSTANCE} is not running$(v2_hint)"
   # BSD date, as on macOS: today minus (days - 1), so --days 1 is today.
   cutoff="$(date -v-"$((days - 1))"d +%F)"
   rows="$(guest sh -c 'cat /var/log/homefield/memwatch-*.csv 2>/dev/null; true')" || exit 1
@@ -1306,7 +1328,7 @@ main() {
   local cmd="" rest=()
   while [ $# -gt 0 ]; do
     case "$1" in
-      --instance) INSTANCE="${2:?--instance needs a value}"; shift 2 ;;
+      --instance) INSTANCE="${2:?--instance needs a value}"; INSTANCE_EXPLICIT=1; shift 2 ;;
       *)
         if [ -z "$cmd" ]; then cmd="$1"; else rest+=("$1"); fi
         shift
