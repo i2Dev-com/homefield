@@ -173,13 +173,15 @@ cache_line_restore="$(grep -nxF "            ${os_key}-npm-" "$work/wf-cache/ci.
   emit_job test "$expr_acme" "$(guard_label acme-ci ci.yml:lint ci.yml:test)"
 } >"$work/wf-twoguards/ci.yml"
 # Guards with options: the routed jobs carry the expression for them.
-mkdir -p "$work/wf-push" "$work/wf-combo" "$work/wf-prt"
+expr_typo="$(python3 "$ROOT/routing-guard/routing_guard.py" --print-expression --fallback ubuntu-lates)"
+mkdir -p "$work/wf-push" "$work/wf-combo" "$work/wf-prt" "$work/wf-typo"
 { header; emit_job lint "$expr_push" "$(guard_opts ci.yml:lint 'events: push')"; } >"$work/wf-push/ci.yml"
 {
   header
   emit_job lint "$expr_combo" "$(guard_opts ci.yml:lint 'events: |' '  push' '  schedule' 'dependabot: local' 'fallback: ubuntu-24.04-arm')"
 } >"$work/wf-combo/ci.yml"
 { header; emit_job lint "$expr" "$(guard_opts ci.yml:lint 'events: pull_request_target')"; } >"$work/wf-prt/ci.yml"
+{ header; emit_job lint "$expr_typo" "$(guard_opts ci.yml:lint 'fallback: ubuntu-lates')"; } >"$work/wf-typo/ci.yml"
 
 # Fixtures for what makes a step a guard: the action it uses, and whether its
 # workflow runs on pull requests. wf_guard <dir> <on-line> <uses> writes a
@@ -475,6 +477,11 @@ record "all three options, in another order and separator: agree with a block-sc
   "$rc/$(has "$out" 'routing: ready')/$(called 'variable set CI_RUNNER --repo acme/app --body local')"
 adopt GH_WF="$work/wf-combo" --
 record "...without flags the guard's options are used" "0/1" "$rc/$(called 'variable set CI_RUNNER --repo acme/app --body local')"
+record "...and a standard fallback is not warned about" "yes/no" \
+  "$(has "$out" 'fallback image: ubuntu-24.04-arm is a standard')/$(has "$out" 'warning: fallback')"
+adopt GH_WF="$work/wf-typo" --
+record "a fallback GitHub does not list (ubuntu-lates): warned, not refused" "0/yes/1" \
+  "$rc/$(has "$out" 'warning: fallback ubuntu-lates is not one of')/$(called 'variable set CI_RUNNER --repo acme/app --body local')"
 adopt GH_WF="$work/wf-combo" -- --events 'push,schedule,workflow_dispatch'
 record "...a larger events set differs" "nonzero/yes" "$(nonzero "$rc")/$(has "$out" 'but --events is push,schedule,workflow_dispatch')"
 adopt GH_WF="$work/wf-combo" -- --dependabot hosted

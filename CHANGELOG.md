@@ -25,7 +25,9 @@ Compatible with v3: the v3 tag moves to include it.
     is not thrown away after the job.
   - `fallback` (default `ubuntu-latest`): the hosted image used when
     `CI_RUNNER` is not `local`. It must be a bare `ubuntu-*`, `windows-*` or
-    `macos-*` name, so a self-hosted label cannot replace it.
+    `macos-*` name, so a self-hosted label cannot replace it. `homefield
+    adopt` warns when it is not one of GitHub's standard hosted labels (a
+    typo, a larger runner, or an image newer than its list).
 
   The `CI_RUNNER` switch, the hosted fallback and hosted fork pull requests
   stay mandatory. `homefield adopt` reads the options from the guard step,

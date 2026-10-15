@@ -1194,6 +1194,26 @@ adopt_routing_check() {
   fi
 }
 
+# adopt_fallback <image>: a warning only. routing_guard.py accepts any
+# ubuntu-*, windows-* or macos-* name, so a typo such as ubuntu-lates passes
+# the guard, and the jobs then wait for a runner that does not exist whenever
+# CI_RUNNER is not local. This list is GitHub's standard hosted labels
+# (docs.github.com, "GitHub-hosted runners", 2026-10). A label it does not
+# know, a new image or a larger runner, only gets the warning.
+adopt_fallback() {
+  case "$1" in
+    ubuntu-slim | ubuntu-latest | ubuntu-2[246].04 | ubuntu-2[246].04-arm | \
+      windows-latest | windows-2022 | windows-2025 | windows-2025-vs2026 | \
+      windows-11-arm | windows-11-vs2026-arm | \
+      macos-latest | macos-1[45] | macos-26 | macos-1[45]-intel | macos-26-intel)
+      log "fallback image: $1 is a standard GitHub-hosted label"
+      ;;
+    *)
+      adopt_warn "fallback $1 is not one of GitHub's standard hosted labels that this version knows. If it is a typo, jobs wait for a runner that does not exist whenever CI_RUNNER is not local. Ignore this for a larger runner or an image newer than this list."
+      ;;
+  esac
+}
+
 # adopt_cache_keys <dir>: warnings only. See tools/adopt.py for what counts.
 adopt_cache_keys() {
   local dir="$1" hits
@@ -1315,6 +1335,7 @@ cmd_adopt() {
   adopt_fetch_workflows "$repo" "$ADOPT_BRANCH" "$ADOPT_TMP/workflows"
   adopt_routing_check "$ADOPT_TMP/workflows" "$label" "$label_given"
   adopt_cache_keys "$ADOPT_TMP/workflows"
+  adopt_fallback "$ADOPT_FALLBACK"
   adopt_group_access "$repo" "$group" "$dry"
   adopt_switch "$repo" "$ADOPT_LABEL" "$dry" "$switch" "$jobs"
 
