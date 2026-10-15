@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The guest's memory sampler (ci-runner-memwatch, embedded in provision.sh):
+# The guest's memory sampler (homefield-memwatch, embedded in provision.sh):
 # lint it as extracted, then run it against a fake /proc for a few seconds and
 # check the rows it writes.
 #
@@ -15,10 +15,10 @@ set -uo pipefail
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
-script="$work/ci-runner-memwatch"
+script="$work/homefield-memwatch"
 
 # Between the heredoc's opening line and its terminator.
-sed -n "/^cat > \/usr\/local\/sbin\/ci-runner-memwatch <<'EOF'\$/,/^EOF\$/p" "$ROOT/vm/provision.sh" |
+sed -n "/^cat > \/usr\/local\/sbin\/homefield-memwatch <<'EOF'\$/,/^EOF\$/p" "$ROOT/vm/provision.sh" |
   sed '1d;$d' >"$script"
 record "extracted the sampler" "yes" "$([ -s "$script" ] && echo yes || echo no)"
 

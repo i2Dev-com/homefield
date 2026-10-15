@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# `bin/ci-runner report`: classification (local, hosted, skipped, cancelled
+# `bin/homefield report`: classification (local, hosted, skipped, cancelled
 # before starting, running now), queue-wait percentiles, minutes with the OS
 # multiplier, matrix jobs kept as separate rows, and PR counts, all from a
 # fixture instead of the GitHub API.
@@ -17,7 +17,7 @@ cat >"$work/fixture.json" <<'JSON'
  {"id": 1, "path": ".github/workflows/ci.yml", "event": "pull_request", "branch": "feat/a", "jobs": [
   {"id": 11, "name": "checks", "status": "completed", "conclusion": "success", "created_at": "2026-10-01T10:00:00Z",
    "started_at": "2026-10-01T10:00:30Z", "completed_at": "2026-10-01T10:02:10Z",
-   "runner_name": "lima", "labels": ["self-hosted", "linux", "arm64", "local-ci"]},
+   "runner_name": "lima", "labels": ["self-hosted", "linux", "arm64", "homefield-ci"]},
   {"id": 12, "name": "lint (node 22)", "status": "completed", "conclusion": "success", "created_at": "2026-10-01T10:00:00Z",
    "started_at": "2026-10-01T10:00:03Z", "completed_at": "2026-10-01T10:01:04Z",
    "runner_name": "GitHub Actions 5", "labels": ["ubuntu-latest"]},
@@ -29,21 +29,21 @@ cat >"$work/fixture.json" <<'JSON'
    "runner_name": null, "labels": ["ubuntu-latest"]},
   {"id": 16, "name": "cancelme", "status": "completed", "conclusion": "cancelled", "created_at": "2026-10-01T10:00:00Z",
    "started_at": "2026-10-01T10:00:10Z", "completed_at": "2026-10-01T10:00:40Z",
-   "runner_name": "lima", "labels": ["self-hosted", "linux", "arm64", "local-ci"]},
+   "runner_name": "lima", "labels": ["self-hosted", "linux", "arm64", "homefield-ci"]},
   {"id": 17, "name": "skipme", "status": "completed", "conclusion": "skipped", "created_at": "2026-10-01T10:00:00Z",
    "started_at": null, "completed_at": null,
-   "runner_name": null, "labels": ["self-hosted", "linux", "arm64", "local-ci"]},
+   "runner_name": null, "labels": ["self-hosted", "linux", "arm64", "homefield-ci"]},
   {"id": 18, "name": "running", "status": "in_progress", "conclusion": null, "created_at": "2026-10-01T10:00:00Z",
    "started_at": "2026-10-01T10:00:05Z", "completed_at": null,
-   "runner_name": "lima", "labels": ["self-hosted", "linux", "arm64", "local-ci"]},
+   "runner_name": "lima", "labels": ["self-hosted", "linux", "arm64", "homefield-ci"]},
   {"id": 15, "name": "stuck", "status": "completed", "conclusion": "cancelled", "created_at": "2026-10-01T10:00:00Z",
    "started_at": null, "completed_at": null,
-   "runner_name": null, "labels": ["self-hosted", "linux", "arm64", "local-ci"]}
+   "runner_name": null, "labels": ["self-hosted", "linux", "arm64", "homefield-ci"]}
  ]},
  {"id": 2, "path": ".github/workflows/ci.yml", "event": "pull_request", "branch": "feat/b", "jobs": [
   {"id": 21, "name": "checks", "status": "completed", "conclusion": "failure", "created_at": "2026-10-01T10:05:00Z",
    "started_at": "2026-10-01T10:11:00Z", "completed_at": "2026-10-01T10:11:50Z",
-   "runner_name": "lima", "labels": ["self-hosted", "linux", "arm64", "local-ci"]}
+   "runner_name": "lima", "labels": ["self-hosted", "linux", "arm64", "homefield-ci"]}
  ]},
  {"id": 3, "path": ".github/workflows/other.yml", "event": "push", "branch": "main", "jobs": [
   {"id": 31, "name": "mac", "status": "completed", "conclusion": "success", "created_at": "2026-10-02T09:00:00Z",
@@ -54,7 +54,7 @@ cat >"$work/fixture.json" <<'JSON'
 JSON
 
 report() {
-  CI_RUNNER_REPORT_FIXTURE="$work/fixture.json" python3 "$ROOT/tools/report.py" \
+  HOMEFIELD_REPORT_FIXTURE="$work/fixture.json" python3 "$ROOT/tools/report.py" \
     --repo acme/app --since 2026-10-01 --until 2026-10-02 "$@"
 }
 # field <jobs|totals> <repo-workflow-job or repo-where> <key>
@@ -103,7 +103,7 @@ out="$(python3 "$ROOT/tools/report.py" --repo nope 2>&1)"
 record "a malformed --repo is refused" "yes" "$(echo "$out" | grep -q 'must be <owner>/<repo>' && echo yes || echo no)"
 out="$(python3 "$ROOT/tools/report.py" --repo a/b --since 2026-10-05 --until 2026-10-01 2>&1)"
 record "since after until is refused" "yes" "$(echo "$out" | grep -q 'is after' && echo yes || echo no)"
-out="$(CI_RUNNER_REPORT_FIXTURE="$work/fixture.json" python3 "$ROOT/tools/report.py" \
+out="$(HOMEFIELD_REPORT_FIXTURE="$work/fixture.json" python3 "$ROOT/tools/report.py" \
   --repo acme/other --since 2026-10-01 --until 2026-10-02 2>&1)"
 record "a fixture without the repository is refused, not a traceback" \
   "yes" "$(echo "$out" | grep -q 'has no entry for acme/other' && echo yes || echo no)"

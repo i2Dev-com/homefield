@@ -1,4 +1,4 @@
-# ci-runner
+# HomeField
 
 Run selected pull-request jobs from GitHub Actions on a self-hosted runner in
 an isolated VM on your Mac, instead of on GitHub-hosted runners. GitHub stays
@@ -13,7 +13,7 @@ It has three parts:
   credentials. It does have network access, including to the Mac's own
   services ([Security model](#security-model)).
 - **A one-command setup** ([`install.sh`](install.sh), then
-  [`bin/ci-runner`](bin/ci-runner)): install, upgrade, status, uninstall.
+  [`bin/homefield`](bin/homefield)): install, upgrade, status, uninstall.
 - **A routing guard** ([`verify-routing`](verify-routing/action.yml)): a
   GitHub Action that fails CI unless every job that can reach the runner uses
   the one reviewed `runs-on` expression, with its safety guards, and the set of
@@ -25,22 +25,22 @@ On an Apple Silicon Mac, in a terminal. While this repository is private, the
 installer is read with `gh`, logged in with access to it:
 
 ```bash
-gh api 'repos/i2Dev-com/ci-runner/contents/install.sh?ref=v2' -H 'Accept: application/vnd.github.raw' | bash
+gh api 'repos/i2Dev-com/homefield/contents/install.sh?ref=v3' -H 'Accept: application/vnd.github.raw' | bash
 ```
 
 Once the repository is public, `curl` does the same without `gh`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/i2Dev-com/ci-runner/v2/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/i2Dev-com/homefield/v3/install.sh | bash
 ```
 
 This installs or upgrades [Lima](https://lima-vm.io) with Homebrew if it is missing or older than 1.1 (it
-asks first), puts the tool in `~/.local/share/ci-runner` with a `ci-runner`
-command on your PATH, and then runs `ci-runner install`. That asks for your
+asks first), puts the tool in `~/.local/share/homefield` with a `homefield`
+command on your PATH, and then runs `homefield install`. That asks for your
 organization or repository URL, creates the VM, checks its isolation,
-provisions it, creates the `local-ci` runner group for an organization (selected
+provisions it, creates the `homefield-ci` runner group for an organization (selected
 repositories only, no public ones), registers the runner with the routing label
-`local-ci` and waits until GitHub shows it online. To give the URL up front,
+`homefield-ci` and waits until GitHub shows it online. To give the URL up front,
 or any other option, append it:
 
 ```bash
@@ -48,10 +48,10 @@ or any other option, append it:
 ```
 
 From a checkout of this repository, with Lima ≥ 1.1 installed, run
-`bin/ci-runner install --url https://github.com/<org>` instead. Running the
+`bin/homefield install --url https://github.com/<org>` instead. Running the
 one-liner again replaces the installed tool with the current one and leaves
-an existing VM alone; `ci-runner upgrade` updates the VM. `ci-runner version`
-shows which copy you have, and `ci-runner status` the runner.
+an existing VM alone; `homefield upgrade` updates the VM. `homefield version`
+shows which copy you have, and `homefield status` the runner.
 
 Registration needs a one-hour token, and the group needs the `admin:org`
 scope: `gh` fetches the token if you are an org owner or a repository admin
@@ -64,14 +64,14 @@ Then route jobs from a repository by following
 [`docs/adopting.md`](docs/adopting.md), and once that is merged:
 
 ```bash
-ci-runner adopt --repo <owner>/<repo>    # hosted again: ci-runner route hosted --repo <owner>/<repo>
+homefield adopt --repo <owner>/<repo>    # hosted again: homefield route hosted --repo <owner>/<repo>
 ```
 
 `adopt` checks that the repository's routing and guard are in place, and only
 then adds it to the runner group and switches it to the local runner. It
 refuses a public repository. `--dry-run` shows what it would do.
 
-`ci-runner help` lists the options (`--label`, `--packages`, `--cpus`,
+`homefield help` lists the options (`--label`, `--packages`, `--cpus`,
 ...). [`docs/runbook.md`](docs/runbook.md) covers operating it.
 
 ## Requirements and limitations
@@ -87,11 +87,11 @@ refuses a public repository. `--dry-run` shows what it would do.
   every repository that can reach the runner private, with the runner group
   refusing public ones. See [Security model](#security-model).
 - **One job at a time**, across every repository using the runner. Others
-  queue. (Running several is tracked in [#14](https://github.com/i2Dev-com/ci-runner/issues/14).)
+  queue. (Running several is tracked in [#14](https://github.com/i2Dev-com/homefield/issues/14).)
 - **Only while the Mac is up.** Routed jobs wait while the Mac sleeps or the
   VM is stopped, and GitHub fails them after 24 hours. Pushes to the default
   branch always run hosted, so merging and deploying never wait on the Mac.
-  To route around a sleeping runner, `bin/ci-runner route hosted --repo
+  To route around a sleeping runner, `bin/homefield route hosted --repo
   <owner>/<repo>` switches the repository to hosted and re-runs whatever was
   already waiting for the local runner
   ([runbook: Switching](docs/runbook.md#switching-per-repository)).
@@ -100,7 +100,7 @@ refuses a public repository. `--dry-run` shows what it would do.
   Team plan or Enterprise. On the Free plan there is only the Default group,
   which every repository in the organization can use, so only register there
   if you trust all of them, and pass `--group Default` (the default,
-  `local-ci`, cannot be created there, so `install` stops and says so). A **personal account** cannot have an
+  `homefield-ci`, cannot be created there, so `install` stops and says so). A **personal account** cannot have an
   account-wide runner: register per repository (`--url
   https://github.com/<you>/<repo>`), one VM per repository.
 - **Less software than `ubuntu-latest`.** The VM starts small. Add what your
@@ -111,7 +111,7 @@ refuses a public repository. `--dry-run` shows what it would do.
 
 The VM is the boundary. Jobs run pull-request code, so the Mac's files and
 credentials are not reachable from inside: no mounts (`mounts: []` plus
-`--mount-none`, and `bin/ci-runner` refuses to continue if it finds any), no
+`--mount-none`, and `bin/homefield` refuses to continue if it finds any), no
 SSH-agent forwarding and no host SSH keys. Services started by a job are not
 forwarded to the Mac's `localhost`. Inside the guest, jobs are
 root-equivalent (the `docker` group), which is why the VM and not a user
@@ -120,7 +120,7 @@ account is the boundary.
 **The network is not isolated.** Jobs can reach the internet, your LAN, and,
 through `host.lima.internal`, **every service listening on the Mac, including
 ones bound only to `127.0.0.1`** (local databases, development servers, local
-AI or tool APIs). Until that is closed ([#18](https://github.com/i2Dev-com/ci-runner/issues/18)), don't run anything on the
+AI or tool APIs). Until that is closed ([#18](https://github.com/i2Dev-com/homefield/issues/18)), don't run anything on the
 Mac hosting the runner that the repositories using it shouldn't be able to
 reach.
 
@@ -141,7 +141,7 @@ minute on every run. So each routed job carries the routing expression
 inline:
 
 ```yaml
-runs-on: ${{ vars.CI_RUNNER == 'local' && github.event_name == 'pull_request' && github.actor != 'dependabot[bot]' && !startsWith(github.head_ref, 'dependabot/') && github.event.pull_request.head.repo.full_name == github.repository && fromJSON('["self-hosted","linux","arm64","local-ci"]') || 'ubuntu-latest' }}
+runs-on: ${{ vars.CI_RUNNER == 'local' && github.event_name == 'pull_request' && github.actor != 'dependabot[bot]' && !startsWith(github.head_ref, 'dependabot/') && github.event.pull_request.head.repo.full_name == github.repository && fromJSON('["self-hosted","linux","arm64","homefield-ci"]') || 'ubuntu-latest' }}
 ```
 
 It sends the job to the local runner only when the repository variable
@@ -150,7 +150,7 @@ Dependabot and the branch is not from a fork; otherwise to `ubuntu-latest`.
 `verify-routing` keeps every copy identical and every guard in place:
 
 ```yaml
-      - uses: i2Dev-com/ci-runner/verify-routing@v2
+      - uses: i2Dev-com/homefield/verify-routing@v3
         with:
           expected: |
             ci.yml:lint
@@ -197,12 +197,12 @@ pull-request code away from the Mac it runs on.
 
 | Path | What it is |
 |---|---|
-| [`install.sh`](install.sh) | The one-line installer: downloads the tool, puts `ci-runner` on the PATH, installs Lima, runs `ci-runner install` |
-| [`bin/ci-runner`](bin/ci-runner) | Install, upgrade, inspect and remove the runner on this Mac; adopt and switch repositories |
+| [`install.sh`](install.sh) | The one-line installer: downloads the tool, puts `homefield` on the PATH, installs Lima, runs `homefield install` |
+| [`bin/homefield`](bin/homefield) | Install, upgrade, inspect and remove the runner on this Mac; adopt and switch repositories |
 | [`vm/lima.yaml`](vm/lima.yaml) | The VM: Ubuntu 24.04 arm64, no host mounts, no forwarding of guest ports to the Mac, no SSH-agent forwarding |
-| [`vm/provision.sh`](vm/provision.sh) | Runs inside the VM: packages, Docker, the checksum-pinned runner, cleanup and idle-time OS update timers, registration. Settings: `RUNNER_URL`, `RUNNER_LABEL`, `RUNNER_NAME`, `RUNNER_GROUP`, `RUNNER_EXTRA_PACKAGES`; hooks in `/etc/ci-runner/provision.d/` |
+| [`vm/provision.sh`](vm/provision.sh) | Runs inside the VM: packages, Docker, the checksum-pinned runner, cleanup and idle-time OS update timers, registration. Settings: `RUNNER_URL`, `RUNNER_LABEL`, `RUNNER_NAME`, `RUNNER_GROUP`, `RUNNER_EXTRA_PACKAGES`; hooks in `/etc/homefield/provision.d/` |
 | [`verify-routing/`](verify-routing/action.yml) | The routing guard action |
-| [`tools/`](tools) | Python helpers behind `ci-runner report` and `ci-runner adopt` |
+| [`tools/`](tools) | Python helpers behind `homefield report` and `homefield adopt` |
 | [`docs/adopting.md`](docs/adopting.md) | Checklist for routing a repository's jobs to the runner |
 | [`docs/runbook.md`](docs/runbook.md) | Operating it: setup, runner group, switching, failure modes, maintenance, moving, removal |
 
@@ -214,12 +214,12 @@ bash tests/label-rule.sh           # provision.sh and verify-routing accept the 
 bash tests/extra-packages.sh       # RUNNER_EXTRA_PACKAGES accepts package names only
 bash tests/runner-url.sh           # RUNNER_URL accepts github.com orgs and repos only
 bash tests/memwatch.sh             # the guest's memory sampler (needs bash >= 4.2 and GNU timeout to run)
-bash tests/memory-summary.sh       # `bin/ci-runner memory` per-day summary
-bash tests/report.sh               # `bin/ci-runner report` against a fixture
+bash tests/memory-summary.sh       # `bin/homefield memory` per-day summary
+bash tests/report.sh               # `bin/homefield report` against a fixture
 bash tests/install-sh.sh           # install.sh, with stub gh, curl, brew and Lima
 bash tests/runner-group.sh         # runner group, wait for online, `version`, install's check order
-bash tests/adopt.sh                # `bin/ci-runner adopt` and tools/adopt.py, with a stub gh
-shellcheck bin/ci-runner install.sh vm/provision.sh verify-routing/tests/run.sh tests/*.sh
+bash tests/adopt.sh                # `bin/homefield adopt` and tools/adopt.py, with a stub gh
+shellcheck bin/homefield install.sh vm/provision.sh verify-routing/tests/run.sh tests/*.sh
 ```
 
 ## Versioning

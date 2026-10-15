@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# `bin/ci-runner adopt` and its helpers: the repository checks, the runner
+# `bin/homefield adopt` and its helpers: the repository checks, the runner
 # group access, the routing check on downloaded workflows, the cache-key
-# warnings and the switch. bin/ci-runner is sourced (CI_RUNNER_SOURCE_ONLY=1)
+# warnings and the switch. bin/homefield is sourced (HOMEFIELD_SOURCE_ONLY=1)
 # with a stub gh that records its calls and answers from files, including a
 # fixture .github/workflows served through the contents API. Nothing reaches
 # GitHub or a VM, and no write is ever real.
@@ -70,10 +70,10 @@ ln -s "$(command -v python3)" "$stubs/python3"
 cp "$work/gh" "$stubs/gh"
 
 # The group rows are name, visibility, public allowed, id.
-printf 'Default\tall\tfalse\t1\nlocal-ci\tselected\tfalse\t42\n' >"$work/groups-selected"
-printf 'Default\tall\tfalse\t1\nLocal-CI\tselected\tfalse\t42\n' >"$work/groups-case"
-printf 'Default\tall\tfalse\t1\nlocal-ci\tall\tfalse\t42\n' >"$work/groups-all"
-printf 'Default\tall\tfalse\t1\nlocal-ci\tprivate\tfalse\t42\n' >"$work/groups-private"
+printf 'Default\tall\tfalse\t1\nhomefield-ci\tselected\tfalse\t42\n' >"$work/groups-selected"
+printf 'Default\tall\tfalse\t1\nHomeField-CI\tselected\tfalse\t42\n' >"$work/groups-case"
+printf 'Default\tall\tfalse\t1\nhomefield-ci\tall\tfalse\t42\n' >"$work/groups-all"
+printf 'Default\tall\tfalse\t1\nhomefield-ci\tprivate\tfalse\t42\n' >"$work/groups-private"
 printf 'Default\tall\tfalse\t1\n' >"$work/groups-none"
 printf '100\n200\n' >"$work/members-other"
 printf '100\n555\n200\n' >"$work/members-with"
@@ -92,7 +92,7 @@ emit_job() {
 }
 header() { printf 'name: CI\non: [pull_request]\njobs:\n'; }
 # guard <expected block lines> or guard_label <label> <block lines>
-guard() { guard_uses i2Dev-com/ci-runner/verify-routing@v2 "$@"; }
+guard() { guard_uses i2Dev-com/homefield/verify-routing@v3 "$@"; }
 guard_uses() {
   local uses="$1" e
   shift
@@ -132,7 +132,7 @@ mkdir -p "$work/wf-ready/subdir"
 } >"$work/wf-mismatch/ci.yml"
 {
   header
-  emit_job lint ubuntu-latest "$(printf '      - name: Verify local-runner routing\n        uses: i2Dev-com/ci-runner/verify-routing@v2\n        with:\n          expected: '"''"'')"
+  emit_job lint ubuntu-latest "$(printf '      - name: Verify local-runner routing\n        uses: i2Dev-com/homefield/verify-routing@v3\n        with:\n          expected: '"''"'')"
 } >"$work/wf-norouted/ci.yml"
 {
   header
@@ -170,16 +170,18 @@ wf_guard() {
     emit_job lint "$expr" "$(guard_uses "$3" ci.yml:lint)"
   } >"$work/$1/ci.yml"
 }
-action="i2Dev-com/ci-runner/verify-routing@v2"
+action="i2Dev-com/homefield/verify-routing@v3"
 sha40="0123456789abcdef0123456789abcdef01234567"
-wf_guard wf-src-other 'on: [pull_request]' other-org/ci-runner/verify-routing@v2
-wf_guard wf-src-v1 'on: [pull_request]' i2Dev-com/ci-runner/verify-routing@v1
-wf_guard wf-src-main 'on: [pull_request]' i2Dev-com/ci-runner/verify-routing@main
-wf_guard wf-src-short 'on: [pull_request]' i2Dev-com/ci-runner/verify-routing@${sha40%?}
-wf_guard wf-src-sha 'on: [pull_request]' "i2Dev-com/ci-runner/verify-routing@${sha40}"
+wf_guard wf-src-other 'on: [pull_request]' other-org/homefield/verify-routing@v3
+wf_guard wf-src-v1 'on: [pull_request]' i2Dev-com/homefield/verify-routing@v1
+wf_guard wf-src-main 'on: [pull_request]' i2Dev-com/homefield/verify-routing@main
+wf_guard wf-src-short 'on: [pull_request]' i2Dev-com/homefield/verify-routing@${sha40%?}
+wf_guard wf-src-sha 'on: [pull_request]' "i2Dev-com/homefield/verify-routing@${sha40}"
 wf_guard wf-src-quoted 'on: [pull_request]' "'${action}'"
 wf_guard wf-src-dquoted 'on: [pull_request]' "\"${action}\""
-wf_guard wf-src-case 'on: [pull_request]' I2DEV-COM/CI-Runner/verify-routing@v2
+wf_guard wf-src-case 'on: [pull_request]' I2DEV-COM/HomeField/verify-routing@v3
+wf_guard wf-src-oldpath 'on: [pull_request]' i2Dev-com/ci-runner/verify-routing@v3
+wf_guard wf-src-oldpath-v2 'on: [pull_request]' i2Dev-com/ci-runner/verify-routing@v2
 wf_guard wf-on-push 'on: [push]' "$action"
 wf_guard wf-on-prt 'on: pull_request_target' "$action"
 wf_guard wf-on-list 'on: [push, pull_request]' "$action"
@@ -282,8 +284,8 @@ run_fn() {
   shift
   : >"$calls"
   # shellcheck disable=SC2016  # the -c script is expanded by the inner bash
-  out="$(env -i HOME="$work" PATH="$stubs" TMPDIR="$work/tmp" CALLS="$calls" CI_RUNNER_SOURCE_ONLY=1 "${envs[@]+"${envs[@]}"}" \
-    "$BASH" -c '. "$1"; shift; "$@"' _ "$ROOT/bin/ci-runner" "$@" 2>&1 </dev/null)"
+  out="$(env -i HOME="$work" PATH="$stubs" TMPDIR="$work/tmp" CALLS="$calls" HOMEFIELD_SOURCE_ONLY=1 "${envs[@]+"${envs[@]}"}" \
+    "$BASH" -c '. "$1"; shift; "$@"' _ "$ROOT/bin/homefield" "$@" 2>&1 </dev/null)"
   rc=$?
 }
 called() { grep -c -e "$1" "$calls" || true; }
@@ -349,24 +351,24 @@ record "the repository is read once" "1" "$(called '^gh api repos/acme/app ')"
 # ── Runner group ───────────────────────────────────────────────────────────
 echo "runner group"
 adopt --
-record "selected group, not a member: added" "0/yes" "$rc/$(has "$out" 'added acme/app to local-ci')"
+record "selected group, not a member: added" "0/yes" "$rc/$(has "$out" 'added acme/app to homefield-ci')"
 record "...by a PUT to the group's repository path, once" "1" "$(called "gh api -X PUT $put_path")"
 record "...after reading the members, paginated" "1" "$(called '--paginate orgs/acme/actions/runner-groups/42/repositories?per_page=100')"
 
 adopt GH_MEMBERS="$work/members-with" --
-record "already a member: no PUT" "0/yes/0" "$rc/$(has "$out" 'already has access to local-ci')/$(called 'X PUT')"
+record "already a member: no PUT" "0/yes/0" "$rc/$(has "$out" 'already has access to homefield-ci')/$(called 'X PUT')"
 adopt GH_MEMBERS="$work/members-empty" --
 record "no members at all: added" "1" "$(called 'X PUT')"
 adopt GH_GROUPS="$work/groups-case" --
-record "the group name is found in any case" "1/yes" "$(called 'X PUT')/$(has "$out" 'added acme/app to Local-CI')"
+record "the group name is found in any case" "1/yes" "$(called 'X PUT')/$(has "$out" 'added acme/app to HomeField-CI')"
 adopt GH_GROUPS="$work/groups-all" --
 record "a group open to all repositories: a warning, no PUT, no members read" "0/yes/yes/0/0" \
-  "$rc/$(has "$out" 'warning: runner group local-ci is open to all')/$(has "$out" 'already has access and nothing was added')/$(called 'X PUT')/$(called 'repositories?')"
+  "$rc/$(has "$out" 'warning: runner group homefield-ci is open to all')/$(has "$out" 'already has access and nothing was added')/$(called 'X PUT')/$(called 'repositories?')"
 adopt GH_GROUPS="$work/groups-private" --
 record "a group open to private repositories: the same" "0/yes/0" "$rc/$(has "$out" 'open to private repositories')/$(called 'X PUT')"
 adopt GH_GROUPS="$work/groups-none" --
 record "no such group: a note that nothing was done, and it goes on" "0/yes/0/yes" \
-  "$rc/$(has "$out" 'has no group local-ci')/$(called 'X PUT')/$(has "$out" 'routing: ready')"
+  "$rc/$(has "$out" 'has no group homefield-ci')/$(called 'X PUT')/$(has "$out" 'routing: ready')"
 adopt -- --group Default
 record "the Default group: skipped, no group call" "0/yes/0" "$rc/$(has "$out" 'runner group: skipped, the Default group')/$(called 'runner-groups')"
 adopt -- --group default
@@ -379,7 +381,7 @@ record "groups cannot be listed: a warning, no PUT, and it goes on" "0/yes/yes/0
 adopt GH_MEMBERS_FAIL=1 --
 record "members cannot be read: a warning, no PUT" "0/yes/0" "$rc/$(has "$out" 'could not read the repositories of runner group')/$(called 'X PUT')"
 adopt GH_PUT_FAIL=1 --
-record "the PUT fails: an error naming the manual step" "nonzero/yes" "$(nonzero "$rc")/$(has "$out" 'could not add acme/app to runner group local-ci; add it by hand')"
+record "the PUT fails: an error naming the manual step" "nonzero/yes" "$(nonzero "$rc")/$(has "$out" 'could not add acme/app to runner group homefield-ci; add it by hand')"
 adopt -- --group other-group
 record "--group picks the group" "0/yes" "$rc/$(has "$out" 'has no group other-group')"
 
@@ -402,9 +404,9 @@ record "no guard step: not ready, nothing switched, exit 1" "nonzero/yes/yes/0" 
   "$(nonzero "$rc")/$(has "$out" 'routing: not ready')/$(has "$out" 'no verify-routing step in .github/workflows')/$(called 'variable set')"
 record "...the canonical expression is printed" "yes" "$(has "$out" "runs-on: $expr")"
 record "...and the guard step, with the jobs that are routed" "yes/yes/yes" \
-  "$(has "$out" 'uses: i2Dev-com/ci-runner/verify-routing@v2')/$(has "$out" '            ci.yml:lint')/$(has "$out" '            ci.yml:test')"
-record "...the default label is not written into the guard" "no" "$(has "$out" 'label: local-ci')"
-record "...and the last line says to merge first" "yes" "$(has "$out" 'not switched: merge the routing first, then run ci-runner adopt again')"
+  "$(has "$out" 'uses: i2Dev-com/homefield/verify-routing@v3')/$(has "$out" '            ci.yml:lint')/$(has "$out" '            ci.yml:test')"
+record "...the default label is not written into the guard" "no" "$(has "$out" 'label: homefield-ci')"
+record "...and the last line says to merge first" "yes" "$(has "$out" 'not switched: merge the routing first, then run homefield adopt again')"
 
 adopt GH_WF="$work/wf-mismatch" --
 record "a guard that differs from the routed jobs: not ready" "nonzero/yes/yes/0" \
@@ -423,10 +425,10 @@ record "--jobs fills the snippet's expected list" "yes/yes/no" "$(has "$out" '  
 adopt GH_WF="$work/wf-label" --
 record "a guard with another label: that label is used" "0/yes/yes/1" \
   "$rc/$(has "$out" 'routing: ready')/$(has "$out" 'these jobs are routed: ci.yml:lint')/$(called 'variable set CI_RUNNER --repo acme/app --body local')"
-adopt GH_WF="$work/wf-label" -- --label local-ci
+adopt GH_WF="$work/wf-label" -- --label homefield-ci
 record "...unless --label says otherwise: not ready, and only that label's jobs count" \
   "nonzero/yes/yes/0" \
-  "$(nonzero "$rc")/$(has "$out" 'uses label acme-ci, but --label is local-ci')/$(has "$out" 'no job uses the routing expression for label local-ci')/$(called 'variable set')"
+  "$(nonzero "$rc")/$(has "$out" 'uses label acme-ci, but --label is homefield-ci')/$(has "$out" 'no job uses the routing expression for label homefield-ci')/$(called 'variable set')"
 adopt GH_WF="$work/wf-label" -- --label acme-ci
 record "...--label that agrees is fine" "0/1" "$rc/$(called 'variable set CI_RUNNER --repo acme/app --body local')"
 adopt GH_WF="$work/wf-noguard" -- --label acme-ci
@@ -455,7 +457,7 @@ adopt GH_WF="$work/wf-noguard" -- --dry-run
 record "...the same in a dry run" "nonzero/0/yes" "$(nonzero "$rc")/$(called 'X PUT')/$(has "$out" 'runner group: not added')"
 adopt GH_WF="$work/wf-noguard" GH_MEMBERS="$work/members-with" --
 record "routing not ready but already a member: a warning that it can reach the runner" "nonzero/0/yes/yes" \
-  "$(nonzero "$rc")/$(called 'X PUT')/$(has "$out" 'warning: acme/app is already in runner group local-ci')/$(has "$out" 'although its routing is not ready')"
+  "$(nonzero "$rc")/$(called 'X PUT')/$(has "$out" 'warning: acme/app is already in runner group homefield-ci')/$(has "$out" 'although its routing is not ready')"
 adopt GH_WF="$work/wf-noguard" GH_LIST_FAIL=1 --
 record "routing not ready and groups not readable: a warning that does not send you to add it" "nonzero/0/yes/no" \
   "$(nonzero "$rc")/$(called 'X PUT')/$(has "$out" 'could not check runner group access')/$(has "$out" 'by hand')"
@@ -485,16 +487,18 @@ route_case() {
 }
 may_not_run='the verify-routing guard may not run on every pull request'
 recognizes="adopt recognizes $action"
-route_case "another repository's verify-routing: not a guard, and says what it uses" wf-src-other not "ci.yml:9 uses other-org/ci-runner/verify-routing@v2, but $recognizes"
-route_case "@v1: not a guard" wf-src-v1 not "uses i2Dev-com/ci-runner/verify-routing@v1, but $recognizes"
-route_case "@main: not a guard" wf-src-main not "uses i2Dev-com/ci-runner/verify-routing@main, but $recognizes"
+route_case "another repository's verify-routing: not a guard, and says what it uses" wf-src-other not "ci.yml:9 uses other-org/homefield/verify-routing@v3, but $recognizes"
+route_case "@v1: not a guard" wf-src-v1 not "uses i2Dev-com/homefield/verify-routing@v1, but $recognizes"
+route_case "@main: not a guard" wf-src-main not "uses i2Dev-com/homefield/verify-routing@main, but $recognizes"
 route_case "...and nothing else is said to be usable" wf-src-main not "no verify-routing step that runs on pull requests"
 route_case "a 39-character ref is not a commit: not a guard" wf-src-short not "but $recognizes"
-route_case "a full commit SHA: ready, with a warning naming the line" wf-src-sha ready "ci.yml:9: pinned to a commit (adopt checks it with v2's rules)"
+route_case "a full commit SHA: ready, with a warning naming the line" wf-src-sha ready "ci.yml:9: pinned to a commit (adopt checks it with v3's rules)"
 route_case "a single-quoted uses: a guard" wf-src-quoted ready "!$recognizes"
 route_case "a double-quoted uses: a guard" wf-src-dquoted ready "!$recognizes"
 route_case "the owner and repository are compared without case" wf-src-case ready "!$recognizes"
 route_case "...with no warning about the guard" wf-src-case ready "!$may_not_run"
+route_case "the former ci-runner path (GitHub redirects it) is a guard too" wf-src-oldpath ready "!$recognizes"
+route_case "...but only at the current version" wf-src-oldpath-v2 not "uses i2Dev-com/ci-runner/verify-routing@v2, but $recognizes"
 
 route_case "a push-only workflow: the guard does not run on pull requests" wf-on-push not "ci.yml:9 does not run on pull requests: ci.yml does not run on pull_request"
 route_case "...so there is no guard" wf-on-push not "no verify-routing step that runs on pull requests"
@@ -556,7 +560,7 @@ record "not ready but already local: a warning about that, still exit 1" "nonzer
 echo "dry run"
 adopt GH_CI_RUNNER=hosted -- --dry-run
 record "ready, member missing, not local: reports both, writes nothing" "0/yes/yes/0/0" \
-  "$rc/$(has "$out" 'would add acme/app to local-ci (dry run)')/$(has "$out" 'CI_RUNNER hosted -> local (dry run)')/$(called 'X PUT')/$(called 'variable set')"
+  "$rc/$(has "$out" 'would add acme/app to homefield-ci (dry run)')/$(has "$out" 'CI_RUNNER hosted -> local (dry run)')/$(called 'X PUT')/$(called 'variable set')"
 adopt GH_WF="$work/wf-noguard" -- --dry-run
 record "not ready: reports, exit 1, writes nothing" "nonzero/yes/0/0" "$(nonzero "$rc")/$(has "$out" 'routing: not ready')/$(called 'X PUT')/$(called 'variable set')"
 adopt GH_CI_RUNNER=local -- --dry-run
@@ -584,8 +588,8 @@ on: pull_request
 jobs:
   one:
     steps:
-      # - uses: x/ci-runner/verify-routing@v2   (commented out)
-      - uses: i2Dev-com/ci-runner/verify-routing@v2
+      # - uses: x/homefield/verify-routing@v3   (commented out)
+      - uses: i2Dev-com/homefield/verify-routing@v3
         with:
           expected: a.yml:one a.yml:two
   two:
@@ -594,14 +598,14 @@ jobs:
         with:
           label: "acme-ci"
           expected: "a.yml:one, a.yml:two"
-        uses: 'i2Dev-com/ci-runner/verify-routing@v2'
+        uses: 'i2Dev-com/homefield/verify-routing@v3'
       - uses: actions/checkout@v5
         with:
           expected: not-a-guard
   three:
     steps:
       - name: Guard, comments in and after the block
-        uses: i2Dev-com/ci-runner/verify-routing@v2 # pinned
+        uses: i2Dev-com/homefield/verify-routing@v3 # pinned
         with:
           expected: |-
             a.yml:one
@@ -609,17 +613,17 @@ jobs:
           # a comment at the key's depth ends the scalar
       - run: echo done
 EOF
-printf 'on: [push, pull_request]\r\njobs:\r\n  j:\r\n    steps:\r\n      - uses: i2dev-com/ci-runner/verify-routing@v2\r\n        with:\r\n          expected: |\r\n            b.yml:j\r\n' >"$shapes/b.yaml"
-printf 'jobs:\n  j:\n    steps:\n      - uses: o/r/verify-routing@v2\n' >"$shapes/c.yml"
+printf 'on: [push, pull_request]\r\njobs:\r\n  j:\r\n    steps:\r\n      - uses: i2dev-com/homefield/verify-routing@v3\r\n        with:\r\n          expected: |\r\n            b.yml:j\r\n' >"$shapes/b.yaml"
+printf 'jobs:\n  j:\n    steps:\n      - uses: o/r/verify-routing@v3\n' >"$shapes/c.yml"
 echo "not a workflow" >"$shapes/d.txt"
 got="$(python3 -I "$ROOT/tools/adopt.py" guards "$shapes")"
-want="$(printf 'a.yml:6\tok\tlocal-ci\t-\t-\ta.yml:one a.yml:two\na.yml:15\tok\tacme-ci\t-\t-\ta.yml:one a.yml:two\na.yml:22\tok\tlocal-ci\t-\t-\ta.yml:one\nb.yaml:5\tok\tlocal-ci\t-\t-\tb.yml:j\nc.yml:4\tsource\tlocal-ci\tthe verify-routing step at c.yml:4 uses o/r/verify-routing@v2, but adopt recognizes i2Dev-com/ci-runner/verify-routing@v2 (docs/adopting.md, step 3)\t-\t')"
+want="$(printf 'a.yml:6\tok\thomefield-ci\t-\t-\ta.yml:one a.yml:two\na.yml:15\tok\tacme-ci\t-\t-\ta.yml:one a.yml:two\na.yml:22\tok\thomefield-ci\t-\t-\ta.yml:one\nb.yaml:5\tok\thomefield-ci\t-\t-\tb.yml:j\nc.yml:4\tsource\thomefield-ci\tthe verify-routing step at c.yml:4 uses o/r/verify-routing@v3, but adopt recognizes i2Dev-com/homefield/verify-routing@v3 (docs/adopting.md, step 3)\t-\t')"
 record "guards: shapes of the step (block, inline, quoted, uses after with, CRLF, none, another action)" "$want" "$got"
 got="$(python3 -I "$ROOT/tools/adopt.py" guards "$work/wf-i2dev")"
-want="$(printf 'ci-checks.yml:9\tok\tlocal-ci\t-\tci.yml:5: the pull_request trigger has branches, paths-ignore filters;ci.yml:19: job checks, which calls ci-checks.yml, has an if: condition\tci-checks.yml:lint ci-checks.yml:test')"
+want="$(printf 'ci-checks.yml:9\tok\thomefield-ci\t-\tci.yml:5: the pull_request trigger has branches, paths-ignore filters;ci.yml:19: job checks, which calls ci-checks.yml, has an if: condition\tci-checks.yml:lint ci-checks.yml:test')"
 record "guards: the columns of a guard behind a caller (status, blocking, warnings joined by ;)" "$want" "$got"
 mkdir -p "$work/no-on"
-printf 'jobs:\n  j:\n    steps:\n      - uses: i2Dev-com/ci-runner/verify-routing@v2\n' >"$work/no-on/ci.yml"
+printf 'jobs:\n  j:\n    steps:\n      - uses: i2Dev-com/homefield/verify-routing@v3\n' >"$work/no-on/ci.yml"
 record "guards: a workflow whose on: cannot be read is blocked, not trusted" "blocked/yes" \
   "$(python3 -I "$ROOT/tools/adopt.py" guards "$work/no-on" | cut -f2)/$(has "$(python3 -I "$ROOT/tools/adopt.py" guards "$work/no-on" | cut -f4)" 'could not read the on: of ci.yml')"
 record "guards: a directory with no workflow files has none" "" "$(mkdir -p "$work/empty" && python3 -I "$ROOT/tools/adopt.py" guards "$work/empty")"

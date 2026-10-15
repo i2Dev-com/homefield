@@ -28,7 +28,7 @@ image name (ubuntu-*, windows-*, macos-*, alone or as a one-item list). It is
 an allowlist because the ways to reach the local runner are open-ended: GitHub
 matches labels case-insensitively and gives a job any runner whose labels are
 a superset of the requested ones, so `Self-Hosted`, `[linux, ARM64]` or
-`group: local-ci` all land on the VM with none of the guards. Anything not on
+`group: homefield-ci` all land on the VM with none of the guards. Anything not on
 the list fails, including an expression this check cannot evaluate and a
 multi-line `runs-on` (a list or mapping on the following lines). Write those
 on one line, or keep the job on a hosted image name.
@@ -39,7 +39,7 @@ local runner is always a deliberate, reviewed change.
 Exit status: 0 if every check passes, 1 otherwise.
 
 Two flags print instead of checking, for tools that build on the same rules
-(bin/ci-runner adopt): --list names the jobs that carry the canonical
+(bin/homefield adopt): --list names the jobs that carry the canonical
 expression, and --print-expression prints the expression itself.
 """
 import argparse
@@ -109,7 +109,7 @@ GUARDS = [
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--workflows-dir", default=".github/workflows")
-    ap.add_argument("--label", default="local-ci")
+    ap.add_argument("--label", default="homefield-ci")
     ap.add_argument("--arch", default="arm64")
     ap.add_argument(
         "--expected",

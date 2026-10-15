@@ -11,7 +11,7 @@ permissions:
 jobs:
   test:
     name: Lint & test
-    runs-on: ${{ vars.CI_RUNNER == 'local' && github.event_name == 'pull_request' && github.actor != 'dependabot[bot]' && !startsWith(github.head_ref, 'dependabot/') && github.event.pull_request.head.repo.full_name == github.repository && fromJSON('["self-hosted","linux","arm64","local-ci"]') || 'ubuntu-latest' }}
+    runs-on: ${{ vars.CI_RUNNER == 'local' && github.event_name == 'pull_request' && github.actor != 'dependabot[bot]' && !startsWith(github.head_ref, 'dependabot/') && github.event.pull_request.head.repo.full_name == github.repository && fromJSON('["self-hosted","linux","arm64","homefield-ci"]') || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
@@ -45,7 +45,7 @@ jobs:
             rm -rf "shellcheck-v${SHELLCHECK_VERSION}" "$tarball"
             export PATH="$PWD:$PATH"
           fi
-          shellcheck bin/ci-runner install.sh vm/provision.sh verify-routing/tests/run.sh tests/*.sh
+          shellcheck bin/homefield install.sh vm/provision.sh verify-routing/tests/run.sh tests/*.sh
 
       # Pinned and checksum-verified. Other repositories run this repository's
       # action to guard their routing, so nothing in its CI executes a download
@@ -87,10 +87,10 @@ jobs:
       - name: Guest memory sampler
         run: bash tests/memwatch.sh
 
-      - name: bin/ci-runner memory summary
+      - name: bin/homefield memory summary
         run: bash tests/memory-summary.sh
 
-      - name: bin/ci-runner report
+      - name: bin/homefield report
         run: bash tests/report.sh
 
       - name: install.sh
@@ -99,7 +99,7 @@ jobs:
       - name: Runner group, wait for online, version
         run: bash tests/runner-group.sh
 
-      - name: bin/ci-runner adopt
+      - name: bin/homefield adopt
         run: bash tests/adopt.sh
 
       # The action as consumers call it, not just the script behind it: inputs
@@ -116,9 +116,11 @@ jobs:
       # workflows: on pull requests the test job above opts in to the local
       # runner, and it is the only job that may. Pushes to main always run
       # hosted (the expression requires a pull_request event). The published
-      # @v2, not the checkout's local action, so `ci-runner adopt` counts it.
+      # action, not the checkout's local one, so `homefield adopt` counts it.
       - name: Action against this repo's workflows
+        # Moves to i2Dev-com/homefield/verify-routing@v3 once that tag exists.
         uses: i2Dev-com/ci-runner/verify-routing@v2
         with:
+          label: homefield-ci
           expected: |
             ci.yml:test

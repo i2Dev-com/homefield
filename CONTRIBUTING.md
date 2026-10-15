@@ -11,23 +11,23 @@ bash tests/label-rule.sh           # label rule, provision.sh and verify-routing
 bash tests/extra-packages.sh       # RUNNER_EXTRA_PACKAGES validation
 bash tests/runner-url.sh           # RUNNER_URL validation
 bash tests/memwatch.sh             # memory sampler (needs bash >= 4.2 and GNU timeout to run)
-bash tests/memory-summary.sh       # `bin/ci-runner memory` summary
-bash tests/report.sh               # `bin/ci-runner report`
+bash tests/memory-summary.sh       # `bin/homefield memory` summary
+bash tests/report.sh               # `bin/homefield report`
 bash tests/install-sh.sh           # install.sh
 bash tests/runner-group.sh         # runner group, wait for online, `version`
-bash tests/adopt.sh                # `bin/ci-runner adopt`
-shellcheck bin/ci-runner install.sh vm/provision.sh verify-routing/tests/run.sh tests/*.sh
+bash tests/adopt.sh                # `bin/homefield adopt`
+shellcheck bin/homefield install.sh vm/provision.sh verify-routing/tests/run.sh tests/*.sh
 actionlint
 ```
 
-CI runs the same. Changes to `bin/ci-runner` or `vm/provision.sh` should also be
-tried on a throwaway VM (`bin/ci-runner install --instance <name> ...`), and
+CI runs the same. Changes to `bin/homefield` or `vm/provision.sh` should also be
+tried on a throwaway VM (`bin/homefield install --instance <name> ...`), and
 the pull request should say what was run and what happened. Never test against
 a runner that serves real repositories.
 
 ## Conventions
 
-- **`bin/ci-runner` and `install.sh` run on the host**, which on a stock Mac is bash 3.2: no
+- **`bin/homefield` and `install.sh` run on the host**, which on a stock Mac is bash 3.2: no
   `mapfile`, no `inherit_errexit`, and `set -e` is off inside `$(...)`, so
   check failures there explicitly. **`vm/provision.sh` runs in the guest**
   (Ubuntu, bash 5) and must stay idempotent: every run is also an upgrade.

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Queue wait, duration and minutes of the jobs in some repositories, local
-runner against GitHub-hosted. Run it through `bin/ci-runner report`.
+runner against GitHub-hosted. Run it through `bin/homefield report`.
 
 Everything comes from the GitHub API (via `gh`), one day of runs at a time:
 the runs endpoint returns at most 1,000 results for a filtered query, which a
@@ -19,7 +19,7 @@ multiplier for the OS (Linux 1, Windows 2, macOS 10). For hosted jobs that is
 the billed figure (a rough one: larger runners have their own rates). For
 local jobs it is what they would have cost.
 
-CI_RUNNER_REPORT_FIXTURE=<file.json> reads {"owner/repo": [run, ...]} instead
+HOMEFIELD_REPORT_FIXTURE=<file.json> reads {"owner/repo": [run, ...]} instead
 of calling GitHub; tests/report.sh uses it.
 """
 
@@ -46,7 +46,7 @@ JOB_FIELDS = (
 
 
 def die(message):
-    print(f"ci-runner report: {message}", file=sys.stderr)
+    print(f"homefield report: {message}", file=sys.stderr)
     sys.exit(1)
 
 
@@ -75,7 +75,7 @@ def days(first, last):
 def fetch_repo(repo, first, last):
     """Runs of the repository created from `first` to `last` (dates,
     inclusive), each with its jobs under "jobs"."""
-    fixture = os.environ.get("CI_RUNNER_REPORT_FIXTURE")
+    fixture = os.environ.get("HOMEFIELD_REPORT_FIXTURE")
     if fixture:
         with open(fixture, encoding="utf-8") as handle:
             data = json.load(handle)
@@ -291,11 +291,11 @@ def parse_date(value):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(prog="ci-runner report", description=__doc__.split("\n\n")[0])
+    parser = argparse.ArgumentParser(prog="homefield report", description=__doc__.split("\n\n")[0])
     parser.add_argument("--repo", action="append", default=[], required=True)
     parser.add_argument("--since")
     parser.add_argument("--until")
-    parser.add_argument("--label", default="local-ci")
+    parser.add_argument("--label", default="homefield-ci")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
 

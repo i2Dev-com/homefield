@@ -24,7 +24,7 @@ they'd rather not be.
   runner while `verify-routing` passes.
 - Leaking registration or removal tokens (they should only ever reach the VM
   on stdin).
-- `bin/ci-runner` or `provision.sh` doing something unsafe with their inputs.
+- `bin/homefield` or `provision.sh` doing something unsafe with their inputs.
 
 ## Known limitations
 
@@ -33,7 +33,7 @@ These are documented and not treated as vulnerabilities; see the
 
 - **Network:** jobs can reach the internet, the LAN, and every service
   listening on the host, including ones bound to `127.0.0.1` only, through
-  `host.lima.internal` ([#18](https://github.com/i2Dev-com/ci-runner/issues/18)).
+  `host.lima.internal` ([#18](https://github.com/i2Dev-com/homefield/issues/18)).
 - **Public repositories are not supported.** A pull request runs its own
   workflow files, so anyone who can open one can change `runs-on`. Only
   private repositories may reach the runner.

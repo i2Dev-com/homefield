@@ -1,5 +1,5 @@
 blank_issues_enabled: true
 contact_links:
   - name: Report a security vulnerability
-    url: https://github.com/i2Dev-com/ci-runner/security/advisories/new
+    url: https://github.com/i2Dev-com/homefield/security/advisories/new
     about: Privately, please, for anything that lets job code escape the VM, read the host's files or credentials, or bypass the routing guard. Known limitations (see SECURITY.md) can be public issues.

@@ -8,20 +8,20 @@ this is) and `CONTRIBUTING.md` (the pre-PR checklist and conventions).
 Shell and Python only — no package manifest, no build, no lockfile. Three
 parts:
 
-- `bin/ci-runner` + `install.sh` — host-side tool (runs on the Mac, wraps
+- `bin/homefield` + `install.sh` — host-side tool (runs on the Mac, wraps
   Lima), Python helpers in `tools/` behind `adopt` and `report`.
 - `vm/lima.yaml` + `vm/provision.sh` — the VM and what runs inside it.
 - `verify-routing/` — the published GitHub Action (`verify_routing.py` +
-  `action.yml`); consumers pin it as `i2Dev-com/ci-runner/verify-routing@vN`.
+  `action.yml`); consumers pin it as `i2Dev-com/homefield/verify-routing@vN`.
 
 ## Bash versions
 
-- `bin/ci-runner`, `install.sh`, and everything in `tests/` run on the host —
+- `bin/homefield`, `install.sh`, and everything in `tests/` run on the host —
   on a stock Mac that is **bash 3.2**: no `mapfile`, no `inherit_errexit`,
   `set -e` is off inside `$(...)` (check failures there explicitly).
 - `vm/provision.sh` runs in the guest (Ubuntu, bash 5) and **must stay
   idempotent**: every run is also an upgrade.
-- Run `shellcheck bin/ci-runner install.sh vm/provision.sh verify-routing/tests/run.sh tests/*.sh`
+- Run `shellcheck bin/homefield install.sh vm/provision.sh verify-routing/tests/run.sh tests/*.sh`
   (see CONTRIBUTING.md for the full pre-PR list, which also includes
   `actionlint`); CI runs the same.
 
@@ -32,7 +32,7 @@ Each suite is standalone; there is no test runner.
 ```bash
 bash verify-routing/tests/run.sh   # fixture suite: every drift case must fail
 bash tests/label-rule.sh           # provision.sh and verify-routing accept the same labels
-bash tests/adopt.sh                # bin/ci-runner adopt and tools/adopt.py, with a stub gh
+bash tests/adopt.sh                # bin/homefield adopt and tools/adopt.py, with a stub gh
 # ... plus the other tests/*.sh suites; see CONTRIBUTING.md
 ```
 
@@ -47,8 +47,8 @@ bash tests/adopt.sh                # bin/ci-runner adopt and tools/adopt.py, wit
 - Tests never observe ambient host state (processes, files, time): give the
   code an override and drive it from the test. This Mac is itself a runner
   host.
-- Changes to `bin/ci-runner` or `vm/provision.sh` should also be tried on a
-  **throwaway VM** (`bin/ci-runner install --instance <name> ...`). Never
+- Changes to `bin/homefield` or `vm/provision.sh` should also be tried on a
+  **throwaway VM** (`bin/homefield install --instance <name> ...`). Never
   test against a runner that serves real repositories.
 
 ## The routing expression is a versioned contract
@@ -63,7 +63,7 @@ agreement — run it when touching either.
 - A change that makes a previously passing workflow fail (new guard, new
   default) is a **new major** `verify-routing@vN`; compatible changes move the
   current tag. Say so in the PR; `CHANGELOG.md` explains the upgrade.
-- This repo's own CI checks its workflow against the **published `@v2`
+- This repo's own CI checks its workflow against the **published `@v3`
   action**, not the local checkout — a breaking change lands only when the
   tag moves.
 - The checker rejects multi-line `runs-on`; write expressions on one line.
