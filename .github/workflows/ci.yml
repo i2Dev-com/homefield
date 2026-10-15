@@ -130,10 +130,8 @@ jobs:
       # runner, and it is the only job that may. Pushes to main always run
       # hosted (the expression requires a pull_request event). The published
       # @v3, not the checkout's local action, so `homefield adopt` counts it.
-      # Switches to routing-guard@v3 (with jobs:) once the v3 tag moves past
-      # the merge of that action.
       - name: Action against this repo's workflows
-        uses: i2Dev-com/homefield/verify-routing@v3
+        uses: i2Dev-com/homefield/routing-guard@v3
         with:
-          expected: |
+          jobs: |
             ci.yml:test
