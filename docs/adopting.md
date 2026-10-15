@@ -19,8 +19,10 @@ Keep hosted:
 
 - Docker image builds (x86-64 images, GHA build cache).
 - Anything with cloud or production credentials.
-- Anything that only runs on push or schedule. The expression routes pull
-  requests only, so those would never use the runner anyway.
+- Anything that only runs on push or schedule. By default the expression
+  routes pull requests only, so those would never use the runner anyway. They
+  can be routed ([routing options](#routing-options)), but then they depend on
+  the Mac being awake, and a deploy gated on CI can queue behind it.
 
 ## 2. Route them
 
@@ -65,6 +67,45 @@ The guard used to be called `verify-routing`, with `expected:` in place of
 a deprecated alias, and `homefield adopt` accepts it with a warning, until v4
 removes it. To switch, change the `uses:` line and rename `expected:` to
 `jobs:`.
+
+### Routing options
+
+The expression above is the default. Three options of `routing-guard` change
+it; each also exists as a flag of `homefield adopt` with the same name
+(`--events`, `--dependabot`, `--fallback`). Whatever you choose, the
+expression in step 2 and the guard in step 3 have to agree, and `homefield
+adopt` refuses a guard whose options differ from the flags you pass it.
+
+```yaml
+      - uses: i2Dev-com/homefield/routing-guard@v3
+        with:
+          jobs: |
+            ci.yml:lint
+          events: pull_request, push   # default: pull_request
+          dependabot: local            # default: hosted
+          fallback: ubuntu-24.04-arm   # default: ubuntu-latest
+```
+
+| Option | Default | Choices | What choosing differently costs |
+|---|---|---|---|
+| `events` | `pull_request` | any of `pull_request`, `merge_group`, `push`, `workflow_dispatch`, `schedule`, separated by newlines, commas or spaces | Jobs on `push`, `workflow_dispatch` and `schedule` run on the Mac, so they wait while it sleeps (GitHub fails them after 24 hours). A deploy gated on CI can queue behind it, and the jobs fall back to hosted only when `CI_RUNNER` is switched. `pull_request_target` is refused: it runs with the repository's secrets on code from forks. |
+| `dependabot` | `hosted` | `hosted`, `local` | With `local`, Dependabot's branches bring unreviewed install scripts onto a VM that is not thrown away after the job. |
+| `fallback` | `ubuntu-latest` | a GitHub-hosted image name: `ubuntu-*`, `windows-*` or `macos-*` | None to the guarantee: it is the image jobs run on when `CI_RUNNER` is not `local`, such as `ubuntu-24.04-arm` for jobs that build for arm64. A self-hosted label is refused, because it would send the job to the runner whenever the switch is off. |
+
+Their order does not matter and a repeated event is ignored; the expression
+always lists events as `pull_request`, `merge_group`, `push`,
+`workflow_dispatch`, `schedule`. Several events are parenthesised, and the
+fork rule is written so that events without a pull request are not sent
+hosted. For example, `events: push` gives:
+
+```yaml
+runs-on: ${{ vars.CI_RUNNER == 'local' && github.event_name == 'push' && github.actor != 'dependabot[bot]' && !startsWith(github.head_ref, 'dependabot/') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","arm64","homefield-ci"]') || 'ubuntu-latest' }}
+```
+
+Unchanged in every case: the `CI_RUNNER == 'local'` switch, a hosted fallback,
+and fork pull requests staying hosted. `homefield adopt --repo <owner>/<repo>
+--events push` prints the expression and the guard for your choice when the
+repository has no guard yet.
 
 ## 4. Fix cache keys
 

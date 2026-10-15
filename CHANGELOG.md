@@ -10,6 +10,28 @@ Compatible with v3: the v3 tag moves to include it.
 
 ### Added
 
+- Routing policy options on `routing-guard` and `homefield adopt` (same names
+  for the action inputs, the `routing_guard.py` flags and the `adopt` flags).
+  The defaults produce today's expression byte for byte, so no existing
+  workflow changes:
+  - `events` (default `pull_request`): which events are routed, any of
+    `pull_request`, `merge_group`, `push`, `workflow_dispatch`, `schedule`.
+    `pull_request_target` and an empty list are refused. Jobs on push,
+    dispatch and schedule then depend on the Mac being awake, and a deploy
+    gated on CI can queue behind it.
+  - `dependabot` (default `hosted`): `local` drops the two Dependabot
+    clauses, which puts Dependabot's unreviewed install scripts on a VM that
+    is not thrown away after the job.
+  - `fallback` (default `ubuntu-latest`): the hosted image used when
+    `CI_RUNNER` is not `local`. It must be a bare `ubuntu-*`, `windows-*` or
+    `macos-*` name, so a self-hosted label cannot replace it.
+
+  The `CI_RUNNER` switch, the hosted fallback and hosted fork pull requests
+  stay mandatory. `homefield adopt` reads the options from the guard step,
+  refuses a guard that differs from `--events`, `--dependabot` or
+  `--fallback`, and prints the expression and guard step for them.
+  `verify-routing` has no such inputs and always uses the defaults. See
+  [adopting: Routing options](docs/adopting.md#routing-options).
 - The `routing-guard` action (`i2Dev-com/homefield/routing-guard@v3`): the
   routing check under its new name, with the input `jobs:` in place of
   `expected:` (same meaning, same format). `label:`, `arch:` and

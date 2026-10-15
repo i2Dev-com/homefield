@@ -14,17 +14,24 @@ request: see check_guard. ACTION reads its jobs from `jobs:`, the alias from
 
   adopt.py guards DIR       one line per step that uses some routing guard:
                             file:line <TAB> status <TAB> label <TAB> blocking
-                            <TAB> warnings <TAB> deprecations <TAB> job
+                            <TAB> warnings <TAB> deprecations <TAB> events
+                            <TAB> dependabot <TAB> fallback <TAB> job
                             entries (spaces). status is ok (a usable guard),
                             blocked (a routing-guard@v3 step that cannot run
                             on pull requests) or source (not an action adopt
                             recognizes). blocking, warnings and deprecations
                             are texts joined by ";", or "-" when there are
-                            none.
+                            none. events (spaces), dependabot and fallback
+                            are the step's `with:` values, or the defaults
+                            when it sets none (the alias has no such inputs);
+                            "-" is a value set to nothing. The job entries
+                            come last because they may be empty.
   adopt.py cache-keys DIR   one line per cache key that has runner.os and not
                             runner.arch: file:line: text
-  adopt.py guard-snippet [--label L] [--jobs a.yml:x,b.yml:y]
-                            the guard step to add to a workflow
+  adopt.py guard-snippet [--label L] [--events E] [--dependabot D]
+                            [--fallback F] [--jobs a.yml:x,b.yml:y]
+                            the guard step to add to a workflow; an option
+                            appears only when it is not the default
   adopt.py quote TEXT       TEXT percent-encoded for a URL path
 """
 import argparse
@@ -39,6 +46,10 @@ ACTION = "i2Dev-com/homefield/routing-guard@v3"
 # The v3.0 name of the action, kept until v4 with `expected:` for `jobs:`.
 ALIAS_ACTION = "i2Dev-com/homefield/verify-routing@v3"
 DEFAULT_LABEL = "homefield-ci"
+# The routing-guard options besides the label, and their defaults.
+DEFAULT_EVENTS = "pull_request"
+DEFAULT_DEPENDABOT = "hosted"
+DEFAULT_FALLBACK = "ubuntu-latest"
 
 # A step or job `uses:`; group 3 is the raw value.
 USES = re.compile(r"^(\s*)(-\s+)?uses:\s*(.*?)\s*$")
@@ -346,8 +357,18 @@ def check_guard(name, at, files):
     return blocks, warns
 
 
+def option(values, key, default):
+    """The step's `with:` value for `key` as one TSV-safe text: the default
+    when the step does not set it, "-" when it sets it to nothing (the guard
+    refuses that, and adopt must not read it as the default)."""
+    if key not in values:
+        return default
+    return " ".join(re.split(r"[\s,]+", values[key].strip())) or "-"
+
+
 def guards(directory):
-    """(file:line, status, label, blocking, warnings, deprecations, job entries)
+    """(file:line, status, label, blocking, warnings, deprecations, events,
+    dependabot, fallback, job entries)
     for every step that uses some routing guard. The status is "source" for
     one that is not ACTION or ALIAS_ACTION (another repository or ref),
     "blocked" for one that cannot run on a pull request, and "ok" for a usable
@@ -380,7 +401,7 @@ def guards(directory):
                         " from local-ci to homefield-ci in the same change"
                         " (docs/runbook.md, \"Migrating from ci-runner (v2)\", step 6)"
                     )
-                found.append((where, "source", label, [reason], [], [], jobs))
+                found.append((where, "source", label, [reason], [], [], DEFAULT_EVENTS, DEFAULT_DEPENDABOT, DEFAULT_FALLBACK, jobs))
                 continue
             blocks, warns = check_guard(name, at, files)
             if sha:
@@ -388,7 +409,13 @@ def guards(directory):
             deprecated = []
             if alias:
                 deprecated.append(f"{where}: {ALIAS_PATH} is a deprecated alias of {ACTION_PATH}: switch the step to {ACTION} and rename expected: to jobs: (the alias is removed in v4)")
-            found.append((where, "blocked" if blocks else "ok", label, blocks, warns, deprecated, jobs))
+            # The alias predates the options and always gets the defaults.
+            opts = (DEFAULT_EVENTS, DEFAULT_DEPENDABOT, DEFAULT_FALLBACK) if alias else (
+                option(values, "events", DEFAULT_EVENTS),
+                option(values, "dependabot", DEFAULT_DEPENDABOT),
+                option(values, "fallback", DEFAULT_FALLBACK),
+            )
+            found.append((where, "blocked" if blocks else "ok", label, blocks, warns, deprecated, *opts, jobs))
     return found
 
 
@@ -423,7 +450,7 @@ def cache_keys(directory):
     return hits
 
 
-def guard_snippet(label, jobs):
+def guard_snippet(label, jobs, events=DEFAULT_EVENTS, dependabot=DEFAULT_DEPENDABOT, fallback=DEFAULT_FALLBACK):
     entries = jobs or ["ci.yml:<job-id>"]
     out = [
         "      - name: Routing guard",
@@ -434,6 +461,13 @@ def guard_snippet(label, jobs):
     out += [f"            {e}" for e in entries]
     if label != DEFAULT_LABEL:
         out.append(f"          label: {label}")
+    names = [e for e in re.split(r"[\s,]+", events) if e]
+    if set(names) != {DEFAULT_EVENTS}:
+        out.append(f"          events: {', '.join(names)}")
+    if dependabot != DEFAULT_DEPENDABOT:
+        out.append(f"          dependabot: {dependabot}")
+    if fallback != DEFAULT_FALLBACK:
+        out.append(f"          fallback: {fallback}")
     return "\n".join(out)
 
 
@@ -444,19 +478,22 @@ def main():
     sub.add_parser("cache-keys").add_argument("dir")
     p = sub.add_parser("guard-snippet")
     p.add_argument("--label", default=DEFAULT_LABEL)
+    p.add_argument("--events", default=DEFAULT_EVENTS)
+    p.add_argument("--dependabot", default=DEFAULT_DEPENDABOT)
+    p.add_argument("--fallback", default=DEFAULT_FALLBACK)
     p.add_argument("--jobs", default="")
     sub.add_parser("quote").add_argument("text")
     args = ap.parse_args()
 
     if args.cmd == "guards":
-        for where, status, label, blocks, warns, deprecated, jobs in guards(args.dir):
+        for where, status, label, blocks, warns, deprecated, events, dependabot, fallback, jobs in guards(args.dir):
             joined = [";".join(t.replace(";", ",") for t in texts) or "-" for texts in (blocks, warns, deprecated)]
-            print("\t".join([where, status, label, *joined, " ".join(jobs)]))
+            print("\t".join([where, status, label, *joined, events, dependabot, fallback, " ".join(jobs)]))
     elif args.cmd == "cache-keys":
         for hit in cache_keys(args.dir):
             print(hit)
     elif args.cmd == "guard-snippet":
-        print(guard_snippet(args.label, [j for j in re.split(r"[\s,]+", args.jobs) if j]))
+        print(guard_snippet(args.label, [j for j in re.split(r"[\s,]+", args.jobs) if j], args.events, args.dependabot, args.fallback))
     else:
         print(urllib.parse.quote(args.text, safe=""))
     return 0

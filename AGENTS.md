@@ -55,12 +55,24 @@ bash tests/adopt.sh                # bin/homefield adopt and tools/adopt.py, wit
 
 ## The routing expression is a versioned contract
 
-The canonical `runs-on` expression (guarded: hosted fallback, PR-only,
-no Dependabot, no forks) lives in copies that must change together:
+The canonical `runs-on` expression lives in copies that must change together:
 `routing-guard/routing_guard.py`, `vm/provision.sh`, `README.md`,
 `docs/adopting.md`, `docs/runbook.md`, `.github/workflows/ci.yml`.
 `tests/label-rule.sh` exists to keep provision.sh and routing-guard in
 agreement — run it when touching either.
+
+- **Mandatory guards**, in every variant: the `vars.CI_RUNNER == 'local'`
+  switch, a hosted fallback (`fallback` must be a bare GitHub-hosted image
+  name), and fork pull requests hosted. Private repositories only is the
+  runner group's job, enforced by `adopt`.
+- **Options with defaults**: `events` (default `pull_request` only),
+  `dependabot` (default `hosted`) and `fallback` (default `ubuntu-latest`).
+  They exist on the action, on `routing_guard.py` and on `homefield adopt` and
+  `tools/adopt.py` under the same names; the defaults must keep producing the
+  original expression byte for byte (`routing-guard/tests/run.sh` hard-codes
+  it). `pull_request_target` is never allowed in `events`.
+  A new option value or a new option whose default changes the expression is
+  a breaking change, as below.
 
 - A change that makes a previously passing workflow fail (new guard, new
   default) is a **new major** `routing-guard@vN`; compatible changes move the

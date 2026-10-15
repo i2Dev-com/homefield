@@ -82,6 +82,8 @@ printf '100\n555\n200\n' >"$work/members-with"
 # ── Workflow fixtures ──────────────────────────────────────────────────────
 expr="$(python3 "$ROOT/routing-guard/routing_guard.py" --print-expression)"
 expr_acme="$(python3 "$ROOT/routing-guard/routing_guard.py" --print-expression --label acme-ci)"
+expr_push="$(python3 "$ROOT/routing-guard/routing_guard.py" --print-expression --events push)"
+expr_combo="$(python3 "$ROOT/routing-guard/routing_guard.py" --print-expression --events push,schedule --dependabot local --fallback ubuntu-24.04-arm)"
 
 # emit_job <id> <runs-on> [extra step lines...]
 emit_job() {
@@ -106,6 +108,16 @@ guard_label() {
   shift
   guard "$@"
   printf '          label: %s' "$label"
+}
+# guard_opts <job entry> <with: line>...: a guard step with more `with:` keys.
+guard_opts() {
+  local sep=""
+  guard "$1"
+  shift
+  for line in "$@"; do
+    printf '%s          %s' "$sep" "$line"
+    sep=$'\n'
+  done
 }
 # GitHub expression text, written with the $ escaped so that it is not shell.
 os_key="\${{ runner.os }}"
@@ -160,6 +172,14 @@ cache_line_restore="$(grep -nxF "            ${os_key}-npm-" "$work/wf-cache/ci.
   emit_job lint "$expr_acme" "$(guard ci.yml:lint)"
   emit_job test "$expr_acme" "$(guard_label acme-ci ci.yml:lint ci.yml:test)"
 } >"$work/wf-twoguards/ci.yml"
+# Guards with options: the routed jobs carry the expression for them.
+mkdir -p "$work/wf-push" "$work/wf-combo" "$work/wf-prt"
+{ header; emit_job lint "$expr_push" "$(guard_opts ci.yml:lint 'events: push')"; } >"$work/wf-push/ci.yml"
+{
+  header
+  emit_job lint "$expr_combo" "$(guard_opts ci.yml:lint 'events: |' '  push' '  schedule' 'dependabot: local' 'fallback: ubuntu-24.04-arm')"
+} >"$work/wf-combo/ci.yml"
+{ header; emit_job lint "$expr" "$(guard_opts ci.yml:lint 'events: pull_request_target')"; } >"$work/wf-prt/ci.yml"
 
 # Fixtures for what makes a step a guard: the action it uses, and whether its
 # workflow runs on pull requests. wf_guard <dir> <on-line> <uses> writes a
@@ -440,6 +460,57 @@ record "...--label that agrees is fine" "0/1" "$rc/$(called 'variable set CI_RUN
 adopt GH_WF="$work/wf-noguard" -- --label acme-ci
 record "snippets carry the chosen label in the expression and the guard" "yes/yes" "$(has "$out" "runs-on: $expr_acme")/$(has "$out" '          label: acme-ci')"
 
+# Routing options: events, dependabot and fallback, held to the guard the way
+# the label is.
+adopt GH_WF="$work/wf-push" --
+record "a guard with events push: that is used, and the jobs are routed" "0/yes/yes/1" \
+  "$rc/$(has "$out" 'routing: ready')/$(has "$out" 'these jobs are routed: ci.yml:lint')/$(called 'variable set CI_RUNNER --repo acme/app --body local')"
+adopt GH_WF="$work/wf-push" -- --events push
+record "...--events that agrees is fine" "0/1" "$rc/$(called 'variable set CI_RUNNER --repo acme/app --body local')"
+adopt GH_WF="$work/wf-push" -- --events pull_request
+record "...--events that differs: refused with the reason, nothing switched" "nonzero/yes/yes/0" \
+  "$(nonzero "$rc")/$(has "$out" 'uses events push, but --events is pull_request')/$(has "$out" 'no job uses the routing expression')/$(called 'variable set')"
+adopt GH_WF="$work/wf-combo" -- --events 'schedule push' --dependabot local --fallback ubuntu-24.04-arm
+record "all three options, in another order and separator: agree with a block-scalar guard" "0/yes/1" \
+  "$rc/$(has "$out" 'routing: ready')/$(called 'variable set CI_RUNNER --repo acme/app --body local')"
+adopt GH_WF="$work/wf-combo" --
+record "...without flags the guard's options are used" "0/1" "$rc/$(called 'variable set CI_RUNNER --repo acme/app --body local')"
+adopt GH_WF="$work/wf-combo" -- --events 'push,schedule,workflow_dispatch'
+record "...a larger events set differs" "nonzero/yes" "$(nonzero "$rc")/$(has "$out" 'but --events is push,schedule,workflow_dispatch')"
+adopt GH_WF="$work/wf-combo" -- --dependabot hosted
+record "...--dependabot that differs: refused with the reason" "nonzero/yes/0" \
+  "$(nonzero "$rc")/$(has "$out" 'uses dependabot local, but --dependabot is hosted')/$(called 'variable set')"
+adopt GH_WF="$work/wf-combo" -- --fallback ubuntu-latest
+record "...--fallback that differs: refused with the reason" "nonzero/yes/0" \
+  "$(nonzero "$rc")/$(has "$out" 'uses fallback ubuntu-24.04-arm, but --fallback is ubuntu-latest')/$(called 'variable set')"
+adopt -- --events push
+record "a guard on the defaults, --events push: refused" "nonzero/yes/0" \
+  "$(nonzero "$rc")/$(has "$out" 'uses events pull_request, but --events is push')/$(called 'variable set')"
+adopt -- --dependabot local
+record "...and --dependabot local" "nonzero/yes" "$(nonzero "$rc")/$(has "$out" 'uses dependabot hosted, but --dependabot is local')"
+adopt -- --fallback macos-latest
+record "...and --fallback macos-latest" "nonzero/yes" "$(nonzero "$rc")/$(has "$out" 'uses fallback ubuntu-latest, but --fallback is macos-latest')"
+adopt GH_WF="$work/wf-prt" --
+record "a guard with events pull_request_target: not ready, with the guard's reason" "nonzero/yes/0" \
+  "$(nonzero "$rc")/$(has "$out" 'pull_request_target is refused')/$(called 'variable set')"
+adopt GH_WF="$work/wf-noguard" -- --events 'push,schedule' --dependabot local --fallback ubuntu-24.04-arm
+record "no guard yet: the expression and the snippet carry the options" "nonzero/yes/yes/yes/yes/no" \
+  "$(nonzero "$rc")/$(has "$out" "runs-on: $expr_combo")/$(has "$out" '          events: push, schedule')/$(has "$out" '          dependabot: local')/$(has "$out" '          fallback: ubuntu-24.04-arm')/$(has "$out" 'label:')"
+adopt GH_WF="$work/wf-noguard" --
+record "...the defaults are not written into the guard" "no/no/no" \
+  "$(has "$out" 'events:')/$(has "$out" 'dependabot:')/$(has "$out" 'fallback:')"
+run_fn -- cmd_adopt --repo acme/app --events pull_request_target
+record "--events pull_request_target: refused, named, before anything is read" "nonzero/yes/0" \
+  "$(nonzero "$rc")/$(has "$out" 'pull_request_target is refused')/$(called gh)"
+run_fn -- cmd_adopt --repo acme/app --events bogus
+record "--events with another name: refused" "nonzero/yes/0" "$(nonzero "$rc")/$(has "$out" "'bogus' is not one of")/$(called gh)"
+run_fn -- cmd_adopt --repo acme/app --events ''
+record "--events with nothing: refused" "nonzero/yes/0" "$(nonzero "$rc")/$(has "$out" '--events needs a value')/$(called gh)"
+run_fn -- cmd_adopt --repo acme/app --dependabot maybe
+record "--dependabot other than hosted or local: refused" "nonzero/yes/0" "$(nonzero "$rc")/$(has "$out" 'must be hosted or local')/$(called gh)"
+run_fn -- cmd_adopt --repo acme/app --fallback self-hosted
+record "--fallback that is not a hosted image: refused" "nonzero/yes/0" "$(nonzero "$rc")/$(has "$out" 'bare GitHub-hosted image name')/$(called gh)"
+
 # Two guards: a stale one on the default label, whose check fails, and a
 # passing one on acme-ci. The routed jobs count under either guard, and the
 # passing guard's label is the one the snippet and messages use.
@@ -637,16 +708,46 @@ printf 'on: [push, pull_request]\r\njobs:\r\n  j:\r\n    steps:\r\n      - uses:
 printf 'jobs:\n  j:\n    steps:\n      - uses: o/r/routing-guard@v3\n' >"$shapes/c.yml"
 echo "not a workflow" >"$shapes/d.txt"
 got="$(python3 -I "$ROOT/tools/adopt.py" guards "$shapes")"
-want="$(printf 'a.yml:6\tok\thomefield-ci\t-\t-\t-\ta.yml:one a.yml:two\na.yml:15\tok\tacme-ci\t-\t-\t-\ta.yml:one a.yml:two\na.yml:22\tok\thomefield-ci\t-\t-\t-\ta.yml:one\nb.yaml:5\tok\thomefield-ci\t-\t-\t-\tb.yml:j\nc.yml:4\tsource\thomefield-ci\tthe routing-guard step at c.yml:4 uses o/r/routing-guard@v3, but adopt recognizes i2Dev-com/homefield/routing-guard@v3 (docs/adopting.md, step 3)\t-\t-\t')"
+want="$(printf 'a.yml:6\tok\thomefield-ci\t-\t-\t-\tpull_request\thosted\tubuntu-latest\ta.yml:one a.yml:two\na.yml:15\tok\tacme-ci\t-\t-\t-\tpull_request\thosted\tubuntu-latest\ta.yml:one a.yml:two\na.yml:22\tok\thomefield-ci\t-\t-\t-\tpull_request\thosted\tubuntu-latest\ta.yml:one\nb.yaml:5\tok\thomefield-ci\t-\t-\t-\tpull_request\thosted\tubuntu-latest\tb.yml:j\nc.yml:4\tsource\thomefield-ci\tthe routing-guard step at c.yml:4 uses o/r/routing-guard@v3, but adopt recognizes i2Dev-com/homefield/routing-guard@v3 (docs/adopting.md, step 3)\t-\t-\tpull_request\thosted\tubuntu-latest\t')"
 record "guards: shapes of the step (block, inline, quoted, uses after with, CRLF, none, another action)" "$want" "$got"
 got="$(python3 -I "$ROOT/tools/adopt.py" guards "$work/wf-i2dev")"
-want="$(printf 'ci-checks.yml:9\tok\thomefield-ci\t-\tci.yml:5: the pull_request trigger has branches, paths-ignore filters;ci.yml:19: job checks, which calls ci-checks.yml, has an if: condition\t-\tci-checks.yml:lint ci-checks.yml:test')"
+want="$(printf 'ci-checks.yml:9\tok\thomefield-ci\t-\tci.yml:5: the pull_request trigger has branches, paths-ignore filters;ci.yml:19: job checks, which calls ci-checks.yml, has an if: condition\t-\tpull_request\thosted\tubuntu-latest\tci-checks.yml:lint ci-checks.yml:test')"
 record "guards: the columns of a guard behind a caller (status, blocking, warnings joined by ;)" "$want" "$got"
 mkdir -p "$work/alias-shape"
 printf 'on: pull_request\njobs:\n  j:\n    steps:\n      - uses: i2Dev-com/homefield/verify-routing@v3\n        with:\n          expected: x.yml:a\n' >"$work/alias-shape/ci.yml"
 got="$(python3 -I "$ROOT/tools/adopt.py" guards "$work/alias-shape")"
-want="$(printf 'ci.yml:5\tok\thomefield-ci\t-\t-\tci.yml:5: i2Dev-com/homefield/verify-routing is a deprecated alias of i2Dev-com/homefield/routing-guard: switch the step to i2Dev-com/homefield/routing-guard@v3 and rename expected: to jobs: (the alias is removed in v4)\tx.yml:a')"
+want="$(printf 'ci.yml:5\tok\thomefield-ci\t-\t-\tci.yml:5: i2Dev-com/homefield/verify-routing is a deprecated alias of i2Dev-com/homefield/routing-guard: switch the step to i2Dev-com/homefield/routing-guard@v3 and rename expected: to jobs: (the alias is removed in v4)\tpull_request\thosted\tubuntu-latest\tx.yml:a')"
 record "guards: the deprecated alias reads expected:, and says so in the deprecations column" "$want" "$got"
+mkdir -p "$work/opts-shape"
+cat >"$work/opts-shape/ci.yml" <<'EOF'
+on: pull_request
+jobs:
+  j:
+    steps:
+      - uses: i2Dev-com/homefield/routing-guard@v3
+        with:
+          jobs: ci.yml:j
+          events: |
+            push
+            schedule
+          dependabot: local
+          fallback: "ubuntu-24.04-arm"
+      - uses: i2Dev-com/homefield/routing-guard@v3
+        with:
+          jobs: ci.yml:j
+          events: push, workflow_dispatch # trailing
+      - uses: i2Dev-com/homefield/routing-guard@v3
+        with:
+          jobs: ci.yml:j
+          events: ''
+      - uses: i2Dev-com/homefield/verify-routing@v3
+        with:
+          expected: ci.yml:j
+          events: push
+EOF
+got="$(python3 -I "$ROOT/tools/adopt.py" guards "$work/opts-shape" | cut -f1,2,7-)"
+want="$(printf 'ci.yml:5\tok\tpush schedule\tlocal\tubuntu-24.04-arm\tci.yml:j\nci.yml:13\tok\tpush workflow_dispatch\thosted\tubuntu-latest\tci.yml:j\nci.yml:17\tok\t-\thosted\tubuntu-latest\tci.yml:j\nci.yml:21\tok\tpull_request\thosted\tubuntu-latest\tci.yml:j')"
+record "guards: events, dependabot and fallback columns (block, inline, empty, and the alias's defaults)" "$want" "$got"
 mkdir -p "$work/no-on"
 printf 'jobs:\n  j:\n    steps:\n      - uses: i2Dev-com/homefield/routing-guard@v3\n' >"$work/no-on/ci.yml"
 record "guards: a workflow whose on: cannot be read is blocked, not trusted" "blocked/yes" \
@@ -679,6 +780,12 @@ want="$(printf 'e.yml:4: %s-a\ne.yml:11: "%s-c"\ne.yml:13: %s-d' "$os_key" "$os_
 record "cache-keys: key and restore-keys with runner.os only, not comments or other keys" "$want" "$got"
 record "guard-snippet: placeholder, and a label only when it is not the default" "yes/yes/no" \
   "$(has "$(python3 -I "$ROOT/tools/adopt.py" guard-snippet --label acme-ci)" '          label: acme-ci')/$(has "$(python3 -I "$ROOT/tools/adopt.py" guard-snippet)" 'ci.yml:<job-id>')/$(has "$(python3 -I "$ROOT/tools/adopt.py" guard-snippet)" 'label:')"
+snippet="$(python3 -I "$ROOT/tools/adopt.py" guard-snippet --events 'schedule, push' --dependabot local --fallback ubuntu-24.04-arm)"
+record "guard-snippet: events, dependabot and fallback when they are not the defaults" "yes/yes/yes" \
+  "$(has "$snippet" '          events: schedule, push')/$(has "$snippet" '          dependabot: local')/$(has "$snippet" '          fallback: ubuntu-24.04-arm')"
+snippet="$(python3 -I "$ROOT/tools/adopt.py" guard-snippet --events pull_request --dependabot hosted --fallback ubuntu-latest)"
+record "guard-snippet: ...and none of them when they are" "no/no/no" \
+  "$(has "$snippet" 'events:')/$(has "$snippet" 'dependabot:')/$(has "$snippet" 'fallback:')"
 record "quote: spaces and slashes are encoded" "a%20b%2Fc.yml" "$(python3 -I "$ROOT/tools/adopt.py" quote 'a b/c.yml')"
 
 # ── The docs say what the tool prints ──────────────────────────────────────
@@ -687,6 +794,7 @@ adopting="$(cat "$ROOT/docs/adopting.md")"
 readme="$(cat "$ROOT/README.md")"
 record "docs/adopting.md has the canonical expression" "yes" "$(has "$adopting" "runs-on: $expr")"
 record "README.md has the canonical expression" "yes" "$(has "$readme" "runs-on: $expr")"
+record "docs/adopting.md shows the expression for events push" "yes" "$(has "$adopting" "runs-on: $expr_push")"
 pinned="$(python3 -B -I -c 'import sys; sys.path.insert(0, sys.argv[1]); import adopt; print(adopt.ACTION)' "$ROOT/tools")"
 record "docs/adopting.md pins the same routing-guard as the snippet" "yes" "$(has "$adopting" "uses: $pinned")"
 record "README.md pins the same routing-guard as the snippet" "yes" "$(has "$readme" "uses: $pinned")"
