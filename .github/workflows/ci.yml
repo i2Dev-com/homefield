@@ -132,6 +132,19 @@ jobs:
       # @v3, not the checkout's local action, so `homefield adopt` counts it.
       # Switches to routing-guard@v3 (with jobs:) once the v3 tag moves past
       # the merge of that action.
+      # TEMPORARY probe (not for merge): both published paths at the merge
+      # commit, as a consumer downloads them.
+      - name: Probe routing-guard at 625bca9
+        uses: i2Dev-com/homefield/routing-guard@625bca94c9d48b0e8e6a3678af2cf69ec3c6ead1
+        with:
+          jobs: |
+            ci.yml:test
+      - name: Probe verify-routing alias at 625bca9
+        uses: i2Dev-com/homefield/verify-routing@625bca94c9d48b0e8e6a3678af2cf69ec3c6ead1
+        with:
+          expected: |
+            ci.yml:test
+
       - name: Action against this repo's workflows
         uses: i2Dev-com/homefield/verify-routing@v3
         with:
