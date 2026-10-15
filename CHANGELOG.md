@@ -24,9 +24,10 @@ fail is a new major (see [README](README.md#development)).
 - `adopt` computed the routed-jobs list with only the first verify-routing
   step's label, so with steps carrying different labels, jobs routed under
   the others were missed and adopt wrongly reported "no job uses the routing
-  expression". The jobs routed under any step count now, and when no
-  `--label` was given, the label of a passing step is the one advised in the
-  snippet and messages.
+  expression". Jobs routed under any step count now — under the steps carrying
+  the requested label, when `--label` is given — and when no `--label` was
+  given, the label of a passing step is the one advised in the snippet and
+  messages.
 - The isolation check read a failed guest command (a VM that is not running,
   say) as an empty mount list and misreported it as "the VM has host
   mounts". It now distinguishes a check that could not run from a mount

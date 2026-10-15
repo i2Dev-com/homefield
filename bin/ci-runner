@@ -1042,15 +1042,19 @@ adopt_routing_check() {
     fi
     # Collect the jobs routed under this guard's label. A repository can carry
     # several verify-routing steps; jobs routed under any of them count, not
-    # only the first guard's.
-    routed="$(python3 -I "$ROOT/verify-routing/verify_routing.py" --workflows-dir "$dir" --label "$glabel" --list 2>/dev/null)" || routed=""
-    while IFS= read -r routedjob; do
-      [ -n "$routedjob" ] || continue
-      case $'\n'"$ADOPT_ROUTED"$'\n' in
-        *"$'\n'${routedjob}"$'\n'*) ;;
-        *) ADOPT_ROUTED="${ADOPT_ROUTED:+${ADOPT_ROUTED}}"$'\n'"${routedjob}" ;;
-      esac
-    done <<<"$routed"
+    # only the first guard's — unless --label picked a label, in which case
+    # only steps carrying it speak for it and the others are already reported
+    # as a mismatch above.
+    if [ "$label_given" = 0 ] || [ "$glabel" = "$label" ]; then
+      routed="$(python3 -I "$ROOT/verify-routing/verify_routing.py" --workflows-dir "$dir" --label "$glabel" --list 2>/dev/null)" || routed=""
+      while IFS= read -r routedjob; do
+        [ -n "$routedjob" ] || continue
+        case $'\n'"$ADOPT_ROUTED"$'\n' in
+          *"$'\n'${routedjob}"$'\n'*) ;;
+          *) ADOPT_ROUTED="${ADOPT_ROUTED:+${ADOPT_ROUTED}$'\n'}${routedjob}" ;;
+        esac
+      done <<<"$routed"
+    fi
     rc=0
     out="$(python3 -I "$ROOT/verify-routing/verify_routing.py" --workflows-dir "$dir" --label "$glabel" --expected "$gexpected" 2>&1)" || rc=$?
     if [ "$rc" -eq 0 ]; then

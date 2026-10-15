@@ -421,9 +421,12 @@ adopt GH_WF="$work/wf-noguard" -- --jobs 'a.yml:x,b.yml:y'
 record "--jobs fills the snippet's expected list" "yes/yes/no" "$(has "$out" '            a.yml:x')/$(has "$out" '            b.yml:y')/$(has "$out" '            ci.yml:lint')"
 
 adopt GH_WF="$work/wf-label" --
-record "a guard with another label: that label is used" "0/yes/1" "$rc/$(has "$out" 'routing: ready')/$(called 'variable set CI_RUNNER --repo acme/app --body local')"
+record "a guard with another label: that label is used" "0/yes/yes/1" \
+  "$rc/$(has "$out" 'routing: ready')/$(has "$out" 'these jobs are routed: ci.yml:lint')/$(called 'variable set CI_RUNNER --repo acme/app --body local')"
 adopt GH_WF="$work/wf-label" -- --label local-ci
-record "...unless --label says otherwise: not ready" "nonzero/yes/0" "$(nonzero "$rc")/$(has "$out" 'uses label acme-ci, but --label is local-ci')/$(called 'variable set')"
+record "...unless --label says otherwise: not ready, and only that label's jobs count" \
+  "nonzero/yes/yes/0" \
+  "$(nonzero "$rc")/$(has "$out" 'uses label acme-ci, but --label is local-ci')/$(has "$out" 'no job uses the routing expression for label local-ci')/$(called 'variable set')"
 adopt GH_WF="$work/wf-label" -- --label acme-ci
 record "...--label that agrees is fine" "0/1" "$rc/$(called 'variable set CI_RUNNER --repo acme/app --body local')"
 adopt GH_WF="$work/wf-noguard" -- --label acme-ci
