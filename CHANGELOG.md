@@ -247,6 +247,7 @@ runner next to it:
 - `bin/ci-runner report`: queue wait, duration and minutes per repository,
   workflow and job, local against hosted, from the GitHub API, for measuring
   whether the runner saves money and keeps up.
+
 ## v2 (2026-09-30)
 
 ### Upgrading from v1
