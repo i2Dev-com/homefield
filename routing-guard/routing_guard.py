@@ -11,8 +11,8 @@ and 3 are defaults that the repository can change, each with a cost:
   1. A hosted fallback (mandatory). With the repository variable CI_RUNNER
      unset or anything but `local`, the job runs on a GitHub-hosted image:
      `fallback`, ubuntu-latest by default, which must itself be a hosted image
-     name, never a self-hosted label. A copy without the
-     `|| 'ubuntu-latest'` leg queues forever whenever the local runner is off.
+     name, never a self-hosted label. A copy without the fallback leg queues
+     forever whenever the local runner is off.
   2. Pull requests only (default; the `events` option). Pushes (main, release
      branches) then always run hosted, so merging and deploying never depend
      on the runner's machine being awake. Adding push, workflow_dispatch,
@@ -49,8 +49,8 @@ Exit status: 0 if every check passes, 1 otherwise.
 
 Two flags print instead of checking, for tools that build on the same rules
 (bin/homefield adopt): --list names the jobs that carry the canonical
-expression, and --print-expression prints the expression itself. Both take the same options as a check
-(--events, --dependabot, --fallback).
+expression, and --print-expression prints the expression itself. Both take
+the same options as a check (--events, --dependabot, --fallback).
 """
 import argparse
 import os

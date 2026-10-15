@@ -22,23 +22,22 @@ runs-on: ${{ vars.CI_RUNNER == 'local' && github.event_name == 'pull_request' &&
 ```
 
 - The **repository** variable `CI_RUNNER` is the switch, so each repository
-  opts in and out on its own. `local` sends pull-request jobs (the routed
-  events, see below) to the runner with the routing label, `homefield-ci`
+  opts in and out on its own. `local` sends the routed jobs (pull requests by
+  default, see below) to the runner with the routing label, `homefield-ci`
   unless the runner was registered with another `RUNNER_LABEL`. Unset, or any
   other value, sends them to the hosted fallback image, `ubuntu-latest` by
   default.
 - **Pushes run hosted by default**, whatever `CI_RUNNER` says. Deploys wait on
   the default branch's CI, and a merge must not sit queued behind a sleeping
-  Mac. Unless the repository's `events` option includes `push` (or
-  `workflow_dispatch`, `schedule`, `merge_group`), those events are not
-  routed. If it does, those jobs wait for the Mac like pull-request jobs do,
-  and a deploy gated on CI queues behind them until the repository is
-  switched to hosted.
+  Mac. A repository whose `events` option adds `push` (or `merge_group`,
+  `workflow_dispatch`, `schedule`) routes those jobs too: they wait for the
+  Mac like pull-request jobs do, and a deploy gated on CI queues behind them
+  until the repository is switched to hosted.
 - **Dependabot runs hosted by default.** Checked by actor and by branch name.
   `dependabot: local` drops both checks, which puts Dependabot's unreviewed
   install scripts on a VM that is not thrown away after the job.
-- **Pull requests from forks always run hosted**, with any options. Only a branch of the
-  repository itself is routed, which covers private repositories that allow
+- **Pull requests from forks always run hosted**, whatever the options. Only
+  a branch of the repository itself is routed, which covers private repositories that allow
   forking. It does not make a public repository safe: a fork PR runs the
   workflow files from its own merge commit, so it can rewrite `runs-on`
   altogether. See the trust boundary below.
