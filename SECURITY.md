@@ -21,7 +21,7 @@ they'd rather not be.
 - Escaping the VM, or reading the host's files or credentials from it.
 - Getting the runner to run code from a fork, from Dependabot, or on a push,
   despite the canonical routing expression; or a `runs-on` that reaches the
-  runner while `verify-routing` passes.
+  runner while `routing-guard` passes.
 - Leaking registration or removal tokens (they should only ever reach the VM
   on stdin).
 - `bin/homefield` or `provision.sh` doing something unsafe with their inputs.
@@ -42,4 +42,4 @@ These are documented and not treated as vulnerabilities; see the
 
 ## Supported versions
 
-Fixes land on `main` and in the current major tag of `verify-routing`.
+Fixes land on `main` and in the current major tag of `routing-guard`.

@@ -25,7 +25,7 @@ Keep hosted:
 ## 2. Route them
 
 Replace each chosen job's `runs-on` with the canonical expression, verbatim.
-It must match the `verify-routing` version used in step 3 (`@v3` below); see
+It must match the `routing-guard` version used in step 3 (`@v3` below); see
 [`CHANGELOG.md`](../CHANGELOG.md) when upgrading:
 
 ```yaml
@@ -41,24 +41,30 @@ the file the `runs-on` line is in.
 In a job that runs on every PR, after `actions/checkout`:
 
 ```yaml
-      - name: Verify local-runner routing
-        uses: i2Dev-com/homefield/verify-routing@v3
+      - name: Routing guard
+        uses: i2Dev-com/homefield/routing-guard@v3
         with:
-          expected: |
+          jobs: |
             ci.yml:lint
             ci.yml:test
 ```
 
-`expected` lists `workflow-file:job-id` for every job you routed in step 2.
+`jobs` lists `workflow-file:job-id` for every job you routed in step 2.
 If the runner was registered with a `RUNNER_LABEL` other than `homefield-ci`, put
 that label in the expression in step 2 and pass it here as `label:`.
 Routing another job later means adding it here in the same PR, which keeps it
 a deliberate, reviewed change.
-The step has to use exactly `i2Dev-com/homefield/verify-routing@v3` and be in
+The step has to use exactly `i2Dev-com/homefield/routing-guard@v3` and be in
 a workflow that runs on `pull_request`, with no `if: false` on the step or its
 job; `homefield adopt` does not count anything else as a guard. A reusable
 workflow works if one of the repository's `pull_request` workflows calls it
 (`uses: ./.github/workflows/<file>`).
+
+The guard used to be called `verify-routing`, with `expected:` in place of
+`jobs:`. `i2Dev-com/homefield/verify-routing@v3` with `expected:` still works as
+a deprecated alias, and `homefield adopt` accepts it with a warning, until v4
+removes it. To switch, change the `uses:` line and rename `expected:` to
+`jobs:`.
 
 ## 4. Fix cache keys
 
@@ -92,8 +98,8 @@ step:
    runner is for private repositories only (README, "Security model").
 2. **Routing.** Downloads the repository's `.github/workflows` at its default
    branch and runs the same check as the guard. It is ready when a
-   `verify-routing` step is there, passes, and at least one job is routed.
-   The step must use `i2Dev-com/homefield/verify-routing@v3` (a full commit
+   `routing-guard` step is there, passes, and at least one job is routed.
+   The step must use `i2Dev-com/homefield/routing-guard@v3` (a full commit
    SHA is accepted, with a warning; the former `i2Dev-com/ci-runner` path no
    longer resolves) in a workflow that runs on pull requests;
    anything else, such as another repository's action, `@v1`, `@main`, a
@@ -105,7 +111,7 @@ step:
    warnings: check that every pull request that changes `.github/workflows`
    still runs the guard. When the routing is not ready it lists what is wrong
    and prints the routing expression and the guard step to add, with
-   `expected:` taken from `--jobs "ci.yml:lint,..."` or from the jobs already
+   `jobs:` taken from `--jobs "ci.yml:lint,..."` or from the jobs already
    routed, and exits 1 without switching.
 3. **Cache keys.** Warns about `key:` and `restore-keys:` lines that have
    `runner.os` and no `runner.arch` ([step 4](#4-fix-cache-keys)), in the
@@ -158,4 +164,4 @@ Default group, needs nothing here. Then set the variable:
 
 In the adopting repository, document which jobs are routed and why, how to
 switch back to hosted, and link to [`runbook.md`](runbook.md). The routed
-jobs themselves are already listed in the guard's `expected`.
+jobs themselves are already listed in the guard's `jobs`.

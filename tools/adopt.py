@@ -1,23 +1,26 @@
 #!/usr/bin/env python3
 """Text helpers for `bin/homefield adopt`, which downloads a repository's
-workflow files and needs three things from them: the verify-routing guard
+workflow files and needs three things from them: the routing-guard
 steps, cache keys that lack the architecture, and the guard step to suggest.
 Stdlib only, and no YAML parser: the workflow text is read line by line, which
 is enough for the shapes GitHub workflows take and fails safe (a guard it
 cannot read counts as no guard, so adopt does not switch the repository on).
 
-A guard is a step that uses exactly ACTION (the owner and repository compared
-without case; a full commit SHA in place of the ref is accepted with a
-warning) and that can run on a pull request: see check_guard.
+A guard is a step that uses exactly ACTION or its deprecated alias
+ALIAS_ACTION (the owner and repository compared without case; a full commit
+SHA in place of the ref is accepted with a warning) and that can run on a pull
+request: see check_guard. ACTION reads its jobs from `jobs:`, the alias from
+`expected:`.
 
-  adopt.py guards DIR       one line per step that uses some verify-routing:
+  adopt.py guards DIR       one line per step that uses some routing guard:
                             file:line <TAB> status <TAB> label <TAB> blocking
-                            <TAB> warnings <TAB> expected entries (spaces).
-                            status is ok (a usable guard), blocked (a
-                            verify-routing@v3 step that cannot run on pull
-                            requests) or source (not the action adopt
-                            recognizes). blocking and warnings are texts joined
-                            by ";", or "-" when there are none.
+                            <TAB> warnings <TAB> deprecations <TAB> job
+                            entries (spaces). status is ok (a usable guard),
+                            blocked (a routing-guard@v3 step that cannot run
+                            on pull requests) or source (not an action adopt
+                            recognizes). blocking, warnings and deprecations
+                            are texts joined by ";", or "-" when there are
+                            none.
   adopt.py cache-keys DIR   one line per cache key that has runner.os and not
                             runner.arch: file:line: text
   adopt.py guard-snippet [--label L] [--jobs a.yml:x,b.yml:y]
@@ -32,16 +35,21 @@ import urllib.parse
 
 # Keep in step with the version docs/adopting.md and the README tell consumers
 # to pin; tests/adopt.sh checks that the docs still say it.
-ACTION = "i2Dev-com/homefield/verify-routing@v3"
+ACTION = "i2Dev-com/homefield/routing-guard@v3"
+# The v3.0 name of the action, kept until v4 with `expected:` for `jobs:`.
+ALIAS_ACTION = "i2Dev-com/homefield/verify-routing@v3"
 DEFAULT_LABEL = "homefield-ci"
 
 # A step or job `uses:`; group 3 is the raw value.
 USES = re.compile(r"^(\s*)(-\s+)?uses:\s*(.*?)\s*$")
 ACTION_PATH, _, ACTION_REF = ACTION.partition("@")
+ALIAS_PATH = ALIAS_ACTION.partition("@")[0]
 # The repository was called ci-runner before v3. GitHub redirects its web and
 # API URLs but not `uses:`, so a step on the old path fails to resolve: adopt
-# names it to say what migrating means.
+# names it to say what migrating means (to ACTION, not the alias).
 OLD_ACTION_PATH = "i2dev-com/ci-runner/verify-routing"
+# What a step that uses some routing guard (any owner, any ref) has in `uses:`.
+STEP_MARKERS = ("/routing-guard@", "/verify-routing@")
 ACTION_DIR = "./.github/workflows/"
 # The trigger options after which a pull request may not run the workflow.
 FILTERS = ("branches", "branches-ignore", "paths", "paths-ignore")
@@ -277,7 +285,7 @@ def step_if(lines, at):
 
 
 def check_guard(name, at, files):
-    """(blocking, warnings) for the verify-routing step on line index `at` of
+    """(blocking, warnings) for the routing-guard step on line index `at` of
     file `name`, given files = {name: {"lines", "events", "jobs"}}: whether it
     can run on a pull request, and what to check when it may not on all of
     them. A workflow with no `pull_request` trigger of its own counts only
@@ -295,7 +303,7 @@ def check_guard(name, at, files):
         if not found:
             continue
         if condition(found[1]) == "false":
-            blocks.append(f"the verify-routing step at {where} never runs: {what} has an if: that is false (line {found[0]})")
+            blocks.append(f"the routing-guard step at {where} never runs: {what} has an if: that is false (line {found[0]})")
         else:
             warns.append(f"{name}:{found[0]}: {what} has an if: condition")
 
@@ -319,7 +327,7 @@ def check_guard(name, at, files):
         for other, caller in callers:
             cwhere = f"job {caller['id']} at {other}:{caller['line']}"
             if caller["if"] and condition(caller["if"][1]) == "false":
-                blocks.append(f"the verify-routing step at {where} never runs: {cwhere}, which calls {name}, has an if: that is false")
+                blocks.append(f"the routing-guard step at {where} never runs: {cwhere}, which calls {name}, has an if: that is false")
             else:
                 usable.append((other, caller, cwhere))
         for other, caller, cwhere in usable:
@@ -334,15 +342,16 @@ def check_guard(name, at, files):
                 tail.append(f"{name} is only reusable (workflow_call) and no workflow that runs on pull_request calls it with uses: {ACTION_DIR}{name} (adopt follows one level of calls)")
             if not tail:
                 tail.append(f"{name} does not run on pull_request" if events else f"adopt could not read the on: of {name}")
-            blocks.append(f"the verify-routing step at {where} does not run on pull requests: " + " and ".join(tail))
+            blocks.append(f"the routing-guard step at {where} does not run on pull requests: " + " and ".join(tail))
     return blocks, warns
 
 
 def guards(directory):
-    """(file:line, status, label, blocking, warnings, expected entries) for
-    every step that uses some verify-routing. The status is "source" for one
-    that is not ACTION (another repository or ref), "blocked" for one that
-    cannot run on a pull request, and "ok" for a usable guard."""
+    """(file:line, status, label, blocking, warnings, deprecations, job entries)
+    for every step that uses some routing guard. The status is "source" for
+    one that is not ACTION or ALIAS_ACTION (another repository or ref),
+    "blocked" for one that cannot run on a pull request, and "ok" for a usable
+    guard. A step on the alias is usable and carries a deprecation."""
     files = {}
     for name in workflow_files(directory):
         lines = read_lines(os.path.join(directory, name))
@@ -353,16 +362,17 @@ def guards(directory):
         for at, line in enumerate(lines):
             m = USES.match(line)
             value = scalar(m.group(3)) if m else ""
-            if line.lstrip().startswith("#") or "/verify-routing@" not in value:
+            if line.lstrip().startswith("#") or not any(marker in value for marker in STEP_MARKERS):
                 continue
             where = f"{name}:{at + 1}"
             path, _, ref = value.partition("@")
             values = with_values(lines, *step_bounds(lines, at))
-            expected = [e for e in re.split(r"[\s,]+", values.get("expected", "")) if e]
+            alias = path.lower().endswith("/verify-routing")
+            jobs = [e for e in re.split(r"[\s,]+", values.get("expected" if alias else "jobs", "")) if e]
             label = values.get("label") or DEFAULT_LABEL
             sha = re.fullmatch(r"[0-9a-fA-F]{40}", ref) is not None
-            if path.lower() != ACTION_PATH.lower() or (ref != ACTION_REF and not sha):
-                reason = f"the verify-routing step at {where} uses {value}, but adopt recognizes {ACTION} (docs/adopting.md, step 3)"
+            if path.lower() not in (ACTION_PATH.lower(), ALIAS_PATH.lower()) or (ref != ACTION_REF and not sha):
+                reason = f"the routing-guard step at {where} uses {value}, but adopt recognizes {ACTION} (docs/adopting.md, step 3)"
                 if path.lower() == OLD_ACTION_PATH:
                     reason += (
                         f". That is the ci-runner guard, which no longer resolves since the repository was renamed:"
@@ -370,12 +380,15 @@ def guards(directory):
                         " from local-ci to homefield-ci in the same change"
                         " (docs/runbook.md, \"Migrating from ci-runner (v2)\", step 6)"
                     )
-                found.append((where, "source", label, [reason], [], expected))
+                found.append((where, "source", label, [reason], [], [], jobs))
                 continue
             blocks, warns = check_guard(name, at, files)
             if sha:
                 warns.append(f"{where}: pinned to a commit (adopt checks it with {ACTION_REF}'s rules)")
-            found.append((where, "blocked" if blocks else "ok", label, blocks, warns, expected))
+            deprecated = []
+            if alias:
+                deprecated.append(f"{where}: {ALIAS_PATH} is a deprecated alias of {ACTION_PATH}: switch the step to {ACTION} and rename expected: to jobs: (the alias is removed in v4)")
+            found.append((where, "blocked" if blocks else "ok", label, blocks, warns, deprecated, jobs))
     return found
 
 
@@ -413,10 +426,10 @@ def cache_keys(directory):
 def guard_snippet(label, jobs):
     entries = jobs or ["ci.yml:<job-id>"]
     out = [
-        "      - name: Verify local-runner routing",
+        "      - name: Routing guard",
         f"        uses: {ACTION}",
         "        with:",
-        "          expected: |",
+        "          jobs: |",
     ]
     out += [f"            {e}" for e in entries]
     if label != DEFAULT_LABEL:
@@ -436,9 +449,9 @@ def main():
     args = ap.parse_args()
 
     if args.cmd == "guards":
-        for where, status, label, blocks, warns, expected in guards(args.dir):
-            joined = [";".join(t.replace(";", ",") for t in texts) or "-" for texts in (blocks, warns)]
-            print("\t".join([where, status, label, *joined, " ".join(expected)]))
+        for where, status, label, blocks, warns, deprecated, jobs in guards(args.dir):
+            joined = [";".join(t.replace(";", ",") for t in texts) or "-" for texts in (blocks, warns, deprecated)]
+            print("\t".join([where, status, label, *joined, " ".join(jobs)]))
     elif args.cmd == "cache-keys":
         for hit in cache_keys(args.dir):
             print(hit)

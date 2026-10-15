@@ -1,14 +1,15 @@
-name: Verify local-runner routing
+name: Verify local-runner routing (deprecated)
 description: >-
-  Fails if any workflow job routes to the local self-hosted runner without the
-  canonical runs-on expression (hosted fallback, pull requests only, Dependabot
-  and fork pull requests excluded), or if the set of opted-in jobs differs from the expected list.
+  Deprecated in favour of routing-guard, which this runs: use
+  i2Dev-com/homefield/routing-guard@v3 with `jobs:` in place of `expected:`.
+  Kept as an alias, and removed in v4.
 
 inputs:
   expected:
     description: >-
       The jobs allowed to opt in, as `workflow-file:job-id` entries separated
       by newlines, commas or spaces. Empty means no job may opt in.
+      Deprecated: this is `jobs` in routing-guard.
     required: false
     default: ''
   label:
@@ -29,7 +30,7 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Verify local-runner routing
+    - name: Verify local-runner routing (deprecated alias of routing-guard)
       shell: bash
       # Inputs go through env, never interpolated into the script, so a value
       # cannot inject shell.
@@ -39,8 +40,8 @@ runs:
         INPUT_ARCH: ${{ inputs.arch }}
         INPUT_WORKFLOWS_DIR: ${{ inputs.workflows-dir }}
       run: |
-        python3 "$GITHUB_ACTION_PATH/verify_routing.py" \
+        python3 "$GITHUB_ACTION_PATH/../routing-guard/routing_guard.py" \
           --workflows-dir "$INPUT_WORKFLOWS_DIR" \
           --label "$INPUT_LABEL" \
           --arch "$INPUT_ARCH" \
-          --expected "$INPUT_EXPECTED"
+          --jobs "$INPUT_EXPECTED"

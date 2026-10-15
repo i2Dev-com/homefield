@@ -11,8 +11,10 @@ parts:
 - `bin/homefield` + `install.sh` — host-side tool (runs on the Mac, wraps
   Lima), Python helpers in `tools/` behind `adopt` and `report`.
 - `vm/lima.yaml` + `vm/provision.sh` — the VM and what runs inside it.
-- `verify-routing/` — the published GitHub Action (`verify_routing.py` +
-  `action.yml`); consumers pin it as `i2Dev-com/homefield/verify-routing@vN`.
+- `routing-guard/` — the published GitHub Action (`routing_guard.py` +
+  `action.yml`); consumers pin it as `i2Dev-com/homefield/routing-guard@vN`.
+  `verify-routing/action.yml` is its deprecated v3.0 name (`expected:` for
+  `jobs:`), a thin alias that runs the same script; it goes in v4.
 
 ## Bash versions
 
@@ -21,7 +23,7 @@ parts:
   `set -e` is off inside `$(...)` (check failures there explicitly).
 - `vm/provision.sh` runs in the guest (Ubuntu, bash 5) and **must stay
   idempotent**: every run is also an upgrade.
-- Run `shellcheck bin/homefield install.sh vm/provision.sh verify-routing/tests/run.sh tests/*.sh`
+- Run `shellcheck bin/homefield install.sh vm/provision.sh routing-guard/tests/run.sh tests/*.sh`
   (see CONTRIBUTING.md for the full pre-PR list, which also includes
   `actionlint`); CI runs the same.
 
@@ -30,8 +32,8 @@ parts:
 Each suite is standalone; there is no test runner.
 
 ```bash
-bash verify-routing/tests/run.sh   # fixture suite: every drift case must fail
-bash tests/label-rule.sh           # provision.sh and verify-routing accept the same labels
+bash routing-guard/tests/run.sh    # fixture suite: every drift case must fail
+bash tests/label-rule.sh           # provision.sh and routing-guard accept the same labels
 bash tests/adopt.sh                # bin/homefield adopt and tools/adopt.py, with a stub gh
 # ... plus the other tests/*.sh suites; see CONTRIBUTING.md
 ```
@@ -55,13 +57,13 @@ bash tests/adopt.sh                # bin/homefield adopt and tools/adopt.py, wit
 
 The canonical `runs-on` expression (guarded: hosted fallback, PR-only,
 no Dependabot, no forks) lives in copies that must change together:
-`verify-routing/verify_routing.py`, `vm/provision.sh`, `README.md`,
+`routing-guard/routing_guard.py`, `vm/provision.sh`, `README.md`,
 `docs/adopting.md`, `docs/runbook.md`, `.github/workflows/ci.yml`.
-`tests/label-rule.sh` exists to keep provision.sh and verify-routing in
+`tests/label-rule.sh` exists to keep provision.sh and routing-guard in
 agreement — run it when touching either.
 
 - A change that makes a previously passing workflow fail (new guard, new
-  default) is a **new major** `verify-routing@vN`; compatible changes move the
+  default) is a **new major** `routing-guard@vN`; compatible changes move the
   current tag. Say so in the PR; `CHANGELOG.md` explains the upgrade.
 - This repo's own CI checks its workflow against the **published `@v3`
   action**, not the local checkout — a breaking change lands only when the

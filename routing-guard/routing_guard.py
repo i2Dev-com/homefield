@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Pin every job that can run on the local self-hosted runner to one
-canonical `runs-on` expression.
+"""The routing guard: pin every job that can run on the local self-hosted
+runner to one canonical `runs-on` expression.
 
 GitHub evaluates `runs-on` before any step runs, so no action can choose a
 job's runner: each opted-in job has to carry the expression inline. This check
@@ -33,7 +33,7 @@ the list fails, including an expression this check cannot evaluate and a
 multi-line `runs-on` (a list or mapping on the following lines). Write those
 on one line, or keep the job on a hosted image name.
 
-The set of opted-in jobs must equal EXPECTED exactly, so routing a job to the
+The set of opted-in jobs must equal --jobs exactly, so routing a job to the
 local runner is always a deliberate, reviewed change.
 
 Exit status: 0 if every check passes, 1 otherwise.
@@ -112,7 +112,7 @@ def main() -> int:
     ap.add_argument("--label", default="homefield-ci")
     ap.add_argument("--arch", default="arm64")
     ap.add_argument(
-        "--expected",
+        "--jobs",
         default="",
         help="file:job entries that opt in, separated by newlines, commas or spaces",
     )
@@ -137,7 +137,7 @@ def main() -> int:
     if args.print_expression:
         print(canonical)
         return 0
-    expected = [e for e in re.split(r"[\s,]+", args.expected) if e]
+    expected = [e for e in re.split(r"[\s,]+", args.jobs) if e]
     quiet = args.list
 
     failed = 0

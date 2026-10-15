@@ -14,7 +14,7 @@
 #                 URL. Required to register or move; not needed to re-run on a
 #                 runner that is already registered.
 #   RUNNER_LABEL  the custom label workflows route on (default homefield-ci). Must
-#                 match verify-routing's `label` input and the label in every
+#                 match routing-guard's `label` input and the label in every
 #                 inline expression.
 #   RUNNER_NAME   default: the guest's hostname (lima-<instance>).
 #   RUNNER_GROUP  org runner group to join (default homefield-ci).
@@ -78,7 +78,7 @@ fi
 # GitHub default label or a hosted image name either, because GitHub gives a
 # job any runner whose labels are a superset of the request: a runner labelled
 # `ubuntu-latest` would take every plain `runs-on: ubuntu-latest` job in the
-# organization, with none of the expression's guards. verify_routing.py
+# organization, with none of the expression's guards. routing_guard.py
 # applies the same rule to its `label` input; keep the two in step.
 if ! [[ "$RUNNER_LABEL" =~ ^[A-Za-z0-9._-]+$ ]]; then
   echo "provision.sh: RUNNER_LABEL must be one label of letters, digits, '.', '_' or '-'" >&2
