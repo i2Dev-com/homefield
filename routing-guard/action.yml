@@ -1,0 +1,46 @@
+name: Routing guard
+description: >-
+  Fails if any workflow job routes to the local self-hosted runner without the
+  canonical runs-on expression (hosted fallback, pull requests only, Dependabot
+  and fork pull requests excluded), or if the set of opted-in jobs differs from the expected list.
+
+inputs:
+  jobs:
+    description: >-
+      The jobs allowed to opt in, as `workflow-file:job-id` entries separated
+      by newlines, commas or spaces. Empty means no job may opt in.
+    required: false
+    default: ''
+  label:
+    description: >-
+      The custom runner label the workflows route on: RUNNER_LABEL in
+      provision.sh, and the last label in every inline expression.
+    required: false
+    default: homefield-ci
+  arch:
+    description: The runner's architecture label (arm64 or x64).
+    required: false
+    default: arm64
+  workflows-dir:
+    description: Directory of workflow files to check, relative to the workspace.
+    required: false
+    default: .github/workflows
+
+runs:
+  using: composite
+  steps:
+    - name: Routing guard
+      shell: bash
+      # Inputs go through env, never interpolated into the script, so a value
+      # cannot inject shell.
+      env:
+        INPUT_JOBS: ${{ inputs.jobs }}
+        INPUT_LABEL: ${{ inputs.label }}
+        INPUT_ARCH: ${{ inputs.arch }}
+        INPUT_WORKFLOWS_DIR: ${{ inputs.workflows-dir }}
+      run: |
+        python3 "$GITHUB_ACTION_PATH/routing_guard.py" \
+          --workflows-dir "$INPUT_WORKFLOWS_DIR" \
+          --label "$INPUT_LABEL" \
+          --arch "$INPUT_ARCH" \
+          --jobs "$INPUT_JOBS"

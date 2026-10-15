@@ -1,6 +1,6 @@
 # Changelog
 
-Versions are the tags consumers pin, `verify-routing@vN`. A compatible change
+Versions are the tags consumers pin, `routing-guard@vN`. A compatible change
 moves the current major tag; a change that makes a previously passing workflow
 fail is a new major (see [README](README.md#development)).
 
@@ -219,6 +219,27 @@ runner next to it:
 - `bin/ci-runner report`: queue wait, duration and minutes per repository,
   workflow and job, local against hosted, from the GitHub API, for measuring
   whether the runner saves money and keeps up.
+- The `routing-guard` action (`i2Dev-com/homefield/routing-guard@v3`): the
+  routing check under its new name, with the input `jobs:` in place of
+  `expected:` (same meaning, same format). `label:`, `arch:` and
+  `workflows-dir:` are unchanged. `homefield adopt` recognizes it, reads
+  `jobs:` from it, and prints it in the guard step it suggests.
+
+### Deprecated
+
+- `i2Dev-com/homefield/verify-routing@v3` and its `expected:` input. It stays
+  as an alias of `routing-guard` (same checks, same inputs as before) so that
+  consumers pinned to `@v3` keep working unchanged, and is removed in v4.
+  `homefield adopt` still accepts it as a guard, with a warning. To switch,
+  change two lines in the guard step:
+
+  ```diff
+  -        uses: i2Dev-com/homefield/verify-routing@v3
+  +        uses: i2Dev-com/homefield/routing-guard@v3
+           with:
+  -          expected: |
+  +          jobs: |
+  ```
 
 ## v2 (2026-09-30)
 

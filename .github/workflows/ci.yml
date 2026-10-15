@@ -45,7 +45,7 @@ jobs:
             rm -rf "shellcheck-v${SHELLCHECK_VERSION}" "$tarball"
             export PATH="$PWD:$PATH"
           fi
-          shellcheck bin/homefield install.sh vm/provision.sh verify-routing/tests/run.sh tests/*.sh
+          shellcheck bin/homefield install.sh vm/provision.sh routing-guard/tests/run.sh tests/*.sh
 
       # Pinned and checksum-verified. Other repositories run this repository's
       # action to guard their routing, so nothing in its CI executes a download
@@ -72,10 +72,10 @@ jobs:
           tar -xzf "$tarball" actionlint
           ./actionlint -color
 
-      - name: verify_routing.py fixture suite
-        run: bash verify-routing/tests/run.sh
+      - name: routing_guard.py fixture suite
+        run: bash routing-guard/tests/run.sh
 
-      - name: Routing label rule, provision.sh and verify_routing.py agree
+      - name: Routing label rule, provision.sh and routing_guard.py agree
         run: bash tests/label-rule.sh
 
       - name: RUNNER_EXTRA_PACKAGES validation
@@ -108,9 +108,19 @@ jobs:
       # The action as consumers call it, not just the script behind it: inputs
       # through env, $GITHUB_ACTION_PATH resolution, composite wiring.
       - name: Action against the clean fixture
+        uses: ./routing-guard
+        with:
+          workflows-dir: routing-guard/tests/base
+          jobs: |
+            ci.yml:changes
+            ci.yml:checks
+
+      # The deprecated v3.0 name, which consumers still pin: same fixture,
+      # its own `expected:` input, and the sibling routing-guard script.
+      - name: Deprecated verify-routing alias against the clean fixture
         uses: ./verify-routing
         with:
-          workflows-dir: verify-routing/tests/base
+          workflows-dir: routing-guard/tests/base
           expected: |
             ci.yml:changes
             ci.yml:checks
@@ -120,6 +130,8 @@ jobs:
       # runner, and it is the only job that may. Pushes to main always run
       # hosted (the expression requires a pull_request event). The published
       # @v3, not the checkout's local action, so `homefield adopt` counts it.
+      # Switches to routing-guard@v3 (with jobs:) once the v3 tag moves past
+      # the merge of that action.
       - name: Action against this repo's workflows
         uses: i2Dev-com/homefield/verify-routing@v3
         with:

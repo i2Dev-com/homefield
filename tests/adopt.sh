@@ -80,8 +80,8 @@ printf '100\n555\n200\n' >"$work/members-with"
 : >"$work/members-empty"
 
 # ── Workflow fixtures ──────────────────────────────────────────────────────
-expr="$(python3 "$ROOT/verify-routing/verify_routing.py" --print-expression)"
-expr_acme="$(python3 "$ROOT/verify-routing/verify_routing.py" --print-expression --label acme-ci)"
+expr="$(python3 "$ROOT/routing-guard/routing_guard.py" --print-expression)"
+expr_acme="$(python3 "$ROOT/routing-guard/routing_guard.py" --print-expression --label acme-ci)"
 
 # emit_job <id> <runs-on> [extra step lines...]
 emit_job() {
@@ -91,12 +91,14 @@ emit_job() {
   for line in "$@"; do printf '%s\n' "$line"; done
 }
 header() { printf 'name: CI\non: [pull_request]\njobs:\n'; }
-# guard <expected block lines> or guard_label <label> <block lines>
-guard() { guard_uses i2Dev-com/homefield/verify-routing@v3 "$@"; }
+# guard <job entries>  or guard_label <label> <block lines>
+guard() { guard_uses i2Dev-com/homefield/routing-guard@v3 "$@"; }
 guard_uses() {
-  local uses="$1" e
+  local uses="$1" key=jobs e
   shift
-  printf '      - name: Verify local-runner routing\n        uses: %s\n        with:\n          expected: |\n' "$uses"
+  # The deprecated alias, and the former ci-runner path, take expected:.
+  case "$uses" in *verify-routing*) key=expected ;; esac
+  printf '      - name: Routing guard\n        uses: %s\n        with:\n          %s: |\n' "$uses" "$key"
   for e in "$@"; do printf '            %s\n' "$e"; done
 }
 guard_label() {
@@ -132,7 +134,7 @@ mkdir -p "$work/wf-ready/subdir"
 } >"$work/wf-mismatch/ci.yml"
 {
   header
-  emit_job lint ubuntu-latest "$(printf '      - name: Verify local-runner routing\n        uses: i2Dev-com/homefield/verify-routing@v3\n        with:\n          expected: '"''"'')"
+  emit_job lint ubuntu-latest "$(printf '      - name: Routing guard\n        uses: i2Dev-com/homefield/routing-guard@v3\n        with:\n          jobs: '"''"'')"
 } >"$work/wf-norouted/ci.yml"
 {
   header
@@ -149,7 +151,7 @@ cache_line_restore="$(grep -nxF "            ${os_key}-npm-" "$work/wf-cache/ci.
 # A workflow with no routed job (a nightly that stays hosted): its keys are
 # not the routed jobs' concern, so they are not reported once jobs are routed.
 { header; emit_job e2e ubuntu-latest "$(cache_step "${os_key}-pw-${hash_key}")"; } >"$work/wf-cache/nightly.yml"
-# Two verify-routing steps: a stale one on the default label (its check fails
+# Two routing-guard steps: a stale one on the default label (its check fails
 # against jobs routed on another label) and a passing one on that other label.
 # The routed jobs count under either step, and the passing label is the one to
 # advise with.
@@ -170,18 +172,22 @@ wf_guard() {
     emit_job lint "$expr" "$(guard_uses "$3" ci.yml:lint)"
   } >"$work/$1/ci.yml"
 }
-action="i2Dev-com/homefield/verify-routing@v3"
+action="i2Dev-com/homefield/routing-guard@v3"
 sha40="0123456789abcdef0123456789abcdef01234567"
-wf_guard wf-src-other 'on: [pull_request]' other-org/homefield/verify-routing@v3
-wf_guard wf-src-v1 'on: [pull_request]' i2Dev-com/homefield/verify-routing@v1
-wf_guard wf-src-main 'on: [pull_request]' i2Dev-com/homefield/verify-routing@main
-wf_guard wf-src-short 'on: [pull_request]' i2Dev-com/homefield/verify-routing@${sha40%?}
-wf_guard wf-src-sha 'on: [pull_request]' "i2Dev-com/homefield/verify-routing@${sha40}"
+wf_guard wf-src-other 'on: [pull_request]' other-org/homefield/routing-guard@v3
+wf_guard wf-src-v1 'on: [pull_request]' i2Dev-com/homefield/routing-guard@v1
+wf_guard wf-src-main 'on: [pull_request]' i2Dev-com/homefield/routing-guard@main
+wf_guard wf-src-short 'on: [pull_request]' i2Dev-com/homefield/routing-guard@${sha40%?}
+wf_guard wf-src-sha 'on: [pull_request]' "i2Dev-com/homefield/routing-guard@${sha40}"
 wf_guard wf-src-quoted 'on: [pull_request]' "'${action}'"
 wf_guard wf-src-dquoted 'on: [pull_request]' "\"${action}\""
-wf_guard wf-src-case 'on: [pull_request]' I2DEV-COM/HomeField/verify-routing@v3
+wf_guard wf-src-case 'on: [pull_request]' I2DEV-COM/HomeField/routing-guard@v3
 wf_guard wf-src-oldpath 'on: [pull_request]' i2Dev-com/ci-runner/verify-routing@v3
 wf_guard wf-src-oldpath-v2 'on: [pull_request]' i2Dev-com/ci-runner/verify-routing@v2
+wf_guard wf-alias 'on: [pull_request]' i2Dev-com/homefield/verify-routing@v3
+wf_guard wf-alias-sha 'on: [pull_request]' "i2Dev-com/homefield/verify-routing@${sha40}"
+wf_guard wf-alias-v1 'on: [pull_request]' i2Dev-com/homefield/verify-routing@v1
+wf_guard wf-alias-push 'on: [push]' i2Dev-com/homefield/verify-routing@v3
 wf_guard wf-on-push 'on: [push]' "$action"
 wf_guard wf-on-prt 'on: pull_request_target' "$action"
 wf_guard wf-on-list 'on: [push, pull_request]' "$action"
@@ -401,10 +407,10 @@ record "the last lines say what is left by hand" "yes/yes" "$(has "$out" 'CI_RUN
 
 adopt GH_WF="$work/wf-noguard" --
 record "no guard step: not ready, nothing switched, exit 1" "nonzero/yes/yes/0" \
-  "$(nonzero "$rc")/$(has "$out" 'routing: not ready')/$(has "$out" 'no verify-routing step in .github/workflows')/$(called 'variable set')"
+  "$(nonzero "$rc")/$(has "$out" 'routing: not ready')/$(has "$out" 'no routing-guard step in .github/workflows')/$(called 'variable set')"
 record "...the canonical expression is printed" "yes" "$(has "$out" "runs-on: $expr")"
 record "...and the guard step, with the jobs that are routed" "yes/yes/yes" \
-  "$(has "$out" 'uses: i2Dev-com/homefield/verify-routing@v3')/$(has "$out" '            ci.yml:lint')/$(has "$out" '            ci.yml:test')"
+  "$(has "$out" 'uses: i2Dev-com/homefield/routing-guard@v3')/$(has "$out" '            ci.yml:lint')/$(has "$out" '            ci.yml:test')"
 record "...the default label is not written into the guard" "no" "$(has "$out" 'label: homefield-ci')"
 record "...and the last line says to merge first" "yes" "$(has "$out" 'not switched: merge the routing first, then run homefield adopt again')"
 
@@ -416,7 +422,7 @@ record "a guard with no routed job: not ready" "nonzero/yes/0" "$(nonzero "$rc")
 record "...the snippet has a placeholder job" "yes" "$(has "$out" 'ci.yml:<job-id>')"
 adopt GH_WF="$work/wf-nonexistent" --
 record "no .github/workflows at all: not ready, not an error to look" "nonzero/yes/yes/0" \
-  "$(nonzero "$rc")/$(has "$out" 'no verify-routing step')/$(has "$out" 'cache keys: no workflow files')/$(called 'variable set')"
+  "$(nonzero "$rc")/$(has "$out" 'no routing-guard step')/$(has "$out" 'cache keys: no workflow files')/$(called 'variable set')"
 adopt GH_WF="$work/wf-ready" GH_WF_FAIL=1 --
 record "the directory cannot be listed (not a 404): an error" "nonzero/yes/0" "$(nonzero "$rc")/$(has "$out" 'could not list .github/workflows in acme/app')/$(called 'variable set')"
 adopt GH_WF="$work/wf-noguard" -- --jobs 'a.yml:x,b.yml:y'
@@ -485,18 +491,27 @@ route_case() {
   if [ "$want" = ready ]; then wantrc="0/1/1"; else wantrc="nonzero/0/0"; fi
   record "$desc" "$wantrc/$wanth" "$(nonzero "$rc")/$(called 'variable set')/$(called 'X PUT')/$(has "$out" "$needle")"
 }
-may_not_run='the verify-routing guard may not run on every pull request'
+may_not_run='the routing guard may not run on every pull request'
 recognizes="adopt recognizes $action"
-route_case "another repository's verify-routing: not a guard, and says what it uses" wf-src-other not "ci.yml:9 uses other-org/homefield/verify-routing@v3, but $recognizes"
-route_case "@v1: not a guard" wf-src-v1 not "uses i2Dev-com/homefield/verify-routing@v1, but $recognizes"
-route_case "@main: not a guard" wf-src-main not "uses i2Dev-com/homefield/verify-routing@main, but $recognizes"
-route_case "...and nothing else is said to be usable" wf-src-main not "no verify-routing step that runs on pull requests"
+route_case "another repository's routing-guard: not a guard, and says what it uses" wf-src-other not "ci.yml:9 uses other-org/homefield/routing-guard@v3, but $recognizes"
+route_case "@v1: not a guard" wf-src-v1 not "uses i2Dev-com/homefield/routing-guard@v1, but $recognizes"
+route_case "@main: not a guard" wf-src-main not "uses i2Dev-com/homefield/routing-guard@main, but $recognizes"
+route_case "...and nothing else is said to be usable" wf-src-main not "no routing-guard step that runs on pull requests"
 route_case "a 39-character ref is not a commit: not a guard" wf-src-short not "but $recognizes"
 route_case "a full commit SHA: ready, with a warning naming the line" wf-src-sha ready "ci.yml:9: pinned to a commit (adopt checks it with v3's rules)"
 route_case "a single-quoted uses: a guard" wf-src-quoted ready "!$recognizes"
 route_case "a double-quoted uses: a guard" wf-src-dquoted ready "!$recognizes"
 route_case "the owner and repository are compared without case" wf-src-case ready "!$recognizes"
 route_case "...with no warning about the guard" wf-src-case ready "!$may_not_run"
+route_case "routing-guard@v3 with jobs: ready, no deprecation" wf-on-list ready "!deprecated alias"
+route_case "verify-routing@v3 with expected: still ready" wf-alias ready "routing: ready, the guard passes and these jobs are routed: ci.yml:lint"
+route_case "...with a deprecation warning naming the line and the switch" wf-alias ready "ci.yml:9: i2Dev-com/homefield/verify-routing is a deprecated alias of i2Dev-com/homefield/routing-guard: switch the step to $action and rename expected: to jobs: (the alias is removed in v4)"
+route_case "...and the alias at a commit SHA is ready too" wf-alias-sha ready "ci.yml:9: pinned to a commit (adopt checks it with v3's rules)"
+route_case "...with the deprecation warning as well" wf-alias-sha ready "is a deprecated alias of i2Dev-com/homefield/routing-guard"
+route_case "...and the deprecation is not a pull-request warning" wf-alias ready "!$may_not_run"
+route_case "verify-routing@v1 is not a guard" wf-alias-v1 not "uses i2Dev-com/homefield/verify-routing@v1, but $recognizes"
+route_case "the alias in a push-only workflow: blocked as any guard" wf-alias-push not "ci.yml:9 does not run on pull requests: ci.yml does not run on pull_request"
+route_case "...and no deprecation is said for a guard that is not usable" wf-alias-push not "!deprecated alias"
 route_case "the former ci-runner path is not a guard: GitHub does not redirect uses:" wf-src-oldpath not "uses i2Dev-com/ci-runner/verify-routing@v3, but $recognizes"
 route_case "...at @v2 either" wf-src-oldpath-v2 not "uses i2Dev-com/ci-runner/verify-routing@v2, but $recognizes"
 route_case "...and the reason says the old path no longer resolves" wf-src-oldpath-v2 not "That is the ci-runner guard, which no longer resolves since the repository was renamed"
@@ -506,7 +521,7 @@ route_case "...pointing at the runbook step" wf-src-oldpath-v2 not 'docs/runbook
 route_case "another repository's guard gets no ci-runner advice" wf-src-other not "!That is the ci-runner guard"
 
 route_case "a push-only workflow: the guard does not run on pull requests" wf-on-push not "ci.yml:9 does not run on pull requests: ci.yml does not run on pull_request"
-route_case "...so there is no guard" wf-on-push not "no verify-routing step that runs on pull requests"
+route_case "...so there is no guard" wf-on-push not "no routing-guard step that runs on pull requests"
 route_case "pull_request_target: not a guard, and the reason says why" wf-on-prt not "runs on pull_request_target, which runs the base branch's workflow files"
 route_case "on: [push, pull_request]" wf-on-list ready "!$may_not_run"
 route_case "\"on\": quoted" wf-on-quoted ready "!$may_not_run"
@@ -593,42 +608,47 @@ on: pull_request
 jobs:
   one:
     steps:
-      # - uses: x/homefield/verify-routing@v3   (commented out)
-      - uses: i2Dev-com/homefield/verify-routing@v3
+      # - uses: x/homefield/routing-guard@v3   (commented out)
+      - uses: i2Dev-com/homefield/routing-guard@v3
         with:
-          expected: a.yml:one a.yml:two
+          jobs: a.yml:one a.yml:two
   two:
     steps:
       - name: Guard
         with:
           label: "acme-ci"
-          expected: "a.yml:one, a.yml:two"
-        uses: 'i2Dev-com/homefield/verify-routing@v3'
+          jobs: "a.yml:one, a.yml:two"
+        uses: 'i2Dev-com/homefield/routing-guard@v3'
       - uses: actions/checkout@v5
         with:
-          expected: not-a-guard
+          jobs: not-a-guard
   three:
     steps:
       - name: Guard, comments in and after the block
-        uses: i2Dev-com/homefield/verify-routing@v3 # pinned
+        uses: i2Dev-com/homefield/routing-guard@v3 # pinned
         with:
-          expected: |-
+          jobs: |-
             a.yml:one
 
           # a comment at the key's depth ends the scalar
       - run: echo done
 EOF
-printf 'on: [push, pull_request]\r\njobs:\r\n  j:\r\n    steps:\r\n      - uses: i2dev-com/homefield/verify-routing@v3\r\n        with:\r\n          expected: |\r\n            b.yml:j\r\n' >"$shapes/b.yaml"
-printf 'jobs:\n  j:\n    steps:\n      - uses: o/r/verify-routing@v3\n' >"$shapes/c.yml"
+printf 'on: [push, pull_request]\r\njobs:\r\n  j:\r\n    steps:\r\n      - uses: i2dev-com/homefield/routing-guard@v3\r\n        with:\r\n          jobs: |\r\n            b.yml:j\r\n' >"$shapes/b.yaml"
+printf 'jobs:\n  j:\n    steps:\n      - uses: o/r/routing-guard@v3\n' >"$shapes/c.yml"
 echo "not a workflow" >"$shapes/d.txt"
 got="$(python3 -I "$ROOT/tools/adopt.py" guards "$shapes")"
-want="$(printf 'a.yml:6\tok\thomefield-ci\t-\t-\ta.yml:one a.yml:two\na.yml:15\tok\tacme-ci\t-\t-\ta.yml:one a.yml:two\na.yml:22\tok\thomefield-ci\t-\t-\ta.yml:one\nb.yaml:5\tok\thomefield-ci\t-\t-\tb.yml:j\nc.yml:4\tsource\thomefield-ci\tthe verify-routing step at c.yml:4 uses o/r/verify-routing@v3, but adopt recognizes i2Dev-com/homefield/verify-routing@v3 (docs/adopting.md, step 3)\t-\t')"
+want="$(printf 'a.yml:6\tok\thomefield-ci\t-\t-\t-\ta.yml:one a.yml:two\na.yml:15\tok\tacme-ci\t-\t-\t-\ta.yml:one a.yml:two\na.yml:22\tok\thomefield-ci\t-\t-\t-\ta.yml:one\nb.yaml:5\tok\thomefield-ci\t-\t-\t-\tb.yml:j\nc.yml:4\tsource\thomefield-ci\tthe routing-guard step at c.yml:4 uses o/r/routing-guard@v3, but adopt recognizes i2Dev-com/homefield/routing-guard@v3 (docs/adopting.md, step 3)\t-\t-\t')"
 record "guards: shapes of the step (block, inline, quoted, uses after with, CRLF, none, another action)" "$want" "$got"
 got="$(python3 -I "$ROOT/tools/adopt.py" guards "$work/wf-i2dev")"
-want="$(printf 'ci-checks.yml:9\tok\thomefield-ci\t-\tci.yml:5: the pull_request trigger has branches, paths-ignore filters;ci.yml:19: job checks, which calls ci-checks.yml, has an if: condition\tci-checks.yml:lint ci-checks.yml:test')"
+want="$(printf 'ci-checks.yml:9\tok\thomefield-ci\t-\tci.yml:5: the pull_request trigger has branches, paths-ignore filters;ci.yml:19: job checks, which calls ci-checks.yml, has an if: condition\t-\tci-checks.yml:lint ci-checks.yml:test')"
 record "guards: the columns of a guard behind a caller (status, blocking, warnings joined by ;)" "$want" "$got"
+mkdir -p "$work/alias-shape"
+printf 'on: pull_request\njobs:\n  j:\n    steps:\n      - uses: i2Dev-com/homefield/verify-routing@v3\n        with:\n          expected: x.yml:a\n' >"$work/alias-shape/ci.yml"
+got="$(python3 -I "$ROOT/tools/adopt.py" guards "$work/alias-shape")"
+want="$(printf 'ci.yml:5\tok\thomefield-ci\t-\t-\tci.yml:5: i2Dev-com/homefield/verify-routing is a deprecated alias of i2Dev-com/homefield/routing-guard: switch the step to i2Dev-com/homefield/routing-guard@v3 and rename expected: to jobs: (the alias is removed in v4)\tx.yml:a')"
+record "guards: the deprecated alias reads expected:, and says so in the deprecations column" "$want" "$got"
 mkdir -p "$work/no-on"
-printf 'jobs:\n  j:\n    steps:\n      - uses: i2Dev-com/homefield/verify-routing@v3\n' >"$work/no-on/ci.yml"
+printf 'jobs:\n  j:\n    steps:\n      - uses: i2Dev-com/homefield/routing-guard@v3\n' >"$work/no-on/ci.yml"
 record "guards: a workflow whose on: cannot be read is blocked, not trusted" "blocked/yes" \
   "$(python3 -I "$ROOT/tools/adopt.py" guards "$work/no-on" | cut -f2)/$(has "$(python3 -I "$ROOT/tools/adopt.py" guards "$work/no-on" | cut -f4)" 'could not read the on: of ci.yml')"
 record "guards: a directory with no workflow files has none" "" "$(mkdir -p "$work/empty" && python3 -I "$ROOT/tools/adopt.py" guards "$work/empty")"
@@ -668,7 +688,7 @@ readme="$(cat "$ROOT/README.md")"
 record "docs/adopting.md has the canonical expression" "yes" "$(has "$adopting" "runs-on: $expr")"
 record "README.md has the canonical expression" "yes" "$(has "$readme" "runs-on: $expr")"
 pinned="$(python3 -B -I -c 'import sys; sys.path.insert(0, sys.argv[1]); import adopt; print(adopt.ACTION)' "$ROOT/tools")"
-record "docs/adopting.md pins the same verify-routing as the snippet" "yes" "$(has "$adopting" "uses: $pinned")"
-record "README.md pins the same verify-routing as the snippet" "yes" "$(has "$readme" "uses: $pinned")"
+record "docs/adopting.md pins the same routing-guard as the snippet" "yes" "$(has "$adopting" "uses: $pinned")"
+record "README.md pins the same routing-guard as the snippet" "yes" "$(has "$readme" "uses: $pinned")"
 
 summary

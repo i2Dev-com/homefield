@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Fixture suite for verify_routing.py. Each case copies base/ into a scratch
+# Fixture suite for routing_guard.py. Each case copies base/ into a scratch
 # workflows dir, applies one mutation, and asserts the exit status. The
 # mutations are the ways a hand-edited copy of the expression actually drifts.
 #
-# Run:  bash verify-routing/tests/run.sh
+# Run:  bash routing-guard/tests/run.sh
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SCRIPT="${HERE}/../verify_routing.py"
+SCRIPT="${HERE}/../routing_guard.py"
 EXPECTED="ci.yml:changes ci.yml:checks"
 SED_INPLACE=(sed -i)
 sed --version >/dev/null 2>&1 || SED_INPLACE=(sed -i '')
@@ -40,7 +40,7 @@ case_() {
     printf '\n%s\n' "$append" >>"$dir/ci.yml"
   fi
   local got=pass
-  python3 "$SCRIPT" --workflows-dir "$dir" --expected "$expected" ${LABEL:+--label "$LABEL"} >"$dir/out" 2>&1 || got=fail
+  python3 "$SCRIPT" --workflows-dir "$dir" --jobs "$expected" ${LABEL:+--label "$LABEL"} >"$dir/out" 2>&1 || got=fail
   if [ "$got" = "$want" ]; then
     echo "  ok   ${name} (${got})"
     pass=$((pass + 1))
@@ -111,8 +111,8 @@ check "--list: a drifted copy is not listed, and is not a failure" "ci.yml:chang
 check "--list: a custom label lists only jobs on it" "ci.yml:changes
 ci.yml:checks" "$(python3 "$SCRIPT" --workflows-dir "${HERE}/base" --label homefield-ci --list)"
 check "--list: nothing for another label" "" "$(python3 "$SCRIPT" --workflows-dir "${HERE}/base" --label acme-ci --list)"
-check "--list ignores --expected" "ci.yml:changes
-ci.yml:checks" "$(python3 "$SCRIPT" --workflows-dir "${HERE}/base" --expected "ci.yml:docker" --list)"
+check "--list ignores --jobs" "ci.yml:changes
+ci.yml:checks" "$(python3 "$SCRIPT" --workflows-dir "${HERE}/base" --jobs "ci.yml:docker" --list)"
 rm -rf "$mutated"
 if python3 "$SCRIPT" --workflows-dir /nonexistent --list >/dev/null 2>&1; then
   echo "  FAIL --list on a missing directory: wanted fail, got pass"; fail=$((fail + 1))
@@ -147,7 +147,7 @@ printf '%s\n' \
   '    runs-on: ubuntu-latest' \
   '    steps:' \
   '      - run: echo build' >"$dispatch/ci.yml"
-if python3 "$SCRIPT" --workflows-dir "$dispatch" --expected "" >/dev/null 2>&1; then
+if python3 "$SCRIPT" --workflows-dir "$dispatch" --jobs "" >/dev/null 2>&1; then
   echo "  ok   a runs-on key under on: is not routing (pass)"; pass=$((pass + 1))
 else
   echo "  FAIL a runs-on key under on: is not routing: wanted pass, got fail"; fail=$((fail + 1))
@@ -166,7 +166,7 @@ printf '%s\n' \
   '            - run: echo changes' >"$indent/ci.yml"
 check "a four-space workflow: the job is attributed" "ci.yml:changes" \
   "$(python3 "$SCRIPT" --workflows-dir "$indent" --list)"
-if python3 "$SCRIPT" --workflows-dir "$indent" --expected "ci.yml:changes" >/dev/null 2>&1; then
+if python3 "$SCRIPT" --workflows-dir "$indent" --jobs "ci.yml:changes" >/dev/null 2>&1; then
   echo "  ok   a four-space workflow checks clean (pass)"; pass=$((pass + 1))
 else
   echo "  FAIL a four-space workflow checks clean: wanted pass, got fail"; fail=$((fail + 1))
@@ -186,7 +186,7 @@ printf '%s\n' \
   '      - run: echo build' >"$quoted/ci.yml"
 check "a quoted jobs key: the job is attributed" "ci.yml:build" \
   "$(python3 "$SCRIPT" --workflows-dir "$quoted" --list)"
-if python3 "$SCRIPT" --workflows-dir "$quoted" --expected "ci.yml:build" >/dev/null 2>&1; then
+if python3 "$SCRIPT" --workflows-dir "$quoted" --jobs "ci.yml:build" >/dev/null 2>&1; then
   echo "  ok   a quoted jobs key checks clean (pass)"; pass=$((pass + 1))
 else
   echo "  FAIL a quoted jobs key checks clean: wanted pass, got fail"; fail=$((fail + 1))
@@ -201,7 +201,7 @@ printf '%s\n' \
   '    runs-on: self-hosted' \
   '    steps:' \
   '      - run: echo build' >"$quoted/ci.yml"
-if python3 "$SCRIPT" --workflows-dir "$quoted" --expected "" >/dev/null 2>&1; then
+if python3 "$SCRIPT" --workflows-dir "$quoted" --jobs "" >/dev/null 2>&1; then
   echo "  FAIL a bare self-hosted under a quoted jobs key: wanted fail, got pass"; fail=$((fail + 1))
 else
   echo "  ok   a bare self-hosted under a quoted jobs key fails (pass)"; pass=$((pass + 1))
@@ -209,7 +209,7 @@ fi
 rm -rf "$quoted"
 
 # A missing directory must fail, not pass vacuously.
-if python3 "$SCRIPT" --workflows-dir /nonexistent --expected "" >/dev/null 2>&1; then
+if python3 "$SCRIPT" --workflows-dir /nonexistent --jobs "" >/dev/null 2>&1; then
   echo "  FAIL missing workflows dir: wanted fail, got pass"; fail=$((fail + 1))
 else
   echo "  ok   missing workflows dir (fail)"; pass=$((pass + 1))

@@ -1,5 +1,5 @@
 name: Bug report
-description: Something in bin/homefield, provision.sh, the VM or verify-routing does not work as documented.
+description: Something in bin/homefield, provision.sh, the VM or routing-guard does not work as documented.
 labels: [bug]
 body:
   - type: markdown
@@ -26,6 +26,6 @@ body:
     id: versions
     attributes:
       label: Versions
-      description: macOS, `limactl --version`, and the verify-routing tag or commit.
+      description: macOS, `limactl --version`, and the routing-guard tag or commit.
     validations:
       required: true
