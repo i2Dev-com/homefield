@@ -1,0 +1,29 @@
+name: E2E local runner
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    name: E2E on local runner
+    runs-on: ${{ vars.CI_RUNNER == 'local' && github.event_name == 'pull_request' && github.actor != 'dependabot[bot]' && !startsWith(github.head_ref, 'dependabot/') && github.event.pull_request.head.repo.full_name == github.repository && fromJSON('["self-hosted","linux","arm64","local-ci"]') || 'ubuntu-latest' }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: i2Dev-com/ci-runner/verify-routing@v2
+        with:
+          expected: |
+            e2e-local.yml:e2e
+
+      - name: Where am I
+        run: |
+          echo "runner: $RUNNER_NAME"
+          echo "arch: $RUNNER_ARCH"
+          echo "os: $ImageOS $ImageVersion"
+          uname -m
+          test "$RUNNER_ARCH" = ARM64
+          test "$(uname -m)" = aarch64
