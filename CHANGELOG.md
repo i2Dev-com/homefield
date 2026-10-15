@@ -28,6 +28,11 @@ fail is a new major (see [README](README.md#development)).
   the requested label, when `--label` is given — and when no `--label` was
   given, the label of a passing step is the one advised in the snippet and
   messages.
+- The `verify-routing` check now recognizes a top-level `jobs:` key spelled
+  with quotes (`"jobs":`), which YAML allows. Before, the runs-on lines under
+  one were attributed to no job and (in the unreleased draft) went unchecked;
+  a workflow with a quoted `jobs:` key and routing in place now passes, and a
+  bare `runs-on: self-hosted` under one still fails.
 - The isolation check read a failed guest command (a VM that is not running,
   say) as an empty mount list and misreported it as "the VM has host
   mounts". It now distinguishes a check that could not run from a mount

@@ -184,12 +184,15 @@ def main() -> int:
                 # attributes its runs-on lines to the right job — while keys
                 # deeper than that (needs, steps, ...) belong to the job's
                 # body, and keys under any other top-level key (`on:` among
-                # them) are not jobs at all. Keys may be quoted
-                # (`"checks":`); a quoted key missed here would credit its
-                # runs-on to the previous job.
-                top = re.match(r"^([A-Za-z0-9_-]+):", code)
+                # them) are not jobs at all. Top-level keys and job ids may
+                # be quoted (`"jobs":`, `"checks":`): a quoted `jobs:` missed
+                # here would skip every runs-on in the file — none of them
+                # checked, a bare `runs-on: self-hosted` included — and a
+                # quoted key missed below would credit its runs-on to the
+                # previous job.
+                top = re.match(r"""^(['"]?)([A-Za-z0-9_-]+)\1:""", code)
                 if top:
-                    in_jobs = top.group(1) == "jobs"
+                    in_jobs = top.group(2) == "jobs"
                     job = None
                     job_indent = None
                 m = re.match(r"""^(\s*)(['"]?)([A-Za-z0-9_-]+)\2:\s*$""", code)
