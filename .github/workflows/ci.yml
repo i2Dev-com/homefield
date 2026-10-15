@@ -11,7 +11,7 @@ permissions:
 jobs:
   test:
     name: Lint & test
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RUNNER == 'local' && github.event_name == 'pull_request' && github.actor != 'dependabot[bot]' && !startsWith(github.head_ref, 'dependabot/') && github.event.pull_request.head.repo.full_name == github.repository && fromJSON('["self-hosted","linux","arm64","local-ci"]') || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
@@ -23,16 +23,24 @@ jobs:
       # action to guard their routing, so nothing in its CI executes a download
       # that has not been verified. A new actionlint version is a deliberate
       # bump of both values (the asset's `digest` in the GitHub release API).
+      # The runner is arm64 locally (the VM) and x64 hosted, so the asset
+      # follows RUNNER_ARCH; both digests come from the same release.
       - name: actionlint
         env:
           ACTIONLINT_VERSION: 1.7.12
-          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+          ACTIONLINT_SHA256_AMD64: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+          ACTIONLINT_SHA256_ARM64: 325e971b6ba9bfa504672e29be93c24981eeb1c07576d730e9f7c8805afff0c6
         run: |
           set -euo pipefail
-          tarball="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          case "$RUNNER_ARCH" in
+            X64) arch=amd64; sha256=$ACTIONLINT_SHA256_AMD64 ;;
+            ARM64) arch=arm64; sha256=$ACTIONLINT_SHA256_ARM64 ;;
+            *) echo "no actionlint asset for RUNNER_ARCH=$RUNNER_ARCH" >&2; exit 1 ;;
+          esac
+          tarball="actionlint_${ACTIONLINT_VERSION}_linux_${arch}.tar.gz"
           curl -fsSL -o "$tarball" \
             "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${tarball}"
-          echo "${ACTIONLINT_SHA256}  ${tarball}" | sha256sum -c -
+          echo "${sha256}  ${tarball}" | sha256sum -c -
           tar -xzf "$tarball" actionlint
           ./actionlint -color
 
@@ -76,7 +84,13 @@ jobs:
             ci.yml:changes
             ci.yml:checks
 
-      # And on this repo, which routes nothing: any runs-on that asks for the
-      # local runner here is a mistake.
+      # The routing guard, as consumers run it, against this repo's own
+      # workflows: on pull requests the test job above opts in to the local
+      # runner, and it is the only job that may. Pushes to main always run
+      # hosted (the expression requires a pull_request event). The published
+      # @v2, not the checkout's local action, so `ci-runner adopt` counts it.
       - name: Action against this repo's workflows
-        uses: ./verify-routing
+        uses: i2Dev-com/ci-runner/verify-routing@v2
+        with:
+          expected: |
+            ci.yml:test
