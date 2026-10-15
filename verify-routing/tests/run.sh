@@ -60,7 +60,7 @@ case_ "Dependabot branch check dropped"  fail "$EXPECTED" "s/!startsWith(github.
 case_ "fork guard dropped"               fail "$EXPECTED" "s/github.event.pull_request.head.repo.full_name == github.repository \&\& //"
 case_ "fork guard weakened to !="        fail "$EXPECTED" "s/head.repo.full_name == github.repository/head.repo.full_name != github.repository/"
 case_ "bare self-hosted job"             fail "$EXPECTED" "s/^    runs-on: ubuntu-latest$/    runs-on: [self-hosted, linux, arm64]/"
-case_ "label in a step, not routing"     pass "$EXPECTED" "s/^      - run: echo docker$/      - name: Verify self-hosted local-ci routing/"
+case_ "label in a step, not routing"     pass "$EXPECTED" "s/^      - run: echo docker$/      - name: Verify self-hosted homefield-ci routing/"
 case_ "opted-in job not in expected"     fail "ci.yml:changes"
 case_ "expected job not opted in"        fail "$EXPECTED ci.yml:docker"
 case_ "job id with trailing comment"     pass "$EXPECTED" "s/^  checks:$/  checks: # lint and test/"
@@ -68,12 +68,12 @@ case_ "quoted job id, not expected"      fail "ci.yml:changes" "s/^  checks:$/  
 case_ "quoted job id, expected"          pass "$EXPECTED" "s/^  checks:$/  'checks':/"
 # Ways to reach the runner without writing `self-hosted` or the label as-is.
 # GitHub matches labels case-insensitively and by superset, and the runner is
-# in the local-ci group, so each of these would run unguarded on the VM.
+# in the homefield-ci group, so each of these would run unguarded on the VM.
 case_ "Self-Hosted in other case"        fail "$EXPECTED" "s/^    runs-on: ubuntu-latest$/    runs-on: Self-Hosted/"
-case_ "label in other case"              fail "$EXPECTED" "s/^    runs-on: ubuntu-latest$/    runs-on: [self-hosted, LOCAL-CI]/"
+case_ "label in other case"              fail "$EXPECTED" "s/^    runs-on: ubuntu-latest$/    runs-on: [self-hosted, HOMEFIELD-CI]/"
 case_ "default labels only"              fail "$EXPECTED" "s/^    runs-on: ubuntu-latest$/    runs-on: [linux, ARM64]/"
-case_ "runner group, inline"             fail "$EXPECTED" "s/^    runs-on: ubuntu-latest$/    runs-on: { group: local-ci }/"
-case_ "runner group, multi-line"         fail "$EXPECTED" "" "$(printf '  grouped:\n    runs-on:\n      group: local-ci\n    steps:\n      - run: echo grouped')"
+case_ "runner group, inline"             fail "$EXPECTED" "s/^    runs-on: ubuntu-latest$/    runs-on: { group: homefield-ci }/"
+case_ "runner group, multi-line"         fail "$EXPECTED" "" "$(printf '  grouped:\n    runs-on:\n      group: homefield-ci\n    steps:\n      - run: echo grouped')"
 case_ "label list, multi-line"           fail "$EXPECTED" "" "$(printf '  listed:\n    runs-on:\n      - linux\n      - arm64\n    steps:\n      - run: echo listed')"
 case_ "unevaluable expression"           fail "$EXPECTED" "s/^    runs-on: ubuntu-latest$/    runs-on: \${{ matrix.os }}/"
 # Hosted forms that must keep passing.
@@ -85,8 +85,8 @@ case_ "list mixing hosted and local"     fail "$EXPECTED" "s/^    runs-on: ubunt
 case_ "unbalanced bracket"               fail "$EXPECTED" "s/^    runs-on: ubuntu-latest$/    runs-on: [ubuntu-latest/"
 case_ "empty expected, nothing routed"   pass "" "/runs-on: \${{ vars.CI_RUNNER/s/.*/    runs-on: ubuntu-latest/"
 # A custom label: it has to be passed, and the expression has to carry it.
-LABEL=acme-ci case_ "custom label, passed"     pass "$EXPECTED" 's/"local-ci"/"acme-ci"/'
-case_ "custom label, not passed"                fail "$EXPECTED" 's/"local-ci"/"acme-ci"/'
+LABEL=acme-ci case_ "custom label, passed"     pass "$EXPECTED" 's/"homefield-ci"/"acme-ci"/'
+case_ "custom label, not passed"                fail "$EXPECTED" 's/"homefield-ci"/"acme-ci"/'
 LABEL=acme-ci case_ "custom label, stale copy" fail "$EXPECTED"
 
 # check <name> <want> <got>: a fixed expectation, for the print-only flags.
@@ -109,7 +109,7 @@ got_rc=0
 got="$(python3 "$SCRIPT" --workflows-dir "$mutated" --list 2>&1)" || got_rc=$?
 check "--list: a drifted copy is not listed, and is not a failure" "ci.yml:changes|0" "$(echo "$got" | tr '\n' ' ' | sed 's/ *$//')|${got_rc}"
 check "--list: a custom label lists only jobs on it" "ci.yml:changes
-ci.yml:checks" "$(python3 "$SCRIPT" --workflows-dir "${HERE}/base" --label local-ci --list)"
+ci.yml:checks" "$(python3 "$SCRIPT" --workflows-dir "${HERE}/base" --label homefield-ci --list)"
 check "--list: nothing for another label" "" "$(python3 "$SCRIPT" --workflows-dir "${HERE}/base" --label acme-ci --list)"
 check "--list ignores --expected" "ci.yml:changes
 ci.yml:checks" "$(python3 "$SCRIPT" --workflows-dir "${HERE}/base" --expected "ci.yml:docker" --list)"

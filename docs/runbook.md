@@ -7,8 +7,8 @@ GitHub-hosted runners; GitHub is still where CI is triggered, where logs live
 and where checks report. Which jobs a repository routes is documented in that
 repository. To add one, follow [`adopting.md`](adopting.md).
 
-Commands below use the default VM name, `ci-runner`. If you installed with
-`--instance NAME`, use that name instead (for `bin/ci-runner`, pass
+Commands below use the default VM name, `homefield`. If you installed with
+`--instance NAME`, use that name instead (for `bin/homefield`, pass
 `--instance NAME`). `<org>`, `<owner>` and `<repo>` are yours.
 
 ---
@@ -18,12 +18,12 @@ Commands below use the default VM name, `ci-runner`. If you installed with
 Every opted-in job uses this `runs-on`, inline:
 
 ```yaml
-runs-on: ${{ vars.CI_RUNNER == 'local' && github.event_name == 'pull_request' && github.actor != 'dependabot[bot]' && !startsWith(github.head_ref, 'dependabot/') && github.event.pull_request.head.repo.full_name == github.repository && fromJSON('["self-hosted","linux","arm64","local-ci"]') || 'ubuntu-latest' }}
+runs-on: ${{ vars.CI_RUNNER == 'local' && github.event_name == 'pull_request' && github.actor != 'dependabot[bot]' && !startsWith(github.head_ref, 'dependabot/') && github.event.pull_request.head.repo.full_name == github.repository && fromJSON('["self-hosted","linux","arm64","homefield-ci"]') || 'ubuntu-latest' }}
 ```
 
 - The **repository** variable `CI_RUNNER` is the switch, so each repository
   opts in and out on its own. `local` sends pull-request jobs to the runner
-  with the routing label, `local-ci` unless the runner was registered with
+  with the routing label, `homefield-ci` unless the runner was registered with
   another `RUNNER_LABEL`. Unset, or any other value, sends them to hosted
   `ubuntu-latest`.
 - **Pushes always run hosted**, whatever `CI_RUNNER` says. Deploys wait on the
@@ -58,7 +58,7 @@ every job holding cloud or production credentials.
 | Unreviewed dependency code | Dependabot PRs are routed hosted (see above). |
 | Host files and credentials | Lima VM with **no mounts** (`mounts: []` + `--mount-none`), no SSH-agent forwarding, and no host SSH keys. `~/.aws`, `gh` auth, `.env` files and working trees on the Mac are not reachable from the guest. |
 | Guest ports on the Mac | Guest→host port forwarding is disabled, so a job's service containers never appear on the Mac's `localhost`. |
-| **Mac and LAN services from the guest** | **Not isolated.** The guest reaches the Mac at `host.lima.internal` (192.168.5.2, also its gateway and DNS), which Lima maps to the Mac's loopback: every service listening on the Mac is reachable, including ones bound only to `127.0.0.1`, as is the LAN. A firewall inside the guest would not hold, since jobs are root-equivalent there. Until [#18](https://github.com/i2Dev-com/ci-runner/issues/18) is closed, keep sensitive services off the Mac that hosts the runner. The mapping is hardcoded in Lima (no option turns it off yet); omitting it was tested to close the loopback exposure without breaking DNS, package installs or `limactl shell`, and is being proposed upstream. Even then, a service bound to all interfaces stays reachable through the Mac's LAN address. |
+| **Mac and LAN services from the guest** | **Not isolated.** The guest reaches the Mac at `host.lima.internal` (192.168.5.2, also its gateway and DNS), which Lima maps to the Mac's loopback: every service listening on the Mac is reachable, including ones bound only to `127.0.0.1`, as is the LAN. A firewall inside the guest would not hold, since jobs are root-equivalent there. Until [#18](https://github.com/i2Dev-com/homefield/issues/18) is closed, keep sensitive services off the Mac that hosts the runner. The mapping is hardcoded in Lima (no option turns it off yet); omitting it was tested to close the loopback exposure without breaking DNS, package installs or `limactl shell`, and is being proposed upstream. Even then, a service bound to all interfaces stays reachable through the Mac's LAN address. |
 | Production | The VM holds no cloud credentials and no AWS CLI. Deploy jobs stay hosted and get their credentials through OIDC. |
 | Secrets in jobs | Jobs on the runner receive the secrets their workflow passes, on same-repo PRs. Push-only secrets never reach it, because pushes run hosted. |
 | Across repositories | Every allowed repository's PR jobs share one VM, one after another. Workspaces are per repository, but anything a job leaves in the guest (Docker images, `/tmp`) is visible to the next job from another repository. Allow only repositories you would trust with each other's PR code. |
@@ -76,7 +76,7 @@ need an organization owner (`admin:org`):
 - Each adopting repository has `CI_RUNNER` set the way you expect
   (`gh variable get CI_RUNNER --repo <owner>/<repo>`), and its
   `verify-routing` step passes on `main`.
-- The VM has no mounts: `bin/ci-runner upgrade` and `install` check this and
+- The VM has no mounts: `bin/homefield upgrade` and `install` check this and
   refuse to continue otherwise.
 - Nothing on the Mac listens that PR code should not reach (see the
   network row above), and the Mac holds no credentials the VM could use.
@@ -87,11 +87,11 @@ need an organization owner (`admin:org`):
 
 The organization's runner group is what decides which repositories can use the
 runner, because an org runner without a restricted group is usable by every
-repository in the organization. `bin/ci-runner install` looks the group up
+repository in the organization. `bin/homefield install` looks the group up
 before registering and creates it if it is missing: **selected
 repositories**, **Allow public repositories** off, so that no repository can
-use it until you add one: `bin/ci-runner adopt --repo <owner>/<repo>` adds a repository
-([adopting, step 5](adopting.md#5-merge-then-run-ci-runner-adopt)).
+use it until you add one: `bin/homefield adopt --repo <owner>/<repo>` adds a repository
+([adopting, step 5](adopting.md#5-merge-then-run-homefield-adopt)).
 If the group already exists and is open to all repositories (or to public ones),
 it prints a warning and goes on; narrowing it is up to you. The steps below
 are the manual way, and the reference for what the group should look like.
@@ -101,7 +101,7 @@ an organization has only the Default group, which every repository in it can
 use: register there only if you would trust every repository with the others'
 pull-request code, keep **Allow public repositories** off on it, and register
 with `--group Default` (`RUNNER_GROUP=Default` by hand). `install` cannot
-create `local-ci` on that plan: it prints what GitHub said and stops, and
+create `homefield-ci` on that plan: it prints what GitHub said and stops, and
 `--group Default` skips the group step. The
 alternative is a repository-scoped runner, which only that repository can use.
 A personal account has no account-wide runners at all: register per
@@ -109,12 +109,12 @@ repository, one VM per repository.
 
 *Organization settings → Actions → Runner groups → New runner group*:
 
-- Name `local-ci`.
+- Name `homefield-ci`.
 - Repository access: **Selected repositories**. Add only the repositories that
   have adopted the runner.
 - Leave **Allow public repositories** off.
 
-`bin/ci-runner install` registers into `--group` (default `local-ci`) for an
+`bin/homefield install` registers into `--group` (default `homefield-ci`) for an
 organization URL; a repository-scoped runner has no group. Looking up and
 creating groups needs the `admin:org` scope. If gh lacks it, `install` on a
 terminal offers to run `gh auth refresh -h github.com -s admin:org` (it does
@@ -132,16 +132,16 @@ gh api orgs/<org>/actions/runner-groups/<id>/repositories -q '.repositories[].fu
 Requires Lima ≥ 1.1 (`brew install lima`; verified on 2.2.0).
 
 **The short way:** the one-liner in the [README](../README.md#quick-start)
-runs `install.sh`, which downloads the tool for a ref (`CI_RUNNER_REF`,
-default `v2`) into `~/.local/share/ci-runner` (`CI_RUNNER_HOME`), writes a
-`ci-runner` command into Homebrew's `bin` or `~/.local/bin`
-(`CI_RUNNER_BIN_DIR`; it prints the line to add to `~/.zshrc` if that is not
-on your PATH), installs or upgrades Lima (1.1 or later) if you agree, and runs `ci-runner install`.
+runs `install.sh`, which downloads the tool for a ref (`HOMEFIELD_REF`,
+default `v3`) into `~/.local/share/homefield` (`HOMEFIELD_HOME`), writes a
+`homefield` command into Homebrew's `bin` or `~/.local/bin`
+(`HOMEFIELD_BIN_DIR`; it prints the line to add to `~/.zshrc` if that is not
+on your PATH), installs or upgrades Lima (1.1 or later) if you agree, and runs `homefield install`.
 Running it again replaces the tool, which is how it is upgraded; with no
-arguments it leaves an existing VM alone (`ci-runner upgrade` updates that).
-`ci-runner version` shows the ref and commit. From a checkout,
-`bin/ci-runner install --url https://github.com/<org>` (or
-`https://github.com/<owner>/<repo>`; options: `bin/ci-runner help`) is the
+arguments it leaves an existing VM alone (`homefield upgrade` updates that).
+`homefield version` shows the ref and commit. From a checkout,
+`bin/homefield install --url https://github.com/<org>` (or
+`https://github.com/<owner>/<repo>`; options: `bin/homefield help`) is the
 same command. Either way it does every step below, asks for the URL if it
 was not given, creates the runner group, waits until the runner is online and
 enables autostart. It fetches the registration token with `gh` when it can,
@@ -150,33 +150,33 @@ to do it by hand, from a checkout of this repository:
 
 ```bash
 # 1. Create and start the VM (no mounts, no port forwards, Ubuntu 24.04 arm64)
-limactl create --name=ci-runner --mount-none vm/lima.yaml
-limactl start ci-runner
+limactl create --name=homefield --mount-none vm/lima.yaml
+limactl start homefield
 
 # 2. Confirm the isolation before anything runs in it: no mounts, no home dir
-limactl shell ci-runner -- sh -c 'mount | grep -Ec "virtiofs|9p|sshfs|reverse-sshfs"; ls /Users 2>&1'
+limactl shell homefield -- sh -c 'mount | grep -Ec "virtiofs|9p|sshfs|reverse-sshfs"; ls /Users 2>&1'
 # expect: 0, and "No such file or directory"
 
 # 3. Provision: packages, Docker, runner binary (checksum-verified), systemd
-#    service, registration at the organization in group local-ci. The token
+#    service, registration at the organization in group homefield-ci. The token
 #    goes in on stdin, never on a command line, where any process in the guest
 #    could read it; see "Registration tokens" below for where to get it.
-#    RUNNER_URL is required. RUNNER_LABEL (default local-ci), RUNNER_NAME
-#    (default: the guest hostname) and RUNNER_GROUP (default local-ci) are
+#    RUNNER_URL is required. RUNNER_LABEL (default homefield-ci), RUNNER_NAME
+#    (default: the guest hostname) and RUNNER_GROUP (default homefield-ci) are
 #    optional; see the top of provision.sh.
-limactl copy vm/provision.sh ci-runner:/tmp/provision.sh
+limactl copy vm/provision.sh homefield:/tmp/provision.sh
 printf 'RUNNER_TOKEN=%s\n' "$TOKEN" |
-  limactl shell ci-runner sudo RUNNER_URL=https://github.com/<org> bash /tmp/provision.sh
+  limactl shell homefield sudo RUNNER_URL=https://github.com/<org> bash /tmp/provision.sh
 unset TOKEN
 ```
 
 Then, on the runners page (*Organization settings → Actions → Runners*, or
 the repository's *Settings → Actions → Runners*), confirm the runner
-(`lima-ci-runner`, or its `RUNNER_NAME`) is **Idle**, in the `local-ci`
-group for an organization, with labels `self-hosted, Linux, ARM64, local-ci`.
+(`lima-homefield`, or its `RUNNER_NAME`) is **Idle**, in the `homefield-ci`
+group for an organization, with labels `self-hosted, Linux, ARM64, homefield-ci`.
 
 Re-running `provision.sh` on a registered runner (to upgrade it) needs no
-settings: the registration is kept as it is. `bin/ci-runner upgrade` does
+settings: the registration is kept as it is. `bin/homefield upgrade` does
 that: it refuses while a job is running, then stops the runner so no job can
 start mid-upgrade, and `provision.sh` starts it again at the end (or the
 command does, if provisioning fails).
@@ -193,7 +193,7 @@ owner, or admin access to it in an organization:
   `config.sh` line; copy only the token.
 
 **Autostart.** The VM does not restart after a reboot unless something starts
-it. Run `limactl autostart enable ci-runner` (Lima 2.x; 1.x called it
+it. Run `limactl autostart enable homefield` (Lima 2.x; 1.x called it
 `start-at-login`). Inside the VM, the runner is a systemd service and starts
 with the guest.
 
@@ -205,19 +205,19 @@ Add what your jobs need without editing the script. Per-job toolchains
 (`actions/setup-node`, `setup-python`, ...) need nothing here.
 
 **Apt packages:** pass `RUNNER_EXTRA_PACKAGES` when provisioning. The list is
-saved in the guest (`/etc/ci-runner/extra-packages`), so upgrade runs keep it
+saved in the guest (`/etc/homefield/extra-packages`), so upgrade runs keep it
 without passing it again, and the idle-time maintenance upgrades these
 packages along with the rest. Passing it again replaces the list; passing it
 empty clears it. Neither uninstalls anything.
 
 ```bash
-bin/ci-runner upgrade --instance ci-runner --packages "libpq-dev shellcheck"
+bin/homefield upgrade --instance homefield --packages "libpq-dev shellcheck"
 # by hand:
-limactl copy vm/provision.sh ci-runner:/tmp/provision.sh
-limactl shell ci-runner sudo RUNNER_EXTRA_PACKAGES="libpq-dev shellcheck" bash /tmp/provision.sh
+limactl copy vm/provision.sh homefield:/tmp/provision.sh
+limactl shell homefield sudo RUNNER_EXTRA_PACKAGES="libpq-dev shellcheck" bash /tmp/provision.sh
 ```
 
-**Anything else:** a hook, a bash script in `/etc/ci-runner/provision.d/`
+**Anything else:** a hook, a bash script in `/etc/homefield/provision.d/`
 ending in `.sh`. Hooks run as root, in name order, on every provisioning run,
 after the packages and the `runner` user and before the runner itself is
 installed or upgraded. Make them idempotent (skip if already installed). A
@@ -230,9 +230,9 @@ fails that run and leaves the saved list as it was. Packages go on one line,
 separated by spaces.
 
 ```bash
-limactl copy 50-awscli.sh ci-runner:/tmp/50-awscli.sh
-limactl shell ci-runner sudo install -D -m 755 /tmp/50-awscli.sh /etc/ci-runner/provision.d/50-awscli.sh
-limactl shell ci-runner sudo bash /tmp/provision.sh   # runs it now
+limactl copy 50-awscli.sh homefield:/tmp/50-awscli.sh
+limactl shell homefield sudo install -D -m 755 /tmp/50-awscli.sh /etc/homefield/provision.d/50-awscli.sh
+limactl shell homefield sudo bash /tmp/provision.sh   # runs it now
 ```
 
 Provision while the runner is idle, as for any upgrade (see "Maintenance").
@@ -241,24 +241,24 @@ credentials out of hooks.
 
 ## Switching (per repository)
 
-`bin/ci-runner adopt --repo <owner>/<repo>` is the first switch to local: it
+`bin/homefield adopt --repo <owner>/<repo>` is the first switch to local: it
 also checks the repository's routing and runner group access first, and
 refuses to switch until the routing is merged
-([adopting, step 5](adopting.md#5-merge-then-run-ci-runner-adopt)). After
+([adopting, step 5](adopting.md#5-merge-then-run-homefield-adopt)). After
 that, `route` flips a repository either way:
 
 ```bash
 # Back to hosted: the recovery path, and the safe default
-bin/ci-runner route hosted --repo <owner>/<repo> [--repo ...]
+bin/homefield route hosted --repo <owner>/<repo> [--repo ...]
 
 # To the local runner
-bin/ci-runner route local --repo <owner>/<repo>
+bin/homefield route local --repo <owner>/<repo>
 ```
 
 `runs-on` is evaluated when a job is queued. **A job that is already queued for
 the local runner stays queued after the switch.** `route hosted` therefore
 also looks for runs with a job still queued for the routing label (`--label`,
-default `local-ci`), cancels them and re-runs them, and the re-run goes to
+default `homefield-ci`), cancels them and re-runs them, and the re-run goes to
 hosted. `--dry-run` shows what it would do. It needs `gh` with write access to
 the repositories, not the VM, so it works while the Mac hosting the runner is
 asleep, from any machine with a checkout. By hand:
@@ -273,12 +273,12 @@ gh run rerun <run-id> --repo <owner>/<repo>
 
 | Symptom | Cause | What happens | Recovery |
 |---|---|---|---|
-| PR job "Waiting for a runner to pick up this job" | VM stopped, Mac asleep or offline, runner service down | The PR's check waits in the queue, and after 24 h GitHub fails it. Merges and deploys are unaffected, because pushes run hosted. | Start the VM (`limactl start ci-runner`), or `bin/ci-runner route hosted --repo <owner>/<repo>`. |
-| Waiting forever although the runner is online and idle | The repository is not in the runner group | Same as above | `bin/ci-runner adopt --repo <owner>/<repo>` adds it (or add it in the organization settings), or switch the repository to hosted |
-| Waiting forever although the runner is online and idle, and the repository is in the group | The label in the expression is not one of the runner's labels. For example, a repository moved to `verify-routing@v2`, whose default label is `local-ci`, while the runner was registered with another label | Same as above | Add the label to the runner (*Settings → Actions → Runners →* the runner *→ Labels*), or pass the runner's label to `verify-routing` as `label:` and use it in the expression |
+| PR job "Waiting for a runner to pick up this job" | VM stopped, Mac asleep or offline, runner service down | The PR's check waits in the queue, and after 24 h GitHub fails it. Merges and deploys are unaffected, because pushes run hosted. | Start the VM (`limactl start homefield`), or `bin/homefield route hosted --repo <owner>/<repo>`. |
+| Waiting forever although the runner is online and idle | The repository is not in the runner group | Same as above | `bin/homefield adopt --repo <owner>/<repo>` adds it (or add it in the organization settings), or switch the repository to hosted |
+| Waiting forever although the runner is online and idle, and the repository is in the group | The label in the expression is not one of the runner's labels. For example, a repository moved to `verify-routing@v3`, whose default label is `homefield-ci`, while the runner was registered with another label | Same as above | Add the label to the runner (*Settings → Actions → Runners →* the runner *→ Labels*), or pass the runner's label to `verify-routing` as `label:` and use it in the expression |
 | A PR job waits while another runs | One runner runs one job at a time, across all repositories | Serialised, not failed | Accept it, or switch the less urgent repository to hosted |
 | Job fails only on the local runner | Toolchain or arch gap between the VM and `ubuntu-latest` (arm64 vs x86-64) | Red check | Re-run hosted to confirm. Then add the tool ("Adding tools") or keep that job hosted |
-| `No space left on device` in the VM | Docker images and old workspaces | Red check | `limactl shell ci-runner sudo /usr/local/sbin/ci-runner-cleanup` |
+| `No space left on device` in the VM | Docker images and old workspaces | Red check | `limactl shell homefield sudo /usr/local/sbin/homefield-cleanup` |
 | Cancelled job still "in progress" for ~40 s | The runner gives the running step a grace period before killing it | Ends `cancelled`, and service containers are removed | Wait. Only investigate if it lasts minutes |
 
 Observed in drills: an offline runner leaves the job queued, and
@@ -287,7 +287,7 @@ restarted VM's runner is back online within seconds. Two concurrent runs
 serialise.
 
 **Inspecting the guest.** The Lima login user is not in the `docker` group, so
-use `limactl shell ci-runner sudo docker ps`. Plain `docker ps` shows
+use `limactl shell homefield sudo docker ps`. Plain `docker ps` shows
 nothing, which is easy to misread as "no containers". On the Mac, `limactl`
 listens only on two loopback ports for its own SSH and host agent. A job's
 service ports never appear there.
@@ -303,10 +303,10 @@ service ports never appear there.
 - **Guest OS updates.** Automatic. Ubuntu's own `unattended-upgrades` is
   switched off, because it restarts the runner, containerd and Docker at
   06:00–07:00 whether or not a job is running, and has failed jobs that way
-  ([#8](https://github.com/i2Dev-com/ci-runner/issues/8)). In its place, `ci-runner-maintenance.timer` runs daily at 07:00 guest
+  ([#8](https://github.com/i2Dev-com/homefield/issues/8)). In its place, `homefield-maintenance.timer` runs daily at 07:00 guest
   time, which Lima takes from the Mac. Pick an hour when pull requests are
-  rarely opened: `limactl shell ci-runner sudo systemctl edit
-  ci-runner-maintenance.timer`, and add `[Timer]`, an empty `OnCalendar=`
+  rarely opened: `limactl shell homefield sudo systemctl edit
+  homefield-maintenance.timer`, and add `[Timer]`, an empty `OnCalendar=`
   (timers add up otherwise) and `OnCalendar=*-*-* 03:00`. Re-provisioning
   keeps the drop-in. If a job is running it skips the day.
   Otherwise it stops the runner, runs `apt-get upgrade`, and then either
@@ -314,35 +314,35 @@ service ports never appear there.
   (`/var/run/reboot-required`), reboots the guest. The runner starts on boot.
   Queued jobs wait through it, typically under a minute and longer on a
   reboot. To update now, while idle:
-  `limactl shell ci-runner sudo systemctl start --no-block ci-runner-maintenance`.
+  `limactl shell homefield sudo systemctl start --no-block homefield-maintenance`.
   (`--no-block`, because the upgrade may restart D-Bus and drop a client
   waiting on the unit.)
-  Its log: `limactl shell ci-runner sudo journalctl -u ci-runner-maintenance`.
+  Its log: `limactl shell homefield sudo journalctl -u homefield-maintenance`.
   To check whether a reboot is pending:
-  `limactl shell ci-runner ls /var/run/reboot-required`.
-  To reboot by hand while idle, run `limactl shell ci-runner sudo systemctl reboot`.
+  `limactl shell homefield ls /var/run/reboot-required`.
+  To reboot by hand while idle, run `limactl shell homefield sudo systemctl reboot`.
   A guest reboot keeps the VM running under `vz`.
 - **Checking health after an update.** After a runner bump, a guest upgrade
   or a reboot (the 07:00 maintenance may do any of them):
-  `bin/ci-runner status` should show the VM running, the service running and
+  `bin/homefield status` should show the VM running, the service running and
   the job state. The runner's own version, which moves when it updates itself,
-  is `limactl shell ci-runner sudo -u runner /opt/actions-runner/bin/Runner.Listener --version`;
+  is `limactl shell homefield sudo -u runner /opt/actions-runner/bin/Runner.Listener --version`;
   compare it with `gh api repos/actions/runner/releases/latest --jq .tag_name`.
-  (`bin/ci-runner status` shows the version `provision.sh` installed, which
+  (`bin/homefield status` shows the version `provision.sh` installed, which
   stays put.) The maintenance run's log is
-  `limactl shell ci-runner sudo journalctl -u ci-runner-maintenance`, and the
+  `limactl shell homefield sudo journalctl -u homefield-maintenance`, and the
   runner's diagnostic logs are in `/opt/actions-runner/_diag/` (root-readable).
   Then look at the next PR jobs: queued jobs should have started, and
-  `bin/ci-runner memory --days 1` and `bin/ci-runner report --repo
+  `bin/homefield memory --days 1` and `bin/homefield report --repo
   <owner>/<repo> [--repo ...] --since <date>` show whether anything looks off
   since.
-- **Cleanup.** A daily systemd timer (`ci-runner-cleanup.timer`) prunes
+- **Cleanup.** A daily systemd timer (`homefield-cleanup.timer`) prunes
   stopped containers, unused networks, dangling layers and build cache older
   than 24 h. It also removes any workspace with nothing modified inside it for
   7 days. It skips the run if a job is in progress, and the prune is written to
   be safe if a job starts during it. For that reason it never removes tagged
   images. After a service image version bump, clear the old tags by hand while
-  idle: `limactl shell ci-runner sudo docker image prune --all --force`.
+  idle: `limactl shell homefield sudo docker image prune --all --force`.
 - **Host memory.** The VM process on the Mac ("Virtual Machine Service") sits
   at roughly the configured `memory` even while idle. The guest fills spare RAM
   with page cache, and Virtualization.framework does not return pages to the
@@ -351,33 +351,33 @@ service ports never appear there.
   `vm/lima.yaml` is kept close to what jobs need. Restarting the VM while the
   runner is idle resets the footprint until the next jobs refill the cache. To
   resize an existing VM, while idle:
-  `limactl stop ci-runner && limactl edit ci-runner --memory 5 && limactl start ci-runner`.
+  `limactl stop homefield && limactl edit homefield --memory 5 && limactl start homefield`.
   Queued PR jobs wait through the restart and are then picked up.
   If `limactl stop` hangs ("did not receive an event with the `exiting`
   status"), power the guest off cleanly with
-  `limactl shell ci-runner sudo systemctl poweroff`, then clear the
-  leftover host agent with `limactl stop --force ci-runner`.
+  `limactl shell homefield sudo systemctl poweroff`, then clear the
+  leftover host agent with `limactl stop --force homefield`.
   If the error came after the VM had already stopped, the next `limactl start`
   can hang at "Explicitly start ssh ControlMaster": the old SSH multiplexer
-  still holds `~/.lima/ci-runner/ssh.sock`, pointing at the previous boot's
+  still holds `~/.lima/homefield/ssh.sock`, pointing at the previous boot's
   port. Close it with
-  `ssh -S ~/.lima/ci-runner/ssh.sock -O exit ci-runner` and the start
+  `ssh -S ~/.lima/homefield/ssh.sock -O exit homefield` and the start
   completes. A `limactl hostagent` for the instance whose PID is not in
-  `~/.lima/ci-runner/ha.pid` is a leftover with no VM; end it with `kill -9`,
+  `~/.lima/homefield/ha.pid` is a leftover with no VM; end it with `kill -9`,
   because a normal shutdown can remove the live agent's files.
 - **Measuring it.** Two commands answer "is the runner big enough, and is it
   paying for itself?":
-  - `bin/ci-runner memory [--days N]` summarises the guest's memory log: per
+  - `bin/homefield memory [--days N]` summarises the guest's memory log: per
     day, the average, the highest minute, the highest minute during a job, the
     lowest available memory and any out-of-memory kills. The guest writes one
-    line a minute to `/var/log/ci-runner/memwatch-<date>.csv` (kept 90 days)
+    line a minute to `/var/log/homefield/memwatch-<date>.csv` (kept 90 days)
     from samples taken every 2 seconds, so a short spike is kept; the usual
     system statistics, at 10 minutes, miss it. "Used" is total minus
     available memory, which is what an out-of-memory kill is about. The
-    sampler (`ci-runner-memwatch.service`) is installed by provisioning, so an
-    existing runner needs `bin/ci-runner upgrade` first. Read the peak before
+    sampler (`homefield-memwatch.service`) is installed by provisioning, so an
+    existing runner needs `bin/homefield upgrade` first. Read the peak before
     lowering `memory`: with no swap, a job that outgrows the VM is killed.
-  - `bin/ci-runner report --repo <owner>/<repo> [--repo ...] [--since DATE]`
+  - `bin/homefield report --repo <owner>/<repo> [--repo ...] [--since DATE]`
     lists, per repository, workflow and job, how many jobs ran locally and
     on GitHub's runners, how long they queued and ran, and how many minutes
     they used (for local jobs, what they would have cost hosted). Queue wait
@@ -399,9 +399,9 @@ Move it while no job is running: the script refuses otherwise, then stops the
 runner before anything else.
 
 ```bash
-limactl copy vm/provision.sh ci-runner:/tmp/provision.sh
+limactl copy vm/provision.sh homefield:/tmp/provision.sh
 printf 'RUNNER_REMOVE_TOKEN=%s\nRUNNER_TOKEN=%s\n' "$REMOVE" "$TOKEN" |
-  limactl shell ci-runner sudo RUNNER_REREGISTER=1 \
+  limactl shell homefield sudo RUNNER_REREGISTER=1 \
     RUNNER_URL=https://github.com/<new-scope> RUNNER_NAME=<name> RUNNER_LABEL=<label> \
     bash /tmp/provision.sh
 unset REMOVE TOKEN
@@ -426,7 +426,7 @@ with new values changes nothing.
 
 ## Removing the runner
 
-`bin/ci-runner uninstall` deregisters the runner (fetching or asking for a
+`bin/homefield uninstall` deregisters the runner (fetching or asking for a
 remove token), turns off autostart and deletes the VM; `--keep-vm` only
 deregisters. By hand:
 
@@ -434,23 +434,100 @@ deregisters. By hand:
 # Every repository that routes to it: switch to hosted first
 gh variable set CI_RUNNER --repo <owner>/<repo> --body hosted
 # REMOVE: org remove-token (orgs/<org>/actions/runners/remove-token, admin:org)
-printf '%s\n' "$REMOVE" | limactl shell ci-runner sudo sh -c 'cd /opt/actions-runner && ./svc.sh uninstall && read -r t && ACTIONS_RUNNER_INPUT_TOKEN="$t" sudo --preserve-env=ACTIONS_RUNNER_INPUT_TOKEN -u runner ./config.sh remove'
+printf '%s\n' "$REMOVE" | limactl shell homefield sudo sh -c 'cd /opt/actions-runner && ./svc.sh uninstall && read -r t && ACTIONS_RUNNER_INPUT_TOKEN="$t" sudo --preserve-env=ACTIONS_RUNNER_INPUT_TOKEN -u runner ./config.sh remove'
 unset REMOVE
-limactl delete --force ci-runner
+limactl delete --force homefield
 ```
 
 If the VM is already gone, delete the stale registration on the runners page.
+
+## Migrating from ci-runner (v2)
+
+v3 renames the project to HomeField: the command, environment variables, VM,
+install directory, runner label and group, and the paths inside the VM all
+change (the list is in [`CHANGELOG.md`](../CHANGELOG.md)), so a v2 install is
+replaced, not upgraded. `provision.sh` does not move the old guest paths, and
+the new VM gets a new runner. v3 enforces this: `install.sh` and `homefield
+install` stop while a `ci-runner` VM exists and no `homefield` VM does, and
+`provision.sh` exits on a guest that has `/etc/ci-runner` or `ci-runner-*`
+units. Steps 1 to 3 need the old tool, so remove it only in step 4.
+
+1. **Route every repository to hosted.** Jobs stay on GitHub-hosted runners
+   while the runner is replaced. This also cancels and re-runs runs stuck
+   waiting for the local runner:
+
+   ```bash
+   ci-runner route hosted --repo <owner>/<repo> --repo <owner>/<other-repo>
+   ```
+
+2. **Keep what lives only in the old guest.** The extra-packages list and
+   the hooks are deleted with the VM (see "Moving to dedicated hardware"):
+
+   ```bash
+   limactl shell ci-runner cat /etc/ci-runner/extra-packages
+   limactl shell ci-runner sudo tar -C /etc/ci-runner -cf - provision.d > provision.d.tar
+   ```
+
+3. **Uninstall the old runner.** `ci-runner uninstall` deregisters the runner
+   (fetching or asking for a remove token), turns off autostart and deletes the
+   VM `ci-runner`. It does not touch the organization's runner groups, so the
+   `local-ci` group stays, now empty of runners:
+
+   ```bash
+   ci-runner uninstall
+   ```
+
+4. **Remove the old tool.** The one-line installer wrote a `ci-runner`
+   wrapper on the PATH and the tool in `~/.local/share/ci-runner` (or
+   `$CI_RUNNER_HOME`). The wrapper is removed only if it is found:
+
+   ```bash
+   wrapper="$(command -v ci-runner)" && rm "$wrapper"
+   rm -rf "${CI_RUNNER_HOME:-$HOME/.local/share/ci-runner}"
+   ```
+
+   If you ran v2 from a checkout of the repository, there is nothing to
+   remove: no wrapper was installed, so the first command finds nothing and the
+   second removes a directory that does not exist. Delete the checkout when you
+   no longer need it.
+
+5. **Install v3** with the one-liner from the [README](../README.md#quick-start).
+   It creates the VM `homefield`, the runner group `homefield-ci` (selected
+   repositories only, no public ones) and registers the runner
+   `lima-homefield` with the label `homefield-ci`. No repository is in the
+   group yet. Restore the packages and hooks from step 2 (`homefield upgrade
+   --packages "..."`, and the hooks into `/etc/homefield/provision.d/`; see
+   "Adding tools").
+
+6. **In each consuming repository,** one pull request: change every routed
+   job's `runs-on` label from `local-ci` to `homefield-ci` (the expression in
+   [`adopting.md`](adopting.md) has it verbatim) and the guard from
+   `i2Dev-com/ci-runner/verify-routing@v2` to
+   `i2Dev-com/homefield/verify-routing@v3`. Merge it with `CI_RUNNER` still
+   `hosted`; everything runs on GitHub-hosted runners.
+
+7. **Adopt each repository** once that is merged. It checks the routing,
+   adds the repository to the `homefield-ci` group and sets `CI_RUNNER` to
+   `local`:
+
+   ```bash
+   homefield adopt --repo <owner>/<repo>
+   ```
+
+8. **Delete the old runner group.** After step 3 nothing is registered in
+   `local-ci`: in the organization, *Settings → Actions → Runner groups →
+   local-ci → Delete group*.
 
 ## Moving to dedicated hardware
 
 The VM definition and `provision.sh`, plus what was added under "Adding tools",
 make up the machine. The additions live only in the guest
-(`/etc/ci-runner/extra-packages` and `/etc/ci-runner/provision.d/`), so copy
+(`/etc/homefield/extra-packages` and `/etc/homefield/provision.d/`), so copy
 them out first, and keep hooks somewhere versioned rather than only in the VM:
 
 ```bash
-limactl shell ci-runner cat /etc/ci-runner/extra-packages   # pass as RUNNER_EXTRA_PACKAGES
-limactl shell ci-runner sudo tar -C /etc/ci-runner -cf - provision.d > provision.d.tar
+limactl shell homefield cat /etc/homefield/extra-packages   # pass as RUNNER_EXTRA_PACKAGES
+limactl shell homefield sudo tar -C /etc/homefield -cf - provision.d > provision.d.tar
 ```
 
 On another Mac, repeat Setup with the same `RUNNER_EXTRA_PACKAGES` and the
@@ -471,7 +548,7 @@ As a checklist:
 4. Same CPU architecture: jobs go to whichever runner is free, so to see a
    job from each adopting repository pass on the new one, stop the old
    runner's service while it is idle
-   (`limactl shell ci-runner sudo systemctl stop "$(limactl shell ci-runner sudo cat /opt/actions-runner/.service)"`),
+   (`limactl shell homefield sudo systemctl stop "$(limactl shell homefield sudo cat /opt/actions-runner/.service)"`),
    run a PR in each repository, and check that the run's log names the new
    runner. If it fails, start the old service again.
    Different architecture: the expression's labels name the old one, so no job
@@ -480,10 +557,10 @@ As a checklist:
    each. That PR's own routed jobs then run on the new runner and are the
    validation. Jobs from repositories not yet changed keep going to the old
    runner, so nothing waits.
-5. Retire the old runner while it is idle: `bin/ci-runner uninstall` on the old
+5. Retire the old runner while it is idle: `bin/homefield uninstall` on the old
    Mac. If the new runner is not up yet, switch the repositories to hosted
    first.
-6. The memory log (`/var/log/ci-runner/`) stays with the old guest. Copy it
+6. The memory log (`/var/log/homefield/`) stays with the old guest. Copy it
    out first if you want the history for comparison.
-7. Re-check "Access checklist" for the new machine, and compare `bin/ci-runner
+7. Re-check "Access checklist" for the new machine, and compare `bin/homefield
    report` before and after.

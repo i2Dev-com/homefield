@@ -4,7 +4,7 @@
 
 ## Verification
 
-<!-- What you ran and what happened. For bin/ci-runner or provision.sh
+<!-- What you ran and what happened. For bin/homefield or provision.sh
 changes: which scenarios on a throwaway VM. -->
 
 - [ ] Tests and shellcheck pass (see CONTRIBUTING.md)

@@ -6,6 +6,69 @@ fail is a new major (see [README](README.md#development)).
 
 ## Unreleased
 
+This is v3, a new major: the project is renamed from ci-runner to HomeField.
+Nothing about how routing works changes, but every name below does, so an
+existing install is replaced, not upgraded in place. See "Migrating from
+ci-runner (v2)" in [`docs/runbook.md`](docs/runbook.md#migrating-from-ci-runner-v2).
+
+### Breaking
+
+- The command is `homefield` (was `ci-runner`), and the script is
+  `bin/homefield`. The installer writes a `homefield` wrapper and installs the
+  tool in `~/.local/share/homefield` (was `~/.local/share/ci-runner`); the
+  install marker is `.homefield-ref` (was `.ci-runner-ref`). The installer
+  fetches `v3` by default.
+- The environment variables are `HOMEFIELD_*` (was `CI_RUNNER_*`):
+  `HOMEFIELD_HOME`, `HOMEFIELD_REPO`, `HOMEFIELD_REF`, `HOMEFIELD_BIN_DIR`,
+  `HOMEFIELD_YES`, `HOMEFIELD_TTY`, `HOMEFIELD_INSTANCE`, plus the test hooks
+  `HOMEFIELD_SOURCE_ONLY` and `HOMEFIELD_REPORT_FIXTURE`. The repository
+  variable `CI_RUNNER` is unchanged: it is part of the routing expression, so
+  consuming repositories keep their `runs-on` switch as it is.
+- The default Lima instance is `homefield` (was `ci-runner`), so the default
+  runner name is `lima-homefield` (was `lima-ci-runner`).
+- The default routing label and org runner group are `homefield-ci` (was
+  `local-ci`), in `homefield`, `provision.sh` (`RUNNER_LABEL`,
+  `RUNNER_GROUP`), `adopt`, `report` and the `verify-routing` action's `label`
+  input. A consumer whose workflows use `local-ci` either passes
+  `label: local-ci` or switches to `homefield-ci` in the same change as the
+  action.
+- Inside the VM: `/etc/homefield` (was `/etc/ci-runner`),
+  `/var/log/homefield` (was `/var/log/ci-runner`), the `homefield-cleanup`,
+  `homefield-maintenance` and `homefield-memwatch` scripts and systemd units
+  (were `ci-runner-*`) and `/etc/apt/apt.conf.d/52homefield-no-unattended-upgrade`.
+  `provision.sh` does not migrate the old paths: the migration below
+  replaces the VM.
+- The repository is `i2Dev-com/homefield` (was `i2Dev-com/ci-runner`), and the
+  action is `i2Dev-com/homefield/verify-routing@v3`. GitHub redirects the old
+  repository path, and `adopt` still recognizes
+  `i2Dev-com/ci-runner/verify-routing@v3` as the guard; `@v2` of the old path
+  keeps working for the workflows that use it, with the old default label.
+
+### Migrating from ci-runner (v2)
+
+Route the repositories to hosted with the old tool, uninstall the old runner,
+install v3, switch each consuming repository to the new label and action, then
+adopt it again. The steps, in order, are in
+[`docs/runbook.md`](docs/runbook.md#migrating-from-ci-runner-v2).
+
+A v2 install is detected and left alone, so v3 never creates a second VM and
+runner next to it:
+
+- `install.sh` installs the tool but does not hand over to `homefield install`
+  when a Lima instance `ci-runner` exists and the target instance does not; it
+  prints the pointer to the migration and exits non-zero.
+- `homefield install` refuses in the same case. Passing `--instance` or setting
+  `HOMEFIELD_INSTANCE` is taken as deliberate and skips the check. `status`,
+  `upgrade`, `uninstall` and `memory` add the same pointer when they find no
+  `homefield` VM but a `ci-runner` one.
+- `provision.sh` exits before changing anything on a guest that has
+  `/etc/ci-runner` or `ci-runner-*` systemd units, instead of provisioning
+  next to them.
+- `adopt` says the `i2Dev-com/ci-runner/verify-routing@v2` step is the v2
+  guard, and that migrating switches the action to
+  `i2Dev-com/homefield/verify-routing@v3` and the label from `local-ci` to
+  `homefield-ci` together.
+
 ### Fixed
 
 - `install`'s online check reported the group the runner was *expected* to

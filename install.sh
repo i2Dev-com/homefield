@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# One-line installer for ci-runner: downloads the tool, puts `ci-runner` on the
-# PATH, makes sure Lima is there, and hands over to `ci-runner install`.
+# One-line installer for homefield: downloads the tool, puts `homefield` on the
+# PATH, makes sure Lima is there, and hands over to `homefield install`.
 #
-#   gh api 'repos/i2Dev-com/ci-runner/contents/install.sh?ref=v2' \
+#   gh api 'repos/i2Dev-com/homefield/contents/install.sh?ref=v3' \
 #     -H 'Accept: application/vnd.github.raw' | bash
-#   curl -fsSL https://raw.githubusercontent.com/i2Dev-com/ci-runner/v2/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/i2Dev-com/homefield/v3/install.sh | bash
 #   ... | bash -s -- --url https://github.com/<org>      # install options pass through
 #
 # Settings, all optional:
-#   CI_RUNNER_REPO      owner/repo to download from (default i2Dev-com/ci-runner)
-#   CI_RUNNER_REF       branch, tag or commit to install (default v2)
-#   CI_RUNNER_HOME      where the tool goes (default ~/.local/share/ci-runner)
-#   CI_RUNNER_BIN_DIR   where the `ci-runner` command goes (default: Homebrew's
+#   HOMEFIELD_REPO      owner/repo to download from (default i2Dev-com/homefield)
+#   HOMEFIELD_REF       branch, tag or commit to install (default v3)
+#   HOMEFIELD_HOME      where the tool goes (default ~/.local/share/homefield)
+#   HOMEFIELD_BIN_DIR   where the `homefield` command goes (default: Homebrew's
 #                       bin when writable, else ~/.local/bin)
-#   CI_RUNNER_YES=1     install Lima with Homebrew without asking (needed when
+#   HOMEFIELD_YES=1     install Lima with Homebrew without asking (needed when
 #                       there is no terminal to ask on)
 #
 # Everything is inside functions and `main` is the last line, so a download
@@ -21,13 +21,13 @@
 # again replaces the installed copy, which is how the tool is upgraded.
 set -euo pipefail
 
-REPO="${CI_RUNNER_REPO:-i2Dev-com/ci-runner}"
-REF="${CI_RUNNER_REF:-v2}"
-INSTALL_DIR="${CI_RUNNER_HOME:-$HOME/.local/share/ci-runner}"
+REPO="${HOMEFIELD_REPO:-i2Dev-com/homefield}"
+REF="${HOMEFIELD_REF:-v3}"
+INSTALL_DIR="${HOMEFIELD_HOME:-$HOME/.local/share/homefield}"
 # The terminal to ask on. Under `curl | bash` stdin is this script, so prompts
 # read from the controlling terminal instead. Settable so the tests can stand
 # in for it with a file, or with nothing.
-TTY="${CI_RUNNER_TTY:-/dev/tty}"
+TTY="${HOMEFIELD_TTY:-/dev/tty}"
 WORK=""
 
 die() {
@@ -42,7 +42,7 @@ cleanup() {
 
 have_tty() { { : <"$TTY"; } 2>/dev/null; }
 
-# Same checks, same messages as check_host in bin/ci-runner, so the failure
+# Same checks, same messages as check_host in bin/homefield, so the failure
 # comes before anything is downloaded.
 check_host() {
   [ "$(uname -s)" = "Darwin" ] || die "needs macOS (Lima with Apple's Virtualization.framework)"
@@ -53,14 +53,14 @@ check_host() {
 # checked against a short list of characters.
 check_settings() {
   [[ "$REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ && "$REPO" != *..* ]] ||
-    die "CI_RUNNER_REPO must be <owner>/<repo>, got: $REPO"
+    die "HOMEFIELD_REPO must be <owner>/<repo>, got: $REPO"
   [[ "$REF" =~ ^[A-Za-z0-9_./-]+$ && "$REF" != *..* && "$REF" != -* ]] ||
-    die "CI_RUNNER_REF must be a branch, tag or commit name (letters, digits, '_', '.', '/', '-'), got: $REF"
+    die "HOMEFIELD_REF must be a branch, tag or commit name (letters, digits, '_', '.', '/', '-'), got: $REF"
   local dir_re='^/[A-Za-z0-9_./@+ -]+$'
   [[ "$INSTALL_DIR" =~ $dir_re && "$INSTALL_DIR" != *..* ]] ||
-    die "CI_RUNNER_HOME must be an absolute path of letters, digits and _./@+- (and spaces), got: $INSTALL_DIR"
-  if [ -n "${CI_RUNNER_BIN_DIR:-}" ]; then
-    [[ "$CI_RUNNER_BIN_DIR" =~ ^/ ]] || die "CI_RUNNER_BIN_DIR must be an absolute path, got: $CI_RUNNER_BIN_DIR"
+    die "HOMEFIELD_HOME must be an absolute path of letters, digits and _./@+- (and spaces), got: $INSTALL_DIR"
+  if [ -n "${HOMEFIELD_BIN_DIR:-}" ]; then
+    [[ "$HOMEFIELD_BIN_DIR" =~ ^/ ]] || die "HOMEFIELD_BIN_DIR must be an absolute path, got: $HOMEFIELD_BIN_DIR"
   fi
 }
 
@@ -101,19 +101,19 @@ install_tree() {
   local tarball="$1" stage="$WORK/tree" top commit f
   mkdir -p "$stage"
   tar -xzf "$tarball" -C "$stage" --strip-components=1 || die "could not unpack the download"
-  for f in bin/ci-runner vm/lima.yaml vm/provision.sh; do
-    [ -f "$stage/$f" ] || die "the download is not ci-runner: $f is missing"
+  for f in bin/homefield vm/lima.yaml vm/provision.sh; do
+    [ -f "$stage/$f" ] || die "the download is not homefield: $f is missing"
   done
   top="$(tar -tzf "$tarball" | sed -n '1s,/.*,,p')"
   commit="$(tarball_commit "$tarball" "$top")"
-  printf 'repo=%s\nref=%s\ncommit=%s\n' "$REPO" "$REF" "$commit" >"$stage/.ci-runner-ref"
+  printf 'repo=%s\nref=%s\ncommit=%s\n' "$REPO" "$REF" "$commit" >"$stage/.homefield-ref"
   COMMIT="$commit"
 
-  # Only a copy this script installed (it writes .ci-runner-ref) is replaced:
+  # Only a copy this script installed (it writes .homefield-ref) is replaced:
   # anything else there, such as a git checkout of this repository, could be
   # someone's work, and the old copy is deleted once the new one is in.
-  if [ -e "$INSTALL_DIR" ] && [ ! -f "$INSTALL_DIR/.ci-runner-ref" ]; then
-    die "$INSTALL_DIR exists and was not installed by this script; remove it or set CI_RUNNER_HOME"
+  if [ -e "$INSTALL_DIR" ] && [ ! -f "$INSTALL_DIR/.homefield-ref" ]; then
+    die "$INSTALL_DIR exists and was not installed by this script; remove it or set HOMEFIELD_HOME"
   fi
   if [ -e "$INSTALL_DIR" ]; then
     mv "$INSTALL_DIR" "$WORK/old"
@@ -124,11 +124,11 @@ install_tree() {
   fi
 }
 
-# pick_bin_dir: where the `ci-runner` command goes.
+# pick_bin_dir: where the `homefield` command goes.
 pick_bin_dir() {
   local prefix
-  if [ -n "${CI_RUNNER_BIN_DIR:-}" ]; then
-    printf '%s' "$CI_RUNNER_BIN_DIR"
+  if [ -n "${HOMEFIELD_BIN_DIR:-}" ]; then
+    printf '%s' "$HOMEFIELD_BIN_DIR"
   elif command -v brew >/dev/null 2>&1 && prefix="$(brew --prefix 2>/dev/null)" && [ -d "$prefix/bin" ] && [ -w "$prefix/bin" ]; then
     printf '%s' "$prefix/bin"
   else
@@ -136,18 +136,18 @@ pick_bin_dir() {
   fi
 }
 
-# write_wrapper <dir>: bin/ci-runner finds the rest of the tool from the path
+# write_wrapper <dir>: bin/homefield finds the rest of the tool from the path
 # it is run by, so the command is a script that runs it by its real path, not
 # a symlink. An existing file is only replaced if it is this wrapper.
 write_wrapper() {
-  local dir="$1" wrapper="$1/ci-runner" tmp
+  local dir="$1" wrapper="$1/homefield" tmp
   mkdir -p "$dir"
   if [ -e "$wrapper" ] || [ -L "$wrapper" ]; then
-    { [ -f "$wrapper" ] && [ ! -L "$wrapper" ] && grep -q '/bin/ci-runner" "\$@"$' "$wrapper"; } ||
-      die "$wrapper exists and is not a ci-runner wrapper; remove it or set CI_RUNNER_BIN_DIR"
+    { [ -f "$wrapper" ] && [ ! -L "$wrapper" ] && grep -q '/bin/homefield" "\$@"$' "$wrapper"; } ||
+      die "$wrapper exists and is not a homefield wrapper; remove it or set HOMEFIELD_BIN_DIR"
   fi
-  tmp="$(mktemp "$dir/.ci-runner.XXXXXX")"
-  printf '#!/bin/sh\nexec "%s/bin/ci-runner" "$@"\n' "$INSTALL_DIR" >"$tmp"
+  tmp="$(mktemp "$dir/.homefield.XXXXXX")"
+  printf '#!/bin/sh\nexec "%s/bin/homefield" "$@"\n' "$INSTALL_DIR" >"$tmp"
   chmod 755 "$tmp"
   mv -f "$tmp" "$wrapper"
 }
@@ -161,7 +161,7 @@ path_hint() {
   echo "  export PATH=\"$shown:\$PATH\""
 }
 
-# lima_new_enough: limactl reports 1.1 or later, the minimum bin/ci-runner's
+# lima_new_enough: limactl reports 1.1 or later, the minimum bin/homefield's
 # check_host asks for (same parsing).
 lima_new_enough() {
   local version major minor
@@ -182,8 +182,8 @@ ensure_lima() {
   fi
   command -v brew >/dev/null 2>&1 ||
     die "Lima ${what}. Install 1.1 or later (https://lima-vm.io/docs/installation/, or install Homebrew from https://brew.sh and run: brew install lima), then run this again"
-  if [ "${CI_RUNNER_YES:-}" != 1 ]; then
-    have_tty || die "Lima ${what} and there is no terminal to ask on. Run: brew ${verb} lima   (or run this again with CI_RUNNER_YES=1 to have it done)"
+  if [ "${HOMEFIELD_YES:-}" != 1 ]; then
+    have_tty || die "Lima ${what} and there is no terminal to ask on. Run: brew ${verb} lima   (or run this again with HOMEFIELD_YES=1 to have it done)"
     local answer
     printf 'Lima %s. Run brew %s lima? [Y/n] ' "$what" "$verb" >&2
     read -r answer <"$TTY" || answer=""
@@ -196,7 +196,21 @@ ensure_lima() {
 }
 
 vm_exists() {
-  [ -n "$(limactl list --format '{{.Status}}' "${CI_RUNNER_INSTANCE:-ci-runner}" 2>/dev/null)" ]
+  [ -n "$(limactl list --format '{{.Status}}' "${HOMEFIELD_INSTANCE:-homefield}" 2>/dev/null)" ]
+}
+
+# v2_vm_left: a ci-runner v2 VM exists and the target instance does not, with
+# no instance chosen on purpose (HOMEFIELD_INSTANCE or --instance in the
+# arguments that go to `homefield install`). Same rule as cmd_install in
+# bin/homefield, which refuses too; this one keeps the installer from handing
+# over to it at all.
+v2_vm_left() {
+  local arg
+  [ -z "${HOMEFIELD_INSTANCE:-}" ] || return 1
+  for arg in "$@"; do
+    [ "$arg" != --instance ] || return 1
+  done
+  ! vm_exists && [ -n "$(limactl list --format '{{.Status}}' ci-runner 2>/dev/null)" ]
 }
 
 main() {
@@ -206,19 +220,19 @@ main() {
 
   # Next to the destination, so that the swap below is a rename.
   mkdir -p "$(dirname "$INSTALL_DIR")"
-  WORK="$(mktemp -d "$(dirname "$INSTALL_DIR")/.ci-runner-install.XXXXXX")"
+  WORK="$(mktemp -d "$(dirname "$INSTALL_DIR")/.homefield-install.XXXXXX")"
   COMMIT=""
-  fetch_tarball "$WORK/ci-runner.tar.gz"
-  install_tree "$WORK/ci-runner.tar.gz"
+  fetch_tarball "$WORK/homefield.tar.gz"
+  install_tree "$WORK/homefield.tar.gz"
 
   local bin_dir
   bin_dir="$(pick_bin_dir)"
   write_wrapper "$bin_dir"
   ensure_lima
 
-  log "installed ci-runner ${REF}${COMMIT:+ (${COMMIT:0:7})} from ${REPO}"
+  log "installed homefield ${REF}${COMMIT:+ (${COMMIT:0:7})} from ${REPO}"
   log "tool: ${INSTALL_DIR}"
-  log "command: ${bin_dir}/ci-runner"
+  log "command: ${bin_dir}/homefield"
   path_hint "$bin_dir"
 
   # Past this point the installed tool takes over. exec does not run the exit
@@ -226,17 +240,25 @@ main() {
   cleanup
   WORK=""
   trap - EXIT
-  local installed="$INSTALL_DIR/bin/ci-runner"
+  local installed="$INSTALL_DIR/bin/homefield"
   if [ $# -gt 0 ] || have_tty; then
+    if v2_vm_left "$@"; then
+      echo
+      echo "A ci-runner v2 VM exists. The tool is installed, but the VM was not set up: v3 does not"
+      echo "upgrade it in place, and installing now would add a second VM and runner next to it."
+      echo "Follow \"Migrating from ci-runner (v2)\" in docs/runbook.md, then run: homefield install"
+      echo "  https://github.com/${REPO}/blob/${REF}/docs/runbook.md#migrating-from-ci-runner-v2"
+      return 1
+    fi
     # Run again with no arguments on a Mac that already has the VM, this is a
     # tool update: `install` there would upgrade the VM and briefly stop the
     # runner, which nobody asked for.
     if [ $# -eq 0 ] && vm_exists; then
       echo
-      echo "The VM ${CI_RUNNER_INSTANCE:-ci-runner} already exists and was not changed. To update it too:"
-      echo "  ci-runner upgrade"
-      echo "If its setup never finished (ci-runner status shows no registration), finish it with:"
-      echo "  ci-runner install"
+      echo "The VM ${HOMEFIELD_INSTANCE:-homefield} already exists and was not changed. To update it too:"
+      echo "  homefield upgrade"
+      echo "If its setup never finished (homefield status shows no registration), finish it with:"
+      echo "  homefield install"
       return 0
     fi
     echo
@@ -247,7 +269,7 @@ main() {
   fi
   echo
   echo "Next, set up the runner:"
-  echo "  ci-runner install --url https://github.com/<org>      # or https://github.com/<owner>/<repo>"
+  echo "  homefield install --url https://github.com/<org>      # or https://github.com/<owner>/<repo>"
 }
 
 main "$@"

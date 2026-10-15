@@ -4,21 +4,21 @@
 # manual steps in docs/runbook.md, which stays the reference for what each one
 # does and why.
 #
-#   bin/ci-runner install [--url https://github.com/<org>[/<repo>]] [options]
-#   bin/ci-runner upgrade [--packages "..."] [--force]
-#   bin/ci-runner status
-#   bin/ci-runner uninstall [--keep-vm]
-#   bin/ci-runner route <hosted|local> --repo <owner>/<repo> [--repo ...]
-#   bin/ci-runner adopt --repo <owner>/<repo> [--jobs "ci.yml:lint,..."] [--no-switch] [--dry-run]
-#   bin/ci-runner memory [--days N]
-#   bin/ci-runner report --repo <owner>/<repo> [--repo ...] [--since DATE]
-#   bin/ci-runner version
+#   bin/homefield install [--url https://github.com/<org>[/<repo>]] [options]
+#   bin/homefield upgrade [--packages "..."] [--force]
+#   bin/homefield status
+#   bin/homefield uninstall [--keep-vm]
+#   bin/homefield route <hosted|local> --repo <owner>/<repo> [--repo ...]
+#   bin/homefield adopt --repo <owner>/<repo> [--jobs "ci.yml:lint,..."] [--no-switch] [--dry-run]
+#   bin/homefield memory [--days N]
+#   bin/homefield report --repo <owner>/<repo> [--repo ...] [--since DATE]
+#   bin/homefield version
 #
-# install.sh puts this on the PATH as `ci-runner`; the messages below say
-# bin/ci-runner, which is the same file in a checkout.
+# install.sh puts this on the PATH as `homefield`; the messages below say
+# bin/homefield, which is the same file in a checkout.
 #
-# Every command takes --instance NAME (default ci-runner, or $CI_RUNNER_INSTANCE)
-# to pick the Lima VM. Run `bin/ci-runner help` for the options.
+# Every command takes --instance NAME (default homefield, or $HOMEFIELD_INSTANCE)
+# to pick the Lima VM. Run `bin/homefield help` for the options.
 set -euo pipefail
 # Runs on macOS's stock bash 3.2, which turns `set -e` off inside $(...). A
 # function that can fail inside one says `|| exit 1` where it calls another.
@@ -26,12 +26,16 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LIMA_YAML="$ROOT/vm/lima.yaml"
 PROVISION="$ROOT/vm/provision.sh"
-INSTANCE="${CI_RUNNER_INSTANCE:-ci-runner}"
+INSTANCE="${HOMEFIELD_INSTANCE:-homefield}"
+# Whether the instance was chosen (HOMEFIELD_INSTANCE or --instance) rather
+# than defaulted; install uses it to tell a deliberate second VM from a leftover.
+INSTANCE_EXPLICIT=0
+[ -z "${HOMEFIELD_INSTANCE:-}" ] || INSTANCE_EXPLICIT=1
 RUNNER_HOME="/opt/actions-runner"
 
 usage() {
   cat <<'EOF'
-Usage: bin/ci-runner <command> [options]
+Usage: bin/homefield <command> [options]
 
 Commands:
   install    Create the VM (if needed), provision it and register the runner.
@@ -55,14 +59,14 @@ Commands:
   version    Show which version of this tool is installed.
 
 Options:
-  --instance NAME    Lima instance (default ci-runner, or $CI_RUNNER_INSTANCE)
+  --instance NAME    Lima instance (default homefield, or $HOMEFIELD_INSTANCE)
 
 install:
   --url URL          https://github.com/<org> or https://github.com/<owner>/<repo>
                      (asked for on a terminal when a new registration has none)
-  --label LABEL      routing label (default local-ci)
+  --label LABEL      routing label (default homefield-ci)
   --name NAME        runner name (default: the guest hostname, lima-<instance>)
-  --group GROUP      org runner group (default local-ci; ignored for a repo).
+  --group GROUP      org runner group (default homefield-ci; ignored for a repo).
                      Created if missing: selected repositories, no public ones.
                      On the GitHub Free plan, use Default: custom groups
                      need Team or Enterprise
@@ -80,17 +84,17 @@ uninstall:
 
 route <hosted|local>:
   --repo OWNER/REPO  repository to switch (repeat for several; required)
-  --label LABEL      routing label of the stuck jobs to look for (default local-ci)
+  --label LABEL      routing label of the stuck jobs to look for (default homefield-ci)
   --dry-run          show what would change, change nothing
   Needs gh with write access to the repositories' variables and runs. Does
   not need the VM.
 
 adopt:
   --repo OWNER/REPO  the repository to adopt (required, one)
-  --label LABEL      routing label (default local-ci; a verify-routing step
+  --label LABEL      routing label (default homefield-ci; a verify-routing step
                      with another label in the workflows is used as it is)
   --group GROUP      runner group the repository needs access to (default
-                     local-ci; skipped for Default and for personal accounts)
+                     homefield-ci; skipped for Default and for personal accounts)
   --jobs "F:J,..."   file:job entries you mean to route, for the snippets it
                      prints when the routing is not in place yet
   --no-switch        do everything except set CI_RUNNER
@@ -112,7 +116,7 @@ report:
   --repo OWNER/REPO  repository to include (repeat for several; required)
   --since DATE       first day, YYYY-MM-DD, UTC (default: the 1st of this month)
   --until DATE       last day, inclusive (default: today)
-  --label LABEL      routing label that marks a job as local (default local-ci)
+  --label LABEL      routing label that marks a job as local (default homefield-ci)
   --json             machine-readable output
   Needs gh with read access to the repositories' runs. Does not need the VM.
   Queue wait is from a job being queued to it starting; minutes are each
@@ -130,10 +134,10 @@ EOF
 }
 
 die() {
-  echo "ci-runner: $*" >&2
+  echo "homefield: $*" >&2
   exit 1
 }
-log() { echo "ci-runner: $*"; }
+log() { echo "homefield: $*"; }
 
 # ── Host and VM ─────────────────────────────────────────────────────────────
 check_host() {
@@ -151,6 +155,21 @@ check_host() {
 }
 
 vm_status() { limactl list --format '{{.Status}}' "$INSTANCE" 2>/dev/null || true; }
+
+# The VM ci-runner v2 created. v3 does not upgrade it in place (new instance,
+# paths, units and label), so one left behind next to a missing homefield VM is
+# the cue to point at the migration instead of creating a second VM and runner.
+V2_INSTANCE="ci-runner"
+v2_vm_exists() {
+  [ "$INSTANCE" != "$V2_INSTANCE" ] &&
+    [ -n "$(limactl list --format '{{.Status}}' "$V2_INSTANCE" 2>/dev/null)" ]
+}
+V2_MIGRATE="v3 does not upgrade it in place: follow docs/runbook.md, \"Migrating from ci-runner (v2)\""
+# v2_hint: for the end of a "no VM" message; prints nothing without a v2 VM.
+v2_hint() {
+  v2_vm_exists || return 0
+  printf ' (a ci-runner v2 VM exists, and %s)' "$V2_MIGRATE"
+}
 
 # --workdir /: the host's working directory does not exist in the guest, which
 # has no mounts. stdin is closed, or `limactl shell` would swallow whatever is
@@ -214,9 +233,9 @@ stop_runner() {
 restart_runner_on_failure() {
   local rc=$?
   if [ "$rc" -ne 0 ] && [ -n "$stopped_unit" ]; then
-    echo "ci-runner: failed; starting ${stopped_unit} again" >&2
+    echo "homefield: failed; starting ${stopped_unit} again" >&2
     guest sudo systemctl start "$stopped_unit" ||
-      echo "ci-runner: could not start ${stopped_unit}; check bin/ci-runner status" >&2
+      echo "homefield: could not start ${stopped_unit}; check bin/homefield status" >&2
   fi
 }
 runner_back() {
@@ -268,8 +287,8 @@ offer_scope_refresh() {
   if [ -n "${GITHUB_TOKEN:-}${GH_TOKEN:-}" ]; then
     # gh uses that variable instead of its stored login, so adding a scope to
     # the stored login changes nothing for this command.
-    echo "ci-runner: GITHUB_TOKEN or GH_TOKEN is set, and gh uses it instead of its stored login, so" >&2
-    echo "ci-runner: 'gh auth refresh' would not help. Unset it, or use a token with admin:org." >&2
+    echo "homefield: GITHUB_TOKEN or GH_TOKEN is set, and gh uses it instead of its stored login, so" >&2
+    echo "homefield: 'gh auth refresh' would not help. Unset it, or use a token with admin:org." >&2
     return 1
   fi
   local answer
@@ -296,8 +315,8 @@ get_token() {
   fi
   if [ -z "$token" ]; then
     [ -t 0 ] || die "could not get a ${kind} token with gh, and no terminal to paste one"
-    echo "ci-runner: could not get a ${kind} token with gh (needs org owner + admin:org, or repository admin)." >&2
-    echo "ci-runner: get one from $(runners_page "$url")/new and paste only the token." >&2
+    echo "homefield: could not get a ${kind} token with gh (needs org owner + admin:org, or repository admin)." >&2
+    echo "homefield: get one from $(runners_page "$url")/new and paste only the token." >&2
     read -rsp "${kind} token: " token
     echo >&2
   fi
@@ -347,7 +366,7 @@ ask_url() {
 prepare_registration() {
   [ -n "$url" ] || url="$(ask_url)" || exit 1
   validate_scope "$url"
-  ensure_group "$url" "${group:-local-ci}"
+  ensure_group "$url" "${group:-homefield-ci}"
 }
 
 # ── Runner group ────────────────────────────────────────────────────────────
@@ -373,8 +392,8 @@ list_groups_ids() {
 # Registering anyway would put the runner in a group nobody has looked at, or
 # fail at the end, so ask first (default no); without a terminal, stop.
 group_unchecked() {
-  echo "ci-runner: could not check or create the runner group ${1}: ${2}" >&2
-  echo "ci-runner: create it by hand (docs/runbook.md, \"Runner group\"): selected repositories, public repositories off." >&2
+  echo "homefield: could not check or create the runner group ${1}: ${2}" >&2
+  echo "homefield: create it by hand (docs/runbook.md, \"Runner group\"): selected repositories, public repositories off." >&2
   [ -t 0 ] || die "stopping: the runner group ${1} is unchecked and there is no terminal to ask"
   local answer
   read -rp "Continue without checking the group? [y/N] " answer
@@ -397,7 +416,7 @@ GROUP_STATE=""
 # URL has no groups, and Default always exists. GitHub treats group names
 # case-insensitively, so they are compared that way.
 ensure_group() {
-  local url="$1" group="${2:-local-ci}" scope org groups="" name vis pub found=0 why="" out
+  local url="$1" group="${2:-homefield-ci}" scope org groups="" name vis pub found=0 why="" out
   scope="$(api_scope "$url")" || exit 1
   if [[ "$scope" != orgs/* ]]; then
     GROUP_STATE=repo
@@ -440,8 +459,8 @@ ensure_group() {
     [ "$pub" != true ] || why="${why:+${why}, and }public repositories can use it"
     if [ -n "$why" ]; then
       GROUP_STATE=wide
-      echo "ci-runner: warning: runner group ${name} is wider than it should be: ${why}." >&2
-      echo "ci-runner: narrow it to selected repositories with public ones off (docs/runbook.md, \"Runner group\")." >&2
+      echo "homefield: warning: runner group ${name} is wider than it should be: ${why}." >&2
+      echo "homefield: narrow it to selected repositories with public ones off (docs/runbook.md, \"Runner group\")." >&2
     else
       GROUP_STATE=narrow
       log "runner group ${name} exists (selected repositories only, no public ones)"
@@ -460,7 +479,7 @@ ensure_group() {
         group_unchecked "$group" "the organization enforces SAML single sign-on and gh's token is not authorized for it (authorize it for SSO, or gh auth refresh): ${out}"
         ;;
       *plan* | *upgrade* | *"not available"*)
-        echo "ci-runner: gh said: ${out}" >&2
+        echo "homefield: gh said: ${out}" >&2
         die "could not create runner group ${group}: custom runner groups need the GitHub Team plan or Enterprise. On the Free plan, pass --group Default (every repository in ${org} can then use the runner, so only do that if you trust them all) or use a repository URL (https://github.com/<owner>/<repo>)"
         ;;
       *)
@@ -470,7 +489,7 @@ ensure_group() {
     return 0
   fi
   GROUP_STATE=created
-  log "created runner group ${group}. No repository can use it yet: ci-runner adopt --repo <owner>/<repo> adds one (docs/adopting.md, step 5)"
+  log "created runner group ${group}. No repository can use it yet: homefield adopt --repo <owner>/<repo> adds one (docs/adopting.md, step 5)"
 }
 
 # ── Waiting for the runner ──────────────────────────────────────────────────
@@ -529,7 +548,7 @@ wait_online() {
     tries=$((tries + 1))
     [ "$tries" -ge "$ONLINE_WAIT_TRIES" ] || sleep "$ONLINE_WAIT_INTERVAL"
   done
-  echo "ci-runner: warning: ${name} is not online after $((ONLINE_WAIT_TRIES * ONLINE_WAIT_INTERVAL)) s (${seen:-not listed yet}); check ${page} and bin/ci-runner status" >&2
+  echo "homefield: warning: ${name} is not online after $((ONLINE_WAIT_TRIES * ONLINE_WAIT_INTERVAL)) s (${seen:-not listed yet}); check ${page} and bin/homefield status" >&2
   return 0
 }
 
@@ -564,10 +583,13 @@ cmd_install() {
       --cpus) cpus="${2:?--cpus needs a value}"; shift 2 ;;
       --memory) memory="${2:?--memory needs a value}"; shift 2 ;;
       --no-autostart) autostart=0; shift ;;
-      *) die "install: unknown option $1 (see bin/ci-runner help)" ;;
+      *) die "install: unknown option $1 (see bin/homefield help)" ;;
     esac
   done
   check_host
+  if [ "$INSTANCE_EXPLICIT" != 1 ] && [ -z "$(vm_status)" ] && v2_vm_exists; then
+    die "install: a ci-runner v2 VM exists, and ${V2_MIGRATE}. Installing now would add a second VM and runner next to it. (To create ${INSTANCE} anyway, pass --instance or set HOMEFIELD_INSTANCE.)"
+  fi
   # Everything that can be checked is checked before anything is created: the
   # URL (asked for if it was not given), the organization, the runner group.
   # Whether the instance is registered is only known once its VM is up and
@@ -609,31 +631,31 @@ cmd_install() {
   # The name the runner registered under (--name, else the guest hostname).
   local registered_name=""
   registered_name="$(runner_setting agentName)" || registered_name=""
-  wait_online "$url" "$registered_name" "${group:-local-ci}"
+  wait_online "$url" "$registered_name" "${group:-homefield-ci}"
   echo
   echo "Registered. Next:"
   case "$GROUP_STATE" in
     narrow | created)
-      echo "  - It is in the runner group ${group:-local-ci}, which admits only the"
-      echo "    repositories added to it: ci-runner adopt --repo <owner>/<repo> adds one."
+      echo "  - It is in the runner group ${group:-homefield-ci}, which admits only the"
+      echo "    repositories added to it: homefield adopt --repo <owner>/<repo> adds one."
       ;;
     default)
       echo "  - It is in the Default group: every repository in the organization can"
       echo "    use it (docs/runbook.md, \"Runner group\")."
       ;;
     wide)
-      echo "  - Narrow the runner group ${group:-local-ci} as warned above, then add"
+      echo "  - Narrow the runner group ${group:-homefield-ci} as warned above, then add"
       echo "    the repositories that should use it (docs/runbook.md, \"Runner group\")."
       ;;
     unchecked)
-      echo "  - Check the runner group ${group:-local-ci} by hand: selected repositories,"
+      echo "  - Check the runner group ${group:-homefield-ci} by hand: selected repositories,"
       echo "    public ones off (docs/runbook.md, \"Runner group\")."
       ;;
   esac
   cat <<EOF
   - Route jobs from a repository: docs/adopting.md, then
-    ci-runner adopt --repo <owner>/<repo> (group access and the switch).
-  - bin/ci-runner status   shows the runner at any time.
+    homefield adopt --repo <owner>/<repo> (group access and the switch).
+  - bin/homefield status   shows the runner at any time.
 EOF
 }
 
@@ -643,14 +665,14 @@ cmd_upgrade() {
     case "$1" in
       --packages) packages="${2?--packages needs a value (may be empty)}"; packages_set=1; shift 2 ;;
       --force) force=1; shift ;;
-      *) die "upgrade: unknown option $1 (see bin/ci-runner help)" ;;
+      *) die "upgrade: unknown option $1 (see bin/homefield help)" ;;
     esac
   done
   check_host
-  [ -n "$(vm_status)" ] || die "no VM ${INSTANCE}; run bin/ci-runner install"
+  [ -n "$(vm_status)" ] || die "no VM ${INSTANCE}; run bin/homefield install$(v2_hint)"
   ensure_vm "" ""
   verify_isolation
-  registered || die "${INSTANCE} is not registered; run bin/ci-runner install --url ..."
+  registered || die "${INSTANCE} is not registered; run bin/homefield install --url ..."
   # An upgrade can restart Docker (apt) or the runner (a new binary), which
   # would take down a running job.
   if job_running && [ "$force" != 1 ]; then
@@ -672,7 +694,7 @@ cmd_status() {
   local status
   status="$(vm_status)"
   if [ -z "$status" ]; then
-    echo "VM ${INSTANCE}: not created"
+    echo "VM ${INSTANCE}: not created$(v2_hint)"
     return
   fi
   echo "VM ${INSTANCE}: ${status}"
@@ -698,7 +720,7 @@ cmd_status() {
   fi
   if job_running; then echo "job: running"; else echo "job: idle"; fi
   echo "runner version: $(guest sudo cat "$RUNNER_HOME/.provisioned-version" 2>/dev/null || echo unknown)"
-  echo "extra packages: $(guest sh -c 'cat /etc/ci-runner/extra-packages 2>/dev/null | tr "\n" " "')"
+  echo "extra packages: $(guest sh -c 'cat /etc/homefield/extra-packages 2>/dev/null | tr "\n" " "')"
   [ -n "$url" ] && echo "labels: see $(runners_page "$url") (not stored in the VM)"
   return 0
 }
@@ -708,20 +730,20 @@ cmd_uninstall() {
   while [ $# -gt 0 ]; do
     case "$1" in
       --keep-vm) keep_vm=1; shift ;;
-      *) die "uninstall: unknown option $1 (see bin/ci-runner help)" ;;
+      *) die "uninstall: unknown option $1 (see bin/homefield help)" ;;
     esac
   done
   check_host
   local status
   status="$(vm_status)"
-  [ -n "$status" ] || die "no VM ${INSTANCE}"
+  [ -n "$status" ] || die "no VM ${INSTANCE}$(v2_hint)"
   [ "$status" = "Running" ] || limactl start --tty=false "$INSTANCE"
   if registered; then
     job_running && die "a job is running on ${INSTANCE}; uninstall when it is idle"
     local url token
     url="$(runner_setting gitHubUrl)"
-    echo "ci-runner: switch every repository that routes to this runner to hosted first:" >&2
-    echo "ci-runner:   gh variable set CI_RUNNER --repo <owner>/<repo> --body hosted" >&2
+    echo "homefield: switch every repository that routes to this runner to hosted first:" >&2
+    echo "homefield:   gh variable set CI_RUNNER --repo <owner>/<repo> --body hosted" >&2
     # Offline before the token is fetched or typed, which can take a while.
     stop_runner
     token="$(get_token remove "$url")"
@@ -764,18 +786,18 @@ stuck_runs() {
 }
 
 cmd_route() {
-  local target="${1:-}" label="local-ci" dry=0 repos=() repo current stuck id status tries
+  local target="${1:-}" label="homefield-ci" dry=0 repos=() repo current stuck id status tries
   [ $# -gt 0 ] && shift
   case "$target" in
     hosted | local) ;;
-    *) die "route: say where to: bin/ci-runner route <hosted|local> --repo <owner>/<repo>" ;;
+    *) die "route: say where to: bin/homefield route <hosted|local> --repo <owner>/<repo>" ;;
   esac
   while [ $# -gt 0 ]; do
     case "$1" in
       --repo) repos+=("${2:?--repo needs a value}"); shift 2 ;;
       --label) label="${2:?--label needs a value}"; shift 2 ;;
       --dry-run) dry=1; shift ;;
-      *) die "route: unknown option $1 (see bin/ci-runner help)" ;;
+      *) die "route: unknown option $1 (see bin/homefield help)" ;;
     esac
   done
   [ "${#repos[@]}" -gt 0 ] || die "route: --repo <owner>/<repo> is required"
@@ -851,7 +873,7 @@ ADOPT_GUARDS=0
 ADOPT_ROUTED=""
 ADOPT_WORKFLOWS=0
 
-adopt_warn() { echo "ci-runner: warning: $*" >&2; }
+adopt_warn() { echo "homefield: warning: $*" >&2; }
 
 # adopt_repository <owner/repo>: sets ADOPT_REPO_ID, ADOPT_BRANCH and
 # ADOPT_OWNER_TYPE. Only private repositories may reach the runner.
@@ -1092,7 +1114,7 @@ adopt_routing_check() {
   fi
   if [ -n "$ADOPT_NOTES" ]; then
     adopt_warn "the verify-routing guard may not run on every pull request. Check that every pull request that changes .github/workflows still runs it:"
-    printf '%s' "$ADOPT_NOTES" | sed 's/^/ci-runner:   /' >&2
+    printf '%s' "$ADOPT_NOTES" | sed 's/^/homefield:   /' >&2
   fi
 }
 
@@ -1122,7 +1144,7 @@ adopt_cache_keys() {
     return 0
   fi
   adopt_warn "cache keys with runner.os and no runner.arch (a text match; check what each one is the key of):"
-  printf '%s\n' "$hits" | sed 's/^/ci-runner:   /' >&2
+  printf '%s\n' "$hits" | sed 's/^/homefield:   /' >&2
   adopt_warn "runner.os is Linux on the hosted runners and on this arm64 VM, so such a key lets the two architectures restore each other's build outputs. Add \${{ runner.arch }} (docs/adopting.md, step 4)."
 }
 
@@ -1166,14 +1188,14 @@ adopt_switch() {
     return 0
   fi
   if [ "$current" = local ]; then
-    adopt_warn "CI_RUNNER is already local on ${repo} although its routing is not in place; bin/ci-runner route hosted --repo ${repo} undoes that"
+    adopt_warn "CI_RUNNER is already local on ${repo} although its routing is not in place; bin/homefield route hosted --repo ${repo} undoes that"
   fi
   adopt_snippets "$ADOPT_LABEL" "${jobs:-$(printf '%s' "$ADOPT_ROUTED" | tr '\n' ',')}"
-  die "not switched: merge the routing first, then run ci-runner adopt again"
+  die "not switched: merge the routing first, then run homefield adopt again"
 }
 
 cmd_adopt() {
-  local repo="" nrepo=0 label="local-ci" label_given=0 group="local-ci" jobs="" switch=1 dry=0 entry out
+  local repo="" nrepo=0 label="homefield-ci" label_given=0 group="homefield-ci" jobs="" switch=1 dry=0 entry out
   while [ $# -gt 0 ]; do
     case "$1" in
       --repo) repo="${2:?--repo needs a value}"; nrepo=$((nrepo + 1)); shift 2 ;;
@@ -1182,7 +1204,7 @@ cmd_adopt() {
       --jobs) jobs="${2:?--jobs needs a value}"; shift 2 ;;
       --no-switch) switch=0; shift ;;
       --dry-run) dry=1; shift ;;
-      *) die "adopt: unknown option $1 (see bin/ci-runner help)" ;;
+      *) die "adopt: unknown option $1 (see bin/homefield help)" ;;
     esac
   done
   [ "$nrepo" -gt 0 ] || die "adopt: --repo <owner>/<repo> is required"
@@ -1214,7 +1236,7 @@ cmd_adopt() {
 }
 
 # Per-day summary of the guest's memwatch rows (vm/provision.sh,
-# ci-runner-memwatch): ts,samples,total_mib,used_avg_mib,used_max_mib,
+# homefield-memwatch): ts,samples,total_mib,used_avg_mib,used_max_mib,
 # avail_min_mib,oom_kills,job. Files sort by date, so rows arrive in time
 # order and the cumulative oom counter can be diffed row to row; a smaller
 # value than before means the guest rebooted and the counter restarted from
@@ -1255,18 +1277,18 @@ cmd_memory() {
   while [ $# -gt 0 ]; do
     case "$1" in
       --days) days="${2:?--days needs a value}"; shift 2 ;;
-      *) die "memory: unknown option $1 (see bin/ci-runner help)" ;;
+      *) die "memory: unknown option $1 (see bin/homefield help)" ;;
     esac
   done
   if ! [[ "$days" =~ ^[0-9]+$ ]] || [ "$days" -lt 1 ]; then
     die "memory: --days must be a positive number"
   fi
   check_host
-  [ "$(vm_status)" = "Running" ] || die "memory: VM ${INSTANCE} is not running"
+  [ "$(vm_status)" = "Running" ] || die "memory: VM ${INSTANCE} is not running$(v2_hint)"
   # BSD date, as on macOS: today minus (days - 1), so --days 1 is today.
   cutoff="$(date -v-"$((days - 1))"d +%F)"
-  rows="$(guest sh -c 'cat /var/log/ci-runner/memwatch-*.csv 2>/dev/null; true')" || exit 1
-  [ -n "$rows" ] || die "memory: no samples in ${INSTANCE} yet; the sampler is installed by bin/ci-runner upgrade"
+  rows="$(guest sh -c 'cat /var/log/homefield/memwatch-*.csv 2>/dev/null; true')" || exit 1
+  [ -n "$rows" ] || die "memory: no samples in ${INSTANCE} yet; the sampler is installed by bin/homefield upgrade"
   rc=0
   printf '%s\n' "$rows" | awk -v cutoff="$cutoff" "$MEMORY_AWK" || rc=$?
   [ "$rc" -ne 3 ] || die "memory: no samples since ${cutoff}"
@@ -1284,19 +1306,19 @@ cmd_report() {
 cmd_version() {
   [ $# -eq 0 ] || die "version takes no options besides --instance"
   local key value repo="" ref="" commit=""
-  if [ -f "$ROOT/.ci-runner-ref" ]; then
+  if [ -f "$ROOT/.homefield-ref" ]; then
     while IFS='=' read -r key value; do
       case "$key" in
         repo) repo="$value" ;;
         ref) ref="$value" ;;
         commit) commit="$value" ;;
       esac
-    done <"$ROOT/.ci-runner-ref"
-    echo "ci-runner ${ref:-unknown}${commit:+ (${commit:0:7})}, installed from ${repo:-unknown} in ${ROOT}"
+    done <"$ROOT/.homefield-ref"
+    echo "homefield ${ref:-unknown}${commit:+ (${commit:0:7})}, installed from ${repo:-unknown} in ${ROOT}"
   elif git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1; then
-    echo "ci-runner $(git -C "$ROOT" describe --always), from a checkout in ${ROOT}"
+    echo "homefield $(git -C "$ROOT" describe --always), from a checkout in ${ROOT}"
   else
-    echo "ci-runner (version unknown), in ${ROOT}"
+    echo "homefield (version unknown), in ${ROOT}"
   fi
 }
 
@@ -1306,7 +1328,7 @@ main() {
   local cmd="" rest=()
   while [ $# -gt 0 ]; do
     case "$1" in
-      --instance) INSTANCE="${2:?--instance needs a value}"; shift 2 ;;
+      --instance) INSTANCE="${2:?--instance needs a value}"; INSTANCE_EXPLICIT=1; shift 2 ;;
       *)
         if [ -z "$cmd" ]; then cmd="$1"; else rest+=("$1"); fi
         shift
@@ -1331,4 +1353,4 @@ main() {
 }
 
 # The tests source this file to call the functions above on their own.
-[ "${CI_RUNNER_SOURCE_ONLY:-}" = 1 ] || main "$@"
+[ "${HOMEFIELD_SOURCE_ONLY:-}" = 1 ] || main "$@"

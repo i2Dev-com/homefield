@@ -4,26 +4,26 @@
 # Runs inside the guest as root. Copy it in and run it; see docs/runbook.md
 # for the full sequence:
 #
-#   limactl copy vm/provision.sh ci-runner:/tmp/provision.sh
+#   limactl copy vm/provision.sh homefield:/tmp/provision.sh
 #   printf 'RUNNER_TOKEN=%s\n' "$TOKEN" |
-#     limactl shell ci-runner sudo RUNNER_URL=https://github.com/<org> \
+#     limactl shell homefield sudo RUNNER_URL=https://github.com/<org> \
 #       bash /tmp/provision.sh
 #
 # Settings, as environment variables (after `sudo`, as above):
 #   RUNNER_URL    where to register: https://github.com/<org>, or a repository
 #                 URL. Required to register or move; not needed to re-run on a
 #                 runner that is already registered.
-#   RUNNER_LABEL  the custom label workflows route on (default local-ci). Must
+#   RUNNER_LABEL  the custom label workflows route on (default homefield-ci). Must
 #                 match verify-routing's `label` input and the label in every
 #                 inline expression.
 #   RUNNER_NAME   default: the guest's hostname (lima-<instance>).
-#   RUNNER_GROUP  org runner group to join (default local-ci).
+#   RUNNER_GROUP  org runner group to join (default homefield-ci).
 #   RUNNER_EXTRA_PACKAGES
 #                 apt packages to install on top of the base set, space-
 #                 separated. Saved in the guest, so later runs keep them
 #                 without passing it again; setting it replaces the saved
 #                 list, and setting it empty clears it (nothing is removed).
-# Tools apt does not have go in hooks: /etc/ci-runner/provision.d/*.sh, run
+# Tools apt does not have go in hooks: /etc/homefield/provision.d/*.sh, run
 # as root in name order after the packages. See docs/runbook.md, "Adding
 # tools".
 # Name, label and group are read only at registration. To change the label
@@ -62,13 +62,13 @@ RUNNER_VERSION="2.337.0"
 RUNNER_SHA256="9b1dc70626422526e3c94767cf024896beb15da5342a3f4819bf2feac13e0393"
 RUNNER_URL="${RUNNER_URL:-}"
 RUNNER_NAME="${RUNNER_NAME:-$(hostname)}"
-RUNNER_LABEL="${RUNNER_LABEL:-local-ci}"
+RUNNER_LABEL="${RUNNER_LABEL:-homefield-ci}"
 # Org registrations join the runner group that limits which repositories may
 # use the runner (docs/runbook.md, "Runner group"). Without one the runner
 # lands in Default, usable by every repository in the organization. Runner
 # groups do not exist for a repository-scoped runner, so none is passed there.
 if [[ "$RUNNER_URL" =~ ^https://github\.com/[^/]+/?$ ]]; then
-  RUNNER_GROUP="${RUNNER_GROUP:-local-ci}"
+  RUNNER_GROUP="${RUNNER_GROUP:-homefield-ci}"
 else
   RUNNER_GROUP=""
 fi
@@ -110,9 +110,31 @@ for pkg in ${requested_packages[@]+"${requested_packages[@]}"}; do
     exit 1
   fi
 done
-CONFIG_DIR="/etc/ci-runner"
+CONFIG_DIR="/etc/homefield"
 RUNNER_USER="runner"
 RUNNER_HOME="/opt/actions-runner"
+
+# A guest that ci-runner v2 provisioned keeps its config in /etc/ci-runner and
+# its units named ci-runner-*. v3 uses other paths and does not move these, so
+# running here would leave two sets of timers and a half-configured runner:
+# refuse, before anything changes (read-only checks, so ahead of the root
+# check). PROVISION_SYSROOT prefixes the paths looked at; the tests point it at
+# a fixture so they never read this machine's /etc.
+v2_leftover=""
+sysroot="${PROVISION_SYSROOT:-}"
+if [ -e "$sysroot/etc/ci-runner" ] || [ -L "$sysroot/etc/ci-runner" ]; then
+  v2_leftover="/etc/ci-runner"
+fi
+for unit in "$sysroot"/etc/systemd/system/ci-runner-*.timer "$sysroot"/etc/systemd/system/ci-runner-*.service; do
+  if [ -e "$unit" ] || [ -L "$unit" ]; then
+    v2_leftover="${v2_leftover:-${unit#"$sysroot"}}"
+  fi
+done
+if [ -n "$v2_leftover" ]; then
+  echo "provision.sh: this VM was provisioned by ci-runner v2 (found ${v2_leftover}). v3 does not upgrade it in place:" \
+       "replace the VM by following docs/runbook.md, \"Migrating from ci-runner (v2)\"" >&2
+  exit 1
+fi
 
 if [ "$(id -u)" -ne 0 ]; then
   echo "provision.sh: run as root (sudo)" >&2
@@ -374,14 +396,14 @@ fi
 # A workspace is removed only if nothing *inside* it changed for 7 days. The
 # top-level directory's own mtime moves only when direct entries change, so
 # the checkout reused by every job would look stale after a week of daily use.
-cat > /usr/local/sbin/ci-runner-cleanup <<'EOF'
+cat > /usr/local/sbin/homefield-cleanup <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 # An empty _work (before the first job) must not iterate the literal glob.
 shopt -s nullglob
 job_running() { pgrep -f Runner.Worker >/dev/null; }
 if job_running; then
-  echo "ci-runner-cleanup: job in progress, skipping"
+  echo "homefield-cleanup: job in progress, skipping"
   exit 0
 fi
 docker system prune --force --filter "until=24h"
@@ -392,26 +414,26 @@ for dir in /opt/actions-runner/_work/*/; do
     # top of the script, and an idle-for-a-week workspace is exactly the one
     # the first job after a long absence would be using.
     if job_running; then
-      echo "ci-runner-cleanup: job started, leaving $dir"
+      echo "homefield-cleanup: job started, leaving $dir"
       exit 0
     fi
-    echo "ci-runner-cleanup: removing idle workspace $dir"
+    echo "homefield-cleanup: removing idle workspace $dir"
     rm -rf "$dir"
   fi
 done
 EOF
-chmod 755 /usr/local/sbin/ci-runner-cleanup
+chmod 755 /usr/local/sbin/homefield-cleanup
 
-cat > /etc/systemd/system/ci-runner-cleanup.service <<'EOF'
+cat > /etc/systemd/system/homefield-cleanup.service <<'EOF'
 [Unit]
 Description=Prune Docker and stale runner workspaces
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/sbin/ci-runner-cleanup
+ExecStart=/usr/local/sbin/homefield-cleanup
 EOF
 
-cat > /etc/systemd/system/ci-runner-cleanup.timer <<'EOF'
+cat > /etc/systemd/system/homefield-cleanup.timer <<'EOF'
 [Unit]
 Description=Daily CI runner cleanup
 
@@ -428,7 +450,7 @@ EOF
 # and restarts whatever it upgrades, plus everything needrestart finds, with
 # no regard for the runner. On 2026-09-30 that stopped the runner, containerd
 # and Docker in the middle of a job and failed an unrelated snap PR
-# (ci-runner#8). So automatic upgrades are off, and ci-runner-maintenance
+# (homefield#8). So automatic upgrades are off, and homefield-maintenance
 # installs updates instead. It runs only while the runner is idle, and stops
 # the runner first, so no job can be caught by a restart during the upgrade.
 #
@@ -438,17 +460,17 @@ EOF
 # service restarts. The package lists are still refreshed daily, and
 # "unattended-upgrades" stays installed but inert, so `apt-config` shows the
 # override in effect.
-cat > /etc/apt/apt.conf.d/52ci-runner-no-unattended-upgrade <<'EOF'
-// ci-runner#8: upgrades run from ci-runner-maintenance.timer, only while idle.
+cat > /etc/apt/apt.conf.d/52homefield-no-unattended-upgrade <<'EOF'
+// homefield#8: upgrades run from homefield-maintenance.timer, only while idle.
 APT::Periodic::Unattended-Upgrade "0";
 EOF
 
-cat > /usr/local/sbin/ci-runner-maintenance <<'EOF'
+cat > /usr/local/sbin/homefield-maintenance <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 unit="$(cat /opt/actions-runner/.service)"
 if pgrep -f Runner.Worker >/dev/null; then
-  echo "ci-runner-maintenance: job in progress, skipping until tomorrow"
+  echo "homefield-maintenance: job in progress, skipping until tomorrow"
   exit 0
 fi
 systemctl stop "$unit"
@@ -464,14 +486,14 @@ apt-get autoremove -y -q --purge
 # enabled, so it comes back on boot. A guest reboot keeps the VM running
 # under Lima's vz backend (verified with Lima 2.2.0).
 if [ -f /var/run/reboot-required ]; then
-  echo "ci-runner-maintenance: rebooting to finish the upgrade"
+  echo "homefield-maintenance: rebooting to finish the upgrade"
   trap - EXIT
   systemctl reboot || systemctl start "$unit"
 fi
 EOF
-chmod 755 /usr/local/sbin/ci-runner-maintenance
+chmod 755 /usr/local/sbin/homefield-maintenance
 
-cat > /etc/systemd/system/ci-runner-maintenance.service <<'EOF'
+cat > /etc/systemd/system/homefield-maintenance.service <<'EOF'
 [Unit]
 Description=Install OS updates while the CI runner is idle
 After=network-online.target
@@ -479,16 +501,16 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/sbin/ci-runner-maintenance
+ExecStart=/usr/local/sbin/homefield-maintenance
 EOF
 
 # 07:00 guest time (Lima copies the Mac's time zone): in the deployment this
 # came from, none of ~800 PR runs started between 07:00 and 08:00. Change it
-# with a drop-in (`systemctl edit ci-runner-maintenance.timer`: an empty
+# with a drop-in (`systemctl edit homefield-maintenance.timer`: an empty
 # `OnCalendar=` first, or the new time adds to this one), which
 # re-provisioning leaves alone. The timer is not Persistent: a missed run would
 # fire at boot, just as the runner comes online and may pick up a queued job.
-cat > /etc/systemd/system/ci-runner-maintenance.timer <<'EOF'
+cat > /etc/systemd/system/homefield-maintenance.timer <<'EOF'
 [Unit]
 Description=Daily idle-time OS updates for the CI runner
 
@@ -500,19 +522,19 @@ WantedBy=timers.target
 EOF
 
 # ── Memory sampler ──────────────────────────────────────────────────────────
-# One line per minute in /var/log/ci-runner/memwatch-<date>.csv, taken from
+# One line per minute in /var/log/homefield/memwatch-<date>.csv, taken from
 # samples every 2 seconds. sysstat's 10-minute samples miss the short spikes
 # (a build, a test run) that decide how small the VM's memory can be set, so
 # this keeps the per-minute *peak*. "Used" is MemTotal - MemAvailable: what
 # cannot be reclaimed, and so what an out-of-memory kill is about. `job` is 1
 # if a job ran at any time in the minute; `oom_kills` is the kernel's
 # cumulative counter (it restarts at 0 after a reboot). Files older than 90
-# days are deleted. Read it with `bin/ci-runner memory`.
-cat > /usr/local/sbin/ci-runner-memwatch <<'EOF'
+# days are deleted. Read it with `bin/homefield memory`.
+cat > /usr/local/sbin/homefield-memwatch <<'EOF'
 #!/usr/bin/env bash
 # The MEMWATCH_* variables exist for tests/memwatch.sh; the service sets none.
 set -u
-dir="${MEMWATCH_DIR:-/var/log/ci-runner}"
+dir="${MEMWATCH_DIR:-/var/log/homefield}"
 interval="${MEMWATCH_INTERVAL:-2}"
 period="${MEMWATCH_PERIOD:-60}"
 meminfo="${MEMWATCH_MEMINFO:-/proc/meminfo}"
@@ -582,14 +604,14 @@ while :; do
   fi
 done
 EOF
-chmod 755 /usr/local/sbin/ci-runner-memwatch
+chmod 755 /usr/local/sbin/homefield-memwatch
 
-cat > /etc/systemd/system/ci-runner-memwatch.service <<'EOF'
+cat > /etc/systemd/system/homefield-memwatch.service <<'EOF'
 [Unit]
 Description=Per-minute peak memory log for the CI runner
 
 [Service]
-ExecStart=/usr/local/sbin/ci-runner-memwatch
+ExecStart=/usr/local/sbin/homefield-memwatch
 Restart=always
 RestartSec=5
 Nice=10
@@ -599,12 +621,12 @@ WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
-systemctl enable --now ci-runner-cleanup.timer ci-runner-maintenance.timer
+systemctl enable --now homefield-cleanup.timer homefield-maintenance.timer
 # restart, not just enable: a re-run may have changed the script, and the
 # running copy would keep the old one. Nothing depends on it, so it never
 # blocks a job; the minute in progress is lost.
-systemctl enable ci-runner-memwatch.service
-systemctl restart ci-runner-memwatch.service
+systemctl enable homefield-memwatch.service
+systemctl restart homefield-memwatch.service
 
 # Reports the registration as it is, which differs from the settings when an
 # existing registration was kept. Labels are not in the runner's config; the

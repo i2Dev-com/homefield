@@ -16,7 +16,7 @@ inputs:
       The custom runner label the workflows route on: RUNNER_LABEL in
       provision.sh, and the last label in every inline expression.
     required: false
-    default: local-ci
+    default: homefield-ci
   arch:
     description: The runner's architecture label (arm64 or x64).
     required: false

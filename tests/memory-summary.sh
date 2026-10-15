@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The awk behind `bin/ci-runner memory`: per-day average and peak, the peak
+# The awk behind `bin/homefield memory`: per-day average and peak, the peak
 # during jobs, and out-of-memory kills counted across a guest reboot, which
 # restarts the kernel's counter.
 #
@@ -9,7 +9,7 @@ set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 # The program text, between MEMORY_AWK=' and the closing quote.
-prog="$(sed -n "/^MEMORY_AWK='\$/,/^}'\$/p" "$ROOT/bin/ci-runner" | sed '1d;$d')"
+prog="$(sed -n "/^MEMORY_AWK='\$/,/^}'\$/p" "$ROOT/bin/homefield" | sed '1d;$d')"
 prog="${prog}
 }"
 record "extracted the awk program" "yes" "$([ -n "$prog" ] && echo yes || echo no)"

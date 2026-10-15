@@ -1,5 +1,5 @@
 name: Bug report
-description: Something in bin/ci-runner, provision.sh, the VM or verify-routing does not work as documented.
+description: Something in bin/homefield, provision.sh, the VM or verify-routing does not work as documented.
 labels: [bug]
 body:
   - type: markdown
@@ -19,8 +19,8 @@ body:
   - type: textarea
     id: status
     attributes:
-      label: bin/ci-runner status
-      description: Output of `bin/ci-runner status` (add --instance if you use one), if the runner is involved.
+      label: bin/homefield status
+      description: Output of `bin/homefield status` (add --instance if you use one), if the runner is involved.
       render: text
   - type: input
     id: versions

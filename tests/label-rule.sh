@@ -26,7 +26,7 @@ check() {
   record "$label" "$want" "$([ "$prov" = "$verify" ] && echo "$prov" || echo "provision.sh $prov, verify_routing.py $verify")"
 }
 
-for label in local-ci i2dev-ci acme.ci_2 LOCAL-CI ubuntu2 macos_runner; do
+for label in homefield-ci i2dev-ci acme.ci_2 HOMEFIELD-CI ubuntu2 macos_runner; do
   check "$label" ok
 done
 # Not one label.
