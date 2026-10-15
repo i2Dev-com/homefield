@@ -6,6 +6,93 @@ fail is a new major (see [README](README.md#development)).
 
 ## Unreleased
 
+Compatible with v3: the v3 tag moves to include it.
+
+### Added
+
+- `homefield version` says whether a newer HomeField is available for an
+  install.sh copy: it asks GitHub through `gh` whether the installed ref has
+  moved and prints the command that updates the tool, and it points to this
+  changelog when a newer major version exists. When it cannot check (no `gh`,
+  not logged in, no access) it prints one line saying so; the exit status is
+  0 either way.
+- `bin/ci-runner adopt --repo <owner>/<repo>`: does the part of
+  `docs/adopting.md` that is not a workflow edit. It refuses a public
+  repository, downloads the repository's workflows and runs the
+  `verify-routing` check on them, warns about cache keys with `runner.os` and
+  no `runner.arch` in files with routed jobs, and only when the routing is
+  ready adds the repository to the organization's runner group (needs
+  `admin:org`; without it, it warns and goes on) and sets `CI_RUNNER` to
+  `local`. The routing is ready when a guard is present, passes and at least
+  one job is routed. A guard is a step that uses
+  `i2Dev-com/ci-runner/verify-routing@v2` (a full commit SHA is accepted with
+  a warning) in a workflow that runs on `pull_request`, or in a reusable
+  workflow that one of those calls, and that is not switched off by
+  `if: false`; another repository's action, another ref, a push-only or
+  `pull_request_target` workflow does not count. Branch and path filters on
+  the trigger and other `if:` conditions are warnings. When the routing is not
+  ready, the group is only read (it warns if the repository is already in it)
+  and nothing is added; it prints the routing expression and the guard step to
+  add, and exits 1. `--jobs`, `--label`, `--group`, `--no-switch`;
+  `--dry-run` changes nothing. Needs `gh` and `python3`, not the VM. `install`'s closing message
+  points to it.
+- `verify_routing.py --list` (the jobs that carry the canonical expression)
+  and `--print-expression`, which `adopt` uses. Existing invocations and
+  their output are unchanged, so the action stays `@v2`.
+- `install.sh`, a one-line installer: `gh api
+  'repos/i2Dev-com/ci-runner/contents/install.sh?ref=v2' -H 'Accept:
+  application/vnd.github.raw' | bash` (or `curl -fsSL
+  https://raw.githubusercontent.com/i2Dev-com/ci-runner/v2/install.sh | bash`
+  once the repository is public). It downloads the tool for a ref
+  (`CI_RUNNER_REPO`, `CI_RUNNER_REF`; `gh` for a private repository, `curl`
+  otherwise) into `~/.local/share/ci-runner`, puts a `ci-runner` command on
+  the PATH, installs or upgrades Lima (1.1 or later) with Homebrew if you agree, and runs
+  `ci-runner install`; arguments after `bash -s --` go to it. Run it again to
+  upgrade the tool; with no arguments, an existing VM is left alone.
+- `bin/ci-runner version`: the installed ref and commit, or the checkout's.
+- `bin/ci-runner install` asks for the URL on a terminal when `--url` is
+  missing, instead of failing, and checks it before creating anything.
+- `bin/ci-runner install` creates the organization's runner group when it is
+  missing (selected repositories, public repositories off) and warns when an
+  existing one is open to all or to public repositories. On the Free plan,
+  where custom groups cannot be created, it says so and points to
+  `--group Default`. `--group Default` skips the step.
+- `bin/ci-runner install` and `uninstall` offer `gh auth refresh -s admin:org`
+  when gh lacks the scope (unless `GITHUB_TOKEN` or `GH_TOKEN` overrides gh's
+  login), before falling back to a pasted token.
+- `bin/ci-runner install` waits up to 90 seconds for the runner to show online
+  and prints its labels and group, or the runners page to check by hand.
+- `bin/ci-runner route <hosted|local> --repo <owner>/<repo>`: switches
+  repositories' pull-request jobs (the `CI_RUNNER` variable), and on a switch
+  to hosted cancels and re-runs runs that are stuck waiting for the local
+  runner. `--dry-run` previews it. It works without the VM, for a Mac that is
+  asleep.
+- MIT `LICENSE`, `SECURITY.md` (private reporting, scope, known
+  limitations), `CONTRIBUTING.md`, issue forms and a pull request template.
+- `bin/ci-runner`: `install`, `upgrade`, `status` and `uninstall` the runner
+  on a Mac in one command each. It checks prerequisites, creates the VM,
+  verifies its isolation before running anything in it, fetches tokens with
+  `gh` or prompts for them (never on a command line), refuses to upgrade or
+  remove while a job is running and takes the runner offline for the
+  duration (starting it again if the command fails), and refuses a personal
+  account's URL, which cannot have account-wide runners (checked with `gh`,
+  or `curl` without it). Runs on macOS's stock bash 3.2.
+- `provision.sh` rejects a `RUNNER_URL` that is not a github.com organization
+  or repository.
+
+- `provision.sh`: `RUNNER_EXTRA_PACKAGES` installs extra apt packages on top
+  of the base set. The list is saved in the guest and kept by later runs.
+  Hooks in `/etc/ci-runner/provision.d/*.sh` install anything apt does not
+  have. See "Adding tools" in [`docs/runbook.md`](docs/runbook.md). Nothing
+  changes for existing runners: the base set is the same.
+- `bin/ci-runner memory`: per-day average and peak memory of the VM, the peak
+  during jobs and out-of-memory kills, from a new guest sampler
+  (`ci-runner-memwatch.service`) that logs the per-minute peak of 2-second
+  samples to `/var/log/ci-runner/`. Existing runners get it with
+  `bin/ci-runner upgrade`.
+
+## v3 (2026-10-15)
+
 This is v3, a new major: the project is renamed from ci-runner to HomeField.
 Nothing about how routing works changes, but every name below does, so an
 existing install is replaced, not upgraded in place. See "Migrating from
@@ -142,86 +229,6 @@ runner next to it:
 
 ### Added
 
-- `homefield version` says whether a newer HomeField is available for an
-  install.sh copy: it asks GitHub through `gh` whether the installed ref has
-  moved and prints the command that updates the tool, and it points to this
-  changelog when a newer major version exists. When it cannot check (no `gh`,
-  not logged in, no access) it prints one line saying so; the exit status is
-  0 either way.
-- `bin/ci-runner adopt --repo <owner>/<repo>`: does the part of
-  `docs/adopting.md` that is not a workflow edit. It refuses a public
-  repository, downloads the repository's workflows and runs the
-  `verify-routing` check on them, warns about cache keys with `runner.os` and
-  no `runner.arch` in files with routed jobs, and only when the routing is
-  ready adds the repository to the organization's runner group (needs
-  `admin:org`; without it, it warns and goes on) and sets `CI_RUNNER` to
-  `local`. The routing is ready when a guard is present, passes and at least
-  one job is routed. A guard is a step that uses
-  `i2Dev-com/ci-runner/verify-routing@v2` (a full commit SHA is accepted with
-  a warning) in a workflow that runs on `pull_request`, or in a reusable
-  workflow that one of those calls, and that is not switched off by
-  `if: false`; another repository's action, another ref, a push-only or
-  `pull_request_target` workflow does not count. Branch and path filters on
-  the trigger and other `if:` conditions are warnings. When the routing is not
-  ready, the group is only read (it warns if the repository is already in it)
-  and nothing is added; it prints the routing expression and the guard step to
-  add, and exits 1. `--jobs`, `--label`, `--group`, `--no-switch`;
-  `--dry-run` changes nothing. Needs `gh` and `python3`, not the VM. `install`'s closing message
-  points to it.
-- `verify_routing.py --list` (the jobs that carry the canonical expression)
-  and `--print-expression`, which `adopt` uses. Existing invocations and
-  their output are unchanged, so the action stays `@v2`.
-- `install.sh`, a one-line installer: `gh api
-  'repos/i2Dev-com/ci-runner/contents/install.sh?ref=v2' -H 'Accept:
-  application/vnd.github.raw' | bash` (or `curl -fsSL
-  https://raw.githubusercontent.com/i2Dev-com/ci-runner/v2/install.sh | bash`
-  once the repository is public). It downloads the tool for a ref
-  (`CI_RUNNER_REPO`, `CI_RUNNER_REF`; `gh` for a private repository, `curl`
-  otherwise) into `~/.local/share/ci-runner`, puts a `ci-runner` command on
-  the PATH, installs or upgrades Lima (1.1 or later) with Homebrew if you agree, and runs
-  `ci-runner install`; arguments after `bash -s --` go to it. Run it again to
-  upgrade the tool; with no arguments, an existing VM is left alone.
-- `bin/ci-runner version`: the installed ref and commit, or the checkout's.
-- `bin/ci-runner install` asks for the URL on a terminal when `--url` is
-  missing, instead of failing, and checks it before creating anything.
-- `bin/ci-runner install` creates the organization's runner group when it is
-  missing (selected repositories, public repositories off) and warns when an
-  existing one is open to all or to public repositories. On the Free plan,
-  where custom groups cannot be created, it says so and points to
-  `--group Default`. `--group Default` skips the step.
-- `bin/ci-runner install` and `uninstall` offer `gh auth refresh -s admin:org`
-  when gh lacks the scope (unless `GITHUB_TOKEN` or `GH_TOKEN` overrides gh's
-  login), before falling back to a pasted token.
-- `bin/ci-runner install` waits up to 90 seconds for the runner to show online
-  and prints its labels and group, or the runners page to check by hand.
-- `bin/ci-runner route <hosted|local> --repo <owner>/<repo>`: switches
-  repositories' pull-request jobs (the `CI_RUNNER` variable), and on a switch
-  to hosted cancels and re-runs runs that are stuck waiting for the local
-  runner. `--dry-run` previews it. It works without the VM, for a Mac that is
-  asleep.
-- MIT `LICENSE`, `SECURITY.md` (private reporting, scope, known
-  limitations), `CONTRIBUTING.md`, issue forms and a pull request template.
-- `bin/ci-runner`: `install`, `upgrade`, `status` and `uninstall` the runner
-  on a Mac in one command each. It checks prerequisites, creates the VM,
-  verifies its isolation before running anything in it, fetches tokens with
-  `gh` or prompts for them (never on a command line), refuses to upgrade or
-  remove while a job is running and takes the runner offline for the
-  duration (starting it again if the command fails), and refuses a personal
-  account's URL, which cannot have account-wide runners (checked with `gh`,
-  or `curl` without it). Runs on macOS's stock bash 3.2.
-- `provision.sh` rejects a `RUNNER_URL` that is not a github.com organization
-  or repository.
-
-- `provision.sh`: `RUNNER_EXTRA_PACKAGES` installs extra apt packages on top
-  of the base set. The list is saved in the guest and kept by later runs.
-  Hooks in `/etc/ci-runner/provision.d/*.sh` install anything apt does not
-  have. See "Adding tools" in [`docs/runbook.md`](docs/runbook.md). Nothing
-  changes for existing runners: the base set is the same.
-- `bin/ci-runner memory`: per-day average and peak memory of the VM, the peak
-  during jobs and out-of-memory kills, from a new guest sampler
-  (`ci-runner-memwatch.service`) that logs the per-minute peak of 2-second
-  samples to `/var/log/ci-runner/`. Existing runners get it with
-  `bin/ci-runner upgrade`.
 - `bin/ci-runner report`: queue wait, duration and minutes per repository,
   workflow and job, local against hosted, from the GitHub API, for measuring
   whether the runner saves money and keeps up.
