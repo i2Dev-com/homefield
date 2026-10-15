@@ -1,9 +1,7 @@
 # AGENTS.md
 
 Guidance for agents working in this repository. Start with `README.md` (what
-this is), `CONTRIBUTING.md` (checklist and conventions), and
-`tasks/lessons.md` (one-line rules earned from past mistakes, with full
-entries in `tasks/lessons-archive.md`).
+this is) and `CONTRIBUTING.md` (the pre-PR checklist and conventions).
 
 ## What this repo is
 
