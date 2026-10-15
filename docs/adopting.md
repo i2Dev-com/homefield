@@ -93,9 +93,9 @@ step:
 2. **Routing.** Downloads the repository's `.github/workflows` at its default
    branch and runs the same check as the guard. It is ready when a
    `verify-routing` step is there, passes, and at least one job is routed.
-   The step must use `i2Dev-com/homefield/verify-routing@v3` (or the former
-   `i2Dev-com/ci-runner/verify-routing@v3`, which GitHub redirects; a full
-   commit SHA is accepted, with a warning) in a workflow that runs on pull requests;
+   The step must use `i2Dev-com/homefield/verify-routing@v3` (a full commit
+   SHA is accepted, with a warning; the former `i2Dev-com/ci-runner` path no
+   longer resolves) in a workflow that runs on pull requests;
    anything else, such as another repository's action, `@v1`, `@main`, a
    push-only workflow, `pull_request_target` or an `if: false`, is not a
    guard. A reusable workflow (`workflow_call`) counts when a workflow that

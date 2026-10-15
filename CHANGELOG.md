@@ -40,9 +40,11 @@ ci-runner (v2)" in [`docs/runbook.md`](docs/runbook.md#migrating-from-ci-runner-
   replaces the VM.
 - The repository is `i2Dev-com/homefield` (was `i2Dev-com/ci-runner`), and the
   action is `i2Dev-com/homefield/verify-routing@v3`. GitHub redirects the old
-  repository path, and `adopt` still recognizes
-  `i2Dev-com/ci-runner/verify-routing@v3` as the guard; `@v2` of the old path
-  keeps working for the workflows that use it, with the old default label.
+  repository's web and API URLs, but not a workflow's `uses:`: once the
+  repository is renamed, a step on `i2Dev-com/ci-runner/verify-routing` (any
+  ref) fails with "Repository not found", so switch each consumer as soon as
+  the rename happens. `adopt` does not accept the old path, and says what
+  migrating means when it finds it.
 
 ### Migrating from ci-runner (v2)
 
