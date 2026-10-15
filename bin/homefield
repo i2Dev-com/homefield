@@ -95,7 +95,7 @@ adopt:
   --label LABEL      routing label (default homefield-ci; a routing-guard step
                      with another label in the workflows is used as it is)
   --events "E,..."   events whose jobs are routed (default pull_request; also
-                     merge_group, push, workflow_dispatch, schedule). Like
+                     push, workflow_dispatch, schedule). Like
                      --label: shapes the printed expression when there is no
                      guard yet, and must equal the guard's `events` when there
                      is one. Jobs on push, workflow_dispatch and schedule wait
@@ -1050,7 +1050,7 @@ adopt_each() {
 adopt_events_key() {
   local padded e key=""
   padded=" $(printf '%s' "$1" | tr ',\n\t' '   ') "
-  for e in pull_request merge_group push workflow_dispatch schedule; do
+  for e in pull_request push workflow_dispatch schedule; do
     case "$padded" in
       *" $e "*) key="${key:+${key},}${e}" ;;
     esac

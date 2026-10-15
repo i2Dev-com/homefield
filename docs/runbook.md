@@ -29,7 +29,7 @@ runs-on: ${{ vars.CI_RUNNER == 'local' && github.event_name == 'pull_request' &&
   default.
 - **Pushes run hosted by default**, whatever `CI_RUNNER` says. Deploys wait on
   the default branch's CI, and a merge must not sit queued behind a sleeping
-  Mac. A repository whose `events` option adds `push` (or `merge_group`,
+  Mac. A repository whose `events` option adds `push` (or
   `workflow_dispatch`, `schedule`) routes those jobs too: they wait for the
   Mac like pull-request jobs do, and a deploy gated on CI queues behind them
   until the repository is switched to hosted.

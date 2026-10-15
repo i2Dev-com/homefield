@@ -15,10 +15,11 @@ Compatible with v3: the v3 tag moves to include it.
   The defaults produce today's expression byte for byte, so no existing
   workflow changes:
   - `events` (default `pull_request`): which events are routed, any of
-    `pull_request`, `merge_group`, `push`, `workflow_dispatch`, `schedule`.
-    `pull_request_target` and an empty list are refused. Jobs on push,
-    dispatch and schedule then depend on the Mac being awake, and a deploy
-    gated on CI can queue behind it.
+    `pull_request`, `push`, `workflow_dispatch`, `schedule`.
+    `pull_request_target`, `merge_group` (it can carry a fork's pull request
+    with nothing to check its origin by) and an empty list are refused. Jobs
+    on push, dispatch and schedule then depend on the Mac being awake, and a
+    deploy gated on CI can queue behind it.
   - `dependabot` (default `hosted`): `local` drops the two Dependabot
     clauses, which puts Dependabot's unreviewed install scripts on a VM that
     is not thrown away after the job.

@@ -88,13 +88,13 @@ adopt` refuses a guard whose options differ from the flags you pass it.
 
 | Option | Default | Choices | What choosing differently costs |
 |---|---|---|---|
-| `events` | `pull_request` | any of `pull_request`, `merge_group`, `push`, `workflow_dispatch`, `schedule`, separated by newlines, commas or spaces | Jobs on `push`, `workflow_dispatch` and `schedule` run on the Mac, so they wait while it sleeps (GitHub fails them after 24 hours). A deploy gated on CI can queue behind it, and the jobs fall back to hosted only when `CI_RUNNER` is switched. `pull_request_target` is refused: it runs with the repository's secrets on code from forks. |
+| `events` | `pull_request` | any of `pull_request`, `push`, `workflow_dispatch`, `schedule`, separated by newlines, commas or spaces | Jobs on `push`, `workflow_dispatch` and `schedule` run on the Mac, so they wait while it sleeps (GitHub fails them after 24 hours). A deploy gated on CI can queue behind it, and the jobs fall back to hosted only when `CI_RUNNER` is switched. `pull_request_target` is refused: it runs with the repository's secrets on code from forks. So is `merge_group`: a merge group can hold a pull request from a fork, and the event has no pull request to check where it came from. |
 | `dependabot` | `hosted` | `hosted`, `local` | With `local`, Dependabot's branches bring unreviewed install scripts onto a VM that is not thrown away after the job. |
 | `fallback` | `ubuntu-latest` | a GitHub-hosted image name: `ubuntu-*`, `windows-*` or `macos-*` | None to the guarantee: it is the image jobs run on when `CI_RUNNER` is not `local`, such as `ubuntu-24.04-arm` for jobs that build for arm64. A self-hosted label is refused, because it would send the job to the runner whenever the switch is off. |
 
 Their order does not matter and a repeated event is ignored; the expression
-always lists events as `pull_request`, `merge_group`, `push`,
-`workflow_dispatch`, `schedule`. Several events are parenthesised, and the
+always lists events as `pull_request`, `push`, `workflow_dispatch`,
+`schedule`. Several events are parenthesised, and the
 fork rule is written so that events without a pull request are not sent
 hosted. For example, `events: push` gives:
 

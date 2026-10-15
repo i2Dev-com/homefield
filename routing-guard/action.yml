@@ -25,7 +25,7 @@ inputs:
   events:
     description: >-
       The events whose jobs are routed to the local runner, from
-      pull_request, merge_group, push, workflow_dispatch and schedule,
+      pull_request, push, workflow_dispatch and schedule,
       separated by newlines, commas or spaces. pull_request_target is refused.
       Jobs on push, workflow_dispatch and schedule then wait for the Mac.
     required: false

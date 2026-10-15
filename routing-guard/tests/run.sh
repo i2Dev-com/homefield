@@ -156,13 +156,10 @@ check "events pull_request and push: parenthesised, in canonical order" \
 check "events: order, duplicates and separators do not matter" "$(printed --events push,pull_request)" \
   "$(printed --events "pull_request push, pull_request
 push")"
-check "events: all five, in canonical order" \
-  "\${{ vars.CI_RUNNER == 'local' && (github.event_name == 'pull_request' || github.event_name == 'merge_group' || github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') && ${DEP} && ${FORKANY} && ${LABELS} || 'ubuntu-latest' }}" \
-  "$(printed --events schedule,workflow_dispatch,push,merge_group,pull_request)"
+check "events: all four, in canonical order" \
+  "\${{ vars.CI_RUNNER == 'local' && (github.event_name == 'pull_request' || github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') && ${DEP} && ${FORKANY} && ${LABELS} || 'ubuntu-latest' }}" \
+  "$(printed --events schedule,workflow_dispatch,push,pull_request)"
 check "events pull_request alone keeps the bare fork clause" "$TODAY" "$(printed --events pull_request)"
-check "events merge_group alone" \
-  "\${{ vars.CI_RUNNER == 'local' && github.event_name == 'merge_group' && ${DEP} && ${FORKANY} && ${LABELS} || 'ubuntu-latest' }}" \
-  "$(printed --events merge_group)"
 check "dependabot local drops both clauses" \
   "\${{ vars.CI_RUNNER == 'local' && github.event_name == 'pull_request' && ${FORKPR} && ${LABELS} || 'ubuntu-latest' }}" \
   "$(printed --dependabot local)"
@@ -197,6 +194,8 @@ invalid() {
 }
 invalid "events pull_request_target" "pull_request_target is refused" --events pull_request_target
 invalid "events pull_request_target among others" "secrets on code from forks" --events "pull_request,pull_request_target"
+invalid "events merge_group" "merge_group is refused" --events merge_group
+invalid "events merge_group among others" "pull request from a fork" --events "pull_request,merge_group"
 invalid "events empty" "name at least one" --events ""
 invalid "events only separators" "name at least one" --events " , "
 invalid "events an unknown name" "'issues' is not one of" --events issues

@@ -15,11 +15,13 @@ and 3 are defaults that the repository can change, each with a cost:
      forever whenever the local runner is off.
   2. Pull requests only (default; the `events` option). Pushes (main, release
      branches) then always run hosted, so merging and deploying never depend
-     on the runner's machine being awake. Adding push, workflow_dispatch,
-     schedule or merge_group puts those jobs on the Mac: a deploy gated on CI
-     can queue behind it, and it falls back to hosted only when CI_RUNNER is
-     switched. pull_request_target is refused outright: it runs with the
-     repository's secrets on code from forks.
+     on the runner's machine being awake. Adding push, workflow_dispatch or
+     schedule puts those jobs on the Mac: a deploy gated on CI can queue
+     behind it, and it falls back to hosted only when CI_RUNNER is switched.
+     Two events are refused outright. pull_request_target runs with the
+     repository's secrets on code from forks. merge_group can carry a fork's
+     pull request but has no github.event.pull_request, so guarantee 4 could
+     not be checked.
   3. Dependabot stays hosted (default; the `dependabot` option), checked by
      actor and by branch. Its branches bring in unreviewed install scripts,
      and the local VM, unlike a hosted one, is not thrown away after the job.
@@ -90,9 +92,13 @@ def label_problem(label: str) -> str:
 
 
 # The events a job can be routed on, in the order the expression lists them.
-# pull_request_target is deliberately absent: it runs with the repository's
-# secrets on code from forks.
-EVENTS = ("pull_request", "merge_group", "push", "workflow_dispatch", "schedule")
+# Some events are deliberately absent; REFUSED says why.
+EVENTS = ("pull_request", "push", "workflow_dispatch", "schedule")
+REFUSED = {
+    "pull_request_target": "it runs with the repository's secrets on code from forks",
+    "merge_group": "a merge group can hold a pull request from a fork, and the"
+    " event has no pull_request to check where it came from",
+}
 DEFAULT_EVENTS = "pull_request"
 DEPENDABOT = ("hosted", "local")
 # The fallback must be a bare GitHub-hosted image name: a self-hosted label
@@ -105,11 +111,8 @@ def parse_events(text: str) -> list:
     list in canonical order without duplicates. Raises ValueError."""
     given = [e for e in re.split(r"[\s,]+", text) if e]
     for event in given:
-        if event == "pull_request_target":
-            raise ValueError(
-                "events: pull_request_target is refused: it runs with the"
-                " repository's secrets on code from forks"
-            )
+        if event in REFUSED:
+            raise ValueError(f"events: {event} is refused: {REFUSED[event]}")
         if event not in EVENTS:
             raise ValueError(f"events: {event!r} is not one of {', '.join(EVENTS)}")
     if not given:
