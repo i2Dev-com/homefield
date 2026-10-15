@@ -4,8 +4,9 @@
 # check the rows it writes.
 #
 # The sampler runs in the guest (Ubuntu, bash 5) and uses printf '%(...)T',
-# which macOS's bash 3.2 lacks, so the run needs a newer bash; without one
-# the lint still runs and the run is reported as skipped.
+# which macOS's bash 3.2 lacks, so the run needs a newer bash. It also needs
+# GNU timeout to end the sampler's run here, which macOS does not ship.
+# Without either, the lint still runs and the run is reported as skipped.
 #
 # Run:  bash tests/memwatch.sh
 set -uo pipefail
@@ -38,6 +39,11 @@ for candidate in bash /opt/homebrew/bin/bash /usr/local/bin/bash; do
 done
 if [ -z "$new_bash" ]; then
   echo "  skip run (needs bash >= 4.2)"
+  summary
+  exit
+fi
+if ! command -v timeout >/dev/null; then
+  echo "  skip run (needs GNU timeout)"
   summary
   exit
 fi

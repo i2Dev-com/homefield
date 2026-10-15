@@ -34,6 +34,8 @@ fail is a new major (see [README](README.md#development)).
   loopback-only ones, and the LAN (#18). The earlier docs said the VM had no
   access to the Mac's ports.
 - Free-plan organizations are told to register with `--group Default`.
+- `tests/memwatch.sh` skips the run (not fails) when GNU `timeout` is
+  missing, as it already did for bash < 4.2; macOS ships neither.
 
 ### Added
 
