@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The routing label rule, checked at both ends: provision.sh's RUNNER_LABEL and
-# verify_routing.py's --label must accept and reject the same labels. A label
+# routing_guard.py's --label must accept and reject the same labels. A label
 # one side accepts and the other rejects is a runner no workflow can reach, or
 # a check that passes for a runner that cannot be registered.
 #
@@ -17,13 +17,13 @@ check() {
   local label="$1" want="$2" prov verify
   prov="$(provision_verdict RUNNER_LABEL "$label")"
   # An empty workflows dir, so only the label decides.
-  if python3 "$ROOT/verify-routing/verify_routing.py" --workflows-dir "$EMPTY" \
-    --label "$label" --expected "" >/dev/null 2>&1; then
+  if python3 "$ROOT/routing-guard/routing_guard.py" --workflows-dir "$EMPTY" \
+    --label "$label" --jobs "" >/dev/null 2>&1; then
     verify=ok
   else
     verify=reject
   fi
-  record "$label" "$want" "$([ "$prov" = "$verify" ] && echo "$prov" || echo "provision.sh $prov, verify_routing.py $verify")"
+  record "$label" "$want" "$([ "$prov" = "$verify" ] && echo "$prov" || echo "provision.sh $prov, routing_guard.py $verify")"
 }
 
 for label in homefield-ci i2dev-ci acme.ci_2 HOMEFIELD-CI ubuntu2 macos_runner; do

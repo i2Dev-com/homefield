@@ -10,4 +10,4 @@ changes: which scenarios on a throwaway VM. -->
 - [ ] Tests and shellcheck pass (see CONTRIBUTING.md)
 - [ ] README / runbook updated for any new setting, flag or behaviour
 - [ ] CHANGELOG.md updated under *Unreleased*
-- [ ] Breaking for `verify-routing` consumers? If so, says so above
+- [ ] Breaking for `routing-guard` consumers? If so, says so above

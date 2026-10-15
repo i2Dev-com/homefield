@@ -92,7 +92,7 @@ route <hosted|local>:
 
 adopt:
   --repo OWNER/REPO  the repository to adopt (required, one)
-  --label LABEL      routing label (default homefield-ci; a verify-routing step
+  --label LABEL      routing label (default homefield-ci; a routing-guard step
                      with another label in the workflows is used as it is)
   --group GROUP      runner group the repository needs access to (default
                      homefield-ci; skipped for Default and for personal accounts)
@@ -101,7 +101,7 @@ adopt:
   --no-switch        do everything except set CI_RUNNER
   --dry-run          read-only: report what would change, change nothing
   Reads the repository's workflows on its default branch. Only when the
-  verify-routing guard is there (the pinned action, in a workflow that runs
+  routing guard is there (the pinned action, in a workflow that runs
   on pull requests), passes and at least one job is routed does it add the
   repository to the group and switch it; otherwise it prints what to add and
   exits 1, having changed nothing. Adding the repository to the group needs
@@ -865,8 +865,9 @@ ADOPT_SWITCH_OUTCOME=""
 ADOPT_READY=0
 ADOPT_REASONS=""
 ADOPT_NOTES=""
+ADOPT_DEPRECATIONS=""
 ADOPT_LABEL=""
-# The label of the first verify-routing guard that passes its check, when
+# The label of the first routing guard that passes its check, when
 # adopt did not get --label: a passing guard says which label the repository
 # actually routes on, and that is the one to advise with.
 ADOPT_LABEL_OK=""
@@ -1011,6 +1012,12 @@ adopt_note() {
   esac
 }
 
+# adopt_deprecation <text>: a guard on the deprecated alias. A warning only:
+# the alias works until v4.
+adopt_deprecation() {
+  ADOPT_DEPRECATIONS="${ADOPT_DEPRECATIONS}$1"$'\n'
+}
+
 # adopt_each <command> <items>: runs the command on each of the items, which
 # tools/adopt.py joins with ";" ("-" is none).
 adopt_each() {
@@ -1024,23 +1031,25 @@ adopt_each() {
 }
 
 # adopt_routing_check <dir> <label> <label_given>: sets ADOPT_READY (1 when a
-# usable verify-routing step is there, passes, and at least one job is routed),
+# usable routing-guard step is there, passes, and at least one job is routed),
 # ADOPT_REASONS (why not), ADOPT_LABEL and ADOPT_ROUTED. The workflows' own
-# guard says which label and jobs to expect; the checks are verify_routing.py,
-# the same script the guard runs in CI. A usable step is the pinned action in
-# a workflow that runs on pull requests (tools/adopt.py says which are).
+# guard says which label and jobs to expect; the checks are routing_guard.py,
+# the same script the guard runs in CI. A usable step is the pinned action (or
+# its deprecated verify-routing alias, which adds a warning) in a workflow that
+# runs on pull requests (tools/adopt.py says which are).
 adopt_routing_check() {
-  local dir="$1" label="$2" label_given="$3" rows where gstatus glabel gblocks gwarns gexpected out rc lines
+  local dir="$1" label="$2" label_given="$3" rows where gstatus glabel gblocks gwarns gdeprecated gjobs out rc lines
   local candidates=0 deferred="" routed routedjob
   ADOPT_READY=1
   ADOPT_REASONS=""
   ADOPT_NOTES=""
+  ADOPT_DEPRECATIONS=""
   ADOPT_LABEL="$label"
   ADOPT_LABEL_OK=""
   ADOPT_GUARDS=0
   ADOPT_ROUTED=""
   rows="$(python3 -I "$ROOT/tools/adopt.py" guards "$dir")" || die "adopt: could not read the downloaded workflows"
-  while IFS=$'\t' read -r where gstatus glabel gblocks gwarns gexpected; do
+  while IFS=$'\t' read -r where gstatus glabel gblocks gwarns gdeprecated gjobs; do
     [ -n "$where" ] || continue
     candidates=$((candidates + 1))
     case "$gstatus" in
@@ -1060,16 +1069,17 @@ adopt_routing_check() {
     fi
     ADOPT_GUARDS=$((ADOPT_GUARDS + 1))
     adopt_each adopt_note "$gwarns"
+    adopt_each adopt_deprecation "$gdeprecated"
     if [ "$label_given" = 1 ] && [ "$glabel" != "$label" ]; then
-      adopt_reason "the verify-routing step at ${where} uses label ${glabel}, but --label is ${label}"
+      adopt_reason "the routing-guard step at ${where} uses label ${glabel}, but --label is ${label}"
     fi
     # Collect the jobs routed under this guard's label. A repository can carry
-    # several verify-routing steps; jobs routed under any of them count, not
+    # several routing-guard steps; jobs routed under any of them count, not
     # only the first guard's — unless --label picked a label, in which case
     # only steps carrying it speak for it and the others are already reported
     # as a mismatch above.
     if [ "$label_given" = 0 ] || [ "$glabel" = "$label" ]; then
-      routed="$(python3 -I "$ROOT/verify-routing/verify_routing.py" --workflows-dir "$dir" --label "$glabel" --list 2>/dev/null)" || routed=""
+      routed="$(python3 -I "$ROOT/routing-guard/routing_guard.py" --workflows-dir "$dir" --label "$glabel" --list 2>/dev/null)" || routed=""
       while IFS= read -r routedjob; do
         [ -n "$routedjob" ] || continue
         case $'\n'"$ADOPT_ROUTED"$'\n' in
@@ -1079,7 +1089,7 @@ adopt_routing_check() {
       done <<<"$routed"
     fi
     rc=0
-    out="$(python3 -I "$ROOT/verify-routing/verify_routing.py" --workflows-dir "$dir" --label "$glabel" --expected "$gexpected" 2>&1)" || rc=$?
+    out="$(python3 -I "$ROOT/routing-guard/routing_guard.py" --workflows-dir "$dir" --label "$glabel" --jobs "$gjobs" 2>&1)" || rc=$?
     if [ "$rc" -eq 0 ]; then
       if [ "$label_given" = 0 ] && [ -z "$ADOPT_LABEL_OK" ]; then
         ADOPT_LABEL_OK="$glabel"
@@ -1089,18 +1099,18 @@ adopt_routing_check() {
     # The failure lines only: no colours, no passes, no header or totals.
     lines="$(printf '%s\n' "$out" | sed $'s/\033\\[[0-9;]*m//g' |
       grep -v -e PASS -e '^self-hosted runner routing' -e ' passed, ' -e '^$' || true)"
-    adopt_reason "the verify-routing step at ${where} would fail:"
+    adopt_reason "the routing-guard step at ${where} would fail:"
     ADOPT_REASONS="${ADOPT_REASONS}$(printf '%s\n' "$lines" | sed 's/^ */      /')"$'\n'
   done <<<"$rows"
   if [ "$ADOPT_GUARDS" = 0 ]; then
     adopt_each adopt_reason "${deferred:--}"
     if [ "$candidates" = 0 ]; then
-      adopt_reason "no verify-routing step in .github/workflows (docs/adopting.md, step 3)"
+      adopt_reason "no routing-guard step in .github/workflows (docs/adopting.md, step 3)"
     else
-      adopt_reason "no verify-routing step that runs on pull requests (docs/adopting.md, step 3)"
+      adopt_reason "no routing-guard step that runs on pull requests (docs/adopting.md, step 3)"
     fi
     # No guard to say which label applies; look with the expected one, as before.
-    ADOPT_ROUTED="$(python3 -I "$ROOT/verify-routing/verify_routing.py" --workflows-dir "$dir" --label "$ADOPT_LABEL" --list 2>/dev/null)" || ADOPT_ROUTED=""
+    ADOPT_ROUTED="$(python3 -I "$ROOT/routing-guard/routing_guard.py" --workflows-dir "$dir" --label "$ADOPT_LABEL" --list 2>/dev/null)" || ADOPT_ROUTED=""
   elif [ "$label_given" = 0 ] && [ -n "$ADOPT_LABEL_OK" ]; then
     ADOPT_LABEL="$ADOPT_LABEL_OK"
   fi
@@ -1114,8 +1124,11 @@ adopt_routing_check() {
     printf '%s' "$ADOPT_REASONS"
   fi
   if [ -n "$ADOPT_NOTES" ]; then
-    adopt_warn "the verify-routing guard may not run on every pull request. Check that every pull request that changes .github/workflows still runs it:"
+    adopt_warn "the routing guard may not run on every pull request. Check that every pull request that changes .github/workflows still runs it:"
     printf '%s' "$ADOPT_NOTES" | sed 's/^/homefield:   /' >&2
+  fi
+  if [ -n "$ADOPT_DEPRECATIONS" ]; then
+    printf '%s' "$ADOPT_DEPRECATIONS" | sed 's/^/homefield: warning: /' >&2
   fi
 }
 
@@ -1153,7 +1166,7 @@ adopt_cache_keys() {
 # and the guard step come from the same code that checks them.
 adopt_snippets() {
   local label="$1" jobs="$2" expr
-  expr="$(python3 -I "$ROOT/verify-routing/verify_routing.py" --print-expression --label "$label")" || die "adopt: label ${label} cannot be routed on"
+  expr="$(python3 -I "$ROOT/routing-guard/routing_guard.py" --print-expression --label "$label")" || die "adopt: label ${label} cannot be routed on"
   echo
   echo "Replace each job's runs-on with this expression, verbatim (docs/adopting.md, step 2):"
   echo
@@ -1219,7 +1232,7 @@ cmd_adopt() {
   command -v gh >/dev/null || die "adopt needs gh (https://cli.github.com)"
   command -v python3 >/dev/null || die "adopt needs python3"
   # The same label rules as the guard, and a message from it when they fail.
-  out="$(python3 -I "$ROOT/verify-routing/verify_routing.py" --print-expression --label "$label")" ||
+  out="$(python3 -I "$ROOT/routing-guard/routing_guard.py" --print-expression --label "$label")" ||
     die "adopt: --label ${label} cannot be routed on: $(printf '%s' "$out" | sed $'s/\033\\[[0-9;]*m//g')"
   [ "$dry" = 0 ] || log "dry run: nothing will be changed"
 

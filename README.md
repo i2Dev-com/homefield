@@ -14,7 +14,7 @@ It has three parts:
   services ([Security model](#security-model)).
 - **A one-command setup** ([`install.sh`](install.sh), then
   [`bin/homefield`](bin/homefield)): install, upgrade, status, uninstall.
-- **A routing guard** ([`verify-routing`](verify-routing/action.yml)): a
+- **A routing guard** ([`routing-guard`](routing-guard/action.yml)): a
   GitHub Action that fails CI unless every job that can reach the runner uses
   the one reviewed `runs-on` expression, with its safety guards, and the set of
   routed jobs is the reviewed list.
@@ -148,15 +148,18 @@ runs-on: ${{ vars.CI_RUNNER == 'local' && github.event_name == 'pull_request' &&
 It sends the job to the local runner only when the repository variable
 `CI_RUNNER` is `local`, the event is a pull request, the author is not
 Dependabot and the branch is not from a fork; otherwise to `ubuntu-latest`.
-`verify-routing` keeps every copy identical and every guard in place:
+`routing-guard` keeps every copy identical and every guard in place:
 
 ```yaml
-      - uses: i2Dev-com/homefield/verify-routing@v3
+      - uses: i2Dev-com/homefield/routing-guard@v3
         with:
-          expected: |
+          jobs: |
             ci.yml:lint
             ci.yml:test
 ```
+
+`verify-routing@v3` with `expected:` is the same check under its former name.
+It still works as a deprecated alias until v4.
 
 It also fails on any other `runs-on` that could reach the runner (a bare
 `self-hosted`, a label list, a runner group), because GitHub hands a job to
@@ -202,7 +205,8 @@ pull-request code away from the Mac it runs on.
 | [`bin/homefield`](bin/homefield) | Install, upgrade, inspect and remove the runner on this Mac; adopt and switch repositories |
 | [`vm/lima.yaml`](vm/lima.yaml) | The VM: Ubuntu 24.04 arm64, no host mounts, no forwarding of guest ports to the Mac, no SSH-agent forwarding |
 | [`vm/provision.sh`](vm/provision.sh) | Runs inside the VM: packages, Docker, the checksum-pinned runner, cleanup and idle-time OS update timers, registration. Settings: `RUNNER_URL`, `RUNNER_LABEL`, `RUNNER_NAME`, `RUNNER_GROUP`, `RUNNER_EXTRA_PACKAGES`; hooks in `/etc/homefield/provision.d/` |
-| [`verify-routing/`](verify-routing/action.yml) | The routing guard action |
+| [`routing-guard/`](routing-guard/action.yml) | The routing guard action |
+| [`verify-routing/`](verify-routing/action.yml) | Deprecated alias of the routing guard (`expected:` for `jobs:`), removed in v4 |
 | [`tools/`](tools) | Python helpers behind `homefield report` and `homefield adopt` |
 | [`docs/adopting.md`](docs/adopting.md) | Checklist for routing a repository's jobs to the runner |
 | [`docs/runbook.md`](docs/runbook.md) | Operating it: setup, runner group, switching, failure modes, maintenance, moving, removal |
@@ -210,8 +214,8 @@ pull-request code away from the Mac it runs on.
 ## Development
 
 ```bash
-bash verify-routing/tests/run.sh   # fixture suite: every drift case must fail
-bash tests/label-rule.sh           # provision.sh and verify-routing accept the same labels
+bash routing-guard/tests/run.sh    # fixture suite: every drift case must fail
+bash tests/label-rule.sh           # provision.sh and routing-guard accept the same labels
 bash tests/extra-packages.sh       # RUNNER_EXTRA_PACKAGES accepts package names only
 bash tests/runner-url.sh           # RUNNER_URL accepts github.com orgs and repos only
 bash tests/memwatch.sh             # the guest's memory sampler (needs bash >= 4.2 and GNU timeout to run)
@@ -220,12 +224,12 @@ bash tests/report.sh               # `bin/homefield report` against a fixture
 bash tests/install-sh.sh           # install.sh, with stub gh, curl, brew and Lima
 bash tests/runner-group.sh         # runner group, wait for online, `version`, install's check order
 bash tests/adopt.sh                # `bin/homefield adopt` and tools/adopt.py, with a stub gh
-shellcheck bin/homefield install.sh vm/provision.sh verify-routing/tests/run.sh tests/*.sh
+shellcheck bin/homefield install.sh vm/provision.sh routing-guard/tests/run.sh tests/*.sh
 ```
 
 ## Versioning
 
-Consumers pin `verify-routing@vN`. A compatible change moves the current
+Consumers pin `routing-guard@vN`. A compatible change moves the current
 major tag. A change that makes a previously passing workflow fail, such as a
 new guard in the expression, is a new major, because every consumer has to
 update its inline copies at the same time; [`CHANGELOG.md`](CHANGELOG.md)

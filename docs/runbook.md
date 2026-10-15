@@ -34,18 +34,18 @@ runs-on: ${{ vars.CI_RUNNER == 'local' && github.event_name == 'pull_request' &&
   forking. It does not make a public repository safe: a fork PR runs the
   workflow files from its own merge commit, so it can rewrite `runs-on`
   altogether. See the trust boundary below.
-- The [`verify-routing`](../verify-routing/action.yml) action, run in each
+- The [`routing-guard`](../routing-guard/action.yml) action, run in each
   repository's CI, enforces three things:
   - every copy of the expression is identical to the canonical one;
   - any `runs-on` that asks for `self-hosted` is that expression. A bare
     `self-hosted` would match this runner, because its labels are a superset;
-  - the jobs that opt in are exactly the repository's `expected` list.
+  - the jobs that opt in are exactly the repository's `jobs` list.
 
 **Why the expression is inline and not an action.** GitHub evaluates `runs-on`
 before any step runs, so no action can choose a job's runner. A separate
 "choose the runner" job could pass its answer through `needs`, but that job is
 itself billed a whole minute on every run, which is the cost the local runner
-exists to remove. The copies are kept honest by `verify-routing` instead.
+exists to remove. The copies are kept honest by `routing-guard` instead.
 
 **Keep on hosted:** Docker image builds (x86-64 images, GHA build cache), and
 every job holding cloud or production credentials.
@@ -75,7 +75,7 @@ need an organization owner (`admin:org`):
 - Every repository on that list is private.
 - Each adopting repository has `CI_RUNNER` set the way you expect
   (`gh variable get CI_RUNNER --repo <owner>/<repo>`), and its
-  `verify-routing` step passes on `main`.
+  `routing-guard` step passes on `main`.
 - The VM has no mounts: `bin/homefield upgrade` and `install` check this and
   refuse to continue otherwise.
 - Nothing on the Mac listens that PR code should not reach (see the
@@ -278,7 +278,7 @@ gh run rerun <run-id> --repo <owner>/<repo>
 |---|---|---|---|
 | PR job "Waiting for a runner to pick up this job" | VM stopped, Mac asleep or offline, runner service down | The PR's check waits in the queue, and after 24 h GitHub fails it. Merges and deploys are unaffected, because pushes run hosted. | Start the VM (`limactl start homefield`), or `bin/homefield route hosted --repo <owner>/<repo>`. |
 | Waiting forever although the runner is online and idle | The repository is not in the runner group | Same as above | `bin/homefield adopt --repo <owner>/<repo>` adds it (or add it in the organization settings), or switch the repository to hosted |
-| Waiting forever although the runner is online and idle, and the repository is in the group | The label in the expression is not one of the runner's labels. For example, a repository moved to `verify-routing@v3`, whose default label is `homefield-ci`, while the runner was registered with another label | Same as above | Add the label to the runner (*Settings → Actions → Runners →* the runner *→ Labels*), or pass the runner's label to `verify-routing` as `label:` and use it in the expression |
+| Waiting forever although the runner is online and idle, and the repository is in the group | The label in the expression is not one of the runner's labels. For example, a repository moved to `routing-guard@v3`, whose default label is `homefield-ci`, while the runner was registered with another label | Same as above | Add the label to the runner (*Settings → Actions → Runners →* the runner *→ Labels*), or pass the runner's label to `routing-guard` as `label:` and use it in the expression |
 | A PR job waits while another runs | One runner runs one job at a time, across all repositories | Serialised, not failed | Accept it, or switch the less urgent repository to hosted |
 | Job fails only on the local runner | Toolchain or arch gap between the VM and `ubuntu-latest` (arm64 vs x86-64) | Red check | Re-run hosted to confirm. Then add the tool ("Adding tools") or keep that job hosted |
 | `No space left on device` in the VM | Docker images and old workspaces | Red check | `limactl shell homefield sudo /usr/local/sbin/homefield-cleanup` |
@@ -506,9 +506,10 @@ units. Steps 1 to 3 need the old tool, so remove it only in step 4.
    job's `runs-on` label from `local-ci` to `homefield-ci` (the expression in
    [`adopting.md`](adopting.md) has it verbatim) and the guard from
    `i2Dev-com/ci-runner/verify-routing@v2` to
-   `i2Dev-com/homefield/verify-routing@v3`. Merge it with `CI_RUNNER` still
-   `hosted`; everything runs on GitHub-hosted runners. Do this as soon as the
-   repository is renamed to `homefield`: GitHub redirects the old repository's
+   `i2Dev-com/homefield/routing-guard@v3` (and `expected:` to `jobs:`). Merge
+   it with `CI_RUNNER` still `hosted`; everything runs on GitHub-hosted
+   runners. Do this as soon as the repository is renamed to `homefield`:
+   GitHub redirects the old repository's
    web and API URLs but not `uses:`, so from the rename on, a step on
    `i2Dev-com/ci-runner/verify-routing` fails with "Repository not found" and
    the consumer's CI cannot start.
@@ -540,7 +541,7 @@ limactl shell homefield sudo tar -C /etc/homefield -cf - provision.d > provision
 On another Mac, repeat Setup with the same `RUNNER_EXTRA_PACKAGES` and the
 hooks installed before provisioning. On a Linux box, run `provision.sh`
 directly on an Ubuntu 24.04 host or VM. It hardcodes the linux-arm64 tarball, so an x86-64 host needs a
-different tarball and checksum, and consumers' `verify-routing` then takes
+different tarball and checksum, and consumers' `routing-guard` then takes
 `arch: x64` along with the matching expression. Register the new runner with
 the same `RUNNER_LABEL`, confirm it is online, then remove the old one.
 
@@ -559,7 +560,7 @@ As a checklist:
    run a PR in each repository, and check that the run's log names the new
    runner. If it fails, start the old service again.
    Different architecture: the expression's labels name the old one, so no job
-   can reach the new runner yet. Once it is online, change the `verify-routing`
+   can reach the new runner yet. Once it is online, change the `routing-guard`
    `arch` and the expression's labels in each adopting repository, one PR
    each. That PR's own routed jobs then run on the new runner and are the
    validation. Jobs from repositories not yet changed keep going to the old

@@ -1,6 +1,6 @@
 # Changelog
 
-Versions are the tags consumers pin, `verify-routing@vN`. A compatible change
+Versions are the tags consumers pin, `routing-guard@vN`. A compatible change
 moves the current major tag; a change that makes a previously passing workflow
 fail is a new major (see [README](README.md#development)).
 
@@ -10,12 +10,33 @@ Compatible with v3: the v3 tag moves to include it.
 
 ### Added
 
+- The `routing-guard` action (`i2Dev-com/homefield/routing-guard@v3`): the
+  routing check under its new name, with the input `jobs:` in place of
+  `expected:` (same meaning, same format). `label:`, `arch:` and
+  `workflows-dir:` are unchanged. `homefield adopt` recognizes it, reads
+  `jobs:` from it, and prints it in the guard step it suggests.
 - `homefield version` says whether a newer HomeField is available for an
   install.sh copy: it asks GitHub through `gh` whether the installed ref has
   moved and prints the command that updates the tool, and it points to this
   changelog when a newer major version exists. When it cannot check (no `gh`,
   not logged in, no access) it prints one line saying so; the exit status is
   0 either way.
+
+### Deprecated
+
+- `i2Dev-com/homefield/verify-routing@v3` and its `expected:` input. It stays
+  as an alias of `routing-guard` (same checks, same inputs as before) so that
+  consumers pinned to `@v3` keep working unchanged, and is removed in v4.
+  `homefield adopt` still accepts it as a guard, with a warning. To switch,
+  change two lines in the guard step:
+
+  ```diff
+  -        uses: i2Dev-com/homefield/verify-routing@v3
+  +        uses: i2Dev-com/homefield/routing-guard@v3
+           with:
+  -          expected: |
+  +          jobs: |
+  ```
 
 ## v3 (2026-10-15)
 
