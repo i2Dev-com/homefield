@@ -7,8 +7,7 @@ is enough for the shapes GitHub workflows take and fails safe (a guard it
 cannot read counts as no guard, so adopt does not switch the repository on).
 
 A guard is a step that uses exactly ACTION (the owner and repository compared
-without case, and the repository's former name ci-runner accepted too, since
-GitHub redirects it; a full commit SHA in place of the ref is accepted with a
+without case; a full commit SHA in place of the ref is accepted with a
 warning) and that can run on a pull request: see check_guard.
 
   adopt.py guards DIR       one line per step that uses some verify-routing:
@@ -39,10 +38,10 @@ DEFAULT_LABEL = "homefield-ci"
 # A step or job `uses:`; group 3 is the raw value.
 USES = re.compile(r"^(\s*)(-\s+)?uses:\s*(.*?)\s*$")
 ACTION_PATH, _, ACTION_REF = ACTION.partition("@")
-# The repository was called ci-runner before v3 and GitHub redirects the old
-# path, so consumers may still use the action under either name.
+# The repository was called ci-runner before v3. GitHub redirects its web and
+# API URLs but not `uses:`, so a step on the old path fails to resolve: adopt
+# names it to say what migrating means.
 OLD_ACTION_PATH = "i2dev-com/ci-runner/verify-routing"
-ACTION_PATHS = (ACTION_PATH.lower(), OLD_ACTION_PATH)
 ACTION_DIR = "./.github/workflows/"
 # The trigger options after which a pull request may not run the workflow.
 FILTERS = ("branches", "branches-ignore", "paths", "paths-ignore")
@@ -362,11 +361,12 @@ def guards(directory):
             expected = [e for e in re.split(r"[\s,]+", values.get("expected", "")) if e]
             label = values.get("label") or DEFAULT_LABEL
             sha = re.fullmatch(r"[0-9a-fA-F]{40}", ref) is not None
-            if path.lower() not in ACTION_PATHS or (ref != ACTION_REF and not sha):
+            if path.lower() != ACTION_PATH.lower() or (ref != ACTION_REF and not sha):
                 reason = f"the verify-routing step at {where} uses {value}, but adopt recognizes {ACTION} (docs/adopting.md, step 3)"
                 if path.lower() == OLD_ACTION_PATH:
                     reason += (
-                        f". That is the ci-runner v2 guard: migrating means switching the step to {ACTION} and the runs-on label"
+                        f". That is the ci-runner guard, which no longer resolves since the repository was renamed:"
+                        f" migrating means switching the step to {ACTION} and the runs-on label"
                         " from local-ci to homefield-ci in the same change"
                         " (docs/runbook.md, \"Migrating from ci-runner (v2)\", step 6)"
                     )

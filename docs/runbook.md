@@ -504,7 +504,11 @@ units. Steps 1 to 3 need the old tool, so remove it only in step 4.
    [`adopting.md`](adopting.md) has it verbatim) and the guard from
    `i2Dev-com/ci-runner/verify-routing@v2` to
    `i2Dev-com/homefield/verify-routing@v3`. Merge it with `CI_RUNNER` still
-   `hosted`; everything runs on GitHub-hosted runners.
+   `hosted`; everything runs on GitHub-hosted runners. Do this as soon as the
+   repository is renamed to `homefield`: GitHub redirects the old repository's
+   web and API URLs but not `uses:`, so from the rename on, a step on
+   `i2Dev-com/ci-runner/verify-routing` fails with "Repository not found" and
+   the consumer's CI cannot start.
 
 7. **Adopt each repository** once that is merged. It checks the routing,
    adds the repository to the `homefield-ci` group and sets `CI_RUNNER` to
