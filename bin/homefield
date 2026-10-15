@@ -9,7 +9,7 @@
 #   bin/homefield status
 #   bin/homefield uninstall [--keep-vm]
 #   bin/homefield route <hosted|local> --repo <owner>/<repo> [--repo ...]
-#   bin/homefield adopt --repo <owner>/<repo> [--jobs "ci.yml:lint,..."] [--no-switch] [--dry-run]
+#   bin/homefield adopt --repo <owner>/<repo> [--jobs "ci.yml:lint,..."] [--events E] [--dependabot hosted|local] [--fallback IMAGE] [--no-switch] [--dry-run]
 #   bin/homefield memory [--days N]
 #   bin/homefield report --repo <owner>/<repo> [--repo ...] [--since DATE]
 #   bin/homefield version
@@ -46,7 +46,7 @@ Commands:
              runner binary. Refuses while a job is running, unless --force.
   status     Show the VM, the registration and whether a job is running.
   uninstall  Deregister the runner and delete the VM.
-  route      Switch repositories' pull-request jobs to hosted or local
+  route      Switch repositories' routed jobs to hosted or local
              (the CI_RUNNER variable). Switching to hosted also cancels and
              re-runs runs whose jobs are stuck waiting for the local runner.
   adopt      Prepare a repository to use the runner: check that its routing is
@@ -94,6 +94,19 @@ adopt:
   --repo OWNER/REPO  the repository to adopt (required, one)
   --label LABEL      routing label (default homefield-ci; a routing-guard step
                      with another label in the workflows is used as it is)
+  --events "E,..."   events whose jobs are routed (default pull_request; also
+                     push, workflow_dispatch, schedule). Like
+                     --label: shapes the printed expression when there is no
+                     guard yet, and must equal the guard's `events` when there
+                     is one. Jobs on push, workflow_dispatch and schedule wait
+                     for the Mac: a deploy gated on CI can queue behind it
+  --dependabot hosted|local
+                     keep Dependabot's jobs hosted (default) or route them
+                     too; same rules as --events. Dependabot's install
+                     scripts then run on a VM that is not thrown away
+  --fallback IMAGE   hosted image used when CI_RUNNER is not local (default
+                     ubuntu-latest; ubuntu-*, windows-* or macos-*); same
+                     rules as --events
   --group GROUP      runner group the repository needs access to (default
                      homefield-ci; skipped for Default and for personal accounts)
   --jobs "F:J,..."   file:job entries you mean to route, for the snippets it
@@ -1030,15 +1043,34 @@ adopt_each() {
   done
 }
 
+# adopt_events_key <events>: the events in canonical order, comma-separated,
+# so two spellings of the same set compare equal (the order of the list and
+# the separators do not matter to routing_guard.py). Names it does not know
+# are dropped; the guard check reports those.
+adopt_events_key() {
+  local padded e key=""
+  padded=" $(printf '%s' "$1" | tr ',\n\t' '   ') "
+  for e in pull_request push workflow_dispatch schedule; do
+    case "$padded" in
+      *" $e "*) key="${key:+${key},}${e}" ;;
+    esac
+  done
+  printf '%s' "$key"
+}
+
 # adopt_routing_check <dir> <label> <label_given>: sets ADOPT_READY (1 when a
 # usable routing-guard step is there, passes, and at least one job is routed),
-# ADOPT_REASONS (why not), ADOPT_LABEL and ADOPT_ROUTED. The workflows' own
-# guard says which label and jobs to expect; the checks are routing_guard.py,
+# ADOPT_REASONS (why not), ADOPT_LABEL, ADOPT_EVENTS, ADOPT_DEPENDABOT,
+# ADOPT_FALLBACK and ADOPT_ROUTED. The workflows' own guard says which label,
+# options and jobs to expect; --events, --dependabot and --fallback arrive as
+# ADOPT_FLAG_EVENTS, ADOPT_FLAG_DEPENDABOT and ADOPT_FLAG_FALLBACK (empty when
+# not given) and are held to the guard the way --label is. The checks are routing_guard.py,
 # the same script the guard runs in CI. A usable step is the pinned action (or
 # its deprecated verify-routing alias, which adds a warning) in a workflow that
 # runs on pull requests (tools/adopt.py says which are).
 adopt_routing_check() {
   local dir="$1" label="$2" label_given="$3" rows where gstatus glabel gblocks gwarns gdeprecated gjobs out rc lines
+  local gevents gdependabot gfallback gmatch opts
   local candidates=0 deferred="" routed routedjob
   ADOPT_READY=1
   ADOPT_REASONS=""
@@ -1046,10 +1078,13 @@ adopt_routing_check() {
   ADOPT_DEPRECATIONS=""
   ADOPT_LABEL="$label"
   ADOPT_LABEL_OK=""
+  ADOPT_EVENTS="${ADOPT_FLAG_EVENTS:-pull_request}"
+  ADOPT_DEPENDABOT="${ADOPT_FLAG_DEPENDABOT:-hosted}"
+  ADOPT_FALLBACK="${ADOPT_FLAG_FALLBACK:-ubuntu-latest}"
   ADOPT_GUARDS=0
   ADOPT_ROUTED=""
   rows="$(python3 -I "$ROOT/tools/adopt.py" guards "$dir")" || die "adopt: could not read the downloaded workflows"
-  while IFS=$'\t' read -r where gstatus glabel gblocks gwarns gdeprecated gjobs; do
+  while IFS=$'\t' read -r where gstatus glabel gblocks gwarns gdeprecated gevents gdependabot gfallback gjobs; do
     [ -n "$where" ] || continue
     candidates=$((candidates + 1))
     case "$gstatus" in
@@ -1064,22 +1099,40 @@ adopt_routing_check() {
         continue
         ;;
     esac
-    if [ "$ADOPT_GUARDS" = 0 ] && [ "$label_given" = 0 ]; then
-      ADOPT_LABEL="$glabel"
+    if [ "$ADOPT_GUARDS" = 0 ]; then
+      [ "$label_given" = 1 ] || ADOPT_LABEL="$glabel"
+      [ -n "$ADOPT_FLAG_EVENTS" ] || ADOPT_EVENTS="$gevents"
+      [ -n "$ADOPT_FLAG_DEPENDABOT" ] || ADOPT_DEPENDABOT="$gdependabot"
+      [ -n "$ADOPT_FLAG_FALLBACK" ] || ADOPT_FALLBACK="$gfallback"
     fi
     ADOPT_GUARDS=$((ADOPT_GUARDS + 1))
     adopt_each adopt_note "$gwarns"
     adopt_each adopt_deprecation "$gdeprecated"
+    gmatch=1
     if [ "$label_given" = 1 ] && [ "$glabel" != "$label" ]; then
+      gmatch=0
       adopt_reason "the routing-guard step at ${where} uses label ${glabel}, but --label is ${label}"
     fi
-    # Collect the jobs routed under this guard's label. A repository can carry
-    # several routing-guard steps; jobs routed under any of them count, not
-    # only the first guard's — unless --label picked a label, in which case
-    # only steps carrying it speak for it and the others are already reported
-    # as a mismatch above.
-    if [ "$label_given" = 0 ] || [ "$glabel" = "$label" ]; then
-      routed="$(python3 -I "$ROOT/routing-guard/routing_guard.py" --workflows-dir "$dir" --label "$glabel" --list 2>/dev/null)" || routed=""
+    if [ -n "$ADOPT_FLAG_EVENTS" ] && [ "$(adopt_events_key "$gevents")" != "$(adopt_events_key "$ADOPT_FLAG_EVENTS")" ]; then
+      gmatch=0
+      adopt_reason "the routing-guard step at ${where} uses events ${gevents}, but --events is ${ADOPT_FLAG_EVENTS}"
+    fi
+    if [ -n "$ADOPT_FLAG_DEPENDABOT" ] && [ "$gdependabot" != "$ADOPT_FLAG_DEPENDABOT" ]; then
+      gmatch=0
+      adopt_reason "the routing-guard step at ${where} uses dependabot ${gdependabot}, but --dependabot is ${ADOPT_FLAG_DEPENDABOT}"
+    fi
+    if [ -n "$ADOPT_FLAG_FALLBACK" ] && [ "$gfallback" != "$ADOPT_FLAG_FALLBACK" ]; then
+      gmatch=0
+      adopt_reason "the routing-guard step at ${where} uses fallback ${gfallback}, but --fallback is ${ADOPT_FLAG_FALLBACK}"
+    fi
+    opts=(--label "$glabel" --events "$gevents" --dependabot "$gdependabot" --fallback "$gfallback")
+    # Collect the jobs routed under this guard's label and options. A
+    # repository can carry several routing-guard steps; jobs routed under any
+    # of them count, not only the first guard's — unless a flag picked a
+    # value, in which case only steps carrying it speak for it and the others
+    # are already reported as a mismatch above.
+    if [ "$gmatch" = 1 ]; then
+      routed="$(python3 -I "$ROOT/routing-guard/routing_guard.py" --workflows-dir "$dir" "${opts[@]}" --list 2>/dev/null)" || routed=""
       while IFS= read -r routedjob; do
         [ -n "$routedjob" ] || continue
         case $'\n'"$ADOPT_ROUTED"$'\n' in
@@ -1089,10 +1142,15 @@ adopt_routing_check() {
       done <<<"$routed"
     fi
     rc=0
-    out="$(python3 -I "$ROOT/routing-guard/routing_guard.py" --workflows-dir "$dir" --label "$glabel" --jobs "$gjobs" 2>&1)" || rc=$?
+    out="$(python3 -I "$ROOT/routing-guard/routing_guard.py" --workflows-dir "$dir" "${opts[@]}" --jobs "$gjobs" 2>&1)" || rc=$?
     if [ "$rc" -eq 0 ]; then
-      if [ "$label_given" = 0 ] && [ -z "$ADOPT_LABEL_OK" ]; then
+      # The first guard that passes and agrees with the flags names the label
+      # and options; they equal the flags' wherever one was given.
+      if [ "$gmatch" = 1 ] && [ -z "$ADOPT_LABEL_OK" ]; then
         ADOPT_LABEL_OK="$glabel"
+        ADOPT_OK_EVENTS="$gevents"
+        ADOPT_OK_DEPENDABOT="$gdependabot"
+        ADOPT_OK_FALLBACK="$gfallback"
       fi
       continue
     fi
@@ -1110,9 +1168,13 @@ adopt_routing_check() {
       adopt_reason "no routing-guard step that runs on pull requests (docs/adopting.md, step 3)"
     fi
     # No guard to say which label applies; look with the expected one, as before.
-    ADOPT_ROUTED="$(python3 -I "$ROOT/routing-guard/routing_guard.py" --workflows-dir "$dir" --label "$ADOPT_LABEL" --list 2>/dev/null)" || ADOPT_ROUTED=""
-  elif [ "$label_given" = 0 ] && [ -n "$ADOPT_LABEL_OK" ]; then
+    ADOPT_ROUTED="$(python3 -I "$ROOT/routing-guard/routing_guard.py" --workflows-dir "$dir" --label "$ADOPT_LABEL" \
+      --events "$ADOPT_EVENTS" --dependabot "$ADOPT_DEPENDABOT" --fallback "$ADOPT_FALLBACK" --list 2>/dev/null)" || ADOPT_ROUTED=""
+  elif [ -n "$ADOPT_LABEL_OK" ]; then
     ADOPT_LABEL="$ADOPT_LABEL_OK"
+    ADOPT_EVENTS="$ADOPT_OK_EVENTS"
+    ADOPT_DEPENDABOT="$ADOPT_OK_DEPENDABOT"
+    ADOPT_FALLBACK="$ADOPT_OK_FALLBACK"
   fi
   if [ -z "$ADOPT_ROUTED" ]; then
     adopt_reason "no job uses the routing expression for label ${ADOPT_LABEL} (docs/adopting.md, step 2)"
@@ -1130,6 +1192,26 @@ adopt_routing_check() {
   if [ -n "$ADOPT_DEPRECATIONS" ]; then
     printf '%s' "$ADOPT_DEPRECATIONS" | sed 's/^/homefield: warning: /' >&2
   fi
+}
+
+# adopt_fallback <image>: a warning only. routing_guard.py accepts any
+# ubuntu-*, windows-* or macos-* name, so a typo such as ubuntu-lates passes
+# the guard, and the jobs then wait for a runner that does not exist whenever
+# CI_RUNNER is not local. This list is GitHub's standard hosted labels
+# (docs.github.com, "GitHub-hosted runners", 2026-10). A label it does not
+# know, a new image or a larger runner, only gets the warning.
+adopt_fallback() {
+  case "$1" in
+    ubuntu-slim | ubuntu-latest | ubuntu-2[246].04 | ubuntu-2[246].04-arm | \
+      windows-latest | windows-2022 | windows-2025 | windows-2025-vs2026 | \
+      windows-11-arm | windows-11-vs2026-arm | \
+      macos-latest | macos-1[45] | macos-26 | macos-1[45]-intel | macos-26-intel)
+      log "fallback image: $1 is a standard GitHub-hosted label"
+      ;;
+    *)
+      adopt_warn "fallback $1 is not one of GitHub's standard hosted labels that this version knows. If it is a typo, jobs wait for a runner that does not exist whenever CI_RUNNER is not local. Ignore this for a larger runner or an image newer than this list."
+      ;;
+  esac
 }
 
 # adopt_cache_keys <dir>: warnings only. See tools/adopt.py for what counts.
@@ -1162,11 +1244,14 @@ adopt_cache_keys() {
   adopt_warn "runner.os is Linux on the hosted runners and on this arm64 VM, so such a key lets the two architectures restore each other's build outputs. Add \${{ runner.arch }} (docs/adopting.md, step 4)."
 }
 
-# adopt_snippets <label> <jobs>: what to add to the workflows. The expression
+# adopt_snippets <label> <jobs>: what to add to the workflows, with the
+# options in ADOPT_EVENTS, ADOPT_DEPENDABOT and ADOPT_FALLBACK. The expression
 # and the guard step come from the same code that checks them.
 adopt_snippets() {
   local label="$1" jobs="$2" expr
-  expr="$(python3 -I "$ROOT/routing-guard/routing_guard.py" --print-expression --label "$label")" || die "adopt: label ${label} cannot be routed on"
+  expr="$(python3 -I "$ROOT/routing-guard/routing_guard.py" --print-expression --label "$label" \
+    --events "$ADOPT_EVENTS" --dependabot "$ADOPT_DEPENDABOT" --fallback "$ADOPT_FALLBACK")" ||
+    die "adopt: the routing options cannot be routed on (label ${label}, events ${ADOPT_EVENTS}, dependabot ${ADOPT_DEPENDABOT}, fallback ${ADOPT_FALLBACK})"
   echo
   echo "Replace each job's runs-on with this expression, verbatim (docs/adopting.md, step 2):"
   echo
@@ -1175,7 +1260,8 @@ adopt_snippets() {
   echo "Add the guard to a job that runs on every pull request, after checkout (step 3),"
   echo "listing every job you routed:"
   echo
-  python3 -I "$ROOT/tools/adopt.py" guard-snippet --label "$label" --jobs "$jobs"
+  python3 -I "$ROOT/tools/adopt.py" guard-snippet --label "$label" --jobs "$jobs" \
+    --events "$ADOPT_EVENTS" --dependabot "$ADOPT_DEPENDABOT" --fallback "$ADOPT_FALLBACK"
   echo
 }
 
@@ -1210,10 +1296,14 @@ adopt_switch() {
 
 cmd_adopt() {
   local repo="" nrepo=0 label="homefield-ci" label_given=0 group="homefield-ci" jobs="" switch=1 dry=0 entry out
+  ADOPT_FLAG_EVENTS="" ADOPT_FLAG_DEPENDABOT="" ADOPT_FLAG_FALLBACK=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --repo) repo="${2:?--repo needs a value}"; nrepo=$((nrepo + 1)); shift 2 ;;
       --label) label="${2:?--label needs a value}"; label_given=1; shift 2 ;;
+      --events) ADOPT_FLAG_EVENTS="${2:?--events needs a value}"; shift 2 ;;
+      --dependabot) ADOPT_FLAG_DEPENDABOT="${2:?--dependabot needs a value}"; shift 2 ;;
+      --fallback) ADOPT_FLAG_FALLBACK="${2:?--fallback needs a value}"; shift 2 ;;
       --group) group="${2:?--group needs a value}"; shift 2 ;;
       --jobs) jobs="${2:?--jobs needs a value}"; shift 2 ;;
       --no-switch) switch=0; shift ;;
@@ -1231,9 +1321,12 @@ cmd_adopt() {
   done
   command -v gh >/dev/null || die "adopt needs gh (https://cli.github.com)"
   command -v python3 >/dev/null || die "adopt needs python3"
-  # The same label rules as the guard, and a message from it when they fail.
-  out="$(python3 -I "$ROOT/routing-guard/routing_guard.py" --print-expression --label "$label")" ||
-    die "adopt: --label ${label} cannot be routed on: $(printf '%s' "$out" | sed $'s/\033\\[[0-9;]*m//g')"
+  # The same label and option rules as the guard, and a message from it when
+  # they fail.
+  out="$(python3 -I "$ROOT/routing-guard/routing_guard.py" --print-expression --label "$label" \
+    --events "${ADOPT_FLAG_EVENTS:-pull_request}" --dependabot "${ADOPT_FLAG_DEPENDABOT:-hosted}" \
+    --fallback "${ADOPT_FLAG_FALLBACK:-ubuntu-latest}")" ||
+    die "adopt: the routing options cannot be routed on: $(printf '%s' "$out" | sed $'s/\033\\[[0-9;]*m//g')"
   [ "$dry" = 0 ] || log "dry run: nothing will be changed"
 
   ADOPT_TMP="$(mktemp -d)"
@@ -1242,6 +1335,7 @@ cmd_adopt() {
   adopt_fetch_workflows "$repo" "$ADOPT_BRANCH" "$ADOPT_TMP/workflows"
   adopt_routing_check "$ADOPT_TMP/workflows" "$label" "$label_given"
   adopt_cache_keys "$ADOPT_TMP/workflows"
+  adopt_fallback "$ADOPT_FALLBACK"
   adopt_group_access "$repo" "$group" "$dry"
   adopt_switch "$repo" "$ADOPT_LABEL" "$dry" "$switch" "$jobs"
 

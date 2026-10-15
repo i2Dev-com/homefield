@@ -1,8 +1,9 @@
 name: Routing guard
 description: >-
   Fails if any workflow job routes to the local self-hosted runner without the
-  canonical runs-on expression (hosted fallback, pull requests only, Dependabot
-  and fork pull requests excluded), or if the set of opted-in jobs differs from `jobs`.
+  canonical runs-on expression (a hosted fallback and fork pull requests
+  excluded always; the routed events and Dependabot per `events` and
+  `dependabot`), or if the set of opted-in jobs differs from `jobs`.
 
 inputs:
   jobs:
@@ -21,6 +22,26 @@ inputs:
     description: The runner's architecture label (arm64 or x64).
     required: false
     default: arm64
+  events:
+    description: >-
+      The events whose jobs are routed to the local runner, from
+      pull_request, push, workflow_dispatch and schedule,
+      separated by newlines, commas or spaces. pull_request_target is refused.
+      Jobs on push, workflow_dispatch and schedule then wait for the Mac.
+    required: false
+    default: pull_request
+  dependabot:
+    description: >-
+      hosted keeps Dependabot's jobs on hosted runners; local routes them to
+      the runner like any other pull request.
+    required: false
+    default: hosted
+  fallback:
+    description: >-
+      The GitHub-hosted image jobs run on when CI_RUNNER is not local: a bare
+      name such as ubuntu-latest or ubuntu-24.04-arm, never a self-hosted label.
+    required: false
+    default: ubuntu-latest
   workflows-dir:
     description: Directory of workflow files to check, relative to the workspace.
     required: false
@@ -37,10 +58,16 @@ runs:
         INPUT_JOBS: ${{ inputs.jobs }}
         INPUT_LABEL: ${{ inputs.label }}
         INPUT_ARCH: ${{ inputs.arch }}
+        INPUT_EVENTS: ${{ inputs.events }}
+        INPUT_DEPENDABOT: ${{ inputs.dependabot }}
+        INPUT_FALLBACK: ${{ inputs.fallback }}
         INPUT_WORKFLOWS_DIR: ${{ inputs.workflows-dir }}
       run: |
         python3 "$GITHUB_ACTION_PATH/routing_guard.py" \
           --workflows-dir "$INPUT_WORKFLOWS_DIR" \
           --label "$INPUT_LABEL" \
           --arch "$INPUT_ARCH" \
+          --events "$INPUT_EVENTS" \
+          --dependabot "$INPUT_DEPENDABOT" \
+          --fallback "$INPUT_FALLBACK" \
           --jobs "$INPUT_JOBS"

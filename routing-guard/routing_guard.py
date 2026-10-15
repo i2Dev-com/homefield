@@ -5,23 +5,34 @@ runner to one canonical `runs-on` expression.
 GitHub evaluates `runs-on` before any step runs, so no action can choose a
 job's runner: each opted-in job has to carry the expression inline. This check
 is what keeps those inline copies honest. The expression carries four
-guarantees that nothing else enforces:
+guarantees that nothing else enforces. Guarantees 1 and 4 are mandatory; 2
+and 3 are defaults that the repository can change, each with a cost:
 
-  1. A hosted fallback. With the repository variable CI_RUNNER unset or
-     anything but `local`, the job runs on ubuntu-latest. A copy without the
-     `|| 'ubuntu-latest'` leg queues forever whenever the local runner is off.
-  2. Pull requests only. Pushes (main, release branches) always run hosted, so
-     merging and deploying never depend on the runner's machine being awake.
-  3. Dependabot stays hosted, checked by actor and by branch. Its branches
-     bring in unreviewed install scripts, and the local VM, unlike a hosted
-     one, is not thrown away after the job.
-  4. Pull requests from forks stay hosted: only a branch of the repository
-     itself, pushed by someone with write access, is routed. A deleted fork
-     leaves head.repo null, which also fails the comparison and runs hosted.
-     This is defence in depth, not a boundary: a fork PR runs the workflow
-     files from its own merge commit, so it can rewrite runs-on altogether.
-     What keeps strangers off the runner is the runner group admitting
-     private repositories only.
+  1. A hosted fallback (mandatory). With the repository variable CI_RUNNER
+     unset or anything but `local`, the job runs on a GitHub-hosted image:
+     `fallback`, ubuntu-latest by default, which must itself be a hosted image
+     name, never a self-hosted label. A copy without the fallback leg queues
+     forever whenever the local runner is off.
+  2. Pull requests only (default; the `events` option). Pushes (main, release
+     branches) then always run hosted, so merging and deploying never depend
+     on the runner's machine being awake. Adding push, workflow_dispatch or
+     schedule puts those jobs on the Mac: a deploy gated on CI can queue
+     behind it, and it falls back to hosted only when CI_RUNNER is switched.
+     Two events are refused outright. pull_request_target runs with the
+     repository's secrets on code from forks. merge_group can carry a fork's
+     pull request but has no github.event.pull_request, so guarantee 4 could
+     not be checked.
+  3. Dependabot stays hosted (default; the `dependabot` option), checked by
+     actor and by branch. Its branches bring in unreviewed install scripts,
+     and the local VM, unlike a hosted one, is not thrown away after the job.
+     `dependabot: local` drops both checks and accepts that.
+  4. Pull requests from forks stay hosted (mandatory): only a branch of the
+     repository itself, pushed by someone with write access, is routed. A
+     deleted fork leaves head.repo null, which also fails the comparison and
+     runs hosted. This is defence in depth, not a boundary: a fork PR runs the
+     workflow files from its own merge commit, so it can rewrite runs-on
+     altogether. What keeps strangers off the runner is the runner group
+     admitting private repositories only.
 
 Every `runs-on` must be either the canonical expression or a GitHub-hosted
 image name (ubuntu-*, windows-*, macos-*, alone or as a one-item list). It is
@@ -40,7 +51,8 @@ Exit status: 0 if every check passes, 1 otherwise.
 
 Two flags print instead of checking, for tools that build on the same rules
 (bin/homefield adopt): --list names the jobs that carry the canonical
-expression, and --print-expression prints the expression itself.
+expression, and --print-expression prints the expression itself. Both take
+the same options as a check (--events, --dependabot, --fallback).
 """
 import argparse
 import os
@@ -79,31 +91,99 @@ def label_problem(label: str) -> str:
     return ""
 
 
-def canonical_expression(label: str, arch: str) -> str:
+# The events a job can be routed on, in the order the expression lists them.
+# Some events are deliberately absent; REFUSED says why.
+EVENTS = ("pull_request", "push", "workflow_dispatch", "schedule")
+REFUSED = {
+    "pull_request_target": "it runs with the repository's secrets on code from forks",
+    "merge_group": "a merge group can hold a pull request from a fork, and the"
+    " event has no pull_request to check where it came from",
+}
+DEFAULT_EVENTS = "pull_request"
+DEPENDABOT = ("hosted", "local")
+# The fallback must be a bare GitHub-hosted image name: a self-hosted label
+# here would send the job to the runner whenever CI_RUNNER is not `local`.
+FALLBACK = re.compile(r"(ubuntu|windows|macos)-[a-z0-9._-]+", re.IGNORECASE)
+
+
+def parse_events(text: str) -> list:
+    """The events in `text` (separated by newlines, commas or spaces), as a
+    list in canonical order without duplicates. Raises ValueError."""
+    given = [e for e in re.split(r"[\s,]+", text) if e]
+    for event in given:
+        if event in REFUSED:
+            raise ValueError(f"events: {event} is refused: {REFUSED[event]}")
+        if event not in EVENTS:
+            raise ValueError(f"events: {event!r} is not one of {', '.join(EVENTS)}")
+    if not given:
+        raise ValueError(f"events: name at least one of {', '.join(EVENTS)}")
+    return [e for e in EVENTS if e in given]
+
+
+def option_problem(dependabot: str, fallback: str) -> str:
+    if dependabot not in DEPENDABOT:
+        return f"dependabot: {dependabot!r} must be hosted or local"
+    if not FALLBACK.fullmatch(fallback):
+        return (
+            f"fallback: {fallback!r} must be a bare GitHub-hosted image name"
+            " (ubuntu-*, windows-* or macos-*): a self-hosted label would"
+            " defeat the hosted fallback"
+        )
+    return ""
+
+
+def event_clause(events: list) -> str:
+    clauses = [f"github.event_name == '{e}'" for e in events]
+    return clauses[0] if len(clauses) == 1 else "(" + " || ".join(clauses) + ")"
+
+
+# With pull_request alone the fork comparison stands bare. With other events it
+# must let them through: they carry no pull_request, so the comparison would be
+# against null and send them hosted.
+FORK_PR = "github.event.pull_request.head.repo.full_name == github.repository"
+FORK_ANY = f"(github.event_name != 'pull_request' || {FORK_PR})"
+
+
+def fork_clause(events: list) -> str:
+    return FORK_PR if events == ["pull_request"] else FORK_ANY
+
+
+def canonical_expression(
+    label: str,
+    arch: str,
+    events=(DEFAULT_EVENTS,),
+    dependabot: str = "hosted",
+    fallback: str = "ubuntu-latest",
+) -> str:
+    """The expression for validated options: `events` in canonical order."""
     labels = ",".join(f'"{x}"' for x in ("self-hosted", "linux", arch, label))
-    return (
-        "${{ vars.CI_RUNNER == 'local' && github.event_name == 'pull_request'"
-        " && github.actor != 'dependabot[bot]'"
-        " && !startsWith(github.head_ref, 'dependabot/')"
-        " && github.event.pull_request.head.repo.full_name == github.repository"
-        f" && fromJSON('[{labels}]') || 'ubuntu-latest' }}}}"
-    )
+    clauses = ["vars.CI_RUNNER == 'local'", event_clause(list(events))]
+    if dependabot == "hosted":
+        clauses += [
+            "github.actor != 'dependabot[bot]'",
+            "!startsWith(github.head_ref, 'dependabot/')",
+        ]
+    clauses += [fork_clause(list(events)), f"fromJSON('[{labels}]')"]
+    return "${{ " + " && ".join(clauses) + f" || '{fallback}' }}}}"
 
 
-# Each guard, as the fragment of the expression that implements it. Asserted
-# against the canonical expression itself, so a future edit to
-# canonical_expression() cannot weaken every copy at once without failing here.
-GUARDS = [
-    ("|| 'ubuntu-latest'", "hosted fallback"),
-    ("vars.CI_RUNNER == 'local'", "opt-in switch"),
-    ("github.event_name == 'pull_request'", "pull-request-only rule"),
-    ("github.actor != 'dependabot[bot]'", "Dependabot actor excluded"),
-    ("!startsWith(github.head_ref, 'dependabot/')", "Dependabot branch excluded"),
-    (
-        "github.event.pull_request.head.repo.full_name == github.repository",
-        "fork pull requests excluded",
-    ),
-]
+def guards(events: list, dependabot: str, fallback: str) -> list:
+    """Each guard the options call for, as (fragment, name): the fragment of
+    the expression that implements it. Asserted against the canonical
+    expression itself, so a future edit to canonical_expression() cannot
+    weaken every copy at once without failing here."""
+    found = [
+        (f"|| '{fallback}'", "hosted fallback"),
+        ("vars.CI_RUNNER == 'local'", "opt-in switch"),
+        (event_clause(events), "event rule"),
+        (fork_clause(events), "fork pull requests excluded"),
+    ]
+    if dependabot == "hosted":
+        found += [
+            ("github.actor != 'dependabot[bot]'", "Dependabot actor excluded"),
+            ("!startsWith(github.head_ref, 'dependabot/')", "Dependabot branch excluded"),
+        ]
+    return found
 
 
 def main() -> int:
@@ -111,6 +191,16 @@ def main() -> int:
     ap.add_argument("--workflows-dir", default=".github/workflows")
     ap.add_argument("--label", default="homefield-ci")
     ap.add_argument("--arch", default="arm64")
+    ap.add_argument(
+        "--events",
+        default=DEFAULT_EVENTS,
+        help=f"events routed locally ({', '.join(EVENTS)}), separated by newlines,"
+        " commas or spaces",
+    )
+    ap.add_argument("--dependabot", default="hosted", help="hosted or local")
+    ap.add_argument(
+        "--fallback", default="ubuntu-latest", help="the GitHub-hosted image used when not local"
+    )
     ap.add_argument(
         "--jobs",
         default="",
@@ -125,7 +215,7 @@ def main() -> int:
     ap.add_argument(
         "--print-expression",
         action="store_true",
-        help="print the canonical runs-on expression for --label and --arch and exit",
+        help="print the canonical runs-on expression for the options and exit",
     )
     args = ap.parse_args()
 
@@ -133,7 +223,16 @@ def main() -> int:
     if problem:
         print(f"  \033[31mFAIL\033[0m label {args.label!r} {problem}")
         return 1
-    canonical = canonical_expression(args.label, args.arch)
+    try:
+        events = parse_events(args.events)
+    except ValueError as err:
+        print(f"  \033[31mFAIL\033[0m {err}")
+        return 1
+    problem = option_problem(args.dependabot, args.fallback)
+    if problem:
+        print(f"  \033[31mFAIL\033[0m {problem}")
+        return 1
+    canonical = canonical_expression(args.label, args.arch, events, args.dependabot, args.fallback)
     if args.print_expression:
         print(canonical)
         return 0
@@ -244,7 +343,7 @@ def main() -> int:
         if key not in expected:
             fail(f"{key} opts in but is not in the expected list — add it deliberately")
 
-    for needle, why in GUARDS:
+    for needle, why in guards(events, args.dependabot, args.fallback):
         if needle in canonical:
             ok(f"canonical expression has {why}")
         else:

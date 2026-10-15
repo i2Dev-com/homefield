@@ -19,9 +19,10 @@ they'd rather not be.
 ## What is in scope
 
 - Escaping the VM, or reading the host's files or credentials from it.
-- Getting the runner to run code from a fork, from Dependabot, or on a push,
-  despite the canonical routing expression; or a `runs-on` that reaches the
-  runner while `routing-guard` passes.
+- Getting the runner to run code from a fork, or from Dependabot or on a push
+  when the repository has not opted those in (`dependabot: local`, `push` in
+  `events`), despite the canonical routing expression; or a `runs-on` that
+  reaches the runner while `routing-guard` passes.
 - Leaking registration or removal tokens (they should only ever reach the VM
   on stdin).
 - `bin/homefield` or `provision.sh` doing something unsafe with their inputs.

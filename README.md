@@ -90,8 +90,10 @@ refuses a public repository. `--dry-run` shows what it would do.
 - **One job at a time**, across every repository using the runner. Others
   queue. (Running several is tracked in [#14](https://github.com/i2Dev-com/homefield/issues/14).)
 - **Only while the Mac is up.** Routed jobs wait while the Mac sleeps or the
-  VM is stopped, and GitHub fails them after 24 hours. Pushes to the default
-  branch always run hosted, so merging and deploying never wait on the Mac.
+  VM is stopped, and GitHub fails them after 24 hours. By default pushes to the
+  default branch run hosted, so merging and deploying never wait on the Mac;
+  routing `push` too is an option ([routing options](docs/adopting.md#routing-options)),
+  and then a deploy gated on CI can queue behind a sleeping Mac.
   To route around a sleeping runner, `bin/homefield route hosted --repo
   <owner>/<repo>` switches the repository to hosted and re-runs whatever was
   already waiting for the local runner
@@ -125,9 +127,16 @@ AI or tool APIs). Until that is closed ([#18](https://github.com/i2Dev-com/homef
 Mac hosting the runner that the repositories using it shouldn't be able to
 reach.
 
-The routing expression keeps pushes, Dependabot and pull requests from forks
-on hosted runners. The fork rule is defence in depth only: what keeps
-strangers off the runner is that only private repositories can reach it.
+By default the routing expression keeps pushes, Dependabot and pull requests
+from forks on hosted runners. Fork pull requests stay hosted whatever the
+options. Which events are routed (`events`) and whether Dependabot is routed
+(`dependabot`) are defaults a repository can change
+([routing options](docs/adopting.md#routing-options)): routing Dependabot
+puts unreviewed install scripts on a VM that is not thrown away after the job,
+and routing push, schedule or dispatch jobs makes them depend on the Mac being
+awake. `pull_request_target` cannot be routed. The fork rule is defence in
+depth only: what keeps strangers off the runner is that only private
+repositories can reach it.
 Repositories that share the runner share one VM, one job after another, and
 can see what earlier jobs left behind, so share it only between repositories
 you would trust with each other's pull requests. Registration tokens reach
@@ -148,6 +157,9 @@ runs-on: ${{ vars.CI_RUNNER == 'local' && github.event_name == 'pull_request' &&
 It sends the job to the local runner only when the repository variable
 `CI_RUNNER` is `local`, the event is a pull request, the author is not
 Dependabot and the branch is not from a fork; otherwise to `ubuntu-latest`.
+That is the default. The routed events, Dependabot and the hosted fallback
+image are options of the action, and the expression changes with them
+([routing options](docs/adopting.md#routing-options)).
 `routing-guard` keeps every copy identical and every guard in place:
 
 ```yaml
