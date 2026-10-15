@@ -298,15 +298,100 @@ record "an unreadable mount count: refused" "nonzero/yes" "$(nonzero "$rc")/$(ha
 
 # ── version ────────────────────────────────────────────────────────────────
 echo "version"
-mkdir -p "$work/inst/bin" "$work/bare/bin"
+mkdir -p "$work/inst/bin" "$work/bare/bin" "$work/nogh"
 cp "$ROOT/bin/homefield" "$work/inst/bin/homefield"
 cp "$ROOT/bin/homefield" "$work/bare/bin/homefield"
-printf 'repo=acme/tool\nref=v3\ncommit=0123456789abcdef0123456789abcdef01234567\n' >"$work/inst/.homefield-ref"
-out="$(env -i PATH="$stubs" "$BASH" "$work/inst/bin/homefield" version 2>&1)"
-record "an install.sh copy reports its ref, short commit and source" "homefield v3 (0123456), installed from acme/tool in $work/inst" "$out"
+for t in dirname git; do ln -s "$(command -v "$t")" "$work/nogh/$t"; done
+old=0123456789abcdef0123456789abcdef01234567
+new=89abcdef0123456789abcdef0123456789abcdef
+printf 'repo=acme/tool\nref=v3\ncommit=%s\n' "$old" >"$work/inst/.homefield-ref"
+# Without gh, so only the first line, which is not about updates.
+out="$(env -i PATH="$work/nogh" "$BASH" "$work/inst/bin/homefield" version 2>&1)"
+record "an install.sh copy reports its ref, short commit and source" "homefield v3 (0123456), installed from acme/tool in $work/inst" "${out%%$'\n'*}"
 out="$(env -i PATH="$stubs" GIT_CEILING_DIRECTORIES="$work" "$BASH" "$work/bare/bin/homefield" version 2>&1)"
 record "neither a ref file nor a checkout" "homefield (version unknown), in $work/bare" "$out"
-out="$(env -i PATH="$stubs" "$BASH" "$ROOT/bin/homefield" version 2>&1)"
-record "a checkout says so" "yes" "$(has "$out" 'from a checkout in')"
+: >"$calls"
+out="$(env -i PATH="$stubs" CALLS="$calls" "$BASH" "$ROOT/bin/homefield" version 2>&1)"
+record "a checkout says so, and asks gh nothing" "yes/0" "$(has "$out" 'from a checkout in')/$(called 'gh api')"
+
+# A gh that answers the two update-check calls: the commit a ref resolves to
+# (the commits endpoint follows an annotated tag to its commit) and the tags.
+mkdir -p "$work/vgh"
+for t in dirname git; do ln -s "$(command -v "$t")" "$work/vgh/$t"; done
+cat >"$work/vgh/gh" <<'EOF'
+#!/bin/sh
+echo "gh $*" >>"$CALLS"
+if [ -n "${V_GH_FAIL:-}" ]; then echo '{"message":"Bad credentials"}'; echo "gh: HTTP 401" >&2; exit 1; fi
+case "$*" in
+  *repos/*/commits/*) echo "$V_COMMIT" ;;
+  *repos/*/tags*) printf '%s\n' "$V_TAGS" ;;
+esac
+EOF
+chmod +x "$work/vgh/gh"
+tags_v3="$(printf 'v3\nv2\nv1\nv2.1\nlatest')"
+# version_run [VAR=value ...]: out and rc of `version` on the install.sh copy.
+version_run() {
+  : >"$calls"
+  out="$(env -i HOME="$work" PATH="$work/vgh" CALLS="$calls" V_TAGS="$tags_v3" "$@" "$BASH" "$work/inst/bin/homefield" version 2>&1 </dev/null)"
+  rc=$?
+}
+mine="homefield v3 (0123456), installed from acme/tool in $work/inst"
+
+version_run V_COMMIT="$old"
+record "unchanged ref: up to date" "0/$mine
+homefield: up to date with v3" "$rc/$out"
+record "...resolved through the commits endpoint, tags listed" "1/1" "$(called 'repos/acme/tool/commits/v3')/$(called 'repos/acme/tool/tags')"
+
+printf 'repo=acme/tool\nref=v3\ncommit=0123456\n' >"$work/inst/.homefield-ref"
+version_run V_COMMIT="$old"
+record "a short recorded commit still matches" "0/homefield: up to date with v3" "$rc/$(printf '%s' "$out" | tail -1)"
+printf 'repo=acme/tool\nref=v3\ncommit=%s\n' "$old" >"$work/inst/.homefield-ref"
+
+version_run V_COMMIT="$new"
+record "a moved ref: says where it moved, exit 0" "0/yes" "$rc/$(has "$out" 'homefield: v3 has moved to 89abcde since this copy was installed; update with:')"
+record "...with the one-liner for that ref and this copy" "yes" "$(has "$out" "  gh api 'repos/acme/tool/contents/install.sh?ref=v3' -H 'Accept: application/vnd.github.raw' | HOMEFIELD_REPO=acme/tool HOMEFIELD_HOME='$work/inst' bash")"
+record "...saying the VM is left alone" "yes" "$(has "$out" 'homefield upgrade updates the VM')"
+record "...and no newer major when v3 is the highest" "no" "$(has "$out" 'breaking')"
+
+# The README's one-liner exactly: default repository and ref, in the default place.
+dflt="$work/h/.local/share/homefield"
+mkdir -p "$dflt/bin"
+cp "$ROOT/bin/homefield" "$dflt/bin/homefield"
+printf 'repo=i2Dev-com/homefield\nref=v3\ncommit=%s\n' "$old" >"$dflt/.homefield-ref"
+: >"$calls"
+out="$(env -i HOME="$work/h" PATH="$work/vgh" CALLS="$calls" V_TAGS="$tags_v3" V_COMMIT="$new" "$BASH" "$dflt/bin/homefield" version 2>&1 </dev/null)"
+record "default repo, ref and place: the README's one-liner" "yes" "$(has "$out" "
+  gh api 'repos/i2Dev-com/homefield/contents/install.sh?ref=v3' -H 'Accept: application/vnd.github.raw' | bash
+")"
+
+printf 'repo=acme/tool\nref=release/1\ncommit=%s\n' "$old" >"$work/inst/.homefield-ref"
+version_run V_COMMIT="$new"
+record "a branch: HOMEFIELD_REF in the one-liner, no major check" "yes/no" "$(has "$out" "HOMEFIELD_REPO=acme/tool HOMEFIELD_REF=release/1 HOMEFIELD_HOME=")/$(has "$out" 'breaking')"
+
+printf 'repo=acme/tool\nref=v3\ncommit=%s\n' "$old" >"$work/inst/.homefield-ref"
+version_run V_COMMIT="$old" V_TAGS="$(printf 'v4\nv3\nv10\nv9')"
+record "a newer major: says so, points at the changelog, exit 0" "0/yes/yes/yes" "$rc/$(has "$out" 'homefield: v10 exists and is a breaking release; read CHANGELOG.md')/$(has "$out" 'https://github.com/acme/tool/blob/v10/CHANGELOG.md')/$(has "$out" 'up to date with v3')"
+version_run V_COMMIT="$new" V_TAGS="$(printf 'v4\nv3')"
+record "...and with a moved ref, both are said" "0/yes/yes" "$rc/$(has "$out" 'has moved')/$(has "$out" 'v4 exists')"
+
+printf 'repo=acme/tool\nref=%s\ncommit=%s\n' "$old" "$old" >"$work/inst/.homefield-ref"
+version_run V_COMMIT="$new"
+record "a full commit as the ref: nothing to compare, no commit lookup" "0/yes/0" "$rc/$(has "$out" 'installed at a fixed commit (0123456)')/$(called 'commits/')"
+printf 'repo=acme/tool\nref=v3\ncommit=%s\n' "$old" >"$work/inst/.homefield-ref"
+
+out="$(env -i HOME="$work" PATH="$work/nogh" "$BASH" "$work/inst/bin/homefield" version 2>&1 </dev/null)"
+rc=$?
+record "no gh: one line, exit 0" "0/homefield: could not check for updates (gh is not installed)" "$rc/$(printf '%s' "$out" | tail -1)"
+
+version_run V_GH_FAIL=1 V_COMMIT="$old"
+record "gh failing: exit 0, one line, none of gh's output" "0/2/no/no" "$rc/$(printf '%s\n' "$out" | wc -l | tr -d ' ')/$(has "$out" 'Bad credentials')/$(has "$out" 'HTTP 401')"
+record "...naming what failed" "yes" "$(has "$out" 'homefield: could not check for updates (gh could not read v3 in acme/tool; see gh auth status)')"
+
+version_run V_COMMIT="not a sha"
+record "an answer that is not a commit: could not check, exit 0" "0/yes" "$rc/$(has "$out" 'could not check for updates (unexpected answer from gh')"
+
+printf 'repo=acme/tool\nref=v3\ncommit=\n' >"$work/inst/.homefield-ref"
+version_run V_COMMIT="$new"
+record "no commit recorded: could not check, gh not called" "0/yes/0" "$rc/$(has "$out" 'could not check for updates (.homefield-ref records no commit)')/$(called 'gh api')"
 
 summary

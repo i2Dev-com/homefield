@@ -56,7 +56,8 @@ Commands:
              peak per day, and out-of-memory kills.
   report     Queue wait, duration and minutes of the jobs in repositories,
              local against hosted, from the GitHub API.
-  version    Show which version of this tool is installed.
+  version    Show which version of this tool is installed, and whether a
+             newer one is available (checked with gh).
 
 Options:
   --instance NAME    Lima instance (default homefield, or $HOMEFIELD_INSTANCE)
@@ -1301,8 +1302,78 @@ cmd_report() {
   exec python3 "$ROOT/tools/report.py" "$@"
 }
 
-# What install.sh recorded when it installed this copy (repo, ref, commit);
-# a git checkout says where it is instead.
+# update_command <repo> <ref>: the install.sh one-liner (README, Quick start)
+# for that ref, plus the settings that differ from install.sh's defaults, so
+# that it replaces this copy and not some other one.
+update_command() {
+  local repo="$1" ref="$2" settings=""
+  [ "$repo" = i2Dev-com/homefield ] || settings="${settings}HOMEFIELD_REPO=${repo} "
+  [ "$ref" = v3 ] || settings="${settings}HOMEFIELD_REF=${ref} "
+  [ "$ROOT" = "$HOME/.local/share/homefield" ] || settings="${settings}HOMEFIELD_HOME='${ROOT}' "
+  echo "  gh api 'repos/${repo}/contents/install.sh?ref=${ref}' -H 'Accept: application/vnd.github.raw' | ${settings}bash"
+}
+
+# update_check <repo> <ref> <commit>: says whether the ref this copy was
+# installed from has moved, and whether a newer major version exists. Reads
+# GitHub through gh (the repository is private). gh's own output is dropped:
+# whatever goes wrong is one line here, and nothing here fails the command.
+update_check() {
+  local repo="$1" ref="$2" commit="$3" current="" tags="" tag="" latest="" mine=""
+  local repo_re='^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' ref_re='^[A-Za-z0-9_./-]+$' sha_re='^[0-9a-f]{40}$'
+  local major_re='^v([0-9]+)$' ref_major_re='^v([0-9]+)([.].*)?$'
+  if ! command -v gh >/dev/null; then
+    log "could not check for updates (gh is not installed)"
+    return 0
+  fi
+  if [[ ! "$repo" =~ $repo_re || "$repo" == *..* || ! "$ref" =~ $ref_re || "$ref" == *..* || "$ref" == -* ]]; then
+    log "could not check for updates (.homefield-ref has no usable repo and ref)"
+    return 0
+  fi
+  if [ -z "$commit" ]; then
+    log "could not check for updates (.homefield-ref records no commit)"
+    return 0
+  fi
+  # A branch or tag name resolves to the commit it points at (an annotated tag
+  # is followed to its commit). A full commit hash cannot move.
+  if [[ ! "$ref" =~ $sha_re ]]; then
+    if ! current="$(gh api "repos/${repo}/commits/${ref}" --jq .sha 2>/dev/null)"; then
+      log "could not check for updates (gh could not read ${ref} in ${repo}; see gh auth status)"
+      return 0
+    fi
+    if [[ ! "$current" =~ $sha_re ]]; then
+      log "could not check for updates (unexpected answer from gh for ${ref} in ${repo})"
+      return 0
+    fi
+  fi
+  if ! tags="$(gh api --paginate "repos/${repo}/tags?per_page=100" --jq '.[].name' 2>/dev/null)"; then
+    log "could not check for updates (gh could not list the tags of ${repo}; see gh auth status)"
+    return 0
+  fi
+  while IFS= read -r tag; do
+    if [[ "$tag" =~ $major_re ]] && { [ -z "$latest" ] || [ "${BASH_REMATCH[1]}" -gt "$latest" ]; }; then
+      latest="${BASH_REMATCH[1]}"
+    fi
+  done <<<"$tags"
+  if [[ "$ref" =~ $ref_major_re ]]; then mine="${BASH_REMATCH[1]}"; fi
+
+  # The recorded commit may be a short hash (install.sh falls back to one).
+  if [ -z "$current" ]; then
+    log "installed at a fixed commit (${commit:0:7}), so there is no ref to compare"
+  elif [[ "$current" == "$commit"* ]]; then
+    log "up to date with ${ref}"
+  else
+    log "${ref} has moved to ${current:0:7} since this copy was installed; update with:"
+    update_command "$repo" "$ref"
+    echo "That replaces the tool and leaves the VM alone; homefield upgrade updates the VM."
+  fi
+  if [ -n "$mine" ] && [ -n "$latest" ] && [ "$latest" -gt "$mine" ]; then
+    log "v${latest} exists and is a breaking release; read CHANGELOG.md and the migration notes in docs/runbook.md before moving from v${mine}"
+    echo "  https://github.com/${repo}/blob/v${latest}/CHANGELOG.md"
+  fi
+}
+
+# What install.sh recorded when it installed this copy (repo, ref, commit),
+# and whether that ref has moved on; a git checkout says where it is instead.
 cmd_version() {
   [ $# -eq 0 ] || die "version takes no options besides --instance"
   local key value repo="" ref="" commit=""
@@ -1315,6 +1386,7 @@ cmd_version() {
       esac
     done <"$ROOT/.homefield-ref"
     echo "homefield ${ref:-unknown}${commit:+ (${commit:0:7})}, installed from ${repo:-unknown} in ${ROOT}"
+    update_check "$repo" "$ref" "$commit"
   elif git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1; then
     echo "homefield $(git -C "$ROOT" describe --always), from a checkout in ${ROOT}"
   else

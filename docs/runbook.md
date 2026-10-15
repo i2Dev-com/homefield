@@ -139,7 +139,10 @@ default `v3`) into `~/.local/share/homefield` (`HOMEFIELD_HOME`), writes a
 on your PATH), installs or upgrades Lima (1.1 or later) if you agree, and runs `homefield install`.
 Running it again replaces the tool, which is how it is upgraded; with no
 arguments it leaves an existing VM alone (`homefield upgrade` updates that).
-`homefield version` shows the ref and commit. From a checkout,
+`homefield version` shows the ref and commit, and asks GitHub (through `gh`)
+whether that ref has moved since: if so it prints the command that updates the
+tool, and if a newer major version exists it says to read `CHANGELOG.md` first.
+If it cannot reach GitHub it says so and still exits 0. From a checkout,
 `bin/homefield install --url https://github.com/<org>` (or
 `https://github.com/<owner>/<repo>`; options: `bin/homefield help`) is the
 same command. Either way it does every step below, asks for the URL if it

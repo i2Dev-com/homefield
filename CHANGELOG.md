@@ -142,6 +142,12 @@ runner next to it:
 
 ### Added
 
+- `homefield version` says whether a newer HomeField is available for an
+  install.sh copy: it asks GitHub through `gh` whether the installed ref has
+  moved and prints the command that updates the tool, and it points to this
+  changelog when a newer major version exists. When it cannot check (no `gh`,
+  not logged in, no access) it prints one line saying so; the exit status is
+  0 either way.
 - `bin/ci-runner adopt --repo <owner>/<repo>`: does the part of
   `docs/adopting.md` that is not a workflow edit. It refuses a public
   repository, downloads the repository's workflows and runs the
