@@ -113,7 +113,7 @@ cache_step() {
   printf '      - uses: actions/cache@v5\n        with:\n          path: ~/.npm\n          key: %s\n' "$1"
 }
 
-mkdir -p "$work/wf-ready" "$work/wf-noguard" "$work/wf-mismatch" "$work/wf-norouted" "$work/wf-label" "$work/wf-cache"
+mkdir -p "$work/wf-ready" "$work/wf-noguard" "$work/wf-mismatch" "$work/wf-norouted" "$work/wf-label" "$work/wf-cache" "$work/wf-twoguards"
 {
   header
   emit_job lint "$expr" "$(guard ci.yml:lint ci.yml:test)" "$(cache_step "${os_key}-${arch_key}-npm-${hash_key}")"
@@ -149,6 +149,15 @@ cache_line_restore="$(grep -nxF "            ${os_key}-npm-" "$work/wf-cache/ci.
 # A workflow with no routed job (a nightly that stays hosted): its keys are
 # not the routed jobs' concern, so they are not reported once jobs are routed.
 { header; emit_job e2e ubuntu-latest "$(cache_step "${os_key}-pw-${hash_key}")"; } >"$work/wf-cache/nightly.yml"
+# Two verify-routing steps: a stale one on the default label (its check fails
+# against jobs routed on another label) and a passing one on that other label.
+# The routed jobs count under either step, and the passing label is the one to
+# advise with.
+{
+  header
+  emit_job lint "$expr_acme" "$(guard ci.yml:lint)"
+  emit_job test "$expr_acme" "$(guard_label acme-ci ci.yml:lint ci.yml:test)"
+} >"$work/wf-twoguards/ci.yml"
 
 # Fixtures for what makes a step a guard: the action it uses, and whether its
 # workflow runs on pull requests. wf_guard <dir> <on-line> <uses> writes a
@@ -419,6 +428,17 @@ adopt GH_WF="$work/wf-label" -- --label acme-ci
 record "...--label that agrees is fine" "0/1" "$rc/$(called 'variable set CI_RUNNER --repo acme/app --body local')"
 adopt GH_WF="$work/wf-noguard" -- --label acme-ci
 record "snippets carry the chosen label in the expression and the guard" "yes/yes" "$(has "$out" "runs-on: $expr_acme")/$(has "$out" '          label: acme-ci')"
+
+# Two guards: a stale one on the default label, whose check fails, and a
+# passing one on acme-ci. The routed jobs count under either guard, and the
+# passing guard's label is the one the snippet and messages use.
+adopt GH_WF="$work/wf-twoguards" --
+record "two guards, one stale: not ready, with the failing check" "nonzero/yes/no" \
+  "$(nonzero "$rc")/$(has "$out" 'would fail')/$(has "$out" 'no job uses the routing expression')"
+record "...the routed jobs are listed from the passing guard" "yes/yes" \
+  "$(has "$out" '            ci.yml:lint')/$(has "$out" '            ci.yml:test')"
+record "...the passing guard's label is the one advised" "yes/no" \
+  "$(has "$out" "runs-on: $expr_acme")/$(has "$out" "runs-on: $expr")"
 
 # ── Group access waits for the routing ─────────────────────────────────────
 echo "group access order"

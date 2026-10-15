@@ -131,6 +131,48 @@ else
   echo "  ok   --print-expression with a reserved label (fail)"; pass=$((pass + 1))
 fi
 
+# A key named `runs-on:` outside `jobs:` — a workflow_dispatch input, say — is
+# not routing and must not fail the check (it would read as an empty, hence
+# multi-line, runs-on).
+dispatch="$(mktemp -d)"
+printf '%s\n' \
+  'on:' \
+  '  workflow_dispatch:' \
+  '    inputs:' \
+  '      runs-on:' \
+  '        description: where to run' \
+  '        default: hosted' \
+  'jobs:' \
+  '  build:' \
+  '    runs-on: ubuntu-latest' \
+  '    steps:' \
+  '      - run: echo build' >"$dispatch/ci.yml"
+if python3 "$SCRIPT" --workflows-dir "$dispatch" --expected "" >/dev/null 2>&1; then
+  echo "  ok   a runs-on key under on: is not routing (pass)"; pass=$((pass + 1))
+else
+  echo "  FAIL a runs-on key under on: is not routing: wanted pass, got fail"; fail=$((fail + 1))
+fi
+rm -rf "$dispatch"
+
+# A workflow indented four spaces: --list and the expected list must still
+# name its job, not "None".
+indent="$(mktemp -d)"
+printf '%s\n' \
+  'on: [pull_request]' \
+  'jobs:' \
+  '    changes:' \
+  "        runs-on: ${base_expr}" \
+  '        steps:' \
+  '            - run: echo changes' >"$indent/ci.yml"
+check "a four-space workflow: the job is attributed" "ci.yml:changes" \
+  "$(python3 "$SCRIPT" --workflows-dir "$indent" --list)"
+if python3 "$SCRIPT" --workflows-dir "$indent" --expected "ci.yml:changes" >/dev/null 2>&1; then
+  echo "  ok   a four-space workflow checks clean (pass)"; pass=$((pass + 1))
+else
+  echo "  FAIL a four-space workflow checks clean: wanted pass, got fail"; fail=$((fail + 1))
+fi
+rm -rf "$indent"
+
 # A missing directory must fail, not pass vacuously.
 if python3 "$SCRIPT" --workflows-dir /nonexistent --expected "" >/dev/null 2>&1; then
   echo "  FAIL missing workflows dir: wanted fail, got pass"; fail=$((fail + 1))

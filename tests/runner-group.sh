@@ -53,6 +53,16 @@ echo "limactl $*" >>"$CALLS"
 case "$1" in
   --version) echo "limactl version 2.2.0" ;;
   list) printf '%s' "${LIMA_STATUS:-}" ;;
+  shell)
+    case "$*" in
+      *"test -e /Users"*)
+        [ -n "${LIMA_SEES_USERS:-}" ] && exit 0
+        exit 1
+        ;;
+    esac
+    if [ -n "${LIMA_SHELL_FAIL:-}" ]; then echo "limactl: could not connect" >&2; exit 1; fi
+    printf '%s' "${LIMA_SHELL_OUT:-}"
+    ;;
 esac
 EOF
 chmod +x "$stubs/uname" "$stubs/limactl"
@@ -185,15 +195,27 @@ record "a bad URL is refused before an existing VM is touched" "nonzero/yes/0" "
 # ── wait_online ────────────────────────────────────────────────────────────
 echo "wait_online"
 printf 'other\tonline\tself-hosted\tDefault\nlima-ci-runner\toffline\tself-hosted,Linux\tlocal-ci\n' >"$work/runners-offline"
-printf 'lima-ci-runner\tonline\tself-hosted,Linux,ARM64,local-ci\tlocal-ci\n' >"$work/runners-online"
+printf 'lima-ci-runner\tonline\tself-hosted,Linux,ARM64,local-ci\t7\n' >"$work/runners-online"
 printf 'lima-ci-runner\tonline\tself-hosted,Linux,ARM64,local-ci\t\n' >"$work/runners-nogroup"
+# The runner-groups list as [id, name] rows; wait_online resolves the id to a name.
+printf '7\tlocal-ci\n' >"$work/groups-ids"
+printf '7\tDefault\n' >"$work/groups-ids-other"
 
-run_fn GH_RUNNERS="$work/runners-online" -- wait_online https://github.com/acme lima-ci-runner local-ci
-record "online: reports labels and group" "0/yes" "$rc/$(has "$out" 'lima-ci-runner is online: labels self-hosted,Linux,ARM64,local-ci, group local-ci')"
-record "...from the organization's runners, paginated" "1/1" "$(called 'orgs/acme/actions/runners')/$(called '--paginate')"
+run_fn GH_RUNNERS="$work/runners-online" GH_GROUPS="$work/groups-ids" -- wait_online https://github.com/acme lima-ci-runner local-ci
+record "online: reports labels and the resolved group" "0/yes" "$rc/$(has "$out" 'lima-ci-runner is online: labels self-hosted,Linux,ARM64,local-ci, group local-ci')"
+record "...from the organization's runners and groups, paginated" "1/2" "$(called 'orgs/acme/actions/runners')/$(called '--paginate')"
 
-run_fn GH_RUNNERS="$work/runners-nogroup" -- wait_online https://github.com/acme lima-ci-runner local-ci
-record "no group field from GitHub: the group it registered into" "yes" "$(has "$out" 'group local-ci')"
+run_fn GH_RUNNERS="$work/runners-online" GH_GROUPS="$work/groups-ids-other" -- wait_online https://github.com/acme lima-ci-runner local-ci
+record "the runner registered into another group: observed, with the expected one" \
+  "0/yes/no" "$rc/$(has "$out" 'group Default (expected local-ci)')/$(has "$out" 'group local-ci')"
+
+run_fn GH_RUNNERS="$work/runners-online" GH_LIST_FAIL=1 -- wait_online https://github.com/acme lima-ci-runner local-ci
+record "the groups list cannot be read: the observed id, not the expected name" \
+  "0/yes/no" "$rc/$(has "$out" 'group id 7')/$(has "$out" 'group local-ci')"
+
+run_fn GH_RUNNERS="$work/runners-nogroup" GH_GROUPS="$work/groups-ids" -- wait_online https://github.com/acme lima-ci-runner local-ci
+record "no group id from GitHub: only the labels are claimed" \
+  "0/yes/no" "$rc/$(has "$out" 'is online: labels self-hosted,Linux,ARM64,local-ci')/$(has "$out" 'group')"
 
 run_fn GH_RUNNERS="$work/runners-online" -- wait_online https://github.com/acme/app lima-ci-runner local-ci
 record "a repository runner: read from the repository, no group" "0/1/no" "$rc/$(called 'repos/acme/app/actions/runners')/$(has "$out" 'group')"
@@ -208,6 +230,25 @@ record "gh cannot read the list: the page to check by hand, no failure" "0/yes/1
 
 run_fn GH_RUNNERS="$work/runners-online" -- wait_online https://github.com/acme "" local-ci
 record "no runner name: the page to check by hand" "0/yes/0" "$rc/$(has "$out" 'check that the runner is online at')/$(called 'actions/runners')"
+
+# ── verify_isolation ───────────────────────────────────────────────────────
+echo "verify_isolation"
+run_fn LIMA_SHELL_OUT=0 -- verify_isolation
+record "no host mounts: verified" "0/yes" "$rc/$(has "$out" 'isolation verified: no host mounts')"
+
+run_fn LIMA_SHELL_OUT=2 -- verify_isolation
+record "host mounts: refused" \
+  "nonzero/yes/no" "$(nonzero "$rc")/$(has "$out" 'has host mounts')/$(has "$out" 'isolation verified')"
+
+run_fn LIMA_SHELL_OUT=0 LIMA_SEES_USERS=1 -- verify_isolation
+record "the guest can see /Users: refused" "nonzero/yes" "$(nonzero "$rc")/$(has "$out" 'can see /Users')"
+
+run_fn LIMA_SHELL_FAIL=1 -- verify_isolation
+record "the check cannot run: refused, not read as host mounts" \
+  "nonzero/yes/no" "$(nonzero "$rc")/$(has "$out" 'could not run the isolation check')/$(has "$out" 'has host mounts')"
+
+run_fn LIMA_SHELL_OUT=nonsense -- verify_isolation
+record "an unreadable mount count: refused" "nonzero/yes" "$(nonzero "$rc")/$(has "$out" 'could not read the mount count')"
 
 # ── version ────────────────────────────────────────────────────────────────
 echo "version"

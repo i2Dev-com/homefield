@@ -103,5 +103,9 @@ out="$(python3 "$ROOT/tools/report.py" --repo nope 2>&1)"
 record "a malformed --repo is refused" "yes" "$(echo "$out" | grep -q 'must be <owner>/<repo>' && echo yes || echo no)"
 out="$(python3 "$ROOT/tools/report.py" --repo a/b --since 2026-10-05 --until 2026-10-01 2>&1)"
 record "since after until is refused" "yes" "$(echo "$out" | grep -q 'is after' && echo yes || echo no)"
+out="$(CI_RUNNER_REPORT_FIXTURE="$work/fixture.json" python3 "$ROOT/tools/report.py" \
+  --repo acme/other --since 2026-10-01 --until 2026-10-02 2>&1)"
+record "a fixture without the repository is refused, not a traceback" \
+  "yes" "$(echo "$out" | grep -q 'has no entry for acme/other' && echo yes || echo no)"
 
 summary
