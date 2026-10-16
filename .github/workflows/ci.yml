@@ -1,0 +1,125 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Lint & test
+    runs-on: ${{ vars.CI_RUNNER == 'local' && github.event_name == 'pull_request' && github.actor != 'dependabot[bot]' && !startsWith(github.head_ref, 'dependabot/') && github.event.pull_request.head.repo.full_name == github.repository && fromJSON('["self-hosted","linux","arm64","homefield-ci"]') || 'ubuntu-latest' }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Shellcheck
+        # Hosted ubuntu-latest preinstalls shellcheck; the VM's base package
+        # set stays small and does not, so the job installs a pinned build
+        # when it is missing instead of relying on an untracked prerequisite
+        # (review P1 on PR #30). The pinned hashes are of the release assets
+        # fetched over TLS: koalaman/shellcheck publishes neither API digests
+        # nor a checksums file, so they pin the tarballs, they do not sign
+        # their origin. Hosted currently runs 0.9.0; a fresh VM gets 0.10.0.
+        env:
+          SHELLCHECK_VERSION: 0.10.0
+          SHELLCHECK_SHA256_X86_64: 6c881ab0698e4e6ea235245f22832860544f17ba386442fe7e9d629f8cbedf87
+          SHELLCHECK_SHA256_AARCH64: 324a7e89de8fa2aed0d0c28f3dab59cf84c6d74264022c00c22af665ed1a09bb
+        run: |
+          set -euo pipefail
+          if ! command -v shellcheck >/dev/null; then
+            case "$(uname -m)" in
+              x86_64) asset=x86_64; sha256=$SHELLCHECK_SHA256_X86_64 ;;
+              aarch64) asset=aarch64; sha256=$SHELLCHECK_SHA256_AARCH64 ;;
+              *) echo "no shellcheck asset for $(uname -m)" >&2; exit 1 ;;
+            esac
+            tarball="shellcheck-v${SHELLCHECK_VERSION}.linux.${asset}.tar.xz"
+            curl -fsSL -o "$tarball" \
+              "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/${tarball}"
+            echo "${sha256}  ${tarball}" | sha256sum -c -
+            tar -xJf "$tarball"
+            install -m 0755 "shellcheck-v${SHELLCHECK_VERSION}/shellcheck" shellcheck
+            rm -rf "shellcheck-v${SHELLCHECK_VERSION}" "$tarball"
+            export PATH="$PWD:$PATH"
+          fi
+          shellcheck bin/homefield install.sh vm/provision.sh routing-guard/tests/run.sh tests/*.sh
+
+      # Pinned and checksum-verified. Other repositories run this repository's
+      # action to guard their routing, so nothing in its CI executes a download
+      # that has not been verified. A new actionlint version is a deliberate
+      # bump of both values (the asset's `digest` in the GitHub release API).
+      # The runner is arm64 locally (the VM) and x64 hosted, so the asset
+      # follows RUNNER_ARCH; both digests come from the same release.
+      - name: actionlint
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+          ACTIONLINT_SHA256_AMD64: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+          ACTIONLINT_SHA256_ARM64: 325e971b6ba9bfa504672e29be93c24981eeb1c07576d730e9f7c8805afff0c6
+        run: |
+          set -euo pipefail
+          case "$RUNNER_ARCH" in
+            X64) arch=amd64; sha256=$ACTIONLINT_SHA256_AMD64 ;;
+            ARM64) arch=arm64; sha256=$ACTIONLINT_SHA256_ARM64 ;;
+            *) echo "no actionlint asset for RUNNER_ARCH=$RUNNER_ARCH" >&2; exit 1 ;;
+          esac
+          tarball="actionlint_${ACTIONLINT_VERSION}_linux_${arch}.tar.gz"
+          curl -fsSL -o "$tarball" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${tarball}"
+          echo "${sha256}  ${tarball}" | sha256sum -c -
+          tar -xzf "$tarball" actionlint
+          ./actionlint -color
+
+      - name: routing_guard.py fixture suite
+        run: bash routing-guard/tests/run.sh
+
+      - name: Routing label rule, provision.sh and routing_guard.py agree
+        run: bash tests/label-rule.sh
+
+      - name: RUNNER_EXTRA_PACKAGES validation
+        run: bash tests/extra-packages.sh
+
+      - name: RUNNER_URL validation
+        run: bash tests/runner-url.sh
+
+      - name: Guest memory sampler
+        run: bash tests/memwatch.sh
+
+      - name: bin/homefield memory summary
+        run: bash tests/memory-summary.sh
+
+      - name: bin/homefield report
+        run: bash tests/report.sh
+
+      - name: install.sh
+        run: bash tests/install-sh.sh
+
+      - name: Runner group, wait for online, version
+        run: bash tests/runner-group.sh
+
+      - name: bin/homefield adopt
+        run: bash tests/adopt.sh
+
+      # The action as consumers call it, not just the script behind it: inputs
+      # through env, $GITHUB_ACTION_PATH resolution, composite wiring.
+      - name: Action against the clean fixture
+        uses: ./routing-guard
+        with:
+          workflows-dir: routing-guard/tests/base
+          jobs: |
+            ci.yml:changes
+            ci.yml:checks
+
+      # The routing guard, as consumers run it, against this repo's own
+      # workflows: on pull requests the test job above opts in to the local
+      # runner, and it is the only job that may. Pushes to main always run
+      # hosted (the expression requires a pull_request event). It pins the
+      # published release, not the checkout's local action, so `homefield
+      # adopt` counts it.
+      - name: Action against this repo's workflows
+        uses: i2Dev-com/homefield/routing-guard@v0.1.0
+        with:
+          jobs: |
+            ci.yml:test

@@ -1,0 +1,31 @@
+name: Bug report
+description: Something in bin/homefield, provision.sh, the VM or routing-guard does not work as documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        A way for job code to escape the VM, read the host's files or
+        credentials, or bypass the routing guard is a security issue: report
+        it privately instead (see SECURITY.md). Reaching the host's network
+        services is a known limitation (#18), fine to discuss here.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: The command or workflow you ran, what you expected, and what happened instead. Paste output.
+    validations:
+      required: true
+  - type: textarea
+    id: status
+    attributes:
+      label: bin/homefield status
+      description: Output of `bin/homefield status` (add --instance if you use one), if the runner is involved.
+      render: text
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: macOS, `limactl --version`, and the routing-guard tag or commit.
+    validations:
+      required: true
