@@ -71,6 +71,10 @@ install:
                      Created if missing: selected repositories, no public ones.
                      On the GitHub Free plan, use Default: custom groups
                      need Team or Enterprise
+  --group-exists     the group exists and you checked it (selected
+                     repositories, public ones off): go on when gh cannot
+                     list the groups, instead of asking. Registration still
+                     fails if the group is missing
   --packages "A B"   extra apt packages (RUNNER_EXTRA_PACKAGES)
   --cpus N           VM CPUs, when creating it (default: vm/lima.yaml)
   --memory GIB       VM memory in GiB, when creating it (default: vm/lima.yaml)
@@ -408,13 +412,30 @@ list_groups_ids() {
 group_unchecked() {
   echo "homefield: could not check or create the runner group ${1}: ${2}" >&2
   echo "homefield: create it by hand (docs/runbook.md, \"Runner group\"): selected repositories, public repositories off." >&2
-  [ -t 0 ] || die "stopping: the runner group ${1} is unchecked and there is no terminal to ask"
+  [ -t 0 ] || die "stopping: the runner group ${1} is unchecked and there is no terminal to ask (if you created and checked it, pass --group-exists)"
   local answer
   read -rp "Continue without checking the group? [y/N] " answer
   case "$answer" in
     [Yy]*) ;;
     *) die "stopped: create the group ${1}, then run this again" ;;
   esac
+}
+
+# group_assumed <group> <why>: with --group-exists, a group gh cannot list is
+# taken as there, and the closing message still says it is unchecked. Only for
+# a group gh could not look at: a list that worked and lacks it is not
+# overridden. Registration fails if the group is missing after all.
+GROUP_EXISTS=0
+group_assumed() {
+  [ "$GROUP_EXISTS" = 1 ] || return 1
+  log "runner group ${1}: not checked (${2}); going on because of --group-exists"
+}
+
+# token_hint: without a terminal offer_scope_refresh says nothing, so say here
+# that gh may have a login with admin:org behind GITHUB_TOKEN or GH_TOKEN.
+token_hint() {
+  [ ! -t 0 ] && [ -n "${GITHUB_TOKEN:-}${GH_TOKEN:-}" ] || return 0
+  echo "homefield: GITHUB_TOKEN or GH_TOKEN is set, and gh uses it instead of its stored login. If that login has admin:org, run this again with them empty for this one command: GITHUB_TOKEN= GH_TOKEN= homefield install ..." >&2
 }
 
 # lower <text>: in lower case (bash 3.2 has no ${var,,}).
@@ -444,7 +465,7 @@ ensure_group() {
   GROUP_STATE=unchecked
 
   if ! command -v gh >/dev/null; then
-    group_unchecked "$group" "gh is not installed"
+    group_assumed "$group" "gh is not installed" || group_unchecked "$group" "gh is not installed"
     return 0
   fi
   if ! groups="$(list_groups "$org")"; then
@@ -454,6 +475,8 @@ ensure_group() {
       why="gh could not list the organization's runner groups (needs an org owner with the admin:org scope)"
     fi
     if [ -n "$why" ]; then
+      group_assumed "$group" "$why" && return 0
+      token_hint
       group_unchecked "$group" "$why"
       return 0
     fi
@@ -482,6 +505,8 @@ ensure_group() {
   done <<<"$groups"
   [ "$found" = 0 ] || return 0
 
+  [ "$GROUP_EXISTS" = 0 ] ||
+    echo "homefield: warning: --group-exists, but gh listed the runner groups of ${org} and ${group} is not among them" >&2
   log "creating runner group ${group}: selected repositories, public repositories off"
   if ! out="$(gh api -X POST "orgs/${org}/actions/runner-groups" -f name="$group" -f visibility=selected \
     -F allows_public_repositories=false 2>&1)"; then
@@ -597,6 +622,7 @@ cmd_install() {
       --cpus) cpus="${2:?--cpus needs a value}"; shift 2 ;;
       --memory) memory="${2:?--memory needs a value}"; shift 2 ;;
       --no-autostart) autostart=0; shift ;;
+      --group-exists) GROUP_EXISTS=1; shift ;;
       *) die "install: unknown option $1 (see bin/homefield help)" ;;
     esac
   done
