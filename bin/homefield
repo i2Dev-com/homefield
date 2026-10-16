@@ -147,7 +147,8 @@ your gh credentials allow it (org owner with admin:org, or repository admin);
 otherwise you are asked to paste one from the "New runner" page. Tokens go to
 the VM on stdin, never on a command line. For an organization, gh also reads
 and creates the runner group, which needs the same admin:org scope: on a
-terminal you are offered `gh auth refresh -s admin:org` if it is missing.
+terminal you are offered `gh auth refresh -s admin:org` if it is missing;
+without one, pass --group-exists for a group you created and checked by hand.
 EOF
 }
 
