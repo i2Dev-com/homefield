@@ -241,6 +241,18 @@ main() {
   WORK=""
   trap - EXIT
   local installed="$INSTALL_DIR/bin/homefield"
+  # Run again with no arguments on a Mac that already has the VM, this is a
+  # tool update, with or without a terminal: `install` there would upgrade the
+  # VM and briefly stop the runner, which nobody asked for, and advice to set
+  # up a runner would be wrong.
+  if [ $# -eq 0 ] && vm_exists; then
+    echo
+    echo "The VM ${HOMEFIELD_INSTANCE:-homefield} already exists and was not changed. To update it too:"
+    echo "  homefield upgrade"
+    echo "If its setup never finished (homefield status shows no registration), finish it with:"
+    echo "  homefield install"
+    return 0
+  fi
   if [ $# -gt 0 ] || have_tty; then
     if v2_vm_left "$@"; then
       echo
@@ -249,17 +261,6 @@ main() {
       echo "Follow \"Migrating from ci-runner (v2)\" in docs/runbook.md, then run: homefield install"
       echo "  https://github.com/${REPO}/blob/${REF}/docs/runbook.md#migrating-from-ci-runner-v2"
       return 1
-    fi
-    # Run again with no arguments on a Mac that already has the VM, this is a
-    # tool update: `install` there would upgrade the VM and briefly stop the
-    # runner, which nobody asked for.
-    if [ $# -eq 0 ] && vm_exists; then
-      echo
-      echo "The VM ${HOMEFIELD_INSTANCE:-homefield} already exists and was not changed. To update it too:"
-      echo "  homefield upgrade"
-      echo "If its setup never finished (homefield status shows no registration), finish it with:"
-      echo "  homefield install"
-      return 0
     fi
     echo
     if have_tty; then

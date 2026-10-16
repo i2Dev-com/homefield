@@ -54,6 +54,13 @@ Compatible with v3: the v3 tag moves to include it.
   not logged in, no access) it prints one line saying so; the exit status is
   0 either way.
 
+### Fixed
+
+- `install.sh` run again without a terminal (piped from an agent's shell, for
+  example) on a Mac that already has the VM ended with "Next, set up the
+  runner". It now says the VM exists and was not changed, as it already did
+  on a terminal.
+
 ### Deprecated
 
 - `i2Dev-com/homefield/verify-routing@v3` and its `expected:` input. It stays
