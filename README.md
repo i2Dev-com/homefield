@@ -1,5 +1,17 @@
 # HomeField
 
+<p align="center">
+  <img src="docs/assets/homefield-banner.png" alt="HomeField: run pull-request CI on your own Mac, in an isolated VM, with a hosted fallback" width="840">
+</p>
+
+<p align="center">
+  <a href="https://github.com/i2Dev-com/homefield/actions/workflows/ci.yml"><img src="https://github.com/i2Dev-com/homefield/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License: MIT"></a>
+  <a href="#requirements-and-limitations"><img src="https://img.shields.io/badge/platform-macOS%20Apple%20Silicon-lightgrey?logo=apple" alt="Platform: macOS on Apple Silicon"></a>
+  <a href="https://lima-vm.io"><img src="https://img.shields.io/badge/VM-Lima%20%E2%89%A5%201.1-4e9a06" alt="VM: Lima 1.1 or later"></a>
+  <a href="https://docs.github.com/en/actions"><img src="https://img.shields.io/badge/GitHub%20Actions-self--hosted%20runner-2088FF?logo=githubactions&amp;logoColor=white" alt="GitHub Actions self-hosted runner"></a>
+</p>
+
 Run selected pull-request jobs from GitHub Actions on a self-hosted runner in
 an isolated VM on your Mac, instead of on GitHub-hosted runners. GitHub stays
 where CI is triggered, where logs live and where checks report; only the
@@ -228,6 +240,7 @@ pull-request code away from the Mac it runs on.
 | [`tools/`](tools) | Python helpers behind `homefield report` and `homefield adopt` |
 | [`docs/adopting.md`](docs/adopting.md) | Checklist for routing a repository's jobs to the runner |
 | [`docs/runbook.md`](docs/runbook.md) | Operating it: setup, runner group, switching, failure modes, maintenance, moving, removal |
+| [`docs/assets/`](docs/assets) | The banner image and its SVG source |
 
 ## Development
 
