@@ -1,12 +1,24 @@
 # Changelog
 
-Versions are the tags consumers pin, `routing-guard@vN`. A compatible change
-moves the current major tag; a change that makes a previously passing workflow
-fail is a new major (see [README](README.md#development)).
+Versions are the tags consumers pin, `routing-guard@vN`. Merged changes wait
+on `main`, under *Unreleased*, until a release: a compatible release moves the
+current major tag, and a change that makes a previously passing workflow fail
+is a new major (see [README](README.md#development)).
 
 ## Unreleased
 
-Compatible with v3: the v3 tag moves to include it.
+Not in the v3 tag yet; compatible with v3.
+
+### Fixed
+
+- `install.sh` run again without a terminal (piped from an agent's shell, for
+  example) on a Mac that already has the VM ended with "Next, set up the
+  runner". It now says the VM exists and was not changed, as it already did
+  on a terminal.
+
+## v3 update (2026-10-15)
+
+Compatible with v3. The v3 tag (4a7a3f0) includes it.
 
 ### Added
 
@@ -53,13 +65,6 @@ Compatible with v3: the v3 tag moves to include it.
   changelog when a newer major version exists. When it cannot check (no `gh`,
   not logged in, no access) it prints one line saying so; the exit status is
   0 either way.
-
-### Fixed
-
-- `install.sh` run again without a terminal (piped from an agent's shell, for
-  example) on a Mac that already has the VM ended with "Next, set up the
-  runner". It now says the VM exists and was not changed, as it already did
-  on a terminal.
 
 ### Deprecated
 
