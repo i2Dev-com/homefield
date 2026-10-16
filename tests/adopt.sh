@@ -566,15 +566,15 @@ route_case() {
   record "$desc" "$wantrc/$wanth" "$(nonzero "$rc")/$(called 'variable set')/$(called 'X PUT')/$(has "$out" "$needle")"
 }
 may_not_run='the routing guard may not run on every pull request'
-recognizes="adopt recognizes ${action%@*} at an exact release tag such as ${action#*@}, or at a full commit SHA"
+recognizes="adopt recognizes ${action}, the release this copy of homefield checks with, or a full commit SHA"
 route_case "another repository's routing-guard: not a guard, and says what it uses" wf-src-other not "ci.yml:9 uses other-org/homefield/routing-guard@v0.1.0, but $recognizes"
 route_case "@v1, a major only: not a guard" wf-src-v1 not "uses i2Dev-com/homefield/routing-guard@v1, but $recognizes"
 route_case "@v3, a major only: not a guard" wf-src-v3 not "uses i2Dev-com/homefield/routing-guard@v3, but $recognizes"
 route_case "@v0.1, a minor only: not a guard" wf-src-minor not "uses i2Dev-com/homefield/routing-guard@v0.1, but $recognizes"
 route_case "@v0.1.0-rc1, a suffix: not a guard" wf-src-suffix not "uses i2Dev-com/homefield/routing-guard@v0.1.0-rc1, but $recognizes"
 route_case "the current release, @v0.1.0: ready" wf-on-list ready "routing: ready, the guard passes and these jobs are routed: ci.yml:lint"
-route_case "a later exact release, @v0.2.0: ready" wf-src-later ready "routing: ready, the guard passes and these jobs are routed: ci.yml:lint"
-route_case "...with no commit warning" wf-src-later ready "!pinned to a commit"
+route_case "another exact release, @v0.2.0: not a guard, its rules may differ" wf-src-later not "uses i2Dev-com/homefield/routing-guard@v0.2.0, but $recognizes"
+route_case "...and says to pin this release or install that one" wf-src-later not "v0.2.0 may have other rules: pin v0.1.0, or install homefield v0.2.0"
 route_case "@main: not a guard" wf-src-main not "uses i2Dev-com/homefield/routing-guard@main, but $recognizes"
 route_case "...and nothing else is said to be usable" wf-src-main not "no routing-guard step that runs on pull requests"
 route_case "a 39-character ref is not a commit: not a guard" wf-src-short not "but $recognizes"
@@ -701,7 +701,7 @@ printf 'on: [push, pull_request]\r\njobs:\r\n  j:\r\n    steps:\r\n      - uses:
 printf 'jobs:\n  j:\n    steps:\n      - uses: o/r/routing-guard@v0.1.0\n' >"$shapes/c.yml"
 echo "not a workflow" >"$shapes/d.txt"
 got="$(python3 -I "$ROOT/tools/adopt.py" guards "$shapes")"
-want="$(printf 'a.yml:6\tok\thomefield-ci\t-\t-\tpull_request\thosted\tubuntu-latest\ta.yml:one a.yml:two\na.yml:15\tok\tacme-ci\t-\t-\tpull_request\thosted\tubuntu-latest\ta.yml:one a.yml:two\na.yml:22\tok\thomefield-ci\t-\t-\tpull_request\thosted\tubuntu-latest\ta.yml:one\nb.yaml:5\tok\thomefield-ci\t-\t-\tpull_request\thosted\tubuntu-latest\tb.yml:j\nc.yml:4\tsource\thomefield-ci\tthe routing-guard step at c.yml:4 uses o/r/routing-guard@v0.1.0, but adopt recognizes i2Dev-com/homefield/routing-guard at an exact release tag such as v0.1.0, or at a full commit SHA (docs/adopting.md, step 3)\t-\tpull_request\thosted\tubuntu-latest\t')"
+want="$(printf 'a.yml:6\tok\thomefield-ci\t-\t-\tpull_request\thosted\tubuntu-latest\ta.yml:one a.yml:two\na.yml:15\tok\tacme-ci\t-\t-\tpull_request\thosted\tubuntu-latest\ta.yml:one a.yml:two\na.yml:22\tok\thomefield-ci\t-\t-\tpull_request\thosted\tubuntu-latest\ta.yml:one\nb.yaml:5\tok\thomefield-ci\t-\t-\tpull_request\thosted\tubuntu-latest\tb.yml:j\nc.yml:4\tsource\thomefield-ci\tthe routing-guard step at c.yml:4 uses o/r/routing-guard@v0.1.0, but adopt recognizes i2Dev-com/homefield/routing-guard@v0.1.0, the release this copy of homefield checks with, or a full commit SHA (docs/adopting.md, step 3)\t-\tpull_request\thosted\tubuntu-latest\t')"
 record "guards: shapes of the step (block, inline, quoted, uses after with, CRLF, none, another action)" "$want" "$got"
 got="$(python3 -I "$ROOT/tools/adopt.py" guards "$work/wf-i2dev")"
 want="$(printf 'ci-checks.yml:9\tok\thomefield-ci\t-\tci.yml:5: the pull_request trigger has branches, paths-ignore filters;ci.yml:19: job checks, which calls ci-checks.yml, has an if: condition\tpull_request\thosted\tubuntu-latest\tci-checks.yml:lint ci-checks.yml:test')"
@@ -744,7 +744,7 @@ mkdir -p "$work/refs-shape"
   done
 } >"$work/refs-shape/ci.yml"
 got="$(python3 -I "$ROOT/tools/adopt.py" guards "$work/refs-shape" | cut -f2 | tr '\n' ' ')"
-record "guards: exact release tags and a full SHA are guards; a major, a minor, a suffix, another case and a branch are not" "ok ok ok source source source source source source ok " "$got"
+record "guards: this release and a full SHA are guards; other releases, a major, a minor, a suffix, another case and a branch are not" "ok source source source source source source source source ok " "$got"
 record "guards: a directory with no workflow files has none" "" "$(mkdir -p "$work/empty" && python3 -I "$ROOT/tools/adopt.py" guards "$work/empty")"
 
 cat >"$shapes/e.yml" <<'EOF'

@@ -40,7 +40,8 @@ First public release.
 - **`routing-guard` action.** Fails CI unless every job that can reach the
   runner uses the one reviewed `runs-on` expression, with its guards, and the
   set of routed jobs is the reviewed list. `homefield adopt` counts a guard
-  pinned to an exact release tag or a full commit SHA.
+  pinned to its own release or a full commit SHA, since it checks the
+  workflow with its own copy of the guard's rules.
 - **`homefield version`.** Shows the installed ref and commit, and checks
   through `gh` whether the ref has moved or a later release exists.
 - **`homefield memory` and `homefield report`.** Per-day memory use and

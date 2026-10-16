@@ -7,10 +7,11 @@ is enough for the shapes GitHub workflows take and fails safe (a guard it
 cannot read counts as no guard, so adopt does not switch the repository on).
 
 A guard is a step that uses ACTION_PATH (the owner and repository compared
-without case) at an exact release tag (v0.1.0, v0.2.0, ...) or at a full
-commit SHA (accepted with a warning), and that can run on a pull request: see
-check_guard. Major-only tags (@v3), branches and any other ref are not
-recognized.
+without case) at RELEASE, the release whose rules this copy's routing_guard.py
+checks, or at a full commit SHA (accepted with a warning), and that can run on
+a pull request: see check_guard. Other releases, major-only tags (@v3),
+branches and any other ref are not recognized: adopt cannot vouch for rules it
+does not have.
 
   adopt.py guards DIR       one line per step that uses some routing guard:
                             file:line <TAB> status <TAB> label <TAB> blocking
@@ -54,7 +55,7 @@ DEFAULT_FALLBACK = "ubuntu-latest"
 
 # A step or job `uses:`; group 3 is the raw value.
 USES = re.compile(r"^(\s*)(-\s+)?uses:\s*(.*?)\s*$")
-# The refs adopt recognizes: an exact release tag, or a full commit SHA.
+# An exact release tag other than RELEASE: not recognized, but named as such.
 RELEASE_REF = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+")
 SHA_REF = re.compile(r"[0-9a-fA-F]{40}")
 # What a step that uses some routing guard (any owner, any ref) has in `uses:`.
@@ -368,8 +369,8 @@ def guards(directory):
     """(file:line, status, label, blocking, warnings, events, dependabot,
     fallback, job entries)
     for every step that uses some routing guard. The status is "source" for
-    one that is not ACTION_PATH at an exact release tag or a full commit SHA
-    (another repository, a branch, a major-only tag), "blocked" for one that
+    one that is not ACTION_PATH at RELEASE or a full commit SHA (another
+    repository, another release, a branch, a major-only tag), "blocked" for one that
     cannot run on a pull request, and "ok" for a usable guard."""
     files = {}
     for name in workflow_files(directory):
@@ -389,8 +390,10 @@ def guards(directory):
             jobs = [e for e in re.split(r"[\s,]+", values.get("jobs", "")) if e]
             label = values.get("label") or DEFAULT_LABEL
             sha = SHA_REF.fullmatch(ref) is not None
-            if path.lower() != ACTION_PATH.lower() or not (sha or RELEASE_REF.fullmatch(ref)):
-                reason = f"the routing-guard step at {where} uses {value}, but adopt recognizes {ACTION_PATH} at an exact release tag such as {RELEASE}, or at a full commit SHA (docs/adopting.md, step 3)"
+            if path.lower() != ACTION_PATH.lower() or not (sha or ref == RELEASE):
+                reason = f"the routing-guard step at {where} uses {value}, but adopt recognizes {ACTION}, the release this copy of homefield checks with, or a full commit SHA (docs/adopting.md, step 3)"
+                if path.lower() == ACTION_PATH.lower() and RELEASE_REF.fullmatch(ref):
+                    reason += f". {ref} may have other rules: pin {RELEASE}, or install homefield {ref} (homefield version)"
                 found.append((where, "source", label, [reason], [], DEFAULT_EVENTS, DEFAULT_DEPENDABOT, DEFAULT_FALLBACK, jobs))
                 continue
             blocks, warns = check_guard(name, at, files)

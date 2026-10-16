@@ -56,8 +56,9 @@ If the runner was registered with a `RUNNER_LABEL` other than `homefield-ci`, pu
 that label in the expression in step 2 and pass it here as `label:`.
 Routing another job later means adding it here in the same PR, which keeps it
 a deliberate, reviewed change.
-The step has to use `i2Dev-com/homefield/routing-guard` at an exact release
-tag (`@v0.1.0`; `@v0` or `@main` do not count) or a full commit SHA, and be in
+The step has to use `i2Dev-com/homefield/routing-guard@v0.1.0`, the release
+your installed `homefield` checks with (`homefield version` shows it), or a
+full commit SHA; another release, `@v0` or `@main` do not count. It must be in
 a workflow that runs on `pull_request`, with no `if: false` on the step or its
 job; `homefield adopt` does not count anything else as a guard. A reusable
 workflow works if one of the repository's `pull_request` workflows calls it
@@ -135,11 +136,13 @@ step:
 2. **Routing.** Downloads the repository's `.github/workflows` at its default
    branch and runs the same check as the guard. It is ready when a
    `routing-guard` step is there, passes, and at least one job is routed.
-   The step must use `i2Dev-com/homefield/routing-guard` at an exact release
-   tag such as `@v0.1.0` (a full commit SHA is accepted, with a warning) in a
-   workflow that runs on pull requests;
-   anything else, such as another repository's action, a tag that is not an
-   exact release (`@v1`), a branch (`@main`), a push-only workflow,
+   The step must use `i2Dev-com/homefield/routing-guard` at the release
+   `homefield` itself is (`@v0.1.0`; a full commit SHA is accepted, with a
+   warning) in a workflow that runs on pull requests, because `adopt` checks
+   the workflow with its own copy of the guard's rules;
+   anything else, such as another repository's action, another release (update
+   the pin or `homefield` so they match), a tag that is not an exact release
+   (`@v1`), a branch (`@main`), a push-only workflow,
    `pull_request_target` or an `if: false`, is not a guard. A reusable workflow (`workflow_call`) counts when a workflow that
    runs on `pull_request` calls it from a job (one level; deeper chains are
    not followed). Branch or path filters on the `pull_request` trigger, and
