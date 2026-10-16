@@ -155,7 +155,8 @@ default `v0.1.0`) into `~/.local/share/homefield` (`HOMEFIELD_HOME`), writes a
 on your PATH), installs or upgrades Lima (1.1 or later) if you agree, and runs `homefield install`.
 Running it again replaces the tool, which is how it is upgraded; with no
 arguments it leaves an existing VM alone (`homefield upgrade` updates that).
-`homefield version` shows the ref and commit, and asks GitHub (through `gh`)
+`homefield version` shows the ref and commit, and asks GitHub (through `gh`, or
+the public API with `curl` when `gh` is missing)
 whether that ref has moved since: if so it prints the command that updates the
 tool. If the ref is a release tag and a later release exists, it says so, to
 read `CHANGELOG.md` for breaking changes first, and prints the command that
