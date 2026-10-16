@@ -288,6 +288,13 @@ new_env gh curl limactl
 run_install HOMEFIELD_TTY="$work/answer" FAKE_VM_STATUS=Running
 record "VM exists, terminal, no arguments: tool only, install not run" "0/no/yes" "$rc/$(has "$out" 'homefield stub')/$(has "$out" 'homefield upgrade')"
 new_env gh curl limactl
+run_install FAKE_VM_STATUS=Running
+record "VM exists, no terminal, no arguments: says it exists, no set-up advice" "0/no/yes/no" \
+  "$rc/$(has "$out" 'homefield stub')/$(has "$out" 'already exists and was not changed')/$(has "$out" 'Next, set up the runner')"
+new_env gh curl limactl
+run_install
+record "no VM, no terminal, no arguments: set-up advice" "0/yes" "$rc/$(has "$out" 'Next, set up the runner')"
+new_env gh curl limactl
 run_install HOMEFIELD_TTY="$work/answer" FAKE_VM_STATUS=Running HOMEFIELD_INSTANCE=other
 record "...the instance named by HOMEFIELD_INSTANCE is the one looked up" "1" "$(called '^limactl list --format {{.Status}} other$')"
 new_env gh curl limactl
