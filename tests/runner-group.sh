@@ -173,6 +173,29 @@ record "a repository URL has no group: no gh call" "0/0" "$rc/$(wc -l <"$calls" 
 run_fn GH_LIST_FAIL=1 -- ensure_group https://github.com/acme homefield-ci
 record "when gh cannot list the groups and there is no terminal: stops" "nonzero/yes/yes" "$(nonzero "$rc")/$(has "$out" 'could not check or create the runner group homefield-ci')/$(has "$out" 'no terminal to ask')"
 record "...says where the manual steps are, and never creates" "yes/0" "$(has "$out" 'Runner group')/$(called POST)"
+record "...and names --group-exists" "yes" "$(has "$out" 'pass --group-exists')"
+run_fn GH_LIST_FAIL=1 GITHUB_TOKEN=x -- ensure_group https://github.com/acme homefield-ci
+record "...with GITHUB_TOKEN set, says to run again with it empty" "nonzero/yes" "$(nonzero "$rc")/$(has "$out" 'GITHUB_TOKEN= GH_TOKEN= homefield install')"
+run_fn GH_LIST_FAIL=1 -- ensure_group https://github.com/acme homefield-ci
+record "...and without it, does not" "no" "$(has "$out" 'GITHUB_TOKEN=')"
+
+# --group-exists: the caller vouches for a group gh cannot look at.
+# shellcheck disable=SC2016  # expanded by the inner bash
+run_fn GH_LIST_FAIL=1 -- eval 'GROUP_EXISTS=1; ensure_group https://github.com/acme homefield-ci; echo "state=$GROUP_STATE"'
+record "--group-exists, gh cannot list: goes on, still unchecked, never creates" "0/yes/state=unchecked/no/0" \
+  "$rc/$(has "$out" 'going on because of --group-exists')/$(echo "$out" | grep '^state=')/$(has "$out" 'no terminal to ask')/$(called POST)"
+mv "$stubs/gh" "$work/gh.away"
+# shellcheck disable=SC2016  # expanded by the inner bash
+run_fn -- eval 'GROUP_EXISTS=1; ensure_group https://github.com/acme homefield-ci'
+record "--group-exists without gh: goes on" "0/yes" "$rc/$(has "$out" 'going on because of --group-exists')"
+mv "$work/gh.away" "$stubs/gh"
+# shellcheck disable=SC2016  # expanded by the inner bash
+run_fn GH_GROUPS="$work/groups-none" -- eval 'GROUP_EXISTS=1; ensure_group https://github.com/acme homefield-ci; echo "state=$GROUP_STATE"'
+record "--group-exists, but the list works and lacks it: warned, and created as usual" "0/yes/state=created" \
+  "$rc/$(has "$out" 'is not among them')/$(echo "$out" | grep '^state=')"
+# shellcheck disable=SC2016  # expanded by the inner bash
+run_fn GH_GROUPS="$work/groups-none" "GH_CREATE_ERR=gh: Server Error (HTTP 500)" -- eval 'GROUP_EXISTS=1; ensure_group https://github.com/acme homefield-ci'
+record "...and when that creation fails, it still stops" "nonzero/yes" "$(nonzero "$rc")/$(has "$out" 'no terminal to ask')"
 
 # No gh at all.
 mv "$stubs/gh" "$work/gh.away"
@@ -193,6 +216,10 @@ record "no VM, a personal account: refused before the VM is created" "nonzero/ye
 
 run_fn GH_GROUPS="$work/groups-none" "GH_CREATE_ERR=gh: Upgrade to GitHub Team (HTTP 403)" -- cmd_install --url https://github.com/acme --group Default
 record "--group Default skips the group step" "nonzero/no" "$(nonzero "$rc")/$(has "$out" 'Team')"
+
+run_fn GH_LIST_FAIL=1 -- cmd_install --url https://github.com/acme --group-exists
+record "install --group-exists: past the group step to creating the VM" "yes/no/yes" \
+  "$(has "$out" 'going on because of --group-exists')/$(has "$out" 'no terminal to ask')/$([ "$(called 'limactl create')" -gt 0 ] && echo yes || echo no)"
 
 run_fn LIMA_STATUS=Running -- cmd_install --url not-a-url
 record "a bad URL is refused before an existing VM is touched" "nonzero/yes/0" "$(nonzero "$rc")/$(has "$out" '--url must be')/$(called 'limactl start')"

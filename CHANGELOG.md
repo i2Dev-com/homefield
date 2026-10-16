@@ -10,6 +10,13 @@ Compatible with v3: the v3 tag moves to include it.
 
 ### Added
 
+- `homefield install --group-exists`: when gh cannot list the organization's
+  runner groups (no `admin:org`), go on with a group you created and checked
+  by hand instead of asking, which made a run without a terminal stop
+  ([#37](https://github.com/i2Dev-com/homefield/issues/37)). Without a
+  terminal, the stop message now names the flag and, when `GITHUB_TOKEN` or
+  `GH_TOKEN` is set, says to run again with them empty so gh uses its stored
+  login.
 - Routing policy options on `routing-guard` and `homefield adopt` (same names
   for the action inputs, the `routing_guard.py` flags and the `adopt` flags).
   The defaults produce today's expression byte for byte, so no existing

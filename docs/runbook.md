@@ -129,7 +129,14 @@ creating groups needs the `admin:org` scope. If gh lacks it, `install` on a
 terminal offers to run `gh auth refresh -h github.com -s admin:org` (it does
 not when `GITHUB_TOKEN` or `GH_TOKEN` is set, which gh uses instead of its
 stored login), and without gh it asks before going on with the group
-unchecked. Check the group by hand:
+unchecked. Without a terminal it cannot ask, so it stops. If you created and
+checked the group by hand, pass `--group-exists` to go on without asking: the
+closing message still calls the group unchecked, and registration fails if
+it is missing. With `GITHUB_TOKEN` or `GH_TOKEN` set, running the command
+with them empty (`GITHUB_TOKEN= GH_TOKEN= homefield install ...`) lets gh use
+its stored login instead, which may have `admin:org`. A group list that
+works and does not show the group is not overridden: `install` creates the
+group as usual. Check the group by hand:
 
 ```bash
 gh api orgs/<org>/actions/runner-groups -q '.runner_groups[] | "\(.id) \(.name) \(.visibility) public=\(.allows_public_repositories)"'
