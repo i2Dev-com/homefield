@@ -16,6 +16,9 @@ fail, such as a new guard in the routing expression, bumps the minor version
 - The README installs with `curl` now that the repository is public, and
   `homefield version` prints the same `curl` one-liner when an update is
   available, in place of the `gh api` one.
+- `homefield version` checks for updates without `gh` too: it reads the
+  public GitHub API with `curl`. `gh`, when installed, is still used first,
+  since it can read a private fork.
 
 ## v0.1.0 (2026-10-16)
 

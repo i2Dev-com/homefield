@@ -384,7 +384,44 @@ printf 'repo=acme/tool\nref=v0.1.0\ncommit=%s\n' "$old" >"$work/inst/.homefield-
 
 out="$(env -i HOME="$work" PATH="$work/nogh" "$BASH" "$work/inst/bin/homefield" version 2>&1 </dev/null)"
 rc=$?
-record "no gh: one line, exit 0" "0/homefield: could not check for updates (gh is not installed)" "$rc/$(printf '%s' "$out" | tail -1)"
+record "neither gh nor curl: one line, exit 0" "0/homefield: could not check for updates (neither gh nor curl is installed)" "$rc/$(printf '%s' "$out" | tail -1)"
+
+# No gh, but curl: the public API, without a login. The fake answers like
+# GitHub: the bare sha for the commits endpoint (Accept: ...sha), and
+# pretty-printed JSON for the tags.
+mkdir -p "$work/vcurl"
+for t in dirname git sed; do ln -s "$(command -v "$t")" "$work/vcurl/$t"; done
+cat >"$work/vcurl/curl" <<'EOF'
+#!/bin/sh
+echo "curl $*" >>"$CALLS"
+if [ -n "${V_CURL_FAIL:-}" ]; then echo "curl: (22) The requested URL returned error: 404" >&2; exit 22; fi
+case "$*" in
+  *api.github.com/repos/*/commits/*) printf '%s' "$V_COMMIT" ;;
+  *api.github.com/repos/*/tags*)
+    echo '['
+    printf '%s\n' "$V_TAGS" | while IFS= read -r t; do
+      printf '  {\n    "name": "%s",\n    "commit": {\n      "sha": "%s"\n    }\n  },\n' "$t" "$V_COMMIT"
+    done
+    echo ']'
+    ;;
+esac
+EOF
+chmod +x "$work/vcurl/curl"
+curl_run() {
+  : >"$calls"
+  out="$(env -i HOME="$work" PATH="$work/vcurl" CALLS="$calls" V_TAGS="$tags_rel" "$@" "$BASH" "$work/inst/bin/homefield" version 2>&1 </dev/null)"
+  rc=$?
+}
+curl_run V_COMMIT="$old"
+record "no gh, curl: up to date, through the public API" "0/homefield: up to date with v0.1.0/1" "$rc/$(printf '%s' "$out" | tail -1)/$(called 'api.github.com/repos/acme/tool/commits/v0.1.0')"
+curl_run V_COMMIT="$old" V_TAGS="$(printf 'v0.1.0\nv0.2.0')"
+record "...a later release from the tags JSON, with the one-liner" "yes/yes" "$(has "$out" 'homefield: v0.2.0 is out (installed: v0.1.0)')/$(has "$out" "curl -fsSL https://raw.githubusercontent.com/acme/tool/v0.2.0/install.sh")"
+curl_run V_COMMIT="$new"
+record "...a moved ref" "yes" "$(has "$out" 'homefield: v0.1.0 has moved to 89abcde')"
+curl_run V_CURL_FAIL=1 V_COMMIT="$old"
+record "...curl failing: one line naming it, exit 0, none of curl's output" "0/yes/no" "$rc/$(has "$out" 'homefield: could not check for updates (curl could not read v0.1.0 in acme/tool; a private repository needs gh)')/$(has "$out" 'returned error')"
+version_run V_COMMIT="$old"
+record "with gh there, gh is used and not curl" "0/0" "$rc/$(called 'curl ')"
 
 version_run V_GH_FAIL=1 V_COMMIT="$old"
 record "gh failing: exit 0, one line, none of gh's output" "0/2/no/no" "$rc/$(printf '%s\n' "$out" | wc -l | tr -d ' ')/$(has "$out" 'Bad credentials')/$(has "$out" 'HTTP 401')"
