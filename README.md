@@ -37,13 +37,13 @@ On an Apple Silicon Mac, in a terminal. While this repository is private, the
 installer is read with `gh`, logged in with access to it:
 
 ```bash
-gh api 'repos/i2Dev-com/homefield/contents/install.sh?ref=v3' -H 'Accept: application/vnd.github.raw' | bash
+gh api 'repos/i2Dev-com/homefield/contents/install.sh?ref=v0.1.0' -H 'Accept: application/vnd.github.raw' | bash
 ```
 
 Once the repository is public, `curl` does the same without `gh`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/i2Dev-com/homefield/v3/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/i2Dev-com/homefield/v0.1.0/install.sh | bash
 ```
 
 This installs or upgrades [Lima](https://lima-vm.io) with Homebrew if it is missing or older than 1.1 (it
@@ -175,15 +175,12 @@ image are options of the action, and the expression changes with them
 `routing-guard` keeps every copy identical and every guard in place:
 
 ```yaml
-      - uses: i2Dev-com/homefield/routing-guard@v3
+      - uses: i2Dev-com/homefield/routing-guard@v0.1.0
         with:
           jobs: |
             ci.yml:lint
             ci.yml:test
 ```
-
-`verify-routing@v3` with `expected:` is the same check under its former name.
-It still works as a deprecated alias until v4.
 
 It also fails on any other `runs-on` that could reach the runner (a bare
 `self-hosted`, a label list, a runner group), because GitHub hands a job to
@@ -236,7 +233,6 @@ pull-request code away from the Mac it runs on.
 | [`vm/lima.yaml`](vm/lima.yaml) | The VM: Ubuntu 24.04 arm64, no host mounts, no forwarding of guest ports to the Mac, no SSH-agent forwarding |
 | [`vm/provision.sh`](vm/provision.sh) | Runs inside the VM: packages, Docker, the checksum-pinned runner, cleanup and idle-time OS update timers, registration. Settings: `RUNNER_URL`, `RUNNER_LABEL`, `RUNNER_NAME`, `RUNNER_GROUP`, `RUNNER_EXTRA_PACKAGES`; hooks in `/etc/homefield/provision.d/` |
 | [`routing-guard/`](routing-guard/action.yml) | The routing guard action |
-| [`verify-routing/`](verify-routing/action.yml) | Deprecated alias of the routing guard (`expected:` for `jobs:`), removed in v4 |
 | [`tools/`](tools) | Python helpers behind `homefield report` and `homefield adopt` |
 | [`docs/adopting.md`](docs/adopting.md) | Checklist for routing a repository's jobs to the runner |
 | [`docs/runbook.md`](docs/runbook.md) | Operating it: setup, runner group, switching, failure modes, maintenance, moving, removal |
@@ -260,13 +256,18 @@ shellcheck bin/homefield install.sh vm/provision.sh routing-guard/tests/run.sh t
 
 ## Versioning
 
-Consumers pin `routing-guard@vN`. Merged changes wait on `main` until a
-release; a compatible release moves the current major tag. A change that
-makes a previously passing workflow fail, such as a new guard in the
-expression, is a new major, because every consumer has to
-update its inline copies at the same time; [`CHANGELOG.md`](CHANGELOG.md)
-says how to upgrade. The docs on `main` can run ahead of the latest tag;
-anything not yet released is listed under *Unreleased*.
+Releases are exact semver tags (`v0.1.0`, `v0.1.1`, `v0.2.0`), and a tag is
+never moved. Pin an exact tag, such as `routing-guard@v0.1.0` (Dependabot's
+`github-actions` ecosystem can bump it for you), or a full commit SHA. There
+is no floating major tag to follow.
+
+While the version is 0.x, a change that makes a previously passing workflow
+fail, such as a new guard in the expression, bumps the minor version
+(0.1 to 0.2), because every consumer has to update its inline copies at the
+same time. Compatible changes bump the patch. [`CHANGELOG.md`](CHANGELOG.md)
+says how to upgrade. Merged changes wait on `main`, listed under *Unreleased*
+in the changelog, until a release is cut, so the docs on `main` can run ahead
+of the latest tag.
 
 While this repository is private, it has to allow access from the other
 repositories in the organization for them to use the action: *Settings →

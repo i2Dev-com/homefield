@@ -84,9 +84,6 @@ jobs:
       - name: RUNNER_URL validation
         run: bash tests/runner-url.sh
 
-      - name: ci-runner v2 guest refusal
-        run: bash tests/v2-guest.sh
-
       - name: Guest memory sampler
         run: bash tests/memwatch.sh
 
@@ -115,21 +112,12 @@ jobs:
             ci.yml:changes
             ci.yml:checks
 
-      # The deprecated v3.0 name, which consumers still pin: same fixture,
-      # its own `expected:` input, and the sibling routing-guard script.
-      - name: Deprecated verify-routing alias against the clean fixture
-        uses: ./verify-routing
-        with:
-          workflows-dir: routing-guard/tests/base
-          expected: |
-            ci.yml:changes
-            ci.yml:checks
-
       # The routing guard, as consumers run it, against this repo's own
       # workflows: on pull requests the test job above opts in to the local
       # runner, and it is the only job that may. Pushes to main always run
-      # hosted (the expression requires a pull_request event). The published
-      # @v3, not the checkout's local action, so `homefield adopt` counts it.
+      # hosted (the expression requires a pull_request event). It pins the
+      # published release, not the checkout's local action, so `homefield
+      # adopt` counts it.
       - name: Action against this repo's workflows
         uses: i2Dev-com/homefield/routing-guard@v3
         with:

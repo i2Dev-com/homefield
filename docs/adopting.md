@@ -27,7 +27,7 @@ Keep hosted:
 ## 2. Route them
 
 Replace each chosen job's `runs-on` with the canonical expression, verbatim.
-It must match the `routing-guard` version used in step 3 (`@v3` below); see
+It must match the `routing-guard` version used in step 3 (`@v0.1.0` below); see
 [`CHANGELOG.md`](../CHANGELOG.md) when upgrading:
 
 ```yaml
@@ -44,7 +44,7 @@ In a job that runs on every PR, after `actions/checkout`:
 
 ```yaml
       - name: Routing guard
-        uses: i2Dev-com/homefield/routing-guard@v3
+        uses: i2Dev-com/homefield/routing-guard@v0.1.0
         with:
           jobs: |
             ci.yml:lint
@@ -56,17 +56,12 @@ If the runner was registered with a `RUNNER_LABEL` other than `homefield-ci`, pu
 that label in the expression in step 2 and pass it here as `label:`.
 Routing another job later means adding it here in the same PR, which keeps it
 a deliberate, reviewed change.
-The step has to use exactly `i2Dev-com/homefield/routing-guard@v3` and be in
+The step has to use `i2Dev-com/homefield/routing-guard` at an exact release
+tag (`@v0.1.0`; `@v0` or `@main` do not count) or a full commit SHA, and be in
 a workflow that runs on `pull_request`, with no `if: false` on the step or its
 job; `homefield adopt` does not count anything else as a guard. A reusable
 workflow works if one of the repository's `pull_request` workflows calls it
 (`uses: ./.github/workflows/<file>`).
-
-The guard used to be called `verify-routing`, with `expected:` in place of
-`jobs:`. `i2Dev-com/homefield/verify-routing@v3` with `expected:` still works as
-a deprecated alias, and `homefield adopt` accepts it with a warning, until v4
-removes it. To switch, change the `uses:` line and rename `expected:` to
-`jobs:`.
 
 ### Routing options
 
@@ -77,7 +72,7 @@ expression in step 2 and the guard in step 3 have to agree, and `homefield
 adopt` refuses a guard whose options differ from the flags you pass it.
 
 ```yaml
-      - uses: i2Dev-com/homefield/routing-guard@v3
+      - uses: i2Dev-com/homefield/routing-guard@v0.1.0
         with:
           jobs: |
             ci.yml:lint
@@ -140,12 +135,12 @@ step:
 2. **Routing.** Downloads the repository's `.github/workflows` at its default
    branch and runs the same check as the guard. It is ready when a
    `routing-guard` step is there, passes, and at least one job is routed.
-   The step must use `i2Dev-com/homefield/routing-guard@v3` (a full commit
-   SHA is accepted, with a warning; the former `i2Dev-com/ci-runner` path no
-   longer resolves) in a workflow that runs on pull requests;
-   anything else, such as another repository's action, `@v1`, `@main`, a
-   push-only workflow, `pull_request_target` or an `if: false`, is not a
-   guard. A reusable workflow (`workflow_call`) counts when a workflow that
+   The step must use `i2Dev-com/homefield/routing-guard` at an exact release
+   tag such as `@v0.1.0` (a full commit SHA is accepted, with a warning) in a
+   workflow that runs on pull requests;
+   anything else, such as another repository's action, a tag that is not an
+   exact release (`@v1`), a branch (`@main`), a push-only workflow,
+   `pull_request_target` or an `if: false`, is not a guard. A reusable workflow (`workflow_call`) counts when a workflow that
    runs on `pull_request` calls it from a job (one level; deeper chains are
    not followed). Branch or path filters on the `pull_request` trigger, and
    other `if:` conditions on the step, its job or the calling job, are

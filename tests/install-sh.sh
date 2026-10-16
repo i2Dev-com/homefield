@@ -63,15 +63,9 @@ cat >"$tpl/limactl" <<'EOF'
 #!/bin/sh
 echo "limactl $*" >>"$CALLS"
 [ "$1" != --version ] || echo "limactl version ${FAKE_LIMA_VERSION:-2.2.0}"
-# `limactl list --format ... <name>` prints the status of an existing VM only:
-# FAKE_V2_STATUS for the v2 instance (ci-runner), FAKE_VM_STATUS for any other.
+# `limactl list --format ... <name>` prints the status of an existing VM only.
 if [ "$1" = list ]; then
-  for last; do :; done
-  if [ "$last" = ci-runner ]; then
-    [ -z "${FAKE_V2_STATUS:-}" ] || echo "$FAKE_V2_STATUS"
-  else
-    [ -z "${FAKE_VM_STATUS:-}" ] || echo "$FAKE_VM_STATUS"
-  fi
+  [ -z "${FAKE_VM_STATUS:-}" ] || echo "$FAKE_VM_STATUS"
 fi
 exit 0
 EOF
@@ -117,18 +111,18 @@ nonzero() { [ "$1" -ne 0 ] && echo nonzero || echo "$1"; }
 echo "fetching"
 new_env gh curl limactl
 run_install
-record "gh is used when it works" "1/0" "$(called '^gh api repos/i2Dev-com/homefield/tarball/v3$')/$(called '^curl')"
+record "gh is used when it works" "1/0" "$(called '^gh api repos/i2Dev-com/homefield/tarball/v0.1.0$')/$(called '^curl')"
 record "installed with exit 0" "0" "$rc"
 record "the tool is unpacked with the top directory stripped" "yes" "$([ -x "$home/share/bin/homefield" ] && [ -f "$home/share/vm/lima.yaml" ] && echo yes || echo no)"
-record "the ref and commit are recorded" "repo=i2Dev-com/homefield ref=v3 commit=abc1234" "$(tr '\n' ' ' <"$home/share/.homefield-ref" | sed 's/ $//')"
+record "the ref and commit are recorded" "repo=i2Dev-com/homefield ref=v0.1.0 commit=abc1234" "$(tr '\n' ' ' <"$home/share/.homefield-ref" | sed 's/ $//')"
 record "no staging directory is left behind" "0" "$(find "$home" -name '.homefield-install*' | wc -l | tr -d ' ')"
 record "no arguments and no terminal: install is not run" "no" "$(has "$out" 'homefield stub')"
 record "...and the next command is printed" "yes" "$(has "$out" 'homefield install --url https://github.com/<org>')"
-record "the summary names the ref and commit" "yes" "$(has "$out" 'installed homefield v3 (abc1234)')"
+record "the summary names the ref and commit" "yes" "$(has "$out" 'installed homefield v0.1.0 (abc1234)')"
 
 new_env curl limactl
 run_install
-record "curl is used when gh is absent" "1" "$(called '^curl .*https://codeload.github.com/i2Dev-com/homefield/tar.gz/v3')"
+record "curl is used when gh is absent" "1" "$(called '^curl .*https://codeload.github.com/i2Dev-com/homefield/tar.gz/v0\.1\.0')"
 record "...and installs" "0" "$rc"
 
 new_env gh curl limactl
@@ -149,7 +143,7 @@ record "HOMEFIELD_REPO and HOMEFIELD_REF choose the download" "1" "$(called '^gh
 
 # ── Settings are checked ───────────────────────────────────────────────────
 echo "settings"
-for bad in '../x' 'v3;rm' 'a b' '-x' '' 'a..b'; do
+for bad in '../x' 'v0.1.0;rm' 'a b' '-x' '' 'a..b'; do
   [ -n "$bad" ] || continue
   new_env gh curl limactl
   run_install "HOMEFIELD_REF=$bad"
@@ -157,7 +151,7 @@ for bad in '../x' 'v3;rm' 'a b' '-x' '' 'a..b'; do
 done
 new_env gh curl limactl
 run_install HOMEFIELD_REF=
-record "an empty ref is the default" "1" "$(called 'tarball/v3$')"
+record "an empty ref is the default" "1" "$(called 'tarball/v0.1.0$')"
 # shellcheck disable=SC2016  # the values are meant to stay literal
 for bad in 'acme' 'a/b/c' 'a/..' '$(x)/y' 'a/b;c'; do
   new_env gh curl limactl
@@ -303,30 +297,5 @@ record "no VM yet, terminal, no arguments: install runs" "homefield stub: instal
 new_env gh curl limactl
 run_install FAKE_VM_STATUS=Running -- --url https://github.com/acme
 record "VM exists but arguments given: install runs with them" "homefield stub: install --url https://github.com/acme" "$(echo "$out" | grep 'homefield stub' || true)"
-
-# ── A ci-runner v2 VM left behind ──────────────────────────────────────────
-echo "a leftover v2 VM"
-v2_wording='Migrating from ci-runner (v2)'
-new_env gh curl limactl
-: >"$work/answer"
-run_install HOMEFIELD_TTY="$work/answer" FAKE_V2_STATUS=Running
-record "v2 VM, no homefield VM, terminal: install is not run, exit is nonzero" "nonzero/no/yes" "$(nonzero "$rc")/$(has "$out" 'homefield stub')/$(has "$out" "$v2_wording")"
-record "...the tool itself was installed" "yes" "$([ -x "$home/share/bin/homefield" ] && echo yes || echo no)"
-record "...and it says the VM was not set up, with the runbook anchor" "yes/yes" "$(has "$out" 'was not set up')/$(has "$out" 'docs/runbook.md#migrating-from-ci-runner-v2')"
-new_env gh curl limactl
-run_install FAKE_V2_STATUS=Stopped -- --url https://github.com/acme
-record "...also when install options are given" "nonzero/no/yes" "$(nonzero "$rc")/$(has "$out" 'homefield stub')/$(has "$out" "$v2_wording")"
-new_env gh curl limactl
-run_install FAKE_V2_STATUS=Running
-record "...without a terminal or arguments there is no hand-over to refuse" "0/no" "$rc/$(has "$out" "$v2_wording")"
-new_env gh curl limactl
-run_install HOMEFIELD_TTY="$work/answer" FAKE_V2_STATUS=Running FAKE_VM_STATUS=Running
-record "v2 VM and a homefield VM: the usual tool-update message" "0/yes/no" "$rc/$(has "$out" 'homefield upgrade')/$(has "$out" "$v2_wording")"
-new_env gh curl limactl
-run_install HOMEFIELD_TTY="$work/answer" FAKE_V2_STATUS=Running HOMEFIELD_INSTANCE=other
-record "v2 VM, HOMEFIELD_INSTANCE set: chosen on purpose, install runs" "homefield stub: install" "$(echo "$out" | grep 'homefield stub' || true)"
-new_env gh curl limactl
-run_install FAKE_V2_STATUS=Running -- --instance other --url https://github.com/acme
-record "v2 VM, --instance given: install runs with it" "homefield stub: install --instance other --url https://github.com/acme" "$(echo "$out" | grep 'homefield stub' || true)"
 
 summary

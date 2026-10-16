@@ -2,14 +2,14 @@
 # One-line installer for homefield: downloads the tool, puts `homefield` on the
 # PATH, makes sure Lima is there, and hands over to `homefield install`.
 #
-#   gh api 'repos/i2Dev-com/homefield/contents/install.sh?ref=v3' \
+#   gh api 'repos/i2Dev-com/homefield/contents/install.sh?ref=v0.1.0' \
 #     -H 'Accept: application/vnd.github.raw' | bash
-#   curl -fsSL https://raw.githubusercontent.com/i2Dev-com/homefield/v3/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/i2Dev-com/homefield/v0.1.0/install.sh | bash
 #   ... | bash -s -- --url https://github.com/<org>      # install options pass through
 #
 # Settings, all optional:
 #   HOMEFIELD_REPO      owner/repo to download from (default i2Dev-com/homefield)
-#   HOMEFIELD_REF       branch, tag or commit to install (default v3)
+#   HOMEFIELD_REF       branch, tag or commit to install (default v0.1.0)
 #   HOMEFIELD_HOME      where the tool goes (default ~/.local/share/homefield)
 #   HOMEFIELD_BIN_DIR   where the `homefield` command goes (default: Homebrew's
 #                       bin when writable, else ~/.local/bin)
@@ -22,7 +22,7 @@
 set -euo pipefail
 
 REPO="${HOMEFIELD_REPO:-i2Dev-com/homefield}"
-REF="${HOMEFIELD_REF:-v3}"
+REF="${HOMEFIELD_REF:-v0.1.0}"
 INSTALL_DIR="${HOMEFIELD_HOME:-$HOME/.local/share/homefield}"
 # The terminal to ask on. Under `curl | bash` stdin is this script, so prompts
 # read from the controlling terminal instead. Settable so the tests can stand
@@ -199,20 +199,6 @@ vm_exists() {
   [ -n "$(limactl list --format '{{.Status}}' "${HOMEFIELD_INSTANCE:-homefield}" 2>/dev/null)" ]
 }
 
-# v2_vm_left: a ci-runner v2 VM exists and the target instance does not, with
-# no instance chosen on purpose (HOMEFIELD_INSTANCE or --instance in the
-# arguments that go to `homefield install`). Same rule as cmd_install in
-# bin/homefield, which refuses too; this one keeps the installer from handing
-# over to it at all.
-v2_vm_left() {
-  local arg
-  [ -z "${HOMEFIELD_INSTANCE:-}" ] || return 1
-  for arg in "$@"; do
-    [ "$arg" != --instance ] || return 1
-  done
-  ! vm_exists && [ -n "$(limactl list --format '{{.Status}}' ci-runner 2>/dev/null)" ]
-}
-
 main() {
   trap cleanup EXIT
   check_host
@@ -254,14 +240,6 @@ main() {
     return 0
   fi
   if [ $# -gt 0 ] || have_tty; then
-    if v2_vm_left "$@"; then
-      echo
-      echo "A ci-runner v2 VM exists. The tool is installed, but the VM was not set up: v3 does not"
-      echo "upgrade it in place, and installing now would add a second VM and runner next to it."
-      echo "Follow \"Migrating from ci-runner (v2)\" in docs/runbook.md, then run: homefield install"
-      echo "  https://github.com/${REPO}/blob/${REF}/docs/runbook.md#migrating-from-ci-runner-v2"
-      return 1
-    fi
     echo
     if have_tty; then
       exec "$installed" install "$@" <"$TTY"

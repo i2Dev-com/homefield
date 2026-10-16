@@ -12,9 +12,8 @@ parts:
   Lima), Python helpers in `tools/` behind `adopt` and `report`.
 - `vm/lima.yaml` + `vm/provision.sh` — the VM and what runs inside it.
 - `routing-guard/` — the published GitHub Action (`routing_guard.py` +
-  `action.yml`); consumers pin it as `i2Dev-com/homefield/routing-guard@vN`.
-  `verify-routing/action.yml` is its deprecated v3.0 name (`expected:` for
-  `jobs:`), a thin alias that runs the same script; it goes in v4.
+  `action.yml`); consumers pin it as `i2Dev-com/homefield/routing-guard@vX.Y.Z`
+  (an exact release tag) or a full commit SHA.
 
 ## Bash versions
 
@@ -74,15 +73,21 @@ agreement — run it when touching either.
   A new option value or a new option whose default changes the expression is
   a breaking change, as below.
 
-- A change that makes a previously passing workflow fail (new guard, new
-  default) is a **new major** `routing-guard@vN`; compatible changes wait on
-  `main`, under *Unreleased* in `CHANGELOG.md`, until the owner cuts a release
-  that moves the current tag. Don't ask for a tag move after each merge; only
-  for something that can't wait, such as a security fix. Say in the PR
-  whether a change is compatible; `CHANGELOG.md` explains the upgrade.
-- This repo's own CI checks its workflow against the **published `@v3`
-  action**, not the local checkout — a breaking change lands only when a
-  release moves the tag.
+- Releases are exact semver tags (`v0.1.0`, `v0.1.1`, `v0.2.0`) that are
+  **never moved**. While we are in 0.x, a change that makes a previously
+  passing workflow fail (new guard, new default) bumps the **minor**;
+  compatible changes bump the patch. Merged changes wait on `main`, under
+  *Unreleased* in `CHANGELOG.md`, until the owner cuts a release. There are
+  no tag moves: a release is a new tag the owner creates, so don't ask for
+  one after each merge. Say in the PR whether a change is compatible;
+  `CHANGELOG.md` explains the upgrade.
+- This repo's own CI checks its workflow against the **published
+  `routing-guard` release**, not the local checkout — a breaking change lands
+  on `main` while CI still runs the last release, and the owner bumps that pin
+  when cutting the next one.
+- A release bumps the version in `install.sh` (`REF` default and header),
+  `bin/homefield` (`update_command`), `tools/adopt.py` (`RELEASE`), the README
+  and `docs/`, and the pin in `.github/workflows/ci.yml`.
 - The checker rejects multi-line `runs-on`; write expressions on one line.
 
 ## Safety and workflow conventions

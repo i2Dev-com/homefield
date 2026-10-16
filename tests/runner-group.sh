@@ -53,10 +53,8 @@ echo "limactl $*" >>"$CALLS"
 case "$1" in
   --version) echo "limactl version 2.2.0" ;;
   list)
-    # The status of an existing VM only: LIMA_V2_STATUS for the v2 instance
-    # (ci-runner), LIMA_STATUS for any other.
-    for last; do :; done
-    if [ "$last" = ci-runner ]; then printf '%s' "${LIMA_V2_STATUS:-}"; else printf '%s' "${LIMA_STATUS:-}"; fi
+    # The status of an existing VM only.
+    printf '%s' "${LIMA_STATUS:-}"
     ;;
   shell)
     case "$*" in
@@ -224,47 +222,6 @@ record "install --group-exists: past the group step to creating the VM" "yes/no/
 run_fn LIMA_STATUS=Running -- cmd_install --url not-a-url
 record "a bad URL is refused before an existing VM is touched" "nonzero/yes/0" "$(nonzero "$rc")/$(has "$out" '--url must be')/$(called 'limactl start')"
 
-# ── a ci-runner v2 VM left behind ──────────────────────────────────────────
-echo "leftover v2 VM"
-v2_ref='Migrating from ci-runner (v2)'
-run_fn LIMA_V2_STATUS=Running -- cmd_install --url https://github.com/acme
-record "install: v2 VM and no homefield VM: refused, nothing created or started" "nonzero/yes/0/0" "$(nonzero "$rc")/$(has "$out" "$v2_ref")/$(called 'limactl create')/$(called 'limactl start')"
-record "...saying v3 does not upgrade it in place, and how to override" "yes/yes" "$(has "$out" 'does not upgrade it in place')/$(has "$out" 'pass --instance or set HOMEFIELD_INSTANCE')"
-record "...before any gh call (no group is created either)" "0" "$(called '^gh ')"
-
-run_fn LIMA_V2_STATUS=Running LIMA_STATUS=Running -- cmd_install --url not-a-url
-record "install: a homefield VM exists too: not refused for the v2 VM" "nonzero/no/yes" "$(nonzero "$rc")/$(has "$out" "$v2_ref")/$(has "$out" '--url must be')"
-
-run_fn LIMA_V2_STATUS=Running HOMEFIELD_INSTANCE=other -- cmd_install
-record "install: HOMEFIELD_INSTANCE set: the instance is deliberate, not refused" "nonzero/no/yes" "$(nonzero "$rc")/$(has "$out" "$v2_ref")/$(has "$out" '--url is required')"
-
-run_fn LIMA_V2_STATUS=Running -- main --instance other install
-record "install: --instance given: the instance is deliberate, not refused" "nonzero/no/yes" "$(nonzero "$rc")/$(has "$out" "$v2_ref")/$(has "$out" '--url is required')"
-
-run_fn LIMA_V2_STATUS=Running -- main --instance ci-runner install
-record "install: --instance ci-runner is the v2 VM itself, not a leftover" "no" "$(has "$out" 'does not upgrade it in place')"
-
-run_fn -- cmd_install
-record "install: no v2 VM: unchanged" "nonzero/no/yes" "$(nonzero "$rc")/$(has "$out" "$v2_ref")/$(has "$out" '--url is required')"
-
-# The other commands that stop on a missing VM name the v2 one.
-run_fn LIMA_V2_STATUS=Running -- cmd_upgrade
-record "upgrade: no homefield VM, v2 VM present: the hint is added" "nonzero/yes/yes" "$(nonzero "$rc")/$(has "$out" 'no VM homefield')/$(has "$out" "$v2_ref")"
-run_fn -- cmd_upgrade
-record "upgrade: no VM, no v2 VM: no hint" "nonzero/yes/no" "$(nonzero "$rc")/$(has "$out" 'no VM homefield')/$(has "$out" 'ci-runner')"
-run_fn LIMA_V2_STATUS=Running -- cmd_uninstall
-record "uninstall: the hint is added" "nonzero/yes/yes" "$(nonzero "$rc")/$(has "$out" 'no VM homefield')/$(has "$out" "$v2_ref")"
-run_fn -- cmd_uninstall
-record "uninstall: no v2 VM: no hint" "nonzero/no" "$(nonzero "$rc")/$(has "$out" 'ci-runner')"
-run_fn LIMA_V2_STATUS=Running -- cmd_status
-record "status: not created, with the hint" "0/yes/yes" "$rc/$(has "$out" 'VM homefield: not created')/$(has "$out" "$v2_ref")"
-run_fn -- cmd_status
-record "status: not created, no v2 VM: no hint" "0/yes/no" "$rc/$(has "$out" 'VM homefield: not created')/$(has "$out" 'ci-runner')"
-run_fn LIMA_V2_STATUS=Running -- cmd_memory
-record "memory: the hint is added" "nonzero/yes/yes" "$(nonzero "$rc")/$(has "$out" 'VM homefield is not running')/$(has "$out" "$v2_ref")"
-run_fn LIMA_V2_STATUS=Stopped -- main --instance ci-runner status
-record "the v2 VM asked for by name: no hint about itself" "0/no" "$rc/$(has "$out" 'does not upgrade')"
-
 # ── wait_online ────────────────────────────────────────────────────────────
 echo "wait_online"
 printf 'other\tonline\tself-hosted\tDefault\nlima-homefield\toffline\tself-hosted,Linux\thomefield-ci\n' >"$work/runners-offline"
@@ -331,10 +288,10 @@ cp "$ROOT/bin/homefield" "$work/bare/bin/homefield"
 for t in dirname git; do ln -s "$(command -v "$t")" "$work/nogh/$t"; done
 old=0123456789abcdef0123456789abcdef01234567
 new=89abcdef0123456789abcdef0123456789abcdef
-printf 'repo=acme/tool\nref=v3\ncommit=%s\n' "$old" >"$work/inst/.homefield-ref"
+printf 'repo=acme/tool\nref=v0.1.0\ncommit=%s\n' "$old" >"$work/inst/.homefield-ref"
 # Without gh, so only the first line, which is not about updates.
 out="$(env -i PATH="$work/nogh" "$BASH" "$work/inst/bin/homefield" version 2>&1)"
-record "an install.sh copy reports its ref, short commit and source" "homefield v3 (0123456), installed from acme/tool in $work/inst" "${out%%$'\n'*}"
+record "an install.sh copy reports its ref, short commit and source" "homefield v0.1.0 (0123456), installed from acme/tool in $work/inst" "${out%%$'\n'*}"
 out="$(env -i PATH="$stubs" GIT_CEILING_DIRECTORIES="$work" "$BASH" "$work/bare/bin/homefield" version 2>&1)"
 record "neither a ref file nor a checkout" "homefield (version unknown), in $work/bare" "$out"
 : >"$calls"
@@ -355,56 +312,75 @@ case "$*" in
 esac
 EOF
 chmod +x "$work/vgh/gh"
-tags_v3="$(printf 'v3\nv2\nv1\nv2.1\nlatest')"
+# Tags that are not a plain release (v1, v0.1, latest) are ignored.
+tags_rel="$(printf 'v0.1.0\nv1\nv0.1\nv0.0.9\nlatest')"
 # version_run [VAR=value ...]: out and rc of `version` on the install.sh copy.
 version_run() {
   : >"$calls"
-  out="$(env -i HOME="$work" PATH="$work/vgh" CALLS="$calls" V_TAGS="$tags_v3" "$@" "$BASH" "$work/inst/bin/homefield" version 2>&1 </dev/null)"
+  out="$(env -i HOME="$work" PATH="$work/vgh" CALLS="$calls" V_TAGS="$tags_rel" "$@" "$BASH" "$work/inst/bin/homefield" version 2>&1 </dev/null)"
   rc=$?
 }
-mine="homefield v3 (0123456), installed from acme/tool in $work/inst"
+mine="homefield v0.1.0 (0123456), installed from acme/tool in $work/inst"
 
 version_run V_COMMIT="$old"
 record "unchanged ref: up to date" "0/$mine
-homefield: up to date with v3" "$rc/$out"
-record "...resolved through the commits endpoint, tags listed" "1/1" "$(called 'repos/acme/tool/commits/v3')/$(called 'repos/acme/tool/tags')"
+homefield: up to date with v0.1.0" "$rc/$out"
+record "...resolved through the commits endpoint, tags listed" "1/1" "$(called 'repos/acme/tool/commits/v0.1.0')/$(called 'repos/acme/tool/tags')"
 
-printf 'repo=acme/tool\nref=v3\ncommit=0123456\n' >"$work/inst/.homefield-ref"
+printf 'repo=acme/tool\nref=v0.1.0\ncommit=0123456\n' >"$work/inst/.homefield-ref"
 version_run V_COMMIT="$old"
-record "a short recorded commit still matches" "0/homefield: up to date with v3" "$rc/$(printf '%s' "$out" | tail -1)"
-printf 'repo=acme/tool\nref=v3\ncommit=%s\n' "$old" >"$work/inst/.homefield-ref"
+record "a short recorded commit still matches" "0/homefield: up to date with v0.1.0" "$rc/$(printf '%s' "$out" | tail -1)"
+printf 'repo=acme/tool\nref=v0.1.0\ncommit=%s\n' "$old" >"$work/inst/.homefield-ref"
 
 version_run V_COMMIT="$new"
-record "a moved ref: says where it moved, exit 0" "0/yes" "$rc/$(has "$out" 'homefield: v3 has moved to 89abcde since this copy was installed; update with:')"
-record "...with the one-liner for that ref and this copy" "yes" "$(has "$out" "  gh api 'repos/acme/tool/contents/install.sh?ref=v3' -H 'Accept: application/vnd.github.raw' | HOMEFIELD_REPO=acme/tool HOMEFIELD_HOME='$work/inst' bash")"
+record "a moved ref: says where it moved, exit 0" "0/yes" "$rc/$(has "$out" 'homefield: v0.1.0 has moved to 89abcde since this copy was installed; update with:')"
+record "...with the one-liner for that ref and this copy" "yes" "$(has "$out" "  gh api 'repos/acme/tool/contents/install.sh?ref=v0.1.0' -H 'Accept: application/vnd.github.raw' | HOMEFIELD_REPO=acme/tool HOMEFIELD_HOME='$work/inst' bash")"
 record "...saying the VM is left alone" "yes" "$(has "$out" 'homefield upgrade updates the VM')"
-record "...and no newer major when v3 is the highest" "no" "$(has "$out" 'breaking')"
+record "...and no later release when v0.1.0 is the highest" "no" "$(has "$out" ' is out ')"
+record "...the VM note comes once" "1" "$(printf '%s\n' "$out" | grep -c 'homefield upgrade updates the VM')"
 
 # The README's one-liner exactly: default repository and ref, in the default place.
 dflt="$work/h/.local/share/homefield"
 mkdir -p "$dflt/bin"
 cp "$ROOT/bin/homefield" "$dflt/bin/homefield"
-printf 'repo=i2Dev-com/homefield\nref=v3\ncommit=%s\n' "$old" >"$dflt/.homefield-ref"
+printf 'repo=i2Dev-com/homefield\nref=v0.1.0\ncommit=%s\n' "$old" >"$dflt/.homefield-ref"
 : >"$calls"
-out="$(env -i HOME="$work/h" PATH="$work/vgh" CALLS="$calls" V_TAGS="$tags_v3" V_COMMIT="$new" "$BASH" "$dflt/bin/homefield" version 2>&1 </dev/null)"
+out="$(env -i HOME="$work/h" PATH="$work/vgh" CALLS="$calls" V_TAGS="$tags_rel" V_COMMIT="$new" "$BASH" "$dflt/bin/homefield" version 2>&1 </dev/null)"
 record "default repo, ref and place: the README's one-liner" "yes" "$(has "$out" "
-  gh api 'repos/i2Dev-com/homefield/contents/install.sh?ref=v3' -H 'Accept: application/vnd.github.raw' | bash
+  gh api 'repos/i2Dev-com/homefield/contents/install.sh?ref=v0.1.0' -H 'Accept: application/vnd.github.raw' | bash
 ")"
 
 printf 'repo=acme/tool\nref=release/1\ncommit=%s\n' "$old" >"$work/inst/.homefield-ref"
 version_run V_COMMIT="$new"
-record "a branch: HOMEFIELD_REF in the one-liner, no major check" "yes/no" "$(has "$out" "HOMEFIELD_REPO=acme/tool HOMEFIELD_REF=release/1 HOMEFIELD_HOME=")/$(has "$out" 'breaking')"
+record "a branch: HOMEFIELD_REF in the one-liner, no release check" "yes/no" "$(has "$out" "HOMEFIELD_REPO=acme/tool HOMEFIELD_REF=release/1 HOMEFIELD_HOME=")/$(has "$out" ' is out ')"
+version_run V_COMMIT="$new" V_TAGS="$(printf 'v0.1.0\nv0.2.0')"
+record "...even when a release exists" "no" "$(has "$out" ' is out ')"
 
-printf 'repo=acme/tool\nref=v3\ncommit=%s\n' "$old" >"$work/inst/.homefield-ref"
-version_run V_COMMIT="$old" V_TAGS="$(printf 'v4\nv3\nv10\nv9')"
-record "a newer major: says so, points at the changelog, exit 0" "0/yes/yes/yes" "$rc/$(has "$out" 'homefield: v10 exists and is a breaking release; read CHANGELOG.md')/$(has "$out" 'https://github.com/acme/tool/blob/v10/CHANGELOG.md')/$(has "$out" 'up to date with v3')"
-version_run V_COMMIT="$new" V_TAGS="$(printf 'v4\nv3')"
-record "...and with a moved ref, both are said" "0/yes/yes" "$rc/$(has "$out" 'has moved')/$(has "$out" 'v4 exists')"
+printf 'repo=acme/tool\nref=v0.1.0\ncommit=%s\n' "$old" >"$work/inst/.homefield-ref"
+version_run V_COMMIT="$old" V_TAGS="$(printf 'v0.1.0\nv0.2.0')"
+record "a later release: says so with the changelog and the one-liner for it, exit 0" "0/yes/yes/yes" "$rc/$(has "$out" 'homefield: v0.2.0 is out (installed: v0.1.0); read CHANGELOG.md for breaking changes, then update with:')/$(has "$out" "  gh api 'repos/acme/tool/contents/install.sh?ref=v0.2.0' -H 'Accept: application/vnd.github.raw' | HOMEFIELD_REPO=acme/tool HOMEFIELD_REF=v0.2.0 HOMEFIELD_HOME='$work/inst' bash")/$(has "$out" 'up to date with v0.1.0')"
+record "...saying the VM is left alone, once" "1" "$(printf '%s\n' "$out" | grep -c 'homefield upgrade updates the VM')"
+version_run V_COMMIT="$old" V_TAGS="$(printf 'v0.2.0\nv0.1.0')"
+record "...whatever the order of the tags" "yes" "$(has "$out" 'v0.2.0 is out')"
+version_run V_COMMIT="$old" V_TAGS="$(printf 'v0.1.0\nv0.1.1')"
+record "a later patch counts" "yes" "$(has "$out" 'v0.1.1 is out (installed: v0.1.0)')"
+version_run V_COMMIT="$old" V_TAGS="$(printf 'v0.9.9\nv0.10.0\nv0.2.0\nv0.1.0\nv1\nv2.0')"
+record "the highest release is compared as numbers, not text, and v1 is not a release" "yes/no" "$(has "$out" 'v0.10.0 is out')/$(has "$out" 'v2.0 is out')"
+version_run V_COMMIT="$new" V_TAGS="$(printf 'v0.1.0\nv0.2.0')"
+record "...and with a moved ref, both are said" "0/yes/yes/1" "$rc/$(has "$out" 'has moved')/$(has "$out" 'v0.2.0 is out')/$(printf '%s\n' "$out" | grep -c 'homefield upgrade updates the VM')"
+printf 'repo=acme/tool\nref=v0.2.0\ncommit=%s\n' "$old" >"$work/inst/.homefield-ref"
+version_run V_COMMIT="$old" V_TAGS="$(printf 'v0.1.0\nv0.2.0')"
+record "installed at the highest release: nothing newer is said" "no" "$(has "$out" ' is out ')"
+version_run V_COMMIT="$old" V_TAGS="$(printf 'v0.1.0')"
+record "installed above every listed tag: nothing newer is said" "no" "$(has "$out" ' is out ')"
+printf 'repo=acme/tool\nref=v0.1.0\ncommit=%s\n' "$old" >"$work/inst/.homefield-ref"
+version_run V_COMMIT="$old" V_TAGS="latest"
+record "no release tag listed: nothing newer is said" "no" "$(has "$out" ' is out ')"
 
 printf 'repo=acme/tool\nref=%s\ncommit=%s\n' "$old" "$old" >"$work/inst/.homefield-ref"
 version_run V_COMMIT="$new"
 record "a full commit as the ref: nothing to compare, no commit lookup" "0/yes/0" "$rc/$(has "$out" 'installed at a fixed commit (0123456)')/$(called 'commits/')"
-printf 'repo=acme/tool\nref=v3\ncommit=%s\n' "$old" >"$work/inst/.homefield-ref"
+printf 'repo=acme/tool\nref=v0.1.0\ncommit=%s\n' "$old" >"$work/inst/.homefield-ref"
 
 out="$(env -i HOME="$work" PATH="$work/nogh" "$BASH" "$work/inst/bin/homefield" version 2>&1 </dev/null)"
 rc=$?
@@ -412,12 +388,12 @@ record "no gh: one line, exit 0" "0/homefield: could not check for updates (gh i
 
 version_run V_GH_FAIL=1 V_COMMIT="$old"
 record "gh failing: exit 0, one line, none of gh's output" "0/2/no/no" "$rc/$(printf '%s\n' "$out" | wc -l | tr -d ' ')/$(has "$out" 'Bad credentials')/$(has "$out" 'HTTP 401')"
-record "...naming what failed" "yes" "$(has "$out" 'homefield: could not check for updates (gh could not read v3 in acme/tool; see gh auth status)')"
+record "...naming what failed" "yes" "$(has "$out" 'homefield: could not check for updates (gh could not read v0.1.0 in acme/tool; see gh auth status)')"
 
 version_run V_COMMIT="not a sha"
 record "an answer that is not a commit: could not check, exit 0" "0/yes" "$rc/$(has "$out" 'could not check for updates (unexpected answer from gh')"
 
-printf 'repo=acme/tool\nref=v3\ncommit=\n' >"$work/inst/.homefield-ref"
+printf 'repo=acme/tool\nref=v0.1.0\ncommit=\n' >"$work/inst/.homefield-ref"
 version_run V_COMMIT="$new"
 record "no commit recorded: could not check, gh not called" "0/yes/0" "$rc/$(has "$out" 'could not check for updates (.homefield-ref records no commit)')/$(called 'gh api')"
 

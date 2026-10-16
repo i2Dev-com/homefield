@@ -114,28 +114,6 @@ CONFIG_DIR="/etc/homefield"
 RUNNER_USER="runner"
 RUNNER_HOME="/opt/actions-runner"
 
-# A guest that ci-runner v2 provisioned keeps its config in /etc/ci-runner and
-# its units named ci-runner-*. v3 uses other paths and does not move these, so
-# running here would leave two sets of timers and a half-configured runner:
-# refuse, before anything changes (read-only checks, so ahead of the root
-# check). PROVISION_SYSROOT prefixes the paths looked at; the tests point it at
-# a fixture so they never read this machine's /etc.
-v2_leftover=""
-sysroot="${PROVISION_SYSROOT:-}"
-if [ -e "$sysroot/etc/ci-runner" ] || [ -L "$sysroot/etc/ci-runner" ]; then
-  v2_leftover="/etc/ci-runner"
-fi
-for unit in "$sysroot"/etc/systemd/system/ci-runner-*.timer "$sysroot"/etc/systemd/system/ci-runner-*.service; do
-  if [ -e "$unit" ] || [ -L "$unit" ]; then
-    v2_leftover="${v2_leftover:-${unit#"$sysroot"}}"
-  fi
-done
-if [ -n "$v2_leftover" ]; then
-  echo "provision.sh: this VM was provisioned by ci-runner v2 (found ${v2_leftover}). v3 does not upgrade it in place:" \
-       "replace the VM by following docs/runbook.md, \"Migrating from ci-runner (v2)\"" >&2
-  exit 1
-fi
-
 if [ "$(id -u)" -ne 0 ]; then
   echo "provision.sh: run as root (sudo)" >&2
   exit 1

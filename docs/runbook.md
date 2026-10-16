@@ -149,7 +149,7 @@ Requires Lima ≥ 1.1 (`brew install lima`; verified on 2.2.0).
 
 **The short way:** the one-liner in the [README](../README.md#quick-start)
 runs `install.sh`, which downloads the tool for a ref (`HOMEFIELD_REF`,
-default `v3`) into `~/.local/share/homefield` (`HOMEFIELD_HOME`), writes a
+default `v0.1.0`) into `~/.local/share/homefield` (`HOMEFIELD_HOME`), writes a
 `homefield` command into Homebrew's `bin` or `~/.local/bin`
 (`HOMEFIELD_BIN_DIR`; it prints the line to add to `~/.zshrc` if that is not
 on your PATH), installs or upgrades Lima (1.1 or later) if you agree, and runs `homefield install`.
@@ -157,7 +157,9 @@ Running it again replaces the tool, which is how it is upgraded; with no
 arguments it leaves an existing VM alone (`homefield upgrade` updates that).
 `homefield version` shows the ref and commit, and asks GitHub (through `gh`)
 whether that ref has moved since: if so it prints the command that updates the
-tool, and if a newer major version exists it says to read `CHANGELOG.md` first.
+tool. If the ref is a release tag and a later release exists, it says so, to
+read `CHANGELOG.md` for breaking changes first, and prints the command that
+installs it.
 If it cannot reach GitHub it says so and still exits 0. From a checkout,
 `bin/homefield install --url https://github.com/<org>` (or
 `https://github.com/<owner>/<repo>`; options: `bin/homefield help`) is the
@@ -294,7 +296,7 @@ gh run rerun <run-id> --repo <owner>/<repo>
 |---|---|---|---|
 | PR job "Waiting for a runner to pick up this job" | VM stopped, Mac asleep or offline, runner service down | The PR's check waits in the queue, and after 24 h GitHub fails it. By default merges and deploys are unaffected, because pushes run hosted; with `push` (or `workflow_dispatch`, `schedule`) in `events`, those jobs wait too. | Start the VM (`limactl start homefield`), or `bin/homefield route hosted --repo <owner>/<repo>`. |
 | Waiting forever although the runner is online and idle | The repository is not in the runner group | Same as above | `bin/homefield adopt --repo <owner>/<repo>` adds it (or add it in the organization settings), or switch the repository to hosted |
-| Waiting forever although the runner is online and idle, and the repository is in the group | The label in the expression is not one of the runner's labels. For example, a repository moved to `routing-guard@v3`, whose default label is `homefield-ci`, while the runner was registered with another label | Same as above | Add the label to the runner (*Settings → Actions → Runners →* the runner *→ Labels*), or pass the runner's label to `routing-guard` as `label:` and use it in the expression |
+| Waiting forever although the runner is online and idle, and the repository is in the group | The label in the expression is not one of the runner's labels. For example, an expression that uses the default label `homefield-ci` while the runner was registered with another label | Same as above | Add the label to the runner (*Settings → Actions → Runners →* the runner *→ Labels*), or pass the runner's label to `routing-guard` as `label:` and use it in the expression |
 | A PR job waits while another runs | One runner runs one job at a time, across all repositories | Serialised, not failed | Accept it, or switch the less urgent repository to hosted |
 | Job fails only on the local runner | Toolchain or arch gap between the VM and `ubuntu-latest` (arm64 vs x86-64) | Red check | Re-run hosted to confirm. Then add the tool ("Adding tools") or keep that job hosted |
 | `No space left on device` in the VM | Docker images and old workspaces | Red check | `limactl shell homefield sudo /usr/local/sbin/homefield-cleanup` |
@@ -459,88 +461,6 @@ limactl delete --force homefield
 ```
 
 If the VM is already gone, delete the stale registration on the runners page.
-
-## Migrating from ci-runner (v2)
-
-v3 renames the project to HomeField: the command, environment variables, VM,
-install directory, runner label and group, and the paths inside the VM all
-change (the list is in [`CHANGELOG.md`](../CHANGELOG.md)), so a v2 install is
-replaced, not upgraded. `provision.sh` does not move the old guest paths, and
-the new VM gets a new runner. v3 enforces this: `install.sh` and `homefield
-install` stop while a `ci-runner` VM exists and no `homefield` VM does, and
-`provision.sh` exits on a guest that has `/etc/ci-runner` or `ci-runner-*`
-units. Steps 1 to 3 need the old tool, so remove it only in step 4.
-
-1. **Route every repository to hosted.** Jobs stay on GitHub-hosted runners
-   while the runner is replaced. This also cancels and re-runs runs stuck
-   waiting for the local runner:
-
-   ```bash
-   ci-runner route hosted --repo <owner>/<repo> --repo <owner>/<other-repo>
-   ```
-
-2. **Keep what lives only in the old guest.** The extra-packages list and
-   the hooks are deleted with the VM (see "Moving to dedicated hardware"):
-
-   ```bash
-   limactl shell ci-runner cat /etc/ci-runner/extra-packages
-   limactl shell ci-runner sudo tar -C /etc/ci-runner -cf - provision.d > provision.d.tar
-   ```
-
-3. **Uninstall the old runner.** `ci-runner uninstall` deregisters the runner
-   (fetching or asking for a remove token), turns off autostart and deletes the
-   VM `ci-runner`. It does not touch the organization's runner groups, so the
-   `local-ci` group stays, now empty of runners:
-
-   ```bash
-   ci-runner uninstall
-   ```
-
-4. **Remove the old tool.** The one-line installer wrote a `ci-runner`
-   wrapper on the PATH and the tool in `~/.local/share/ci-runner` (or
-   `$CI_RUNNER_HOME`). The wrapper is removed only if it is found:
-
-   ```bash
-   wrapper="$(command -v ci-runner)" && rm "$wrapper"
-   rm -rf "${CI_RUNNER_HOME:-$HOME/.local/share/ci-runner}"
-   ```
-
-   If you ran v2 from a checkout of the repository, there is nothing to
-   remove: no wrapper was installed, so the first command finds nothing and the
-   second removes a directory that does not exist. Delete the checkout when you
-   no longer need it.
-
-5. **Install v3** with the one-liner from the [README](../README.md#quick-start).
-   It creates the VM `homefield`, the runner group `homefield-ci` (selected
-   repositories only, no public ones) and registers the runner
-   `lima-homefield` with the label `homefield-ci`. No repository is in the
-   group yet. Restore the packages and hooks from step 2 (`homefield upgrade
-   --packages "..."`, and the hooks into `/etc/homefield/provision.d/`; see
-   "Adding tools").
-
-6. **In each consuming repository,** one pull request: change every routed
-   job's `runs-on` label from `local-ci` to `homefield-ci` (the expression in
-   [`adopting.md`](adopting.md) has it verbatim) and the guard from
-   `i2Dev-com/ci-runner/verify-routing@v2` to
-   `i2Dev-com/homefield/routing-guard@v3` (and `expected:` to `jobs:`). Merge
-   it with `CI_RUNNER` still `hosted`; everything runs on GitHub-hosted
-   runners. Do this as soon as the repository is renamed to `homefield`:
-   GitHub redirects the old repository's
-   web and API URLs but not `uses:`, so from the rename on, a step on
-   `i2Dev-com/ci-runner/verify-routing` fails with "Repository not found" and
-   the consumer's CI cannot start.
-
-7. **Adopt each repository** once that is merged. It checks the routing,
-   adds the repository to the `homefield-ci` group and sets `CI_RUNNER` to
-   `local`:
-
-   ```bash
-   homefield adopt --repo <owner>/<repo>
-   ```
-
-8. **Delete the old runner group.** After step 3 nothing is registered in
-   `local-ci`: in the organization, *Settings → Actions → Runner groups →
-   local-ci → Delete group*.
 
 ## Moving to dedicated hardware
 

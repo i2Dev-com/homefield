@@ -27,10 +27,6 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LIMA_YAML="$ROOT/vm/lima.yaml"
 PROVISION="$ROOT/vm/provision.sh"
 INSTANCE="${HOMEFIELD_INSTANCE:-homefield}"
-# Whether the instance was chosen (HOMEFIELD_INSTANCE or --instance) rather
-# than defaulted; install uses it to tell a deliberate second VM from a leftover.
-INSTANCE_EXPLICIT=0
-[ -z "${HOMEFIELD_INSTANCE:-}" ] || INSTANCE_EXPLICIT=1
 RUNNER_HOME="/opt/actions-runner"
 
 usage() {
@@ -174,21 +170,6 @@ check_host() {
 }
 
 vm_status() { limactl list --format '{{.Status}}' "$INSTANCE" 2>/dev/null || true; }
-
-# The VM ci-runner v2 created. v3 does not upgrade it in place (new instance,
-# paths, units and label), so one left behind next to a missing homefield VM is
-# the cue to point at the migration instead of creating a second VM and runner.
-V2_INSTANCE="ci-runner"
-v2_vm_exists() {
-  [ "$INSTANCE" != "$V2_INSTANCE" ] &&
-    [ -n "$(limactl list --format '{{.Status}}' "$V2_INSTANCE" 2>/dev/null)" ]
-}
-V2_MIGRATE="v3 does not upgrade it in place: follow docs/runbook.md, \"Migrating from ci-runner (v2)\""
-# v2_hint: for the end of a "no VM" message; prints nothing without a v2 VM.
-v2_hint() {
-  v2_vm_exists || return 0
-  printf ' (a ci-runner v2 VM exists, and %s)' "$V2_MIGRATE"
-}
 
 # --workdir /: the host's working directory does not exist in the guest, which
 # has no mounts. stdin is closed, or `limactl shell` would swallow whatever is
@@ -628,9 +609,6 @@ cmd_install() {
     esac
   done
   check_host
-  if [ "$INSTANCE_EXPLICIT" != 1 ] && [ -z "$(vm_status)" ] && v2_vm_exists; then
-    die "install: a ci-runner v2 VM exists, and ${V2_MIGRATE}. Installing now would add a second VM and runner next to it. (To create ${INSTANCE} anyway, pass --instance or set HOMEFIELD_INSTANCE.)"
-  fi
   # Everything that can be checked is checked before anything is created: the
   # URL (asked for if it was not given), the organization, the runner group.
   # Whether the instance is registered is only known once its VM is up and
@@ -710,7 +688,7 @@ cmd_upgrade() {
     esac
   done
   check_host
-  [ -n "$(vm_status)" ] || die "no VM ${INSTANCE}; run bin/homefield install$(v2_hint)"
+  [ -n "$(vm_status)" ] || die "no VM ${INSTANCE}; run bin/homefield install"
   ensure_vm "" ""
   verify_isolation
   registered || die "${INSTANCE} is not registered; run bin/homefield install --url ..."
@@ -735,7 +713,7 @@ cmd_status() {
   local status
   status="$(vm_status)"
   if [ -z "$status" ]; then
-    echo "VM ${INSTANCE}: not created$(v2_hint)"
+    echo "VM ${INSTANCE}: not created"
     return
   fi
   echo "VM ${INSTANCE}: ${status}"
@@ -777,7 +755,7 @@ cmd_uninstall() {
   check_host
   local status
   status="$(vm_status)"
-  [ -n "$status" ] || die "no VM ${INSTANCE}$(v2_hint)"
+  [ -n "$status" ] || die "no VM ${INSTANCE}"
   [ "$status" = "Running" ] || limactl start --tty=false "$INSTANCE"
   if registered; then
     job_running && die "a job is running on ${INSTANCE}; uninstall when it is idle"
@@ -905,7 +883,6 @@ ADOPT_SWITCH_OUTCOME=""
 ADOPT_READY=0
 ADOPT_REASONS=""
 ADOPT_NOTES=""
-ADOPT_DEPRECATIONS=""
 ADOPT_LABEL=""
 # The label of the first routing guard that passes its check, when
 # adopt did not get --label: a passing guard says which label the repository
@@ -1052,12 +1029,6 @@ adopt_note() {
   esac
 }
 
-# adopt_deprecation <text>: a guard on the deprecated alias. A warning only:
-# the alias works until v4.
-adopt_deprecation() {
-  ADOPT_DEPRECATIONS="${ADOPT_DEPRECATIONS}$1"$'\n'
-}
-
 # adopt_each <command> <items>: runs the command on each of the items, which
 # tools/adopt.py joins with ";" ("-" is none).
 adopt_each() {
@@ -1092,18 +1063,17 @@ adopt_events_key() {
 # options and jobs to expect; --events, --dependabot and --fallback arrive as
 # ADOPT_FLAG_EVENTS, ADOPT_FLAG_DEPENDABOT and ADOPT_FLAG_FALLBACK (empty when
 # not given) and are held to the guard the way --label is. The checks are routing_guard.py,
-# the same script the guard runs in CI. A usable step is the pinned action (or
-# its deprecated verify-routing alias, which adds a warning) in a workflow that
-# runs on pull requests (tools/adopt.py says which are).
+# the same script the guard runs in CI. A usable step is the action pinned to
+# an exact release or a commit, in a workflow that runs on pull requests
+# (tools/adopt.py says which are).
 adopt_routing_check() {
-  local dir="$1" label="$2" label_given="$3" rows where gstatus glabel gblocks gwarns gdeprecated gjobs out rc lines
+  local dir="$1" label="$2" label_given="$3" rows where gstatus glabel gblocks gwarns gjobs out rc lines
   local gevents gdependabot gfallback gmatch opts
   local candidates=0 deferred="" routed routedjob
   ADOPT_READY=1
   ADOPT_REASONS=""
   ADOPT_NOTES=""
-  ADOPT_DEPRECATIONS=""
-  ADOPT_LABEL="$label"
+    ADOPT_LABEL="$label"
   ADOPT_LABEL_OK=""
   ADOPT_EVENTS="${ADOPT_FLAG_EVENTS:-pull_request}"
   ADOPT_DEPENDABOT="${ADOPT_FLAG_DEPENDABOT:-hosted}"
@@ -1111,7 +1081,7 @@ adopt_routing_check() {
   ADOPT_GUARDS=0
   ADOPT_ROUTED=""
   rows="$(python3 -I "$ROOT/tools/adopt.py" guards "$dir")" || die "adopt: could not read the downloaded workflows"
-  while IFS=$'\t' read -r where gstatus glabel gblocks gwarns gdeprecated gevents gdependabot gfallback gjobs; do
+  while IFS=$'\t' read -r where gstatus glabel gblocks gwarns gevents gdependabot gfallback gjobs; do
     [ -n "$where" ] || continue
     candidates=$((candidates + 1))
     case "$gstatus" in
@@ -1134,7 +1104,6 @@ adopt_routing_check() {
     fi
     ADOPT_GUARDS=$((ADOPT_GUARDS + 1))
     adopt_each adopt_note "$gwarns"
-    adopt_each adopt_deprecation "$gdeprecated"
     gmatch=1
     if [ "$label_given" = 1 ] && [ "$glabel" != "$label" ]; then
       gmatch=0
@@ -1215,9 +1184,6 @@ adopt_routing_check() {
   if [ -n "$ADOPT_NOTES" ]; then
     adopt_warn "the routing guard may not run on every pull request. Check that every pull request that changes .github/workflows still runs it:"
     printf '%s' "$ADOPT_NOTES" | sed 's/^/homefield:   /' >&2
-  fi
-  if [ -n "$ADOPT_DEPRECATIONS" ]; then
-    printf '%s' "$ADOPT_DEPRECATIONS" | sed 's/^/homefield: warning: /' >&2
   fi
 }
 
@@ -1419,7 +1385,7 @@ cmd_memory() {
     die "memory: --days must be a positive number"
   fi
   check_host
-  [ "$(vm_status)" = "Running" ] || die "memory: VM ${INSTANCE} is not running$(v2_hint)"
+  [ "$(vm_status)" = "Running" ] || die "memory: VM ${INSTANCE} is not running"
   # BSD date, as on macOS: today minus (days - 1), so --days 1 is today.
   cutoff="$(date -v-"$((days - 1))"d +%F)"
   rows="$(guest sh -c 'cat /var/log/homefield/memwatch-*.csv 2>/dev/null; true')" || exit 1
@@ -1438,23 +1404,26 @@ cmd_report() {
 
 # update_command <repo> <ref>: the install.sh one-liner (README, Quick start)
 # for that ref, plus the settings that differ from install.sh's defaults, so
-# that it replaces this copy and not some other one.
+# that it replaces this copy and not some other one. The default ref here is
+# install.sh's: change both when a release is cut.
 update_command() {
   local repo="$1" ref="$2" settings=""
   [ "$repo" = i2Dev-com/homefield ] || settings="${settings}HOMEFIELD_REPO=${repo} "
-  [ "$ref" = v3 ] || settings="${settings}HOMEFIELD_REF=${ref} "
+  [ "$ref" = v0.1.0 ] || settings="${settings}HOMEFIELD_REF=${ref} "
   [ "$ROOT" = "$HOME/.local/share/homefield" ] || settings="${settings}HOMEFIELD_HOME='${ROOT}' "
   echo "  gh api 'repos/${repo}/contents/install.sh?ref=${ref}' -H 'Accept: application/vnd.github.raw' | ${settings}bash"
 }
 
 # update_check <repo> <ref> <commit>: says whether the ref this copy was
-# installed from has moved, and whether a newer major version exists. Reads
+# installed from has moved, and whether a later release exists (the highest
+# vMAJOR.MINOR.PATCH tag, when the installed ref is such a tag too). Reads
 # GitHub through gh (the repository is private). gh's own output is dropped:
 # whatever goes wrong is one line here, and nothing here fails the command.
 update_check() {
-  local repo="$1" ref="$2" commit="$3" current="" tags="" tag="" latest="" mine=""
+  local repo="$1" ref="$2" commit="$3" current="" tags="" tag="" latest="" advised=0
+  local la="" lb="" lc="" a b c
   local repo_re='^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' ref_re='^[A-Za-z0-9_./-]+$' sha_re='^[0-9a-f]{40}$'
-  local major_re='^v([0-9]+)$' ref_major_re='^v([0-9]+)([.].*)?$'
+  local tag_re='^v([0-9]+)[.]([0-9]+)[.]([0-9]+)$'
   if ! command -v gh >/dev/null; then
     log "could not check for updates (gh is not installed)"
     return 0
@@ -1483,12 +1452,16 @@ update_check() {
     log "could not check for updates (gh could not list the tags of ${repo}; see gh auth status)"
     return 0
   fi
+  # The highest release tag, compared part by part as numbers (no sort -V on
+  # the bash 3.2 and BSD tools macOS ships).
   while IFS= read -r tag; do
-    if [[ "$tag" =~ $major_re ]] && { [ -z "$latest" ] || [ "${BASH_REMATCH[1]}" -gt "$latest" ]; }; then
-      latest="${BASH_REMATCH[1]}"
+    [[ "$tag" =~ $tag_re ]] || continue
+    a="${BASH_REMATCH[1]}" b="${BASH_REMATCH[2]}" c="${BASH_REMATCH[3]}"
+    if [ -z "$latest" ] || [ "$a" -gt "$la" ] ||
+      { [ "$a" -eq "$la" ] && { [ "$b" -gt "$lb" ] || { [ "$b" -eq "$lb" ] && [ "$c" -gt "$lc" ]; }; }; }; then
+      latest="$tag" la="$a" lb="$b" lc="$c"
     fi
   done <<<"$tags"
-  if [[ "$ref" =~ $ref_major_re ]]; then mine="${BASH_REMATCH[1]}"; fi
 
   # The recorded commit may be a short hash (install.sh falls back to one).
   if [ -z "$current" ]; then
@@ -1498,11 +1471,20 @@ update_check() {
   else
     log "${ref} has moved to ${current:0:7} since this copy was installed; update with:"
     update_command "$repo" "$ref"
-    echo "That replaces the tool and leaves the VM alone; homefield upgrade updates the VM."
+    advised=1
   fi
-  if [ -n "$mine" ] && [ -n "$latest" ] && [ "$latest" -gt "$mine" ]; then
-    log "v${latest} exists and is a breaking release; read CHANGELOG.md and the migration notes in docs/runbook.md before moving from v${mine}"
-    echo "  https://github.com/${repo}/blob/v${latest}/CHANGELOG.md"
+  # Only when the installed ref is a release tag too: a branch follows its own
+  # head, and a fixed commit has no release to compare.
+  if [ -n "$latest" ] && [[ "$ref" =~ $tag_re ]]; then
+    a="${BASH_REMATCH[1]}" b="${BASH_REMATCH[2]}" c="${BASH_REMATCH[3]}"
+    if [ "$la" -gt "$a" ] || { [ "$la" -eq "$a" ] && { [ "$lb" -gt "$b" ] || { [ "$lb" -eq "$b" ] && [ "$lc" -gt "$c" ]; }; }; }; then
+      log "${latest} is out (installed: ${ref}); read CHANGELOG.md for breaking changes, then update with:"
+      update_command "$repo" "$latest"
+      advised=1
+    fi
+  fi
+  if [ "$advised" = 1 ]; then
+    echo "That replaces the tool and leaves the VM alone; homefield upgrade updates the VM."
   fi
 }
 
@@ -1534,7 +1516,7 @@ main() {
   local cmd="" rest=()
   while [ $# -gt 0 ]; do
     case "$1" in
-      --instance) INSTANCE="${2:?--instance needs a value}"; INSTANCE_EXPLICIT=1; shift 2 ;;
+      --instance) INSTANCE="${2:?--instance needs a value}"; shift 2 ;;
       *)
         if [ -z "$cmd" ]; then cmd="$1"; else rest+=("$1"); fi
         shift

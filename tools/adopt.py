@@ -6,25 +6,25 @@ Stdlib only, and no YAML parser: the workflow text is read line by line, which
 is enough for the shapes GitHub workflows take and fails safe (a guard it
 cannot read counts as no guard, so adopt does not switch the repository on).
 
-A guard is a step that uses exactly ACTION or its deprecated alias
-ALIAS_ACTION (the owner and repository compared without case; a full commit
-SHA in place of the ref is accepted with a warning) and that can run on a pull
-request: see check_guard. ACTION reads its jobs from `jobs:`, the alias from
-`expected:`.
+A guard is a step that uses ACTION_PATH (the owner and repository compared
+without case) at an exact release tag (v0.1.0, v0.2.0, ...) or at a full
+commit SHA (accepted with a warning), and that can run on a pull request: see
+check_guard. Major-only tags (@v3), branches and any other ref are not
+recognized.
 
   adopt.py guards DIR       one line per step that uses some routing guard:
                             file:line <TAB> status <TAB> label <TAB> blocking
-                            <TAB> warnings <TAB> deprecations <TAB> events
+                            <TAB> warnings <TAB> events
                             <TAB> dependabot <TAB> fallback <TAB> job
                             entries (spaces). status is ok (a usable guard),
-                            blocked (a routing-guard@v3 step that cannot run
-                            on pull requests) or source (not an action adopt
-                            recognizes). blocking, warnings and deprecations
+                            blocked (a recognized routing-guard step that
+                            cannot run on pull requests) or source (not an
+                            action adopt recognizes). blocking and warnings
                             are texts joined by ";", or "-" when there are
                             none. events (spaces), dependabot and fallback
                             are the step's `with:` values, or the defaults
-                            when it sets none (the alias has no such inputs);
-                            "-" is a value set to nothing. The job entries
+                            when it sets none; "-" is a value set to
+                            nothing. The job entries
                             come last because they may be empty.
   adopt.py cache-keys DIR   one line per cache key that has runner.os and not
                             runner.arch: file:line: text
@@ -40,11 +40,12 @@ import re
 import sys
 import urllib.parse
 
-# Keep in step with the version docs/adopting.md and the README tell consumers
-# to pin; tests/adopt.sh checks that the docs still say it.
-ACTION = "i2Dev-com/homefield/routing-guard@v3"
-# The v3.0 name of the action, kept until v4 with `expected:` for `jobs:`.
-ALIAS_ACTION = "i2Dev-com/homefield/verify-routing@v3"
+# The release the snippet adopt prints pins, and that docs/adopting.md and the
+# README tell consumers to pin; tests/adopt.sh checks that the docs still say
+# it. Bump it when a release is cut.
+RELEASE = "v0.1.0"
+ACTION_PATH = "i2Dev-com/homefield/routing-guard"
+ACTION = f"{ACTION_PATH}@{RELEASE}"
 DEFAULT_LABEL = "homefield-ci"
 # The routing-guard options besides the label, and their defaults.
 DEFAULT_EVENTS = "pull_request"
@@ -53,14 +54,11 @@ DEFAULT_FALLBACK = "ubuntu-latest"
 
 # A step or job `uses:`; group 3 is the raw value.
 USES = re.compile(r"^(\s*)(-\s+)?uses:\s*(.*?)\s*$")
-ACTION_PATH, _, ACTION_REF = ACTION.partition("@")
-ALIAS_PATH = ALIAS_ACTION.partition("@")[0]
-# The repository was called ci-runner before v3. GitHub redirects its web and
-# API URLs but not `uses:`, so a step on the old path fails to resolve: adopt
-# names it to say what migrating means (to ACTION, not the alias).
-OLD_ACTION_PATH = "i2dev-com/ci-runner/verify-routing"
+# The refs adopt recognizes: an exact release tag, or a full commit SHA.
+RELEASE_REF = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+")
+SHA_REF = re.compile(r"[0-9a-fA-F]{40}")
 # What a step that uses some routing guard (any owner, any ref) has in `uses:`.
-STEP_MARKERS = ("/routing-guard@", "/verify-routing@")
+STEP_MARKER = "/routing-guard@"
 ACTION_DIR = "./.github/workflows/"
 # The trigger options after which a pull request may not run the workflow.
 FILTERS = ("branches", "branches-ignore", "paths", "paths-ignore")
@@ -367,12 +365,12 @@ def option(values, key, default):
 
 
 def guards(directory):
-    """(file:line, status, label, blocking, warnings, deprecations, events,
-    dependabot, fallback, job entries)
+    """(file:line, status, label, blocking, warnings, events, dependabot,
+    fallback, job entries)
     for every step that uses some routing guard. The status is "source" for
-    one that is not ACTION or ALIAS_ACTION (another repository or ref),
-    "blocked" for one that cannot run on a pull request, and "ok" for a usable
-    guard. A step on the alias is usable and carries a deprecation."""
+    one that is not ACTION_PATH at an exact release tag or a full commit SHA
+    (another repository, a branch, a major-only tag), "blocked" for one that
+    cannot run on a pull request, and "ok" for a usable guard."""
     files = {}
     for name in workflow_files(directory):
         lines = read_lines(os.path.join(directory, name))
@@ -383,39 +381,27 @@ def guards(directory):
         for at, line in enumerate(lines):
             m = USES.match(line)
             value = scalar(m.group(3)) if m else ""
-            if line.lstrip().startswith("#") or not any(marker in value for marker in STEP_MARKERS):
+            if line.lstrip().startswith("#") or STEP_MARKER not in value:
                 continue
             where = f"{name}:{at + 1}"
             path, _, ref = value.partition("@")
             values = with_values(lines, *step_bounds(lines, at))
-            alias = path.lower().endswith("/verify-routing")
-            jobs = [e for e in re.split(r"[\s,]+", values.get("expected" if alias else "jobs", "")) if e]
+            jobs = [e for e in re.split(r"[\s,]+", values.get("jobs", "")) if e]
             label = values.get("label") or DEFAULT_LABEL
-            sha = re.fullmatch(r"[0-9a-fA-F]{40}", ref) is not None
-            if path.lower() not in (ACTION_PATH.lower(), ALIAS_PATH.lower()) or (ref != ACTION_REF and not sha):
-                reason = f"the routing-guard step at {where} uses {value}, but adopt recognizes {ACTION} (docs/adopting.md, step 3)"
-                if path.lower() == OLD_ACTION_PATH:
-                    reason += (
-                        f". That is the ci-runner guard, which no longer resolves since the repository was renamed:"
-                        f" migrating means switching the step to {ACTION} and the runs-on label"
-                        " from local-ci to homefield-ci in the same change"
-                        " (docs/runbook.md, \"Migrating from ci-runner (v2)\", step 6)"
-                    )
-                found.append((where, "source", label, [reason], [], [], DEFAULT_EVENTS, DEFAULT_DEPENDABOT, DEFAULT_FALLBACK, jobs))
+            sha = SHA_REF.fullmatch(ref) is not None
+            if path.lower() != ACTION_PATH.lower() or not (sha or RELEASE_REF.fullmatch(ref)):
+                reason = f"the routing-guard step at {where} uses {value}, but adopt recognizes {ACTION_PATH} at an exact release tag such as {RELEASE}, or at a full commit SHA (docs/adopting.md, step 3)"
+                found.append((where, "source", label, [reason], [], DEFAULT_EVENTS, DEFAULT_DEPENDABOT, DEFAULT_FALLBACK, jobs))
                 continue
             blocks, warns = check_guard(name, at, files)
             if sha:
-                warns.append(f"{where}: pinned to a commit (adopt checks it with {ACTION_REF}'s rules)")
-            deprecated = []
-            if alias:
-                deprecated.append(f"{where}: {ALIAS_PATH} is a deprecated alias of {ACTION_PATH}: switch the step to {ACTION} and rename expected: to jobs: (the alias is removed in v4)")
-            # The alias predates the options and always gets the defaults.
-            opts = (DEFAULT_EVENTS, DEFAULT_DEPENDABOT, DEFAULT_FALLBACK) if alias else (
+                warns.append(f"{where}: pinned to a commit (adopt checks it as it would a release tag)")
+            opts = (
                 option(values, "events", DEFAULT_EVENTS),
                 option(values, "dependabot", DEFAULT_DEPENDABOT),
                 option(values, "fallback", DEFAULT_FALLBACK),
             )
-            found.append((where, "blocked" if blocks else "ok", label, blocks, warns, deprecated, *opts, jobs))
+            found.append((where, "blocked" if blocks else "ok", label, blocks, warns, *opts, jobs))
     return found
 
 
@@ -486,8 +472,8 @@ def main():
     args = ap.parse_args()
 
     if args.cmd == "guards":
-        for where, status, label, blocks, warns, deprecated, events, dependabot, fallback, jobs in guards(args.dir):
-            joined = [";".join(t.replace(";", ",") for t in texts) or "-" for texts in (blocks, warns, deprecated)]
+        for where, status, label, blocks, warns, events, dependabot, fallback, jobs in guards(args.dir):
+            joined = [";".join(t.replace(";", ",") for t in texts) or "-" for texts in (blocks, warns)]
             print("\t".join([where, status, label, *joined, events, dependabot, fallback, " ".join(jobs)]))
     elif args.cmd == "cache-keys":
         for hit in cache_keys(args.dir):

@@ -43,4 +43,5 @@ These are documented and not treated as vulnerabilities; see the
 
 ## Supported versions
 
-Fixes land on `main` and in the current major tag of `routing-guard`.
+Fixes land on `main` and ship in a new release. Only the latest release is
+supported.
