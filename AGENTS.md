@@ -75,11 +75,14 @@ agreement — run it when touching either.
   a breaking change, as below.
 
 - A change that makes a previously passing workflow fail (new guard, new
-  default) is a **new major** `routing-guard@vN`; compatible changes move the
-  current tag. Say so in the PR; `CHANGELOG.md` explains the upgrade.
+  default) is a **new major** `routing-guard@vN`; compatible changes wait on
+  `main`, under *Unreleased* in `CHANGELOG.md`, until the owner cuts a release
+  that moves the current tag. Don't ask for a tag move after each merge; only
+  for something that can't wait, such as a security fix. Say in the PR
+  whether a change is compatible; `CHANGELOG.md` explains the upgrade.
 - This repo's own CI checks its workflow against the **published `@v3`
-  action**, not the local checkout — a breaking change lands only when the
-  tag moves.
+  action**, not the local checkout — a breaking change lands only when a
+  release moves the tag.
 - The checker rejects multi-line `runs-on`; write expressions on one line.
 
 ## Safety and workflow conventions
