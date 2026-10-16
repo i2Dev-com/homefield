@@ -242,8 +242,9 @@ shellcheck bin/homefield install.sh vm/provision.sh routing-guard/tests/run.sh t
 ## Versioning
 
 Consumers pin `routing-guard@vN`. Merged changes wait on `main` until a
-release; a compatible release moves the current major tag. A change that makes a previously passing workflow fail, such as a
-new guard in the expression, is a new major, because every consumer has to
+release; a compatible release moves the current major tag. A change that
+makes a previously passing workflow fail, such as a new guard in the
+expression, is a new major, because every consumer has to
 update its inline copies at the same time; [`CHANGELOG.md`](CHANGELOG.md)
 says how to upgrade. The docs on `main` can run ahead of the latest tag;
 anything not yet released is listed under *Unreleased*.
