@@ -33,14 +33,7 @@ It has three parts:
 
 ## Quick start
 
-On an Apple Silicon Mac, in a terminal. While this repository is private, the
-installer is read with `gh`, logged in with access to it:
-
-```bash
-gh api 'repos/i2Dev-com/homefield/contents/install.sh?ref=v0.1.0' -H 'Accept: application/vnd.github.raw' | bash
-```
-
-Once the repository is public, `curl` does the same without `gh`:
+On an Apple Silicon Mac, in a terminal:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/i2Dev-com/homefield/v0.1.0/install.sh | bash
@@ -268,10 +261,6 @@ same time. Compatible changes bump the patch. [`CHANGELOG.md`](CHANGELOG.md)
 says how to upgrade. Merged changes wait on `main`, listed under *Unreleased*
 in the changelog, until a release is cut, so the docs on `main` can run ahead
 of the latest tag.
-
-While this repository is private, it has to allow access from the other
-repositories in the organization for them to use the action: *Settings →
-Actions → General → Access*.
 
 ## Contributing, security, license
 
