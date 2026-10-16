@@ -194,6 +194,12 @@ for the current terms.
 
 ## Alternatives
 
+- **[GitHub's own self-hosted runner](https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/add-runners)
+  on the Mac**: a few commands (`config.sh`, then `run.sh` or `svc.sh`), but
+  jobs run as your macOS user with your files, SSH keys and credentials in
+  reach, routed jobs wait while the runner is offline, and nothing keeps fork
+  pull requests, Dependabot or a widened `runs-on` off it. Enough for one
+  private repository whose every contributor you trust with your Mac.
 - **[actions-runner-controller](https://github.com/actions/actions-runner-controller)**:
   ephemeral runners on Kubernetes. The right choice for a team with a
   cluster; far more to operate than one VM.
