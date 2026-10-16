@@ -11,6 +11,12 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ## Unreleased
 
+### Changed
+
+- The README installs with `curl` now that the repository is public, and
+  `homefield version` prints the same `curl` one-liner when an update is
+  available, in place of the `gh api` one.
+
 ## v0.1.0 (2026-10-16)
 
 First public release.

@@ -1411,13 +1411,13 @@ update_command() {
   [ "$repo" = i2Dev-com/homefield ] || settings="${settings}HOMEFIELD_REPO=${repo} "
   [ "$ref" = v0.1.0 ] || settings="${settings}HOMEFIELD_REF=${ref} "
   [ "$ROOT" = "$HOME/.local/share/homefield" ] || settings="${settings}HOMEFIELD_HOME='${ROOT}' "
-  echo "  gh api 'repos/${repo}/contents/install.sh?ref=${ref}' -H 'Accept: application/vnd.github.raw' | ${settings}bash"
+  echo "  curl -fsSL https://raw.githubusercontent.com/${repo}/${ref}/install.sh | ${settings}bash"
 }
 
 # update_check <repo> <ref> <commit>: says whether the ref this copy was
 # installed from has moved, and whether a later release exists (the highest
 # vMAJOR.MINOR.PATCH tag, when the installed ref is such a tag too). Reads
-# GitHub through gh (the repository is private). gh's own output is dropped:
+# GitHub through gh. gh's own output is dropped:
 # whatever goes wrong is one line here, and nothing here fails the command.
 update_check() {
   local repo="$1" ref="$2" commit="$3" current="" tags="" tag="" latest="" advised=0

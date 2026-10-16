@@ -334,7 +334,7 @@ printf 'repo=acme/tool\nref=v0.1.0\ncommit=%s\n' "$old" >"$work/inst/.homefield-
 
 version_run V_COMMIT="$new"
 record "a moved ref: says where it moved, exit 0" "0/yes" "$rc/$(has "$out" 'homefield: v0.1.0 has moved to 89abcde since this copy was installed; update with:')"
-record "...with the one-liner for that ref and this copy" "yes" "$(has "$out" "  gh api 'repos/acme/tool/contents/install.sh?ref=v0.1.0' -H 'Accept: application/vnd.github.raw' | HOMEFIELD_REPO=acme/tool HOMEFIELD_HOME='$work/inst' bash")"
+record "...with the one-liner for that ref and this copy" "yes" "$(has "$out" "  curl -fsSL https://raw.githubusercontent.com/acme/tool/v0.1.0/install.sh | HOMEFIELD_REPO=acme/tool HOMEFIELD_HOME='$work/inst' bash")"
 record "...saying the VM is left alone" "yes" "$(has "$out" 'homefield upgrade updates the VM')"
 record "...and no later release when v0.1.0 is the highest" "no" "$(has "$out" ' is out ')"
 record "...the VM note comes once" "1" "$(printf '%s\n' "$out" | grep -c 'homefield upgrade updates the VM')"
@@ -347,7 +347,7 @@ printf 'repo=i2Dev-com/homefield\nref=v0.1.0\ncommit=%s\n' "$old" >"$dflt/.homef
 : >"$calls"
 out="$(env -i HOME="$work/h" PATH="$work/vgh" CALLS="$calls" V_TAGS="$tags_rel" V_COMMIT="$new" "$BASH" "$dflt/bin/homefield" version 2>&1 </dev/null)"
 record "default repo, ref and place: the README's one-liner" "yes" "$(has "$out" "
-  gh api 'repos/i2Dev-com/homefield/contents/install.sh?ref=v0.1.0' -H 'Accept: application/vnd.github.raw' | bash
+  curl -fsSL https://raw.githubusercontent.com/i2Dev-com/homefield/v0.1.0/install.sh | bash
 ")"
 
 printf 'repo=acme/tool\nref=release/1\ncommit=%s\n' "$old" >"$work/inst/.homefield-ref"
@@ -358,7 +358,7 @@ record "...even when a release exists" "no" "$(has "$out" ' is out ')"
 
 printf 'repo=acme/tool\nref=v0.1.0\ncommit=%s\n' "$old" >"$work/inst/.homefield-ref"
 version_run V_COMMIT="$old" V_TAGS="$(printf 'v0.1.0\nv0.2.0')"
-record "a later release: says so with the changelog and the one-liner for it, exit 0" "0/yes/yes/yes" "$rc/$(has "$out" 'homefield: v0.2.0 is out (installed: v0.1.0); read CHANGELOG.md for breaking changes, then update with:')/$(has "$out" "  gh api 'repos/acme/tool/contents/install.sh?ref=v0.2.0' -H 'Accept: application/vnd.github.raw' | HOMEFIELD_REPO=acme/tool HOMEFIELD_REF=v0.2.0 HOMEFIELD_HOME='$work/inst' bash")/$(has "$out" 'up to date with v0.1.0')"
+record "a later release: says so with the changelog and the one-liner for it, exit 0" "0/yes/yes/yes" "$rc/$(has "$out" 'homefield: v0.2.0 is out (installed: v0.1.0); read CHANGELOG.md for breaking changes, then update with:')/$(has "$out" "  curl -fsSL https://raw.githubusercontent.com/acme/tool/v0.2.0/install.sh | HOMEFIELD_REPO=acme/tool HOMEFIELD_REF=v0.2.0 HOMEFIELD_HOME='$work/inst' bash")/$(has "$out" 'up to date with v0.1.0')"
 record "...saying the VM is left alone, once" "1" "$(printf '%s\n' "$out" | grep -c 'homefield upgrade updates the VM')"
 version_run V_COMMIT="$old" V_TAGS="$(printf 'v0.2.0\nv0.1.0')"
 record "...whatever the order of the tags" "yes" "$(has "$out" 'v0.2.0 is out')"

@@ -2,8 +2,6 @@
 # One-line installer for homefield: downloads the tool, puts `homefield` on the
 # PATH, makes sure Lima is there, and hands over to `homefield install`.
 #
-#   gh api 'repos/i2Dev-com/homefield/contents/install.sh?ref=v0.1.0' \
-#     -H 'Accept: application/vnd.github.raw' | bash
 #   curl -fsSL https://raw.githubusercontent.com/i2Dev-com/homefield/v0.1.0/install.sh | bash
 #   ... | bash -s -- --url https://github.com/<org>      # install options pass through
 #
@@ -64,8 +62,8 @@ check_settings() {
   fi
 }
 
-# fetch_tarball <file>: the source of REF. gh when it works, since it is the
-# only way to read a private repository; otherwise a plain download.
+# fetch_tarball <file>: the source of REF. gh when it works, which also reads
+# a private fork (HOMEFIELD_REPO); otherwise a plain download.
 fetch_tarball() {
   local dest="$1"
   # gh prints an error body on stdout, so the exit status decides, and a
