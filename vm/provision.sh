@@ -16,7 +16,11 @@
 #   RUNNER_LABEL  the custom label workflows route on (default homefield-ci). Must
 #                 match routing-guard's `label` input and the label in every
 #                 inline expression.
-#   RUNNER_NAME   default: the guest's hostname (lima-<instance>).
+#   RUNNER_NAME   default: the guest's hostname (lima-<instance>), which is the
+#                 same on every Mac; give each runner its own name in the scope.
+#                 A name that is already registered there is refused ("A
+#                 runner exists with the same name"); remove that registration
+#                 first (runners page, or `bin/homefield install --replace`).
 #   RUNNER_GROUP  org runner group to join (default homefield-ci).
 #   RUNNER_EXTRA_PACKAGES
 #                 apt packages to install on top of the base set, space-
@@ -312,14 +316,17 @@ if [ ! -f "$RUNNER_HOME/.runner" ]; then
   if [ -n "$RUNNER_GROUP" ]; then
     group_args+=(--runnergroup "$RUNNER_GROUP")
   fi
+  # No --replace: it would hand this machine the registration of any runner
+  # already using the name, wherever that runs (#52), and it keeps that
+  # registration's runner group, ignoring --runnergroup (actions/runner#4091),
+  # which could put the runner in Default. A taken name fails here instead.
   runner_config "$RUNNER_TOKEN" \
     --unattended \
     --url "$RUNNER_URL" \
     --name "$RUNNER_NAME" \
     --labels "$RUNNER_LABELS" \
     "${group_args[@]}" \
-    --work _work \
-    --replace
+    --work _work
 fi
 RUNNER_TOKEN=""
 RUNNER_REMOVE_TOKEN=""

@@ -24,6 +24,9 @@ cat >"$work/gh" <<'EOF'
 #!/bin/sh
 echo "gh $*" >>"$CALLS"
 case "$*" in
+  *"-X DELETE"*)
+    [ -z "${GH_DELETE_FAIL:-}" ] || { echo "gh: HTTP 422" >&2; exit 1; }
+    ;;
   *"-X POST"*)
     if [ -n "${GH_CREATE_ERR:-}" ]; then echo "$GH_CREATE_ERR" >&2; exit 1; fi
     echo '{"id": 7}'
@@ -68,7 +71,13 @@ case "$1" in
     ;;
 esac
 EOF
-chmod +x "$stubs/uname" "$stubs/limactl"
+# This Mac's name for the default runner name; SCUTIL_FAIL makes it unreadable.
+cat >"$stubs/scutil" <<'EOF'
+#!/bin/sh
+[ -z "${SCUTIL_FAIL:-}" ] || exit 1
+echo "${SCUTIL_NAME:-Test-Mac}"
+EOF
+chmod +x "$stubs/uname" "$stubs/limactl" "$stubs/scutil"
 
 printf 'Default\tall\tfalse\nhomefield-ci\tselected\tfalse\nLocal CI\tselected\tfalse\n' >"$work/groups-ok"
 printf 'Default\tall\tfalse\nhomefield-ci\tall\tfalse\n' >"$work/groups-all"
@@ -221,6 +230,56 @@ record "install --group-exists: past the group step to creating the VM" "yes/no/
 
 run_fn LIMA_STATUS=Running -- cmd_install --url not-a-url
 record "a bad URL is refused before an existing VM is touched" "nonzero/yes/0" "$(nonzero "$rc")/$(has "$out" '--url must be')/$(called 'limactl start')"
+
+printf 'test-mac-homefield\tonline\t41\n' >"$work/runners-name-online"
+run_fn GH_GROUPS="$work/groups-ok" GH_RUNNERS="$work/runners-name-online" -- cmd_install --url https://github.com/acme
+record "no VM, the default name taken: refused before the VM is created" "nonzero/yes/0" "$(nonzero "$rc")/$(has "$out" 'test-mac-homefield is already registered and online')/$(called 'limactl create')"
+
+# ── runner name ────────────────────────────────────────────────────────────
+echo "runner name"
+run_fn -- default_name
+record "default: this Mac's local hostname and the instance, lower case" "0/test-mac-homefield" "$rc/$out"
+run_fn SCUTIL_NAME=Studio-2 HOMEFIELD_INSTANCE=CI.b -- default_name
+record "...with another instance" "studio-2-ci.b" "$out"
+run_fn "SCUTIL_NAME=Ana's Mac" -- default_name
+record "...characters a runner name should not have become '-'" "ana-s-mac-homefield" "$out"
+run_fn SCUTIL_FAIL=1 -- default_name
+record "an unreadable Mac name stops, asking for --name" "nonzero/yes" "$(nonzero "$rc")/$(has "$out" 'pass --name')"
+
+# Rows as check_name_free's --jq makes them: name, status, id.
+printf 'other\tonline\t41\nlima-homefield\toffline\t42\n' >"$work/runners-names"
+run_fn GH_RUNNERS="$work/runners-names" -- check_name_free https://github.com/acme test-mac-homefield 0
+record "a free name passes, reading the runners list paginated" "0/1" "$rc/$(called 'paginate orgs/acme/actions/runners')"
+run_fn GH_RUNNERS="$work/runners-names" -- check_name_free https://github.com/acme OTHER 0
+record "a name online elsewhere is refused, ignoring case" "nonzero/yes/yes" "$(nonzero "$rc")/$(has "$out" 'OTHER is already registered and online')/$(has "$out" '--name')"
+run_fn GH_RUNNERS="$work/runners-names" -- check_name_free https://github.com/acme lima-homefield 0
+record "an offline one is refused, offering --replace and the runners page" "nonzero/yes/yes" "$(nonzero "$rc")/$(has "$out" 'run this again with --replace')/$(has "$out" 'organizations/acme/settings/actions/runners')"
+# shellcheck disable=SC2016  # $REPLACE_ID is expanded by the sourced shell
+run_fn GH_RUNNERS="$work/runners-names" -- eval 'check_name_free https://github.com/acme lima-homefield 1 && echo "id=$REPLACE_ID"'
+record "--replace: an offline one is marked for removal, by id" "0/yes/yes" "$rc/$(has "$out" '--replace removes that registration before registering')/$(has "$out" 'id=42')"
+# shellcheck disable=SC2016  # $REPLACE_ID is expanded by the sourced shell
+run_fn GH_RUNNERS="$work/runners-names" -- eval 'check_name_free https://github.com/acme other 1 && echo "id=$REPLACE_ID"'
+record "--replace: an online one too, with a warning" "0/yes/yes" "$rc/$(has "$out" 'warning: other is registered and online')/$(has "$out" 'id=41')"
+# shellcheck disable=SC2016  # $REPLACE_ID is expanded by the sourced shell
+run_fn GH_RUNNERS="$work/runners-names" -- eval 'check_name_free https://github.com/acme free-name 1 && echo "id=[$REPLACE_ID]"'
+record "--replace with a free name removes nothing" "0/yes" "$rc/$(has "$out" 'id=[]')"
+run_fn GH_RUNNERS_FAIL=1 -- check_name_free https://github.com/acme other 1
+record "--replace with an unreadable list stops, pointing at the runners page" "nonzero/yes" "$(nonzero "$rc")/$(has "$out" 'remove other at https://github.com/organizations/acme/settings/actions/runners')"
+
+run_fn -- eval 'REPLACE_ID=42; remove_taken_name https://github.com/acme lima-homefield'
+record "remove_taken_name deletes the runner by id" "0/gh api -X DELETE orgs/acme/actions/runners/42" "$rc/$(grep DELETE "$calls")"
+run_fn -- remove_taken_name https://github.com/acme lima-homefield
+record "...and nothing without an id" "0/0" "$rc/$(called DELETE)"
+run_fn GH_DELETE_FAIL=1 -- eval 'REPLACE_ID=42; remove_taken_name https://github.com/acme/app lima-homefield'
+record "...a failed delete stops the install, pointing at the runners page" "nonzero/yes" "$(nonzero "$rc")/$(has "$out" 'remove it at https://github.com/acme/app/settings/actions/runners')"
+run_fn GH_RUNNERS="$work/runners-names" -- check_name_free https://github.com/acme/app other 0
+record "a repository scope reads the repository's runners" "nonzero/1" "$(nonzero "$rc")/$(called 'repos/acme/app/actions/runners')"
+run_fn GH_RUNNERS_FAIL=1 -- check_name_free https://github.com/acme other 0
+record "an unreadable list does not stop the install" "0/yes" "$rc/$(has "$out" 'registration refuses it if it is not')"
+
+# config.sh --replace takes another runner's registration (#52) and keeps its
+# runner group (actions/runner#4091), so provision.sh must never pass it.
+record "provision.sh never registers with --replace" "0" "$(grep -c -e '^[^#]*--replace' "$ROOT/vm/provision.sh")"
 
 # ── wait_online ────────────────────────────────────────────────────────────
 echo "wait_online"

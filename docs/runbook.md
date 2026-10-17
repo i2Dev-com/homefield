@@ -166,7 +166,11 @@ If it cannot reach GitHub it says so and still exits 0. From a checkout,
 `https://github.com/<owner>/<repo>`; options: `bin/homefield help`) is the
 same command. Either way it does every step below, asks for the URL if it
 was not given, creates the runner group, waits until the runner is online and
-enables autostart. It fetches the registration token with `gh` when it can,
+enables autostart. It names the runner after the Mac and the instance
+(`<local hostname>-homefield`, from `scutil --get LocalHostName`; `--name`
+picks another), and before creating anything refuses a name that is already
+registered in the scope. The name shows on the runners page and in job
+logs. It fetches the registration token with `gh` when it can,
 and otherwise asks you to paste one. The steps are what it does, and the way
 to do it by hand, from a checkout of this repository:
 
@@ -184,17 +188,22 @@ limactl shell homefield -- sh -c 'mount | grep -Ec "virtiofs|9p|sshfs|reverse-ss
 #    goes in on stdin, never on a command line, where any process in the guest
 #    could read it; see "Registration tokens" below for where to get it.
 #    RUNNER_URL is required. RUNNER_LABEL (default homefield-ci), RUNNER_NAME
-#    (default: the guest hostname) and RUNNER_GROUP (default homefield-ci) are
-#    optional; see the top of provision.sh.
+#    and RUNNER_GROUP (default homefield-ci) are optional; see the top of
+#    provision.sh. RUNNER_NAME defaults to the guest hostname, lima-homefield,
+#    which is the same on every Mac: give each runner in the scope its own
+#    name. A name that is already registered is refused: remove that
+#    registration on the runners page first.
 limactl copy vm/provision.sh homefield:/tmp/provision.sh
 printf 'RUNNER_TOKEN=%s\n' "$TOKEN" |
-  limactl shell homefield sudo RUNNER_URL=https://github.com/<org> bash /tmp/provision.sh
+  limactl shell homefield sudo RUNNER_URL=https://github.com/<org> \
+    RUNNER_NAME="$(scutil --get LocalHostName | tr '[:upper:]' '[:lower:]')-homefield" \
+    bash /tmp/provision.sh
 unset TOKEN
 ```
 
 Then, on the runners page (*Organization settings → Actions → Runners*, or
 the repository's *Settings → Actions → Runners*), confirm the runner
-(`lima-homefield`, or its `RUNNER_NAME`) is **Idle**, in the `homefield-ci`
+(its `RUNNER_NAME`, such as `my-mac-homefield`) is **Idle**, in the `homefield-ci`
 group for an organization, with labels `self-hosted, Linux, ARM64, homefield-ci`.
 
 Re-running `provision.sh` on a registered runner (to upgrade it) needs no
@@ -296,6 +305,7 @@ gh run rerun <run-id> --repo <owner>/<repo>
 | Symptom | Cause | What happens | Recovery |
 |---|---|---|---|
 | PR job "Waiting for a runner to pick up this job" | VM stopped, Mac asleep or offline, runner service down | The PR's check waits in the queue, and after 24 h GitHub fails it. By default merges and deploys are unaffected, because pushes run hosted; with `push` (or `workflow_dispatch`, `schedule`) in `events`, those jobs wait too. | Start the VM (`limactl start homefield`), or `bin/homefield route hosted --repo <owner>/<repo>`. |
+| `install` or `provision.sh` stops: "already registered" or "A runner exists with the same name" | Another runner in the scope has the name: another machine's, or this Mac's from before a VM was deleted without `uninstall` | Nothing is registered; the other runner is untouched | Another machine's: pick another name (`--name`, `RUNNER_NAME`). A stale one of this Mac's: `install --replace`, which removes it right before registering, or remove it on the runners page and run again. Not `config.sh --replace`: it keeps the old registration's runner group ([actions/runner#4091](https://github.com/actions/runner/issues/4091)) |
 | Waiting forever although the runner is online and idle | The repository is not in the runner group | Same as above | `bin/homefield adopt --repo <owner>/<repo>` adds it (or add it in the organization settings), or switch the repository to hosted |
 | Waiting forever although the runner is online and idle, and the repository is in the group | The label in the expression is not one of the runner's labels. For example, an expression that uses the default label `homefield-ci` while the runner was registered with another label | Same as above | Add the label to the runner (*Settings → Actions → Runners →* the runner *→ Labels*), or pass the runner's label to `routing-guard` as `label:` and use it in the expression |
 | A PR job waits while another runs | One runner runs one job at a time, across all repositories | Serialised, not failed | Accept it, or switch the less urgent repository to hosted |
@@ -487,7 +497,9 @@ As a checklist:
 1. Copy the extra-packages list and the hooks out of the old guest (above),
    and keep the hooks in version control.
 2. Provision the new machine with the same `RUNNER_LABEL` and group, a
-   different `RUNNER_NAME`, and the same extra packages and hooks. Two runners
+   different `RUNNER_NAME` (`bin/homefield install` names it after the Mac,
+   and refuses a name already in use), and the same extra packages and
+   hooks. Two runners
    with one label share the queue, so it starts taking jobs once it is online.
 3. Confirm it is online on the runners page.
 4. Same CPU architecture: jobs go to whichever runner is free, so to see a
