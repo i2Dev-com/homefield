@@ -62,7 +62,12 @@ install:
   --url URL          https://github.com/<org> or https://github.com/<owner>/<repo>
                      (asked for on a terminal when a new registration has none)
   --label LABEL      routing label (default homefield-ci)
-  --name NAME        runner name (default: the guest hostname, lima-<instance>)
+  --name NAME        runner name (default: this Mac's local hostname and the
+                     instance, e.g. my-mac-homefield). Must be free in the
+                     scope: a name already registered there is refused
+  --replace          register even if the name is taken, taking over that
+                     registration (a stale one of this Mac's, say). If it is
+                     another machine's runner, that runner stops working
   --group GROUP      org runner group (default homefield-ci; ignored for a repo).
                      Created if missing: selected repositories, no public ones.
                      On the GitHub Free plan, use Default: custom groups
@@ -360,13 +365,65 @@ ask_url() {
   printf '%s' "$url"
 }
 
-# prepare_registration: for cmd_install, whose url and group it reads and
-# sets (bash functions see their caller's locals). Asks for the URL if there
-# is none, validates it and sorts out the runner group.
+# prepare_registration: for cmd_install, whose url, group, name and replace
+# it reads and sets (bash functions see their caller's locals). Asks for the
+# URL if there is none, validates it, sorts out the runner group and the name.
 prepare_registration() {
   [ -n "$url" ] || url="$(ask_url)" || exit 1
   validate_scope "$url"
   ensure_group "$url" "${group:-homefield-ci}"
+  [ -n "$name" ] || name="$(default_name)" || exit 1
+  check_name_free "$url" "$name" "$replace"
+}
+
+# ── Runner name ─────────────────────────────────────────────────────────────
+# The guest's hostname, lima-<instance>, is the same on every Mac, so a second
+# Mac registering under it would take the first one's registration (#52). The
+# default is this Mac's local hostname plus the instance instead: unique per
+# Mac on a network, and it says which machine a runner is on.
+
+# default_name: prints <local hostname>-<instance>, lower case, with anything
+# but letters, digits, '.', '_' and '-' replaced by '-'.
+default_name() {
+  local host
+  host="$(scutil --get LocalHostName 2>/dev/null)" || host=""
+  [ -n "$host" ] || die "install: could not read this Mac's name (scutil --get LocalHostName); pass --name"
+  lower "${host}-${INSTANCE}" | tr -c 'a-z0-9._\n-' '-'
+}
+
+# check_name_free <url> <name> <replace>: refuses a name that is already
+# registered in the scope, before anything is created. Without --replace,
+# registration would refuse it too (provision.sh no longer passes --replace by
+# default), but only after the VM is built. Names are compared ignoring case.
+# A runners list that cannot be read is not a reason to stop: registration
+# still refuses a taken name.
+check_name_free() {
+  local url="$1" name="$2" replace="$3" scope rows n status taken="" page
+  command -v gh >/dev/null || return 0
+  scope="$(api_scope "$url")" || exit 1
+  page="$(runners_page "$url")" || exit 1
+  if ! rows="$(gh api --paginate "${scope}/actions/runners?per_page=100" \
+    --jq '.runners[] | [.name, .status] | @tsv' 2>/dev/null)"; then
+    log "could not list the runners at ${url} to check that ${name} is free; registration refuses it if it is not"
+    return 0
+  fi
+  while IFS=$'\t' read -r n status _; do
+    [ -n "$n" ] || continue
+    [ "$(lower "$n")" = "$(lower "$name")" ] && taken="$status"
+  done <<<"$rows"
+  [ -n "$taken" ] || return 0
+  if [ "$replace" = 1 ]; then
+    if [ "$taken" = online ]; then
+      echo "homefield: warning: ${name} is registered and online at ${url}; --replace takes over its registration, and the runner that has it stops working" >&2
+    else
+      log "${name} is registered (${taken}) at ${url}; --replace takes over that registration"
+    fi
+    return 0
+  fi
+  if [ "$taken" = online ]; then
+    die "a runner named ${name} is already registered and online at ${url}, most likely on another machine; pick another name with --name (${page})"
+  fi
+  die "a runner named ${name} is already registered (${taken}) at ${url}. If it is this Mac's old registration, run this again with --replace; otherwise pick another name with --name, or remove it at ${page}"
 }
 
 # ── Runner group ────────────────────────────────────────────────────────────
@@ -593,7 +650,7 @@ enable_autostart() {
 
 # ── Commands ────────────────────────────────────────────────────────────────
 cmd_install() {
-  local url="" label="" name="" group="" packages="" packages_set=0 cpus="" memory="" autostart=1
+  local url="" label="" name="" group="" packages="" packages_set=0 cpus="" memory="" autostart=1 replace=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --url) url="${2:?--url needs a value}"; shift 2 ;;
@@ -605,6 +662,7 @@ cmd_install() {
       --memory) memory="${2:?--memory needs a value}"; shift 2 ;;
       --no-autostart) autostart=0; shift ;;
       --group-exists) GROUP_EXISTS=1; shift ;;
+      --replace) replace=1; shift ;;
       *) die "install: unknown option $1 (see bin/homefield help)" ;;
     esac
   done
@@ -635,9 +693,9 @@ cmd_install() {
   fi
 
   [ "$prepared" = 1 ] || prepare_registration
-  local env=(RUNNER_URL="$url")
+  local env=(RUNNER_URL="$url" RUNNER_NAME="$name")
   [ -n "$label" ] && env+=(RUNNER_LABEL="$label")
-  [ -n "$name" ] && env+=(RUNNER_NAME="$name")
+  [ "$replace" = 1 ] && env+=(RUNNER_REPLACE=1)
   [ -n "$group" ] && env+=(RUNNER_GROUP="$group")
   [ "$packages_set" = 1 ] && env+=(RUNNER_EXTRA_PACKAGES="$packages")
 
@@ -647,7 +705,7 @@ cmd_install() {
   run_provision "RUNNER_TOKEN=${token}"$'\n' "${env[@]}"
   token=""
   [ "$autostart" = 1 ] && enable_autostart
-  # The name the runner registered under (--name, else the guest hostname).
+  # The name the runner registered under, read back from its config.
   local registered_name=""
   registered_name="$(runner_setting agentName)" || registered_name=""
   wait_online "$url" "$registered_name" "${group:-homefield-ci}"

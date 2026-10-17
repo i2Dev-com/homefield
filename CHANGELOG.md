@@ -11,6 +11,20 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ## Unreleased
 
+### Fixed
+
+- Installing on a second Mac with default settings no longer takes over the
+  first Mac's runner (#52). Every Mac's default runner name was the guest
+  hostname, `lima-homefield`, and registration replaced any runner of that
+  name, so the first runner silently stopped working. `homefield install` now
+  names the runner after the Mac and the instance (`<local
+  hostname>-<instance>`), and before creating anything it refuses a name
+  already registered in the scope: `--name` picks another, and the new
+  `--replace` takes over a stale registration. `provision.sh` no longer
+  replaces a runner of the same name unless `RUNNER_REPLACE=1`, so
+  registration itself refuses a taken name when the runners list can't be
+  read. Registered runners keep their names; nothing to do on upgrade.
+
 ### Changed
 
 - The README installs with `curl` now that the repository is public, and
