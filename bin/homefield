@@ -65,9 +65,9 @@ install:
   --name NAME        runner name (default: this Mac's local hostname and the
                      instance, e.g. my-mac-homefield). Must be free in the
                      scope: a name already registered there is refused
-  --replace          register even if the name is taken, taking over that
-                     registration (a stale one of this Mac's, say). If it is
-                     another machine's runner, that runner stops working
+  --replace          if the name is taken, remove that registration (a stale
+                     one of this Mac's, say) right before registering. If it
+                     is another machine's runner, that runner stops working
   --group GROUP      org runner group (default homefield-ci; ignored for a repo).
                      Created if missing: selected repositories, no public ones.
                      On the GitHub Free plan, use Default: custom groups
@@ -392,38 +392,62 @@ default_name() {
 }
 
 # check_name_free <url> <name> <replace>: refuses a name that is already
-# registered in the scope, before anything is created. Without --replace,
-# registration would refuse it too (provision.sh no longer passes --replace by
-# default), but only after the VM is built. Names are compared ignoring case.
-# A runners list that cannot be read is not a reason to stop: registration
-# still refuses a taken name.
+# registered in the scope, before anything is created. Registration would
+# refuse it too (provision.sh never passes --replace), but only after the VM
+# is built. Names are compared ignoring case. A runners list that cannot be
+# read is not a reason to stop, except for --replace, which has to find the
+# registration it removes.
+#
+# --replace removes the old registration (remove_taken_name, just before
+# registering) rather than using config.sh's --replace, which keeps the old
+# registration's runner group and ignores the one asked for
+# (actions/runner#4091). Sets REPLACE_ID to the id to remove.
+REPLACE_ID=""
 check_name_free() {
-  local url="$1" name="$2" replace="$3" scope rows n status taken="" page
-  command -v gh >/dev/null || return 0
+  local url="$1" name="$2" replace="$3" scope rows n status id taken="" taken_id="" page
   scope="$(api_scope "$url")" || exit 1
   page="$(runners_page "$url")" || exit 1
-  if ! rows="$(gh api --paginate "${scope}/actions/runners?per_page=100" \
-    --jq '.runners[] | [.name, .status] | @tsv' 2>/dev/null)"; then
+  if ! command -v gh >/dev/null || ! rows="$(gh api --paginate "${scope}/actions/runners?per_page=100" \
+    --jq '.runners[] | [.name, .status, (.id | tostring)] | @tsv' 2>/dev/null)"; then
+    [ "$replace" != 1 ] || die "--replace needs gh to list the runners at ${url} (org owner + admin:org, or repository admin); remove ${name} at ${page} instead and run this again without --replace"
     log "could not list the runners at ${url} to check that ${name} is free; registration refuses it if it is not"
     return 0
   fi
-  while IFS=$'\t' read -r n status _; do
+  while IFS=$'\t' read -r n status id; do
     [ -n "$n" ] || continue
-    [ "$(lower "$n")" = "$(lower "$name")" ] && taken="$status"
+    if [ "$(lower "$n")" = "$(lower "$name")" ]; then
+      taken="$status"
+      taken_id="$id"
+    fi
   done <<<"$rows"
   [ -n "$taken" ] || return 0
   if [ "$replace" = 1 ]; then
     if [ "$taken" = online ]; then
-      echo "homefield: warning: ${name} is registered and online at ${url}; --replace takes over its registration, and the runner that has it stops working" >&2
+      echo "homefield: warning: ${name} is registered and online at ${url}; --replace removes its registration, and the runner that has it stops working" >&2
     else
-      log "${name} is registered (${taken}) at ${url}; --replace takes over that registration"
+      log "${name} is registered (${taken}) at ${url}; --replace removes that registration before registering"
     fi
+    REPLACE_ID="$taken_id"
     return 0
   fi
   if [ "$taken" = online ]; then
     die "a runner named ${name} is already registered and online at ${url}, most likely on another machine; pick another name with --name (${page})"
   fi
   die "a runner named ${name} is already registered (${taken}) at ${url}. If it is this Mac's old registration, run this again with --replace; otherwise pick another name with --name, or remove it at ${page}"
+}
+
+# remove_taken_name <url> <name>: for --replace, removes the registration
+# check_name_free found under the name, so this one registers fresh, in the
+# group asked for. Done right before registering, after everything that can
+# fail first, so a failed install leaves the old registration alone.
+remove_taken_name() {
+  local url="$1" name="$2" scope
+  [ -n "$REPLACE_ID" ] || return 0
+  scope="$(api_scope "$url")" || exit 1
+  log "removing the registration of ${name} (id ${REPLACE_ID}) at ${url}"
+  gh api -X DELETE "${scope}/actions/runners/${REPLACE_ID}" >/dev/null ||
+    die "could not remove ${name} at ${url}; remove it at $(runners_page "$url") and run this again without --replace"
+  REPLACE_ID=""
 }
 
 # ── Runner group ────────────────────────────────────────────────────────────
@@ -695,12 +719,12 @@ cmd_install() {
   [ "$prepared" = 1 ] || prepare_registration
   local env=(RUNNER_URL="$url" RUNNER_NAME="$name")
   [ -n "$label" ] && env+=(RUNNER_LABEL="$label")
-  [ "$replace" = 1 ] && env+=(RUNNER_REPLACE=1)
   [ -n "$group" ] && env+=(RUNNER_GROUP="$group")
   [ "$packages_set" = 1 ] && env+=(RUNNER_EXTRA_PACKAGES="$packages")
 
   local token
   token="$(get_token registration "$url")"
+  remove_taken_name "$url" "$name"
   log "provisioning ${INSTANCE} and registering at ${url}"
   run_provision "RUNNER_TOKEN=${token}"$'\n' "${env[@]}"
   token=""

@@ -18,12 +18,9 @@
 #                 inline expression.
 #   RUNNER_NAME   default: the guest's hostname (lima-<instance>), which is the
 #                 same on every Mac; give each runner its own name in the scope.
-#   RUNNER_REPLACE
-#                 1 to take over a registration of the same name in the scope
-#                 (default 0). Without it, registering under a name that is
-#                 already taken fails ("A runner exists with the same name"),
-#                 instead of silently cutting off the runner that has it,
-#                 which may be on another machine.
+#                 A name that is already registered there is refused ("A
+#                 runner exists with the same name"); remove that registration
+#                 first (runners page, or `bin/homefield install --replace`).
 #   RUNNER_GROUP  org runner group to join (default homefield-ci).
 #   RUNNER_EXTRA_PACKAGES
 #                 apt packages to install on top of the base set, space-
@@ -70,11 +67,6 @@ RUNNER_SHA256="9b1dc70626422526e3c94767cf024896beb15da5342a3f4819bf2feac13e0393"
 RUNNER_URL="${RUNNER_URL:-}"
 RUNNER_NAME="${RUNNER_NAME:-$(hostname)}"
 RUNNER_LABEL="${RUNNER_LABEL:-homefield-ci}"
-RUNNER_REPLACE="${RUNNER_REPLACE:-0}"
-if ! [[ "$RUNNER_REPLACE" =~ ^[01]$ ]]; then
-  echo "provision.sh: RUNNER_REPLACE must be 0 or 1, got: $RUNNER_REPLACE" >&2
-  exit 1
-fi
 # Org registrations join the runner group that limits which repositories may
 # use the runner (docs/runbook.md, "Runner group"). Without one the runner
 # lands in Default, usable by every repository in the organization. Runner
@@ -324,19 +316,16 @@ if [ ! -f "$RUNNER_HOME/.runner" ]; then
   if [ -n "$RUNNER_GROUP" ]; then
     group_args+=(--runnergroup "$RUNNER_GROUP")
   fi
-  # --replace hands this machine the identity of any runner already registered
-  # under the name, wherever it runs, so it is only passed when asked for.
-  replace_args=()
-  if [ "$RUNNER_REPLACE" = "1" ]; then
-    replace_args+=(--replace)
-  fi
+  # No --replace: it would hand this machine the registration of any runner
+  # already using the name, wherever that runs (#52), and it keeps that
+  # registration's runner group, ignoring --runnergroup (actions/runner#4091),
+  # which could put the runner in Default. A taken name fails here instead.
   runner_config "$RUNNER_TOKEN" \
     --unattended \
     --url "$RUNNER_URL" \
     --name "$RUNNER_NAME" \
     --labels "$RUNNER_LABELS" \
     "${group_args[@]}" \
-    "${replace_args[@]}" \
     --work _work
 fi
 RUNNER_TOKEN=""

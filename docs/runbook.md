@@ -191,8 +191,8 @@ limactl shell homefield -- sh -c 'mount | grep -Ec "virtiofs|9p|sshfs|reverse-ss
 #    and RUNNER_GROUP (default homefield-ci) are optional; see the top of
 #    provision.sh. RUNNER_NAME defaults to the guest hostname, lima-homefield,
 #    which is the same on every Mac: give each runner in the scope its own
-#    name. A name that is already registered is refused unless RUNNER_REPLACE=1,
-#    which takes that registration over.
+#    name. A name that is already registered is refused: remove that
+#    registration on the runners page first.
 limactl copy vm/provision.sh homefield:/tmp/provision.sh
 printf 'RUNNER_TOKEN=%s\n' "$TOKEN" |
   limactl shell homefield sudo RUNNER_URL=https://github.com/<org> \
@@ -305,7 +305,7 @@ gh run rerun <run-id> --repo <owner>/<repo>
 | Symptom | Cause | What happens | Recovery |
 |---|---|---|---|
 | PR job "Waiting for a runner to pick up this job" | VM stopped, Mac asleep or offline, runner service down | The PR's check waits in the queue, and after 24 h GitHub fails it. By default merges and deploys are unaffected, because pushes run hosted; with `push` (or `workflow_dispatch`, `schedule`) in `events`, those jobs wait too. | Start the VM (`limactl start homefield`), or `bin/homefield route hosted --repo <owner>/<repo>`. |
-| `install` or `provision.sh` stops: "already registered" or "A runner exists with the same name" | Another runner in the scope has the name: another machine's, or this Mac's from before a VM was deleted without `uninstall` | Nothing is registered; the other runner is untouched | Another machine's: pick another name (`--name`, `RUNNER_NAME`). A stale one of this Mac's: `--replace` (`RUNNER_REPLACE=1`), or remove it on the runners page first |
+| `install` or `provision.sh` stops: "already registered" or "A runner exists with the same name" | Another runner in the scope has the name: another machine's, or this Mac's from before a VM was deleted without `uninstall` | Nothing is registered; the other runner is untouched | Another machine's: pick another name (`--name`, `RUNNER_NAME`). A stale one of this Mac's: `install --replace`, which removes it right before registering, or remove it on the runners page and run again. Not `config.sh --replace`: it keeps the old registration's runner group ([actions/runner#4091](https://github.com/actions/runner/issues/4091)) |
 | Waiting forever although the runner is online and idle | The repository is not in the runner group | Same as above | `bin/homefield adopt --repo <owner>/<repo>` adds it (or add it in the organization settings), or switch the repository to hosted |
 | Waiting forever although the runner is online and idle, and the repository is in the group | The label in the expression is not one of the runner's labels. For example, an expression that uses the default label `homefield-ci` while the runner was registered with another label | Same as above | Add the label to the runner (*Settings → Actions → Runners →* the runner *→ Labels*), or pass the runner's label to `routing-guard` as `label:` and use it in the expression |
 | A PR job waits while another runs | One runner runs one job at a time, across all repositories | Serialised, not failed | Accept it, or switch the less urgent repository to hosted |

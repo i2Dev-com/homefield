@@ -20,10 +20,14 @@ fail, such as a new guard in the routing expression, bumps the minor version
   names the runner after the Mac and the instance (`<local
   hostname>-<instance>`), and before creating anything it refuses a name
   already registered in the scope: `--name` picks another, and the new
-  `--replace` takes over a stale registration. `provision.sh` no longer
-  replaces a runner of the same name unless `RUNNER_REPLACE=1`, so
+  `--replace` removes a stale registration right before registering.
+  `provision.sh` no longer registers with `config.sh --replace`, so
   registration itself refuses a taken name when the runners list can't be
-  read. Registered runners keep their names; nothing to do on upgrade.
+  read. `config.sh --replace` also kept the old registration's runner group
+  and ignored the one asked for
+  ([actions/runner#4091](https://github.com/actions/runner/issues/4091)),
+  which could leave a runner in `Default`. Registered runners keep their
+  names; nothing to do on upgrade.
 
 ### Changed
 
