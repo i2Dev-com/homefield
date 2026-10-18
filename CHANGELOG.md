@@ -11,6 +11,15 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ## Unreleased
 
+## v0.2.1 (2026-10-18)
+
+Replaces v0.2.0, which is too strict and should not be pinned: its routing
+guard failed compliant workflows because of their scripts (below). Nothing in
+v0.2.0 is unsafe. Everything else in v0.2.0 is unchanged, so its upgrade notes
+apply: run the README's one-liner again, then `homefield upgrade` on each
+runner, and bump `routing-guard@v0.1.1` pins to `@v0.2.1`; `homefield adopt`
+counts only its own release.
+
 ### Fixed
 
 - The routing guard no longer fails a compliant workflow because of a script.
@@ -18,7 +27,8 @@ fail, such as a new guard in the routing expression, bumps the minor version
   `run: |` script with a line starting with `?`, a bracket or an open quote
   (a multi-line quoted string, a here-document line) failed the guard; real
   workflows hit this in a dozen places. Lines under a block scalar (`|` or `>`)
-  are text and are skipped, including one with an anchor or tag (`run: &script |`). A key written after the script is still checked.
+  are text and are skipped, including one with an anchor or tag
+  (`run: &script |`). A key written after the script is still checked.
 
 ## v0.2.0 (2026-10-18)
 

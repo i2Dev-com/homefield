@@ -45,7 +45,7 @@ a runner that serves real repositories.
 
 ## Versioning
 
-Consumers pin an exact release, such as `routing-guard@v0.2.0`. A change that
+Consumers pin an exact release, such as `routing-guard@v0.2.1`. A change that
 makes a previously passing workflow fail (a new guard in the routing
 expression, a new default) bumps the minor version while we are in 0.x; see
 the README. Say so in the pull request if yours is one.

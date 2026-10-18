@@ -153,7 +153,7 @@ Requires Lima ≥ 1.1 (`brew install lima`; verified on 2.2.0).
 
 **The short way:** the one-liner in the [README](../README.md#quick-start)
 runs `install.sh`, which downloads the tool for a ref (`HOMEFIELD_REF`,
-default `v0.2.0`) into `~/.local/share/homefield` (`HOMEFIELD_HOME`), writes a
+default `v0.2.1`) into `~/.local/share/homefield` (`HOMEFIELD_HOME`), writes a
 `homefield` command into Homebrew's `bin` or `~/.local/bin`
 (`HOMEFIELD_BIN_DIR`; it prints the line to add to `~/.zshrc` if that is not
 on your PATH), installs or upgrades Lima (1.1 or later) if you agree, and runs `homefield install`.
