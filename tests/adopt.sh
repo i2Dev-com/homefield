@@ -251,6 +251,16 @@ wf_reuse wf-reuse-push 'on: push' ''
 wf_reuse wf-reuse-false 'on: pull_request' "    if: \${{ false }}\n"
 wf_reuse wf-reuse-cond 'on: pull_request' "    needs: x\n    if: github.event_name != 'push'\n"
 wf_reuse wf-reuse-filter "$(printf 'on:\n  pull_request:\n    branches: [main]')" ''
+# Two jobs call the reusable workflow: a disabled one (if: false) and a usable
+# one, in each order, and both disabled.
+wf_reuse_two() {
+  mkdir -p "$work/$1"
+  printf 'name: CI\non: pull_request\njobs:\n  %s:\n%b    uses: ./.github/workflows/checks.yml\n  %s:\n%b    uses: ./.github/workflows/checks.yml\n' "$2" "$3" "$4" "$5" >"$work/$1/ci.yml"
+  cp "$work/wf-reuse-ok/checks.yml" "$work/$1/checks.yml"
+}
+wf_reuse_two wf-reuse-mixed checks '' retired "    if: \${{ false }}\n"
+wf_reuse_two wf-reuse-mixed-first retired "    if: \${{ false }}\n" checks ''
+wf_reuse_two wf-reuse-two-false checks "    if: \${{ false }}\n" retired "    if: false\n"
 mkdir -p "$work/wf-reuse-uncalled" "$work/wf-reuse-chain"
 cp "$work/wf-reuse-ok/checks.yml" "$work/wf-reuse-uncalled/checks.yml"
 { header; emit_job lint ubuntu-latest; } >"$work/wf-reuse-uncalled/ci.yml"
@@ -610,6 +620,10 @@ route_case "...called only from a push workflow: not a guard" wf-reuse-push not 
 route_case "...called through another reusable workflow: not followed, not a guard" wf-reuse-chain not "adopt follows one level of calls"
 route_case "...called by a job with if: false: not a guard" wf-reuse-false not "job checks at ci.yml:4, which calls checks.yml, has an if: that is false"
 route_case "...called by a job with another if: ready, with a warning" wf-reuse-cond ready "ci.yml:6: job checks, which calls checks.yml, has an if: condition"
+route_case "...called by one job with if: false and another without: ready" wf-reuse-mixed ready "!never runs"
+route_case "...the same, the disabled job first: ready" wf-reuse-mixed-first ready "!never runs"
+route_case "...called only by jobs with if: false: not a guard, naming each" wf-reuse-two-false not "job checks at ci.yml:4, which calls checks.yml, has an if: that is false"
+route_case "...naming the second too" wf-reuse-two-false not "job retired at ci.yml:7, which calls checks.yml, has an if: that is false"
 route_case "...called from a pull_request with branches: ready, with a warning" wf-reuse-filter ready "ci.yml:3: the pull_request trigger has branches filters"
 
 echo "adopter shapes"

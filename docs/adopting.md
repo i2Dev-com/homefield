@@ -62,7 +62,9 @@ full commit SHA; another release, `@v0` or `@main` do not count. It must be in
 a workflow that runs on `pull_request`, with no `if: false` on the step or its
 job; `homefield adopt` does not count anything else as a guard. A reusable
 workflow works if one of the repository's `pull_request` workflows calls it
-(`uses: ./.github/workflows/<file>`).
+(`uses: ./.github/workflows/<file>`); a calling job with `if: false` beside
+one that runs does no harm, and only callers that are all disabled make it
+not a guard.
 
 ### Routing options
 
@@ -144,8 +146,8 @@ step:
    the pin or `homefield` so they match), a tag that is not an exact release
    (`@v1`), a branch (`@main`), a push-only workflow,
    `pull_request_target` or an `if: false`, is not a guard. A reusable workflow (`workflow_call`) counts when a workflow that
-   runs on `pull_request` calls it from a job (one level; deeper chains are
-   not followed). Branch or path filters on the `pull_request` trigger, and
+   runs on `pull_request` calls it from a job that is not `if: false` (one level;
+   deeper chains are not followed). Branch or path filters on the `pull_request` trigger, and
    other `if:` conditions on the step, its job or the calling job, are
    warnings: check that every pull request that changes `.github/workflows`
    still runs the guard. When the routing is not ready it lists what is wrong
