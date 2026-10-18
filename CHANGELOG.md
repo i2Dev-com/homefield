@@ -13,6 +13,13 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ### Fixed
 
+- `homefield adopt` no longer accepts a routing guard that cannot fail the
+  check. A guard step, or its job, with `continue-on-error: true` (or
+  `${{ true }}`) passed adoption and then stayed green on a routing violation.
+  It is now not a guard, as with `if: false`, and so is a reusable workflow
+  whose callers all have it; a `continue-on-error` expression is a warning.
+  Quoted keys (`"continue-on-error": true`) count the same.
+  This affected v0.1.0 and v0.1.1.
 - The routing guard fails on workflow syntax it cannot read, instead of passing
   it. It scans workflow files line by line, so a job whose `runs-on` was
   written another way (a quoted `"runs-on"` key, a job as a `{...}` mapping, a

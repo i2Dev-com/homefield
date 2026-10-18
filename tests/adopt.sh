@@ -227,19 +227,19 @@ wf_guard wf-on-items "$(printf 'on:\n  - push\n  - pull_request')" "$action"
 wf_guard wf-on-filter "$(printf 'on:\n  pull_request:\n    paths-ignore:\n      - docs/**')" "$action"
 wf_guard wf-on-flowfilter 'on: {pull_request: {branches: [main]}}' "$action"
 
-# A guard step with an `if:` of its own, or in a job with one.
+# A guard step with an `if:` (or another key, $3) of its own, or in a job with one.
 wf_stepif() {
   mkdir -p "$work/$1"
-  { printf 'name: CI\non: [pull_request]\njobs:\n'; emit_job lint "$expr" "$(guard ci.yml:lint)" "        if: $2"; } >"$work/$1/ci.yml"
+  { printf 'name: CI\non: [pull_request]\njobs:\n'; emit_job lint "$expr" "$(guard ci.yml:lint)" "        ${3:-if}: $2"; } >"$work/$1/ci.yml"
 }
-# wf_jobif <dir> <if> <before|after>: the job's `if:` above runs-on or below the steps.
+# wf_jobif <dir> <value> <before|after> [key]: the job's `if:` (or key) above runs-on or below the steps.
 wf_jobif() {
   mkdir -p "$work/$1"
   {
     printf 'name: CI\non: [pull_request]\njobs:\n  lint:\n'
-    [ "$3" != before ] || printf '    if: %s\n' "$2"
+    [ "$3" != before ] || printf '    %s: %s\n' "${4:-if}" "$2"
     printf '    runs-on: %s\n    steps:\n      - uses: actions/checkout@v5\n%s\n' "$expr" "$(guard ci.yml:lint)"
-    [ "$3" != after ] || printf '    if: %s\n' "$2"
+    [ "$3" != after ] || printf '    %s: %s\n' "${4:-if}" "$2"
   } >"$work/$1/ci.yml"
 }
 wf_stepif wf-stepif-false 'false'
@@ -249,6 +249,22 @@ wf_stepif wf-stepif-cond "github.event_name == 'pull_request'"
 wf_jobif wf-jobif-false 'false' before
 wf_jobif wf-jobif-false-after "\${{ false }}" after
 wf_jobif wf-jobif-cond "github.actor != 'dependabot[bot]'" before
+# continue-on-error keeps a failing guard from failing the check
+# (GHSA-f4px-f5g2-f9px).
+wf_stepif wf-stepcoe-true 'true' continue-on-error
+wf_stepif wf-stepcoe-expr "\${{ true }}" continue-on-error
+wf_stepif wf-stepcoe-false 'false' continue-on-error
+wf_stepif wf-stepcoe-cond "\${{ matrix.experimental }}" continue-on-error
+wf_jobif wf-jobcoe-true 'true' before continue-on-error
+wf_jobif wf-jobcoe-true-after "True" after continue-on-error
+wf_jobif wf-jobcoe-false 'false' before continue-on-error
+wf_jobif wf-jobcoe-cond "\${{ matrix.experimental }}" before continue-on-error
+# The same keys quoted, which YAML reads as the same key.
+wf_stepif wf-stepcoe-dq 'true' '"continue-on-error"'
+wf_stepif wf-stepcoe-sq 'true' "'continue-on-error'"
+wf_stepif wf-stepif-dq 'false' '"if"'
+wf_jobif wf-jobcoe-dq 'true' before '"continue-on-error"'
+wf_jobif wf-jobcoe-sq 'true' after "'continue-on-error'"
 
 # The guard in a reusable workflow, called from a pull_request workflow.
 # wf_reuse <dir> <caller on:> <extra keys of the calling job, \n-terminated>
@@ -261,6 +277,8 @@ wf_reuse wf-reuse-ok 'on: pull_request' ''
 wf_reuse wf-reuse-push 'on: push' ''
 wf_reuse wf-reuse-false 'on: pull_request' "    if: \${{ false }}\n"
 wf_reuse wf-reuse-cond 'on: pull_request' "    needs: x\n    if: github.event_name != 'push'\n"
+wf_reuse wf-reuse-coe 'on: pull_request' "    continue-on-error: true\n"
+wf_reuse wf-reuse-coe-cond 'on: pull_request' "    continue-on-error: \${{ vars.X == 'y' }}\n"
 wf_reuse wf-reuse-filter "$(printf 'on:\n  pull_request:\n    branches: [main]')" ''
 # Two jobs call the reusable workflow: a disabled one (if: false) and a usable
 # one, in each order, and both disabled.
@@ -272,6 +290,7 @@ wf_reuse_two() {
 wf_reuse_two wf-reuse-mixed checks '' retired "    if: \${{ false }}\n"
 wf_reuse_two wf-reuse-mixed-first retired "    if: \${{ false }}\n" checks ''
 wf_reuse_two wf-reuse-two-false checks "    if: \${{ false }}\n" retired "    if: false\n"
+wf_reuse_two wf-reuse-coe-mixed checks "    continue-on-error: true\n" retired ''
 mkdir -p "$work/wf-reuse-uncalled" "$work/wf-reuse-chain"
 cp "$work/wf-reuse-ok/checks.yml" "$work/wf-reuse-uncalled/checks.yml"
 { header; emit_job lint ubuntu-latest; } >"$work/wf-reuse-uncalled/ci.yml"
@@ -626,6 +645,20 @@ route_case "if: false on the job, above runs-on: not a guard" wf-jobif-false not
 route_case "if: \${{ false }} on the job, after the steps: not a guard" wf-jobif-false-after not "never runs: its job lint has an if: that is false"
 route_case "another if: on the job: ready, with a warning" wf-jobif-cond ready "ci.yml:5: its job lint has an if: condition"
 
+route_case "continue-on-error: true on the step: not a guard" wf-stepcoe-true not "cannot fail the check: its step has continue-on-error: true (line 13)"
+route_case "\"continue-on-error\": true on the step: not a guard" wf-stepcoe-dq not "its step has continue-on-error: true"
+route_case "'continue-on-error': true on the step: not a guard" wf-stepcoe-sq not "its step has continue-on-error: true"
+route_case "\"if\": false on the step: not a guard" wf-stepif-dq not "its step has an if: that is false"
+route_case "\"continue-on-error\": true on the job: not a guard" wf-jobcoe-dq not "its job lint has continue-on-error: true"
+route_case "'continue-on-error': true on the job, after the steps: not a guard" wf-jobcoe-sq not "its job lint has continue-on-error: true"
+route_case "continue-on-error: \${{ true }} on the step: not a guard" wf-stepcoe-expr not "its step has continue-on-error: true"
+route_case "continue-on-error: false on the step: ready" wf-stepcoe-false ready "!continue-on-error"
+route_case "continue-on-error: an expression on the step: ready, with a warning" wf-stepcoe-cond ready "ci.yml:13: its step has a continue-on-error: condition"
+route_case "continue-on-error: true on the job, above runs-on: not a guard" wf-jobcoe-true not "cannot fail the check: its job lint has continue-on-error: true"
+route_case "continue-on-error: True on the job, after the steps: not a guard" wf-jobcoe-true-after not "cannot fail the check: its job lint has continue-on-error: true"
+route_case "continue-on-error: false on the job: ready" wf-jobcoe-false ready "!continue-on-error"
+route_case "continue-on-error: an expression on the job: ready, with a warning" wf-jobcoe-cond ready "ci.yml:5: its job lint has a continue-on-error: condition"
+
 route_case "a reusable workflow called from a pull_request workflow: ready" wf-reuse-ok ready "!$may_not_run"
 route_case "a reusable workflow that nothing calls: not a guard" wf-reuse-uncalled not "only reusable (workflow_call) and no workflow that runs on pull_request calls it with uses: ./.github/workflows/checks.yml"
 route_case "...called only from a push workflow: not a guard" wf-reuse-push not "only reusable (workflow_call)"
@@ -636,6 +669,9 @@ route_case "...called by one job with if: false and another without: ready" wf-r
 route_case "...the same, the disabled job first: ready" wf-reuse-mixed-first ready "!never runs"
 route_case "...called only by jobs with if: false: not a guard, naming each" wf-reuse-two-false not "job checks at ci.yml:4, which calls checks.yml, has an if: that is false"
 route_case "...naming the second too" wf-reuse-two-false not "job retired at ci.yml:7, which calls checks.yml, has an if: that is false"
+route_case "...called by a job with continue-on-error: true: not a guard" wf-reuse-coe not "job checks at ci.yml:4, which calls checks.yml, has continue-on-error: true"
+route_case "...called by a job with a continue-on-error expression: ready, with a warning" wf-reuse-coe-cond ready "ci.yml:5: job checks, which calls checks.yml, has a continue-on-error: condition"
+route_case "...called by one job with continue-on-error: true and another without: ready" wf-reuse-coe-mixed ready "!cannot fail the check"
 route_case "...called from a pull_request with branches: ready, with a warning" wf-reuse-filter ready "ci.yml:3: the pull_request trigger has branches filters"
 
 echo "adopter shapes"
