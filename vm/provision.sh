@@ -263,12 +263,13 @@ done
 # network failure leaves the old runner up. Only then stop it: extracting over
 # a running Runner.Listener fails with ETXTBSY, and a running service keeps
 # executing the old binary anyway. Stopping cancels any job in progress, so
-# upgrade while idle (runbook). From the stop until the service is started at
-# the end, any failure starts it again rather than leaving it down.
+# upgrade while idle (runbook). From the stop until the service is back and
+# listening, any failure starts it again rather than leaving it down; the
+# start block below clears the trap once it is.
 restart_replaced_runner() {
   local rc=$?
   if [ "$rc" -ne 0 ]; then
-    echo "provision.sh: failed with the runner stopped; starting ${svc_unit} again" >&2
+    echo "provision.sh: failed after stopping the runner; starting ${svc_unit} again" >&2
     rm -f "${env_prev:-}"
     systemctl start "$svc_unit" || true
   fi
@@ -425,9 +426,6 @@ fi
 if [ "$env_changed" = "0" ] && [ "$was_active" = "1" ]; then
   echo "provision.sh: ${svc_unit} already running"
 else
-  # A runner stopped above is started right here, and a failure to come up is
-  # reported below, so its trap has done its job.
-  trap - EXIT
   if [ "$was_active" = "1" ]; then
     trap restore_running_runner EXIT
   fi

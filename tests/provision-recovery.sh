@@ -55,7 +55,7 @@ case "$1" in
   start|restart) [ "${FAIL_AT:-}" = start ] && [ "$1" = restart ] && exit 1; : >"$STATE.active" ;;
   *) exit 0 ;;
 esac'
-stub journalctl '[ -e "$STATE.active" ] && echo "Listening for Jobs"; exit 0'
+stub journalctl '[ "${FAIL_AT:-}" != listen ] && [ -e "$STATE.active" ] && echo "Listening for Jobs"; exit 0'
 
 # The script up to the cleanup timer, with its absolute paths in the scratch
 # tree. BSD mktemp keeps a template's suffix literally, so the tarball's goes.
@@ -114,8 +114,14 @@ done
 fresh 2.0.0 active
 run start
 rc=$?
-record "the restart fails: provisioning fails" "1" "$rc"
-record "...with no second start from a leftover trap" "0" "$(calls start)"
+record "the final restart fails: provisioning fails" "1" "$rc"
+record "...and the runner is started again, by the trap" "running/1" "$(running)/$(calls start)"
+
+fresh 2.0.0 active
+run listen
+rc=$?
+record "it never logs \"Listening for Jobs\": provisioning fails" "1" "$rc"
+record "...and the trap starts the service once more" "running/1" "$(running)/$(calls start)"
 
 echo "a running runner, already current:"
 fresh "$current" active
