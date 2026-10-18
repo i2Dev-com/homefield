@@ -210,7 +210,9 @@ Re-running `provision.sh` on a registered runner (to upgrade it) needs no
 settings: the registration is kept as it is. `bin/homefield upgrade` does
 that: it refuses while a job is running, then stops the runner so no job can
 start mid-upgrade, and `provision.sh` starts it again at the end (or the
-command does, if provisioning fails).
+command does, if provisioning fails). Run by hand on a runner that is
+running, `provision.sh` stops it only to replace the runner binary, and
+starts it again if anything fails from then on.
 
 **Registration tokens.** A registration token is valid for one hour, and the
 runner exchanges it for its own identity at registration. An organization

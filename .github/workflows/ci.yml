@@ -55,6 +55,9 @@ jobs:
       - name: Workspace ownership hook
         run: bash tests/workspace-owner.sh
 
+      - name: provision.sh restarts a runner it stopped
+        run: bash tests/provision-recovery.sh
+
       - name: bin/homefield memory summary
         run: bash tests/memory-summary.sh
 
