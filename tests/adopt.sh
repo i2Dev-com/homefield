@@ -256,6 +256,12 @@ wf_jobif wf-jobcoe-true 'true' before continue-on-error
 wf_jobif wf-jobcoe-true-after "True" after continue-on-error
 wf_jobif wf-jobcoe-false 'false' before continue-on-error
 wf_jobif wf-jobcoe-cond "\${{ matrix.experimental }}" before continue-on-error
+# The same keys quoted, which YAML reads as the same key.
+wf_stepif wf-stepcoe-dq 'true' '"continue-on-error"'
+wf_stepif wf-stepcoe-sq 'true' "'continue-on-error'"
+wf_stepif wf-stepif-dq 'false' '"if"'
+wf_jobif wf-jobcoe-dq 'true' before '"continue-on-error"'
+wf_jobif wf-jobcoe-sq 'true' after "'continue-on-error'"
 
 # The guard in a reusable workflow, called from a pull_request workflow.
 # wf_reuse <dir> <caller on:> <extra keys of the calling job, \n-terminated>
@@ -636,6 +642,11 @@ route_case "if: \${{ false }} on the job, after the steps: not a guard" wf-jobif
 route_case "another if: on the job: ready, with a warning" wf-jobif-cond ready "ci.yml:5: its job lint has an if: condition"
 
 route_case "continue-on-error: true on the step: not a guard" wf-stepcoe-true not "cannot fail the check: its step has continue-on-error: true (line 13)"
+route_case "\"continue-on-error\": true on the step: not a guard" wf-stepcoe-dq not "its step has continue-on-error: true"
+route_case "'continue-on-error': true on the step: not a guard" wf-stepcoe-sq not "its step has continue-on-error: true"
+route_case "\"if\": false on the step: not a guard" wf-stepif-dq not "its step has an if: that is false"
+route_case "\"continue-on-error\": true on the job: not a guard" wf-jobcoe-dq not "its job lint has continue-on-error: true"
+route_case "'continue-on-error': true on the job, after the steps: not a guard" wf-jobcoe-sq not "its job lint has continue-on-error: true"
 route_case "continue-on-error: \${{ true }} on the step: not a guard" wf-stepcoe-expr not "its step has continue-on-error: true"
 route_case "continue-on-error: false on the step: ready" wf-stepcoe-false ready "!continue-on-error"
 route_case "continue-on-error: an expression on the step: ready, with a warning" wf-stepcoe-cond ready "ci.yml:13: its step has a continue-on-error: condition"

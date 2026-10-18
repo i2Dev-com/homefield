@@ -64,7 +64,8 @@ ACTION_DIR = "./.github/workflows/"
 # The trigger options after which a pull request may not run the workflow.
 FILTERS = ("branches", "branches-ignore", "paths", "paths-ignore")
 ON_KEY = re.compile(r"^([\"']?)on\1:\s*(.*?)\s*$")
-KEY = re.compile(r"^(\s*)(-\s+)?([A-Za-z0-9_-]+):\s*(.*?)\s*$")
+# A mapping key, plain or quoted (`"continue-on-error": true` is the same key).
+KEY = re.compile(r"""^(\s*)(-\s+)?["']?([A-Za-z0-9_-]+)["']?:\s*(.*?)\s*$""")
 CACHE_KEY = re.compile(r"^(\s*)(?:-\s+)?(key|restore-keys):\s*(.*?)\s*$")
 
 

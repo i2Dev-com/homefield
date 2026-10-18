@@ -18,6 +18,7 @@ fail, such as a new guard in the routing expression, bumps the minor version
   `${{ true }}`) passed adoption and then stayed green on a routing violation.
   It is now not a guard, as with `if: false`, and so is a reusable workflow
   whose callers all have it; a `continue-on-error` expression is a warning.
+  Quoted keys (`"continue-on-error": true`) count the same.
   This affected v0.1.0 and v0.1.1.
 - `homefield report` now counts a GitHub-hosted job that never got a runner
   (#64). A hosted job still queued, or cancelled before a runner was assigned,
