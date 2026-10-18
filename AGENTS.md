@@ -56,7 +56,7 @@ bash tests/adopt.sh                # bin/homefield adopt and tools/adopt.py, wit
 
 The canonical `runs-on` expression lives in copies that must change together:
 `routing-guard/routing_guard.py`, `vm/provision.sh`, `README.md`,
-`docs/adopting.md`, `docs/runbook.md`, `.github/workflows/ci.yml`.
+`docs/adopting.md`, `docs/runbook.md`.
 `tests/label-rule.sh` exists to keep provision.sh and routing-guard in
 agreement — run it when touching either.
 
@@ -81,13 +81,9 @@ agreement — run it when touching either.
   no tag moves: a release is a new tag the owner creates, so don't ask for
   one after each merge. Say in the PR whether a change is compatible;
   `CHANGELOG.md` explains the upgrade.
-- This repo's own CI checks its workflow against the **published
-  `routing-guard` release**, not the local checkout — a breaking change lands
-  on `main` while CI still runs the last release, and the owner bumps that pin
-  when cutting the next one.
 - A release bumps the version in `install.sh` (`REF` default and header),
   `bin/homefield` (`update_command`), `tools/adopt.py` (`RELEASE`), the README
-  and `docs/`, and the pin in `.github/workflows/ci.yml`.
+  and `docs/`.
 - The checker rejects multi-line `runs-on`; write expressions on one line.
 
 ## Safety and workflow conventions
