@@ -11,6 +11,8 @@ bash tests/label-rule.sh           # label rule, provision.sh and routing-guard 
 bash tests/extra-packages.sh       # RUNNER_EXTRA_PACKAGES validation
 bash tests/runner-url.sh           # RUNNER_URL validation
 bash tests/memwatch.sh             # memory sampler (needs bash >= 4.2 and GNU timeout to run)
+bash tests/workspace-owner.sh      # the job-started hook that gives `_work` back to `runner`
+bash tests/provision-recovery.sh   # provision.sh restarts a runner it stopped, when it fails
 bash tests/memory-summary.sh       # `bin/homefield memory` summary
 bash tests/report.sh               # `bin/homefield report`
 bash tests/install-sh.sh           # install.sh

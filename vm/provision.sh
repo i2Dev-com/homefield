@@ -263,8 +263,17 @@ done
 # network failure leaves the old runner up. Only then stop it: extracting over
 # a running Runner.Listener fails with ETXTBSY, and a running service keeps
 # executing the old binary anyway. Stopping cancels any job in progress, so
-# upgrade while idle (runbook). If the replacement itself fails, the old
-# service is started again rather than left down.
+# upgrade while idle (runbook). From the stop until the service is back and
+# listening, any failure starts it again rather than leaving it down; the
+# start block below clears the trap once it is.
+restart_replaced_runner() {
+  local rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "provision.sh: failed after stopping the runner; starting ${svc_unit} again" >&2
+    rm -f "${env_prev:-}"
+    systemctl start "$svc_unit" || true
+  fi
+}
 mkdir -p "$RUNNER_HOME"
 if [ ! -x "$RUNNER_HOME/config.sh" ] || ! grep -qx "$RUNNER_VERSION" "$RUNNER_HOME/.provisioned-version" 2>/dev/null; then
   tarball="$(mktemp /tmp/actions-runner.XXXXXX.tar.gz)"
@@ -278,13 +287,12 @@ if [ ! -x "$RUNNER_HOME/config.sh" ] || ! grep -qx "$RUNNER_VERSION" "$RUNNER_HO
     restart_old=1
   fi
   if [ "$restart_old" = "1" ]; then
-    trap 'echo "provision.sh: replacing the runner failed; restarting the old service" >&2; systemctl start "$svc_unit" || true' ERR
+    trap restart_replaced_runner EXIT
   fi
   tar -xzf "$tarball" -C "$RUNNER_HOME"
   rm -f "$tarball"
   "$RUNNER_HOME/bin/installdependencies.sh"
   echo "$RUNNER_VERSION" > "$RUNNER_HOME/.provisioned-version"
-  trap - ERR
 fi
 chown -R "$RUNNER_USER:$RUNNER_USER" "$RUNNER_HOME"
 

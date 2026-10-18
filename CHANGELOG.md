@@ -11,6 +11,16 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ## Unreleased
 
+### Fixed
+
+- `provision.sh`, run by hand on a runner that is running, no longer leaves
+  it stopped when it fails (#61). It stops the service to replace the runner
+  binary, and only the replacement itself was covered: a failure after that,
+  in the workspace hook, the sudo rule or `.env`, exited with the runner down
+  and no job able to start. It now starts the service again on any failure
+  until it starts it for good at the end. `bin/homefield upgrade` already did
+  this from the Mac and is unchanged.
+
 ## v0.1.1 (2026-10-18)
 
 Compatible with v0.1.0: the routing expression and `routing-guard`'s rules
