@@ -826,6 +826,20 @@ cmd_status() {
   return 0
 }
 
+# deregister_script: what uninstall runs in the guest, as root, with the remove
+# token on its stdin. config.sh refuses to remove a runner whose service is
+# installed, so the service goes first, and if GitHub then refuses the removal
+# (a rejected token, a network failure) the runner is still registered and has
+# to get its service back: the host's restart_runner_on_failure only starts a
+# unit, and svc.sh uninstall deleted it. Reinstalling recreates the same unit
+# and .service, and the host starts it. If that fails too, the runner is
+# registered with no service, and `homefield install` sets the service up again.
+deregister_script() {
+  # shellcheck disable=SC2016  # the guest's shell expands these, not this one
+  local script='cd @HOME@ && read -r t && s=0 && { [ ! -f .service ] || s=1; } && { [ "$s" = 0 ] || ./svc.sh uninstall; } && { ACTIONS_RUNNER_INPUT_TOKEN="$t" sudo --preserve-env=ACTIONS_RUNNER_INPUT_TOKEN -u runner ./config.sh remove || { rc=$?; [ "$s" = 0 ] || ./svc.sh install runner; exit $rc; }; }'
+  printf '%s' "${script//@HOME@/$RUNNER_HOME}"
+}
+
 cmd_uninstall() {
   local keep_vm=0
   while [ $# -gt 0 ]; do
@@ -849,7 +863,7 @@ cmd_uninstall() {
     stop_runner
     token="$(get_token remove "$url")"
     log "deregistering from ${url}"
-    printf '%s\n' "$token" | guest_stdin sudo sh -c "cd $RUNNER_HOME && { [ ! -f .service ] || ./svc.sh uninstall; } && read -r t && ACTIONS_RUNNER_INPUT_TOKEN=\"\$t\" sudo --preserve-env=ACTIONS_RUNNER_INPUT_TOKEN -u runner ./config.sh remove"
+    printf '%s\n' "$token" | guest_stdin sudo sh -c "$(deregister_script)"
     token=""
     runner_back
   else

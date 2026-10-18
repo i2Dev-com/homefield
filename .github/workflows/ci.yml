@@ -58,6 +58,9 @@ jobs:
       - name: provision.sh restarts a runner it stopped
         run: bash tests/provision-recovery.sh
 
+      - name: homefield uninstall restores the service
+        run: bash tests/uninstall.sh
+
       - name: bin/homefield memory summary
         run: bash tests/memory-summary.sh
 

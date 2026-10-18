@@ -13,6 +13,13 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ### Fixed
 
+- `homefield uninstall` no longer leaves a registered runner with no service
+  when GitHub refuses the removal (#60). It uninstalls the service before it
+  removes the registration, because `config.sh remove` refuses while the
+  service exists; if the removal then failed, the runner was still registered
+  but the unit it tried to start was gone. It now installs the service again
+  and starts it, so the runner keeps taking jobs and `uninstall` can be run
+  again.
 - `provision.sh`, run by hand on a runner that is running, no longer leaves
   it stopped when it fails (#61). It stops the service to replace the runner
   binary, and only the replacement itself was covered: a failure after that,
