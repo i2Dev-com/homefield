@@ -13,6 +13,12 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ### Fixed
 
+- `homefield status` no longer stops after the VM line when the runner's
+  settings can't be read (#63). Reading the name and URL from the runner's
+  config failed on missing lines, and that ended the command before the
+  "registered, but its details could not be read" line it is meant to print
+  and before the service, job and version lines, which is when they are most
+  useful.
 - `homefield uninstall` no longer leaves a registered runner with no service
   when GitHub refuses the removal (#60). It uninstalls the service before it
   removes the registration, because `config.sh remove` refuses while the

@@ -244,6 +244,7 @@ bash tests/memwatch.sh             # the guest's memory sampler (needs bash >= 4
 bash tests/workspace-owner.sh      # the job-started hook that gives `_work` back to `runner`
 bash tests/provision-recovery.sh   # provision.sh restarts a runner it stopped, when it fails
 bash tests/uninstall.sh            # `bin/homefield uninstall` gives the service back when removal fails
+bash tests/status.sh               # `bin/homefield status` reports on when the runner's settings can't be read
 bash tests/memory-summary.sh       # `bin/homefield memory` per-day summary
 bash tests/report.sh               # `bin/homefield report` against a fixture
 bash tests/install-sh.sh           # install.sh, with stub gh, curl, brew and Lima
