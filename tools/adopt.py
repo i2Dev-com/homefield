@@ -240,10 +240,22 @@ def condition(value):
     return "false" if text.strip().lower() == "false" else "other"
 
 
+def flag(value):
+    """How a boolean such as `continue-on-error:` reads: "true" or "false" for
+    the literal (`true`, `${{ true }}`), "other" for any expression, which
+    adopt cannot evaluate."""
+    text = scalar(value)
+    m = re.fullmatch(r"\$\{\{\s*(.*?)\s*\}\}", text)
+    if m:
+        text = m.group(1)
+    text = text.strip().lower()
+    return text if text in ("true", "false") else "other"
+
+
 def parse_jobs(lines):
     """The jobs of the workflow: id, line (1-based), first and one-past-last
-    line index, the job-level `if:` as (line, value), and a job-level
-    `uses:` (a reusable workflow it calls). A job-level key sits at the
+    line index, the job-level `if:` and `continue-on-error:` as (line,
+    value), and a job-level `uses:` (a reusable workflow it calls). A job-level key sits at the
     indent of the job's first child; a step's keys are deeper."""
     jobs = []
     top = next((i for i, line in enumerate(lines) if re.match(r"^jobs:\s*(#.*)?$", line)), None)
@@ -265,13 +277,15 @@ def parse_jobs(lines):
             end = i + 1
             while end < len(lines) and (is_blank(lines[end]) or indent_of(lines[end]) > base):
                 end += 1
-            job = {"id": m.group(1), "line": i + 1, "start": i, "end": end, "if": None, "uses": None}
+            job = {"id": m.group(1), "line": i + 1, "start": i, "end": end, "if": None, "coe": None, "uses": None}
             child = next((indent_of(lines[k]) for k in range(i + 1, end) if not is_blank(lines[k])), None)
             for k in range(i + 1, end):
                 km = KEY.match(lines[k])
                 if km and not km.group(2) and len(km.group(1)) == child:
                     if km.group(3) == "if":
                         job["if"] = (k + 1, km.group(4))
+                    elif km.group(3) == "continue-on-error":
+                        job["coe"] = (k + 1, km.group(4))
                     elif km.group(3) == "uses":
                         job["uses"] = scalar(km.group(4))
             jobs.append(job)
@@ -281,15 +295,15 @@ def parse_jobs(lines):
     return jobs
 
 
-def step_if(lines, at):
-    """(line, value) of the `if:` of the step with its `uses:` on line index
+def step_key(lines, at, key):
+    """(line, value) of `key:` in the step with its `uses:` on line index
     `at`, or None."""
     start, end = step_bounds(lines, at)
     m = USES.match(lines[at])
     key_indent = len(m.group(1)) + (len(m.group(2)) if m.group(2) else 0)
     for i in range(start, end):
         km = KEY.match(lines[i])
-        if km and km.group(3) == "if" and len(km.group(1)) + (len(km.group(2)) if km.group(2) else 0) == key_indent:
+        if km and km.group(3) == key and len(km.group(1)) + (len(km.group(2)) if km.group(2) else 0) == key_indent:
             return i + 1, km.group(4)
     return None
 
@@ -306,7 +320,7 @@ def check_guard(name, at, files):
     where = f"{name}:{at + 1}"
     blocks, warns = [], []
     job = next((j for j in jobs if j["start"] < at < j["end"]), None)
-    conditions = [(step_if(lines, at), "its step")]
+    conditions = [(step_key(lines, at, "if"), "its step")]
     if job:
         conditions.append((job["if"], f"its job {job['id']}"))
     for found, what in conditions:
@@ -316,6 +330,19 @@ def check_guard(name, at, files):
             blocks.append(f"the routing-guard step at {where} never runs: {what} has an if: that is false (line {found[0]})")
         else:
             warns.append(f"{name}:{found[0]}: {what} has an if: condition")
+
+    # A guard that fails but cannot fail the check is no guard.
+    ignored = [(step_key(lines, at, "continue-on-error"), "its step")]
+    if job:
+        ignored.append((job["coe"], f"its job {job['id']}"))
+    for found, what in ignored:
+        if not found:
+            continue
+        kind = flag(found[1])
+        if kind == "true":
+            blocks.append(f"the routing-guard step at {where} cannot fail the check: {what} has continue-on-error: true (line {found[0]})")
+        elif kind == "other":
+            warns.append(f"{name}:{found[0]}: {what} has a continue-on-error: condition")
 
     def trigger(owner, event):
         filters = ", ".join(event["filters"])
@@ -338,6 +365,8 @@ def check_guard(name, at, files):
             cwhere = f"job {caller['id']} at {other}:{caller['line']}"
             if caller["if"] and condition(caller["if"][1]) == "false":
                 disabled.append(f"the routing-guard step at {where} never runs: {cwhere}, which calls {name}, has an if: that is false")
+            elif caller["coe"] and flag(caller["coe"][1]) == "true":
+                disabled.append(f"the routing-guard step at {where} cannot fail the check: {cwhere}, which calls {name}, has continue-on-error: true")
             else:
                 usable.append((other, caller, cwhere))
         # One caller that runs is enough: a disabled one beside it is unused.
@@ -347,6 +376,8 @@ def check_guard(name, at, files):
             trigger(other, files[other]["events"]["pull_request"])
             if caller["if"]:
                 warns.append(f"{other}:{caller['if'][0]}: job {caller['id']}, which calls {name}, has an if: condition")
+            if caller["coe"] and flag(caller["coe"][1]) == "other":
+                warns.append(f"{other}:{caller['coe'][0]}: job {caller['id']}, which calls {name}, has a continue-on-error: condition")
         if not usable and not callers:
             tail = []
             if "pull_request_target" in events:

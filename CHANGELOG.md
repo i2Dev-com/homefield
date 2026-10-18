@@ -13,6 +13,12 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ### Fixed
 
+- `homefield adopt` no longer accepts a routing guard that cannot fail the
+  check. A guard step, or its job, with `continue-on-error: true` (or
+  `${{ true }}`) passed adoption and then stayed green on a routing violation.
+  It is now not a guard, as with `if: false`, and so is a reusable workflow
+  whose callers all have it; a `continue-on-error` expression is a warning.
+  This affected v0.1.0 and v0.1.1.
 - `homefield report` now counts a GitHub-hosted job that never got a runner
   (#64). A hosted job still queued, or cancelled before a runner was assigned,
   has no runner name and was dropped as if it had been skipped, so it never
