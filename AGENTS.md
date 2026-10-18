@@ -83,7 +83,10 @@ agreement — run it when touching either.
   `CHANGELOG.md` explains the upgrade.
 - A release bumps the version in `install.sh` (`REF` default and header),
   `bin/homefield` (`update_command`), `tools/adopt.py` (`RELEASE`), the README
-  and `docs/`.
+  and `docs/`. Before tagging, run `routing-guard/routing_guard.py` over the
+  consumers' real workflows (the i2dev and snap checkouts) and expect no
+  finding about unreadable syntax: the fixtures alone missed v0.2.0's false
+  positives on shell scripts.
 - The checker rejects multi-line `runs-on`; write expressions on one line.
 
 ## Safety and workflow conventions
