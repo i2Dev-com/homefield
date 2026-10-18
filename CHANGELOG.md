@@ -13,6 +13,14 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ### Fixed
 
+- `homefield report` now counts a GitHub-hosted job that never got a runner
+  (#64). A hosted job still queued, or cancelled before a runner was assigned,
+  has no runner name and was dropped as if it had been skipped, so it never
+  reached the "queued or running now" and "cancelled before starting" counts.
+  It now does, when it asks for one of GitHub's standard images
+  (`ubuntu-*`, `macos-*`, `windows-*`). A job that was actually skipped, that
+  failed without a runner, or that targets a runner group or custom labels
+  is still not counted.
 - `homefield adopt` no longer rejects a guard in a reusable workflow because
   one of its callers is disabled (#62). A caller with `if: false` beside one
   that runs made adopt report that the guard never runs. It now blocks only
