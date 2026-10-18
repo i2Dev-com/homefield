@@ -66,7 +66,15 @@ esac
 EOF
 chmod +x "$work/gh"
 for t in awk basename cat dirname git grep head ls mkdir mktemp rm sed sleep tr wc; do ln -s "$(command -v "$t")" "$stubs/$t"; done
-ln -s "$(command -v python3)" "$stubs/python3"
+# The interpreter itself, not whatever `python3` resolves to: a pyenv (or asdf)
+# shim is a script that needs pyenv and its tools on PATH, which the isolated
+# PATH of these tests does not have.
+python_exe="$(python3 -c 'import sys; print(sys.executable)' 2>/dev/null)"
+if [ ! -x "$python_exe" ]; then
+  echo "tests: no usable python3 on PATH (found: $(command -v python3 || echo none)); put a real interpreter first" >&2
+  exit 1
+fi
+ln -s "$python_exe" "$stubs/python3"
 cp "$work/gh" "$stubs/gh"
 
 # The group rows are name, visibility, public allowed, id.
