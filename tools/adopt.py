@@ -333,13 +333,16 @@ def check_guard(name, at, files):
                 for caller in info["jobs"]:
                     if caller["uses"] == ACTION_DIR + name:
                         callers.append((other, caller))
-        usable = []
+        usable, disabled = [], []
         for other, caller in callers:
             cwhere = f"job {caller['id']} at {other}:{caller['line']}"
             if caller["if"] and condition(caller["if"][1]) == "false":
-                blocks.append(f"the routing-guard step at {where} never runs: {cwhere}, which calls {name}, has an if: that is false")
+                disabled.append(f"the routing-guard step at {where} never runs: {cwhere}, which calls {name}, has an if: that is false")
             else:
                 usable.append((other, caller, cwhere))
+        # One caller that runs is enough: a disabled one beside it is unused.
+        if not usable:
+            blocks.extend(disabled)
         for other, caller, cwhere in usable:
             trigger(other, files[other]["events"]["pull_request"])
             if caller["if"]:

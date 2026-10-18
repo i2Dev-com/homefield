@@ -13,6 +13,10 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ### Fixed
 
+- `homefield adopt` no longer rejects a guard in a reusable workflow because
+  one of its callers is disabled (#62). A caller with `if: false` beside one
+  that runs made adopt report that the guard never runs. It now blocks only
+  when every caller is disabled.
 - `homefield status` no longer stops after the VM line when the runner's
   settings can't be read (#63). Reading the name and URL from the runner's
   config failed on missing lines, and that ended the command before the
