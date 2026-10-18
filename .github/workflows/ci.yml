@@ -87,6 +87,9 @@ jobs:
       - name: Guest memory sampler
         run: bash tests/memwatch.sh
 
+      - name: Workspace ownership hook
+        run: bash tests/workspace-owner.sh
+
       - name: bin/homefield memory summary
         run: bash tests/memory-summary.sh
 
