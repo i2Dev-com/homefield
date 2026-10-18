@@ -558,6 +558,14 @@ unset REMOVE
 limactl delete --force homefield
 ```
 
+`config.sh remove` refuses while the service is installed, so the service is
+uninstalled first. If GitHub then refuses the removal (a rejected token, no
+network), `bin/homefield uninstall` installs the service again and starts it:
+the runner is still registered and takes jobs, and you run it again once the
+cause is fixed. By hand that is `./svc.sh install runner` and starting the
+unit from `.service`. If the reinstall fails too, the runner is registered
+with no service; `bin/homefield install` sets the service up again.
+
 If the VM is already gone, delete the stale registration on the runners page.
 
 ## Moving to dedicated hardware
