@@ -94,6 +94,13 @@ case_ "quoted key left open on its line"  fail "$EXPECTED" "" "$(printf '  unsaf
 case_ "? key split by a trailing \\"     fail "$EXPECTED" "" "$(printf '  unsafe:\n    ? "runs-\\\n      on"\n    : self-hosted')"
 case_ "single-quoted key left open"     fail "$EXPECTED" "" "$(printf "  unsafe:\n    'runs-\n    on': self-hosted")"
 # Plain forms around them that must keep passing.
+# Text under a block scalar is not YAML syntax: a script line may start with ?, a
+# bracket or an open quote (regression in v0.2.0, found on real workflows).
+case_ "script lines that look like syntax" pass "$EXPECTED" "" "$(printf '  scripts:\n    runs-on: ubuntu-latest\n    steps:\n      - run: |\n          ? what\n          "an open quote\n          { runs-on; }\n          cat <<EOF\n          "runs-on": x\n          EOF\n      - name: after')"
+case_ "folded script, the same"          pass "$EXPECTED" "" "$(printf '  scripts:\n    runs-on: ubuntu-latest\n    steps:\n      - name: x\n        run: >-\n          ? what\n          "an open quote\n      - run: echo done')"
+case_ "list item scalar, the same"       pass "$EXPECTED" "" "$(printf '  scripts:\n    runs-on: ubuntu-latest\n    steps:\n      - |\n        ? what\n        "open')"
+case_ "split key right after a script"   fail "$EXPECTED" "" "$(printf '  scripts:\n    runs-on: ubuntu-latest\n    steps:\n      - run: |\n          echo hi\n    ? "runs-\\\n      on"\n    : self-hosted')"
+case_ "key at the scalar key indent"     fail "$EXPECTED" "" "$(printf '  scripts:\n    steps:\n      - run: |\n          echo hi\n        "runs-on": self-hosted')"
 # Plain text that merely mentions the field must keep passing.
 case_ "a step script that quotes runs-on" pass "$EXPECTED" "s/^      - run: echo docker\$/      - run: echo \"runs-on\"/"
 case_ "a step script with {runs-on: x}"  pass "$EXPECTED" "s/^      - run: echo docker\$/      - run: echo '{runs-on: self-hosted}'/"

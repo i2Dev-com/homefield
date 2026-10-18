@@ -213,6 +213,10 @@ UNREAD = (
     (re.compile(r"""^\s*[-?]?\s*"(?:[^"\\]|\\.)*\\?$"""), "a quoted key that continues on the next line"),
     (re.compile(r"""^\s*[-?]?\s*'(?:[^']|'')*$"""), "a quoted key that continues on the next line"),
 )
+# The start of a block scalar (`run: |`, `- >-`): the lines under it are text, not
+# keys, so a script line that begins with `?`, a bracket or a quote is not YAML
+# the checks above are about.
+BLOCK_START = re.compile(r"""^(\s*)(-\s+)?([^\s#][^#]*?:\s+)?[|>][-+0-9]*\s*$""")
 HOW = "write routing as a plain `runs-on: ...` line directly under a plain `job-id:` line"
 
 
@@ -301,12 +305,25 @@ def main() -> int:
         job = None
         in_jobs = False
         job_indent = None
+        scalar_col = None
         path = os.path.join(args.workflows_dir, name)
         with open(path) as fh:
             for lineno, line in enumerate(fh, 1):
                 # Comments may name the label; only code counts. Safe to cut at
                 # '#' because the canonical expression contains none.
                 code = line.split("#", 1)[0]
+                # Inside a block scalar (blank, or indented past its key), the
+                # line is text. The unreadable-syntax checks skip it.
+                in_scalar = False
+                if scalar_col is not None:
+                    in_scalar = not line.strip() or len(line) - len(line.lstrip()) > scalar_col
+                    if not in_scalar:
+                        scalar_col = None
+                if not in_scalar:
+                    start = BLOCK_START.match(code)
+                    if start:
+                        # The key's own column, or the dash's for `- |`.
+                        scalar_col = len(start.group(1)) + (len(start.group(2)) if start.group(2) and start.group(3) else 0)
                 # Job ids are the keys directly under top-level `jobs:` — at
                 # whatever indent the file's first such key uses, so a
                 # workflow indented other than the common two spaces still
@@ -337,7 +354,7 @@ def main() -> int:
                     if in_jobs and code[top.end():].strip():
                         fail(f"{name}:{lineno}: jobs: has its jobs on the same line; {HOW}")
                 m = re.match(r"""^(\s*)(['"]?)([A-Za-z0-9_-]+)\2:\s*$""", code)
-                if in_jobs and code.strip() and not top:
+                if in_jobs and code.strip() and not top and not in_scalar:
                     indent = len(code) - len(code.lstrip())
                     if job_indent is None:
                         # The first line under `jobs:` is a job id; everything
@@ -360,7 +377,7 @@ def main() -> int:
                 # below, and a multi-line runs-on already fails on its first
                 # line, so the label appearing elsewhere (a step name, a docs
                 # URL in a run string) is not routing.
-                if in_jobs and not m:
+                if in_jobs and not m and not in_scalar:
                     for pattern, what in UNREAD:
                         if pattern.search(code):
                             fail(f"{where}: {what} is not read by this check; {HOW}")

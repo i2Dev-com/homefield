@@ -11,6 +11,15 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ## Unreleased
 
+### Fixed
+
+- The routing guard no longer fails a compliant workflow because of a script.
+  v0.2.0 matched its unreadable-syntax checks on every line under `jobs:`, so a
+  `run: |` script with a line starting with `?`, a bracket or an open quote
+  (`"$@"` split over lines, a `? ` in a here-document) failed the guard; real
+  workflows hit this in a dozen places. Lines under a block scalar (`|` or `>`)
+  are text and are skipped. A key written after the script is still checked.
+
 ## v0.2.0 (2026-10-18)
 
 Not a drop-in for v0.1.x, by the rule above: the routing guard now fails on
