@@ -393,7 +393,7 @@ printf 'repo=acme/tool\nref=v0.1.0\ncommit=%s\n' "$old" >"$work/inst/.homefield-
 
 version_run V_COMMIT="$new"
 record "a moved ref: says where it moved, exit 0" "0/yes" "$rc/$(has "$out" 'homefield: v0.1.0 has moved to 89abcde since this copy was installed; update with:')"
-record "...with the one-liner for that ref and this copy" "yes" "$(has "$out" "  curl -fsSL https://raw.githubusercontent.com/acme/tool/v0.1.0/install.sh | HOMEFIELD_REPO=acme/tool HOMEFIELD_HOME='$work/inst' bash")"
+record "...with the one-liner for that ref and this copy" "yes" "$(has "$out" "  curl -fsSL https://raw.githubusercontent.com/acme/tool/v0.1.0/install.sh | HOMEFIELD_REPO=acme/tool HOMEFIELD_REF=v0.1.0 HOMEFIELD_HOME='$work/inst' bash")"
 record "...saying the VM is left alone" "yes" "$(has "$out" 'homefield upgrade updates the VM')"
 record "...and no later release when v0.1.0 is the highest" "no" "$(has "$out" ' is out ')"
 record "...the VM note comes once" "1" "$(printf '%s\n' "$out" | grep -c 'homefield upgrade updates the VM')"
@@ -402,11 +402,11 @@ record "...the VM note comes once" "1" "$(printf '%s\n' "$out" | grep -c 'homefi
 dflt="$work/h/.local/share/homefield"
 mkdir -p "$dflt/bin"
 cp "$ROOT/bin/homefield" "$dflt/bin/homefield"
-printf 'repo=i2Dev-com/homefield\nref=v0.1.0\ncommit=%s\n' "$old" >"$dflt/.homefield-ref"
+printf 'repo=i2Dev-com/homefield\nref=v0.1.1\ncommit=%s\n' "$old" >"$dflt/.homefield-ref"
 : >"$calls"
 out="$(env -i HOME="$work/h" PATH="$work/vgh" CALLS="$calls" V_TAGS="$tags_rel" V_COMMIT="$new" "$BASH" "$dflt/bin/homefield" version 2>&1 </dev/null)"
 record "default repo, ref and place: the README's one-liner" "yes" "$(has "$out" "
-  curl -fsSL https://raw.githubusercontent.com/i2Dev-com/homefield/v0.1.0/install.sh | bash
+  curl -fsSL https://raw.githubusercontent.com/i2Dev-com/homefield/v0.1.1/install.sh | bash
 ")"
 
 printf 'repo=acme/tool\nref=release/1\ncommit=%s\n' "$old" >"$work/inst/.homefield-ref"

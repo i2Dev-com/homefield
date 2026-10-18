@@ -36,7 +36,7 @@ It has three parts:
 On an Apple Silicon Mac, in a terminal:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/i2Dev-com/homefield/v0.1.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/i2Dev-com/homefield/v0.1.1/install.sh | bash
 ```
 
 This installs or upgrades [Lima](https://lima-vm.io) with Homebrew if it is missing or older than 1.1 (it
@@ -170,7 +170,7 @@ image are options of the action, and the expression changes with them
 `routing-guard` keeps every copy identical and every guard in place:
 
 ```yaml
-      - uses: i2Dev-com/homefield/routing-guard@v0.1.0
+      - uses: i2Dev-com/homefield/routing-guard@v0.1.1
         with:
           jobs: |
             ci.yml:lint
@@ -252,7 +252,7 @@ shellcheck bin/homefield install.sh vm/provision.sh routing-guard/tests/run.sh t
 ## Versioning
 
 Releases are exact semver tags (`v0.1.0`, `v0.1.1`, `v0.2.0`), and a tag is
-never moved. Pin an exact tag, such as `routing-guard@v0.1.0` (Dependabot's
+never moved. Pin an exact tag, such as `routing-guard@v0.1.1` (Dependabot's
 `github-actions` ecosystem can bump it for you), or a full commit SHA. There
 is no floating major tag to follow.
 

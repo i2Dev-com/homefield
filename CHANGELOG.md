@@ -11,6 +11,14 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ## Unreleased
 
+## v0.1.1 (2026-10-18)
+
+Compatible with v0.1.0: the routing expression and `routing-guard`'s rules
+are unchanged. To upgrade, run the README's one-liner again, then
+`homefield upgrade` on each runner, which installs the workspace fix (#54).
+Bump `routing-guard@v0.1.0` pins to `@v0.1.1`: `homefield adopt` counts only
+its own release.
+
 ### Fixed
 
 - A `container:` job no longer breaks the next job's checkout (#54). The job
