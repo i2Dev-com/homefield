@@ -13,6 +13,14 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ### Fixed
 
+- A `container:` job no longer breaks the next job's checkout (#54). The job
+  container runs as root, so it left root-owned files in the workspace, and
+  the next job, as `runner`, failed to delete them with `EACCES`. Before every
+  job, a job-started hook now gives `_work` back to `runner`, through a sudo
+  rule for that one script. `bin/homefield upgrade` installs it and fixes
+  the files left so far. Running `provision.sh` by hand on a running runner
+  restarts it once, to load the hook, which cancels a job in progress.
+
 - Installing on a second Mac with default settings no longer takes over the
   first Mac's runner (#52). Every Mac's default runner name was the guest
   hostname, `lima-homefield`, and registration replaced any runner of that

@@ -330,6 +330,55 @@ if [ ! -f "$RUNNER_HOME/.runner" ]; then
 fi
 RUNNER_TOKEN=""
 RUNNER_REMOVE_TOKEN=""
+
+# ── Workspace ownership ─────────────────────────────────────────────────────
+# A `container:` job runs as root in its container, with _work mounted in it,
+# so whatever its steps write there is owned by root. The next job's checkout
+# runs as runner and fails to delete it (EACCES; #54, actions/runner#434). A
+# job-started hook hands _work back to runner before every job, which also
+# covers a container job that was cancelled. That takes root, so runner may run
+# this one script, with no arguments, through sudo. It grants nothing new: the
+# docker group already makes runner root-equivalent in the guest.
+cat > /usr/local/sbin/homefield-workspace-owner <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+work=/opt/actions-runner/_work
+[ -d "$work" ] || exit 0
+# find does not follow symlinks and chown -h changes the link itself, so a
+# job's symlink to a file outside _work never hands that file to runner.
+find "$work" -xdev ! -user runner -exec chown -h runner:runner {} +
+EOF
+chmod 755 /usr/local/sbin/homefield-workspace-owner
+# The runner picks the interpreter by extension, so the hook needs ".sh".
+cat > /usr/local/sbin/homefield-job-started.sh <<'EOF'
+#!/usr/bin/env bash
+# The runner's job-started hook (ACTIONS_RUNNER_HOOK_JOB_STARTED), run as runner.
+exec sudo -n /usr/local/sbin/homefield-workspace-owner
+EOF
+chmod 755 /usr/local/sbin/homefield-job-started.sh
+sudoers="$(mktemp)"
+echo 'runner ALL=(root) NOPASSWD: /usr/local/sbin/homefield-workspace-owner ""' >"$sudoers"
+visudo -cqf "$sudoers"
+install -m 440 "$sudoers" /etc/sudoers.d/homefield-workspace-owner
+rm -f "$sudoers"
+# Run it once now, as the hook will: this proves the sudo rule works before
+# any job depends on it, and fixes what earlier container jobs left.
+sudo -u "$RUNNER_USER" /usr/local/sbin/homefield-job-started.sh
+# The runner reads .env (written by config.sh) only when it starts, so a
+# changed .env restarts it below.
+hook_line="ACTIONS_RUNNER_HOOK_JOB_STARTED=/usr/local/sbin/homefield-job-started.sh"
+env_changed=0
+if ! grep -qx "$hook_line" "$RUNNER_HOME/.env" 2>/dev/null; then
+  env_new="$(mktemp)"
+  if [ -f "$RUNNER_HOME/.env" ]; then
+    grep -v '^ACTIONS_RUNNER_HOOK_JOB_STARTED=' "$RUNNER_HOME/.env" >"$env_new" || [ $? = 1 ]
+  fi
+  echo "$hook_line" >>"$env_new"
+  install -o "$RUNNER_USER" -g "$RUNNER_USER" -m 644 "$env_new" "$RUNNER_HOME/.env"
+  rm -f "$env_new"
+  env_changed=1
+fi
+
 if [ ! -f "$RUNNER_HOME/.service" ]; then
   (cd "$RUNNER_HOME" && ./svc.sh install "$RUNNER_USER")
 fi
@@ -339,12 +388,14 @@ svc_unit="$(cat "$RUNNER_HOME/.service")"
 # job queues for 24 h behind a script that reported success. "active" only
 # means the process started, so a (re)started runner must also log
 # "Listening for Jobs", which it does once it has authenticated with GitHub.
-# A runner that was already running and untouched is left alone.
-if systemctl is-active --quiet "$svc_unit"; then
+# A runner that was already running and untouched is left alone. One whose
+# .env changed is restarted, which cancels a job in progress, as replacing the
+# binary does (bin/homefield upgrade refuses while a job runs).
+if [ "$env_changed" = "0" ] && systemctl is-active --quiet "$svc_unit"; then
   echo "provision.sh: ${svc_unit} already running"
 else
   since="$(date '+%Y-%m-%d %H:%M:%S')"
-  systemctl start "$svc_unit"
+  systemctl restart "$svc_unit"
   ready=0
   for _ in $(seq 1 60); do
     if journalctl -u "$svc_unit" --since "$since" --no-pager 2>/dev/null | grep -q "Listening for Jobs"; then

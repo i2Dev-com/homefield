@@ -71,7 +71,7 @@ every job holding cloud or production credentials.
 | Production | The VM holds no cloud credentials and no AWS CLI. Deploy jobs stay hosted and get their credentials through OIDC. |
 | Secrets in jobs | Jobs on the runner receive the secrets their workflow passes, on same-repo PRs. Push-only secrets never reach it by default, because pushes run hosted; they do when `events` includes `push`, `workflow_dispatch` or `schedule`. |
 | Across repositories | Every allowed repository's PR jobs share one VM, one after another. Workspaces are per repository, but anything a job leaves in the guest (Docker images, `/tmp`) is visible to the next job from another repository. Allow only repositories you would trust with each other's PR code. |
-| Inside the VM | Jobs run as user `runner`, which is in the `docker` group and therefore root-equivalent **inside the guest**. The VM is the boundary, not the user. |
+| Inside the VM | Jobs run as user `runner`, which is in the `docker` group and therefore root-equivalent **inside the guest**. The VM is the boundary, not the user. `runner` may also run one script as root through sudo, `homefield-workspace-owner` (see Maintenance); that grants nothing the `docker` group doesn't. |
 
 **Access checklist.** Check these when something changes (a repository added,
 an owner left, a Mac replaced) and now and then regardless. The first two
@@ -311,6 +311,7 @@ gh run rerun <run-id> --repo <owner>/<repo>
 | A PR job waits while another runs | One runner runs one job at a time, across all repositories | Serialised, not failed | Accept it, or switch the less urgent repository to hosted |
 | Job fails only on the local runner | Toolchain or arch gap between the VM and `ubuntu-latest` (arm64 vs x86-64) | Red check | Re-run hosted to confirm. Then add the tool ("Adding tools") or keep that job hosted |
 | `No space left on device` in the VM | Docker images and old workspaces | Red check | `limactl shell homefield sudo /usr/local/sbin/homefield-cleanup` |
+| Checkout fails with `EACCES: permission denied` deleting files in `_work` | A `container:` job ran as root and left root-owned files, and the runner predates the job-started hook that gives them back (#54) | Red check, on every later job in that repository's workspace | `bin/homefield upgrade` installs the hook, which also fixes the files left so far |
 | Cancelled job still "in progress" for ~40 s | The runner gives the running step a grace period before killing it | Ends `cancelled`, and service containers are removed | Wait. Only investigate if it lasts minutes |
 
 Observed in drills: an offline runner leaves the job queued, and
@@ -375,6 +376,15 @@ service ports never appear there.
   be safe if a job starts during it. For that reason it never removes tagged
   images. After a service image version bump, clear the old tags by hand while
   idle: `limactl shell homefield sudo docker image prune --all --force`.
+- **Workspace ownership.** A `container:` job runs as root in its container,
+  so whatever it writes in the workspace is owned by root, and the next job's
+  checkout, as `runner`, could not delete it. Before every job, the runner's
+  job-started hook (`ACTIONS_RUNNER_HOOK_JOB_STARTED` in
+  `/opt/actions-runner/.env`) runs `/usr/local/sbin/homefield-workspace-owner`
+  through sudo, which gives anything in `_work` not owned by `runner` back to
+  it. `/etc/sudoers.d/homefield-workspace-owner` allows that one script, with
+  no arguments, and nothing else. The hook's output is in the job log, under
+  "Set up runner".
 - **Host memory.** The VM process on the Mac ("Virtual Machine Service") sits
   at roughly the configured `memory` even while idle. The guest fills spare RAM
   with page cache, and Virtualization.framework does not return pages to the
