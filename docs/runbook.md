@@ -445,9 +445,25 @@ It is named `<local hostname>-homefield-2`. Every command takes `--instance`
 (or `HOMEFIELD_INSTANCE`): `status`, `upgrade`, `memory` and `uninstall` act
 on one instance, so upgrade each. `route` and `adopt` act on repositories and
 cover every runner. If the first runner was installed with a `--label`,
-`--group` or `--packages` other than the defaults, pass the same ones, and
-install the same hooks ([Adding tools](#adding-tools)): a job can land on
-either.
+`--group` or `--packages` other than the defaults, pass the same ones: a job
+can land on either.
+
+If the first runner has hooks ([Adding tools](#adding-tools)), put them in
+the new VM *before* it registers, or the jobs it takes in between run without
+them. `install` uses a VM that already exists and runs its hooks before
+registering, so create the VM first. The file is
+`$HOMEFIELD_HOME/vm/lima.yaml` (from a checkout, `vm/lima.yaml`), and
+`--cpus` and `--memory` go here, not on `install`:
+
+```bash
+limactl create --name=homefield-2 --mount-none --tty=false ~/.local/share/homefield/vm/lima.yaml
+limactl start --tty=false homefield-2
+limactl copy 50-awscli.sh homefield-2:/tmp/50-awscli.sh
+limactl shell homefield-2 sudo install -D -m 755 /tmp/50-awscli.sh /etc/homefield/provision.d/50-awscli.sh
+homefield install --instance homefield-2 --url https://github.com/<org>
+```
+
+A failing hook stops `install` before the runner is registered.
 
 Memory is the cost. Each VM holds up to its `memory` on the Mac even while
 idle, because Virtualization.framework doesn't return the guest's pages
@@ -457,12 +473,20 @@ idle, because Virtualization.framework doesn't return the guest's pages
 before going lower.
 
 **On another Mac**, install the tool there ([Setup](#setup-once-per-machine))
-and run `homefield install` with the same URL, label, group, packages and
-hooks. The runner is named after that Mac, so it doesn't collide with the
-first; a name already in use is refused ([Failure modes](#failure-modes)). The
-runner group already exists and is used as it is. Registering at an
-organization needs an organization owner's `gh` login with `admin:org`, or a
-registration token pasted when asked.
+and run `homefield install` with the same URL, label, group and packages, and
+the hooks put in first as above. The runner is named after that Mac, so it
+doesn't collide with the first; a name already in use is refused
+([Failure modes](#failure-modes)). The runner group already exists and is
+used as it is. Registering at an organization needs an organization owner's
+`gh` login with `admin:org`, or a registration token pasted when asked.
+
+**v0.1.0** names the runner differently. The name is the guest's
+hostname, `lima-<instance>`, so the default instance is `lima-homefield` on
+every Mac, and it registers with `config.sh --replace`, which takes over any
+runner of that name. Installed with the defaults on another Mac, it takes
+over the first Mac's registration: the first Mac's runner stops getting jobs,
+and nothing reports an error. With v0.1.0, pass a `--name` that no
+other runner in the scope uses (CHANGELOG, #52).
 
 Once there are several:
 

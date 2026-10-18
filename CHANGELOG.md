@@ -41,8 +41,9 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 - The runbook has a *More runners* section: for more than one job at a time,
   add a runner as another VM on the same Mac (`--instance`) or on another
-  Mac, with the same label and group. It covers the memory each VM holds and
-  what changes once there are several.
+  Mac, with the same label and group. It covers the memory each VM holds,
+  putting hooks in before the new runner registers, passing `--name` on
+  another Mac with v0.1.0, and what changes once there are several.
 - The README installs with `curl` now that the repository is public, and
   `homefield version` prints the same `curl` one-liner when an update is
   available, in place of the `gh api` one.
