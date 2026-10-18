@@ -90,7 +90,14 @@ case_ "key spelled with an escape"       fail "$EXPECTED" "" "$(printf '  unsafe
 case_ "job id as an alias"               fail "$EXPECTED" "" "  unsafe: *shared"
 case_ "jobs: given as one {...} line"    fail "$EXPECTED" "" "s/^jobs:\$/jobs: {a: {runs-on: self-hosted}}/"
 case_ "spaced top-level jobs key"        fail "$EXPECTED" "" "s/^jobs:\$/jobs :/"
+case_ "quoted key left open on its line"  fail "$EXPECTED" "" "$(printf '  unsafe:\n    "runs-\\\n    on": self-hosted')"
+case_ "? key split by a trailing \\"     fail "$EXPECTED" "" "$(printf '  unsafe:\n    ? "runs-\\\n      on"\n    : self-hosted')"
+case_ "single-quoted key left open"     fail "$EXPECTED" "" "$(printf "  unsafe:\n    'runs-\n    on': self-hosted")"
 # Plain forms around them that must keep passing.
+# Plain text that merely mentions the field must keep passing.
+case_ "a step script that quotes runs-on" pass "$EXPECTED" "s/^      - run: echo docker\$/      - run: echo \"runs-on\"/"
+case_ "a step script with {runs-on: x}"  pass "$EXPECTED" "s/^      - run: echo docker\$/      - run: echo '{runs-on: self-hosted}'/"
+case_ "a block script that quotes it"    pass "$EXPECTED" "" "$(printf '  doc:\n    runs-on: ubuntu-latest\n    steps:\n      - run: |\n          echo "runs-on"\n          echo "a, runs-on: x"')"
 case_ "trailing comment after jobs:"     pass "$EXPECTED" "s/^jobs:\$/jobs: # the jobs/"
 case_ "document start marker"            pass "$EXPECTED" "1s/^/---\\n/"
 case_ "plain flow data elsewhere"        pass "$EXPECTED" "s/^      - run: echo docker\$/      - run: echo docker\\n        env: {A: b}/"

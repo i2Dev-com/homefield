@@ -199,12 +199,19 @@ def guards(events: list, dependabot: str, fallback: str) -> list:
 # fail instead, and the message says how to write it.
 PLAIN_KEY = re.compile(r"""^(['"]?)[A-Za-z0-9_-]+\1:(\s|$)""")
 UNREAD = (
-    (re.compile(r"""["']runs-on["']"""), "a quoted runs-on key"),
-    (re.compile(r"""[{,]\s*runs-on\s*:"""), "runs-on inside a {...} mapping"),
-    (re.compile(r"""^\s*-?\s*\?\s*["']?runs-on"""), "runs-on as a ? complex key"),
+    (re.compile(r"""^\s*(-\s+)?["']runs-on["']\s*:"""), "a quoted runs-on key"),
+    # A line that opens a {...} or [...] and names runs-on. A plain job body
+    # never starts a line with a bracket.
+    (re.compile(r"""^\s*[{,\[].*runs-on"""), "runs-on inside a {...} mapping"),
+    (re.compile(r"""^\s*\?(\s|$)"""), "a ? complex key"),
     (re.compile(r"""^\s*runs-on\s+:"""), "a space before the colon of runs-on"),
     (re.compile(r"""^\s*["']?<<["']?\s*:"""), "a << merge key"),
     (re.compile(r"""^\s*-?\s*"[^"]*\\[^"]*"\s*:"""), "a double-quoted key with an escape"),
+    # A key whose quote is still open at the end of the line: a double-quoted
+    # scalar may continue on the next line (`"runs-\` then `on"` reads as
+    # runs-on), so neither line holds the word.
+    (re.compile(r"""^\s*[-?]?\s*"(?:[^"\\]|\\.)*\\?$"""), "a quoted key that continues on the next line"),
+    (re.compile(r"""^\s*[-?]?\s*'(?:[^']|'')*$"""), "a quoted key that continues on the next line"),
 )
 HOW = "write routing as a plain `runs-on: ...` line directly under a plain `job-id:` line"
 
