@@ -27,7 +27,7 @@ Keep hosted:
 ## 2. Route them
 
 Replace each chosen job's `runs-on` with the canonical expression, verbatim.
-It must match the `routing-guard` version used in step 3 (`@v0.1.1` below); see
+It must match the `routing-guard` version used in step 3 (`@v0.2.0` below); see
 [`CHANGELOG.md`](../CHANGELOG.md) when upgrading:
 
 ```yaml
@@ -44,7 +44,7 @@ In a job that runs on every PR, after `actions/checkout`:
 
 ```yaml
       - name: Routing guard
-        uses: i2Dev-com/homefield/routing-guard@v0.1.1
+        uses: i2Dev-com/homefield/routing-guard@v0.2.0
         with:
           jobs: |
             ci.yml:lint
@@ -56,7 +56,7 @@ If the runner was registered with a `RUNNER_LABEL` other than `homefield-ci`, pu
 that label in the expression in step 2 and pass it here as `label:`.
 Routing another job later means adding it here in the same PR, which keeps it
 a deliberate, reviewed change.
-The step has to use `i2Dev-com/homefield/routing-guard@v0.1.1`, the release
+The step has to use `i2Dev-com/homefield/routing-guard@v0.2.0`, the release
 your installed `homefield` checks with (`homefield version` shows it), or a
 full commit SHA; another release, `@v0` or `@main` do not count. It must be in
 a workflow that runs on `pull_request`, with no `if: false` and no
@@ -76,7 +76,7 @@ expression in step 2 and the guard in step 3 have to agree, and `homefield
 adopt` refuses a guard whose options differ from the flags you pass it.
 
 ```yaml
-      - uses: i2Dev-com/homefield/routing-guard@v0.1.1
+      - uses: i2Dev-com/homefield/routing-guard@v0.2.0
         with:
           jobs: |
             ci.yml:lint
@@ -140,7 +140,7 @@ step:
    branch and runs the same check as the guard. It is ready when a
    `routing-guard` step is there, passes, and at least one job is routed.
    The step must use `i2Dev-com/homefield/routing-guard` at the release
-   `homefield` itself is (`@v0.1.1`; a full commit SHA is accepted, with a
+   `homefield` itself is (`@v0.2.0`; a full commit SHA is accepted, with a
    warning) in a workflow that runs on pull requests, because `adopt` checks
    the workflow with its own copy of the guard's rules;
    anything else, such as another repository's action, another release (update

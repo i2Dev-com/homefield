@@ -11,6 +11,18 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ## Unreleased
 
+## v0.2.0 (2026-10-18)
+
+Not a drop-in for v0.1.x, by the rule above: the routing guard now fails on
+workflow syntax it cannot read, and `homefield adopt` stops accepting a guard
+with `continue-on-error: true`. A workflow written in the plain style (a
+`job-id:` line, then `runs-on: ...` on a line of its own) is unaffected; the
+expression and its guarantees are unchanged. To upgrade, run the README's
+one-liner again, then `homefield upgrade` on each runner. Bump
+`routing-guard@v0.1.1` pins to `@v0.2.0`: `homefield adopt` counts only its own
+release. Two fixes below close ways to get a job onto the runner past the
+guard; both affected v0.1.0 and v0.1.1.
+
 ### Fixed
 
 - `homefield adopt` no longer accepts a routing guard that cannot fail the

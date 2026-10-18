@@ -73,7 +73,7 @@ agreement — run it when touching either.
   A new option value or a new option whose default changes the expression is
   a breaking change, as below.
 
-- Releases are exact semver tags (`v0.1.0`, `v0.1.1`, `v0.2.0`) that are
+- Releases are exact semver tags (`v0.1.0`, `v0.2.0`, `v0.3.0`) that are
   **never moved**. While we are in 0.x, a change that makes a previously
   passing workflow fail (new guard, new default) bumps the **minor**;
   compatible changes bump the patch. Merged changes wait on `main`, under
