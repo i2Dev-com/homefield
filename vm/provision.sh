@@ -365,12 +365,16 @@ rm -f "$sudoers"
 # any job depends on it, and fixes what earlier container jobs left.
 sudo -u "$RUNNER_USER" /usr/local/sbin/homefield-job-started.sh
 # The runner reads .env (written by config.sh) only when it starts, so a
-# changed .env restarts it below.
+# changed .env restarts it below. The previous .env is kept until the runner
+# is back, to restore it if it is not.
 hook_line="ACTIONS_RUNNER_HOOK_JOB_STARTED=/usr/local/sbin/homefield-job-started.sh"
 env_changed=0
+env_prev=""
 if ! grep -qx "$hook_line" "$RUNNER_HOME/.env" 2>/dev/null; then
   env_new="$(mktemp)"
   if [ -f "$RUNNER_HOME/.env" ]; then
+    env_prev="$(mktemp)"
+    cp "$RUNNER_HOME/.env" "$env_prev"
     grep -v '^ACTIONS_RUNNER_HOOK_JOB_STARTED=' "$RUNNER_HOME/.env" >"$env_new" || [ $? = 1 ]
   fi
   echo "$hook_line" >>"$env_new"
@@ -390,10 +394,33 @@ svc_unit="$(cat "$RUNNER_HOME/.service")"
 # "Listening for Jobs", which it does once it has authenticated with GitHub.
 # A runner that was already running and untouched is left alone. One whose
 # .env changed is restarted, which cancels a job in progress, as replacing the
-# binary does (bin/homefield upgrade refuses while a job runs).
-if [ "$env_changed" = "0" ] && systemctl is-active --quiet "$svc_unit"; then
+# binary does (bin/homefield upgrade refuses while a job runs). That restart
+# stops a working runner, so if it does not come back, any failure from here
+# puts the previous .env back and starts the runner again before exiting.
+# Every other path gets here with the runner stopped (first registration, a
+# move, a new runner binary, bin/homefield upgrade) and has nothing to
+# restore.
+restore_running_runner() {
+  local rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "provision.sh: ${svc_unit} did not come back with the job-started hook; restarting it as it was" >&2
+    if [ -n "$env_prev" ]; then
+      install -o "$RUNNER_USER" -g "$RUNNER_USER" -m 644 "$env_prev" "$RUNNER_HOME/.env" || true
+      rm -f "$env_prev"
+    fi
+    systemctl restart "$svc_unit" || true
+  fi
+}
+was_active=0
+if systemctl is-active --quiet "$svc_unit"; then
+  was_active=1
+fi
+if [ "$env_changed" = "0" ] && [ "$was_active" = "1" ]; then
   echo "provision.sh: ${svc_unit} already running"
 else
+  if [ "$was_active" = "1" ]; then
+    trap restore_running_runner EXIT
+  fi
   since="$(date '+%Y-%m-%d %H:%M:%S')"
   systemctl restart "$svc_unit"
   ready=0
@@ -410,7 +437,11 @@ else
     echo "provision.sh: ${svc_unit} did not reach \"Listening for Jobs\"" >&2
     exit 1
   fi
+  trap - EXIT
   echo "provision.sh: ${svc_unit} is listening for jobs"
+fi
+if [ -n "$env_prev" ]; then
+  rm -f "$env_prev"
 fi
 
 # ── Cleanup timer ───────────────────────────────────────────────────────────
