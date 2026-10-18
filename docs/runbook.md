@@ -48,6 +48,10 @@ runs-on: ${{ vars.CI_RUNNER == 'local' && github.event_name == 'pull_request' &&
     [adopting: Routing options](adopting.md#routing-options));
   - any `runs-on` that asks for `self-hosted` is that expression. A bare
     `self-hosted` would match this runner, because its labels are a superset;
+  - every job is written in the plain block style the check can read: a
+    `job-id:` line, then `runs-on: ...` on a line of its own. Valid YAML that
+    spells it another way (a quoted `"runs-on"`, a job as a `{...}` mapping, a
+    `<<` merge key) would pass unseen, so it fails and says to write it plainly;
   - the jobs that opt in are exactly the repository's `jobs` list.
 
 **Why the expression is inline and not an action.** GitHub evaluates `runs-on`
