@@ -18,7 +18,7 @@ fail, such as a new guard in the routing expression, bumps the minor version
   `run: |` script with a line starting with `?`, a bracket or an open quote
   (a multi-line quoted string, a here-document line) failed the guard; real
   workflows hit this in a dozen places. Lines under a block scalar (`|` or `>`)
-  are text and are skipped. A key written after the script is still checked.
+  are text and are skipped, including one with an anchor or tag (`run: &script |`). A key written after the script is still checked.
 
 ## v0.2.0 (2026-10-18)
 

@@ -99,6 +99,9 @@ case_ "single-quoted key left open"     fail "$EXPECTED" "" "$(printf "  unsafe:
 case_ "script lines that look like syntax" pass "$EXPECTED" "" "$(printf '  scripts:\n    runs-on: ubuntu-latest\n    steps:\n      - run: |\n          ? what\n          "an open quote\n          { runs-on; }\n          cat <<EOF\n          "runs-on": x\n          EOF\n      - name: after')"
 case_ "folded script, the same"          pass "$EXPECTED" "" "$(printf '  scripts:\n    runs-on: ubuntu-latest\n    steps:\n      - name: x\n        run: >-\n          ? what\n          "an open quote\n      - run: echo done')"
 case_ "list item scalar, the same"       pass "$EXPECTED" "" "$(printf '  scripts:\n    runs-on: ubuntu-latest\n    steps:\n      - |\n        ? what\n        "open')"
+case_ "anchored script"                  pass "$EXPECTED" "" "$(printf '  scripts:\n    runs-on: ubuntu-latest\n    steps:\n      - run: &script |\n          ? what\n          "an open quote')"
+case_ "tagged script"                    pass "$EXPECTED" "" "$(printf '  scripts:\n    runs-on: ubuntu-latest\n    steps:\n      - run: !!str |\n          ? what\n          "an open quote')"
+case_ "anchored and tagged list scalar"  pass "$EXPECTED" "" "$(printf '  scripts:\n    runs-on: ubuntu-latest\n    steps:\n      - &a !!str >-\n        ? what\n        "open')"
 case_ "split key right after a script"   fail "$EXPECTED" "" "$(printf '  scripts:\n    runs-on: ubuntu-latest\n    steps:\n      - run: |\n          echo hi\n    ? "runs-\\\n      on"\n    : self-hosted')"
 case_ "key at the scalar key indent"     fail "$EXPECTED" "" "$(printf '  scripts:\n    steps:\n      - run: |\n          echo hi\n        "runs-on": self-hosted')"
 # Plain text that merely mentions the field must keep passing.

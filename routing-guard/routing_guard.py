@@ -213,10 +213,10 @@ UNREAD = (
     (re.compile(r"""^\s*[-?]?\s*"(?:[^"\\]|\\.)*\\?$"""), "a quoted key that continues on the next line"),
     (re.compile(r"""^\s*[-?]?\s*'(?:[^']|'')*$"""), "a quoted key that continues on the next line"),
 )
-# The start of a block scalar (`run: |`, `- >-`): the lines under it are text, not
+# The start of a block scalar (`run: |`, `- >-`, `run: &script |`): the lines under it are text, not
 # keys, so a script line that begins with `?`, a bracket or a quote is not YAML
 # the checks above are about.
-BLOCK_START = re.compile(r"""^(\s*)(-\s+)?([^\s#][^#]*?:\s+)?[|>][-+0-9]*\s*$""")
+BLOCK_START = re.compile(r"""^(\s*)(-\s+)?([^\s#][^#]*?:\s+)?(?:[&!]\S*\s+)*[|>][-+0-9]*\s*$""")
 HOW = "write routing as a plain `runs-on: ...` line directly under a plain `job-id:` line"
 
 
