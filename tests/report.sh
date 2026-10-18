@@ -38,7 +38,19 @@ cat >"$work/fixture.json" <<'JSON'
    "runner_name": "lima", "labels": ["self-hosted", "linux", "arm64", "homefield-ci"]},
   {"id": 15, "name": "stuck", "status": "completed", "conclusion": "cancelled", "created_at": "2026-10-01T10:00:00Z",
    "started_at": null, "completed_at": null,
-   "runner_name": null, "labels": ["self-hosted", "linux", "arm64", "homefield-ci"]}
+   "runner_name": null, "labels": ["self-hosted", "linux", "arm64", "homefield-ci"]},
+  {"id": 19, "name": "hosted-queued", "status": "queued", "conclusion": null, "created_at": "2026-10-01T10:00:00Z",
+   "started_at": null, "completed_at": null,
+   "runner_name": null, "labels": ["ubuntu-latest"]},
+  {"id": 20, "name": "hosted-cancelled", "status": "completed", "conclusion": "cancelled", "created_at": "2026-10-01T10:00:00Z",
+   "started_at": null, "completed_at": null,
+   "runner_name": null, "labels": ["ubuntu-latest"]},
+  {"id": 22, "name": "other-pool-queued", "status": "queued", "conclusion": null, "created_at": "2026-10-01T10:00:00Z",
+   "started_at": null, "completed_at": null,
+   "runner_name": null, "labels": ["self-hosted", "gpu"]},
+  {"id": 23, "name": "hosted-never-ran", "status": "completed", "conclusion": "failure", "created_at": "2026-10-01T10:00:00Z",
+   "started_at": null, "completed_at": null,
+   "runner_name": null, "labels": ["ubuntu-latest"]}
  ]},
  {"id": 2, "path": ".github/workflows/ci.yml", "event": "pull_request", "branch": "feat/b", "jobs": [
   {"id": 21, "name": "checks", "status": "completed", "conclusion": "failure", "created_at": "2026-10-01T10:05:00Z",
@@ -86,6 +98,10 @@ record "matrix jobs keep their own rows" "1/1" "$(job ci.yml 'lint (node 22)' ho
 record "hosted lint minutes (61 s -> 2, 56 s -> 1)" "2/1" "$(job ci.yml 'lint (node 22)' hosted minutes)/$(job ci.yml 'lint (node 24)' hosted minutes)"
 record "a skipped job that asked for the local label is not counted" "" "$(job ci.yml skipme local jobs)"
 record "a running job is pending, not a run or an unstarted job" "0/0/1" "$(job ci.yml running local jobs)/$(job ci.yml running local unstarted)/$(job ci.yml running local pending)"
+record "a hosted job still queued is pending" "0/0/1" "$(job ci.yml hosted-queued hosted jobs)/$(job ci.yml hosted-queued hosted unstarted)/$(job ci.yml hosted-queued hosted pending)"
+record "a hosted job cancelled before a runner was assigned is unstarted" "0/1/0" "$(job ci.yml hosted-cancelled hosted jobs)/$(job ci.yml hosted-cancelled hosted unstarted)/$(job ci.yml hosted-cancelled hosted pending)"
+record "a queued job for another self-hosted pool is not counted" "" "$(job ci.yml other-pool-queued hosted pending)"
+record "a hosted job that failed without a runner never ran: not counted" "" "$(job ci.yml hosted-never-ran hosted jobs)"
 record "a skipped job is not a run" "" "$(job ci.yml deploy hosted jobs)"
 record "macOS minutes carry the x10 multiplier" "10" "$(job other.yml mac hosted minutes)"
 record "local total minutes (3, plus the cancelled job's 1)" "4" "$(total local minutes)"

@@ -134,7 +134,12 @@ def classify(job, label):
     if label in labels:
         return "local"
     if not runner:
-        return "skipped"
+        # Not skipped, yet no runner: queued now, or cancelled before one was
+        # assigned. Hosted unless it asked for a self-hosted runner that is not
+        # ours. Any other conclusion without a runner never ran: not counted.
+        if job.get("status") == "completed" and job.get("conclusion") != "cancelled":
+            return "skipped"
+        return "other" if "self-hosted" in labels else "hosted"
     if runner.startswith(("GitHub Actions", "GitHub-hosted", "Hosted Compute Agent")):
         return "hosted"
     return "other"
