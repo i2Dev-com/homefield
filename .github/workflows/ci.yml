@@ -61,6 +61,9 @@ jobs:
       - name: homefield uninstall restores the service
         run: bash tests/uninstall.sh
 
+      - name: homefield status without the runner's settings
+        run: bash tests/status.sh
+
       - name: bin/homefield memory summary
         run: bash tests/memory-summary.sh
 
