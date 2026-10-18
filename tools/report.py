@@ -115,6 +115,10 @@ def percentile(sorted_values, fraction):
     return sorted_values[rank - 1]
 
 
+# Labels of GitHub's standard hosted images (ubuntu-latest, macos-15, windows-2025, ...).
+HOSTED_IMAGES = ("ubuntu-", "macos-", "windows-")
+
+
 def multiplier(labels):
     joined = " ".join(labels)
     if "macos" in joined:
@@ -135,11 +139,15 @@ def classify(job, label):
         return "local"
     if not runner:
         # Not skipped, yet no runner: queued now, or cancelled before one was
-        # assigned. Hosted unless it asked for a self-hosted runner that is not
-        # ours. Any other conclusion without a runner never ran: not counted.
+        # assigned. Any other conclusion without a runner never ran. A name is
+        # all there is to go on, so it is hosted only when it asks for one of
+        # GitHub's standard images; a group or custom labels (a larger runner,
+        # or a self-hosted pool that leaves out `self-hosted`) are not counted.
         if job.get("status") == "completed" and job.get("conclusion") != "cancelled":
             return "skipped"
-        return "other" if "self-hosted" in labels else "hosted"
+        if "self-hosted" not in labels and any(item.startswith(HOSTED_IMAGES) for item in labels):
+            return "hosted"
+        return "other"
     if runner.startswith(("GitHub Actions", "GitHub-hosted", "Hosted Compute Agent")):
         return "hosted"
     return "other"

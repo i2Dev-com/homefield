@@ -427,7 +427,13 @@ service ports never appear there.
     they used (for local jobs, what they would have cost hosted). Queue wait
     is what shows whether one runner is enough. It reads the GitHub API with
     `gh`, so it needs no access to the VM, and takes a few minutes a month of
-    runs. Pull requests are counted as distinct head branches.
+    runs. Pull requests are counted as distinct head branches. A job that is
+    still queued, or was cancelled before a runner was assigned, has no
+    runner yet, so it is told apart by its labels: it counts as hosted (and
+    shows as "queued or running now" or "cancelled before starting") only
+    when it asks for one of GitHub's standard images (`ubuntu-*`, `macos-*`,
+    `windows-*`) without `self-hosted`. A larger runner or a runner group has
+    its own name, so such a job is not counted until a runner takes it.
 
 ## More runners
 
