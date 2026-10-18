@@ -92,8 +92,10 @@ refuses a public repository. `--dry-run` shows what it would do.
   its own branch, so anyone who can open one can change its `runs-on`. Keep
   every repository that can reach the runner private, with the runner group
   refusing public ones. See [Security model](#security-model).
-- **One job at a time**, across every repository using the runner. Others
-  queue. (Running several is tracked in [#14](https://github.com/i2Dev-com/homefield/issues/14).)
+- **One job at a time per runner**, across every repository using it. Others
+  queue. For more at once, add runners: another VM on the same Mac or another
+  Mac, each with its own memory ([runbook: More runners](docs/runbook.md#more-runners)).
+  Several runners in one VM is tracked in [#14](https://github.com/i2Dev-com/homefield/issues/14).
 - **Only while the Mac is up.** Routed jobs wait while the Mac sleeps or the
   VM is stopped, and GitHub fails them after 24 hours. By default pushes to the
   default branch run hosted, so merging and deploying never wait on the Mac;

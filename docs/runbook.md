@@ -308,7 +308,7 @@ gh run rerun <run-id> --repo <owner>/<repo>
 | `install` or `provision.sh` stops: "already registered" or "A runner exists with the same name" | Another runner in the scope has the name: another machine's, or this Mac's from before a VM was deleted without `uninstall` | Nothing is registered; the other runner is untouched | Another machine's: pick another name (`--name`, `RUNNER_NAME`). A stale one of this Mac's: `install --replace`, which removes it right before registering, or remove it on the runners page and run again. Not `config.sh --replace`: it keeps the old registration's runner group ([actions/runner#4091](https://github.com/actions/runner/issues/4091)) |
 | Waiting forever although the runner is online and idle | The repository is not in the runner group | Same as above | `bin/homefield adopt --repo <owner>/<repo>` adds it (or add it in the organization settings), or switch the repository to hosted |
 | Waiting forever although the runner is online and idle, and the repository is in the group | The label in the expression is not one of the runner's labels. For example, an expression that uses the default label `homefield-ci` while the runner was registered with another label | Same as above | Add the label to the runner (*Settings → Actions → Runners →* the runner *→ Labels*), or pass the runner's label to `routing-guard` as `label:` and use it in the expression |
-| A PR job waits while another runs | One runner runs one job at a time, across all repositories | Serialised, not failed | Accept it, or switch the less urgent repository to hosted |
+| A PR job waits while another runs | One runner runs one job at a time, across all repositories | Serialised, not failed | Accept it, switch the less urgent repository to hosted, or add a runner ([More runners](#more-runners)) |
 | Job fails only on the local runner | Toolchain or arch gap between the VM and `ubuntu-latest` (arm64 vs x86-64) | Red check | Re-run hosted to confirm. Then add the tool ("Adding tools") or keep that job hosted |
 | `No space left on device` in the VM | Docker images and old workspaces | Red check | `limactl shell homefield sudo /usr/local/sbin/homefield-cleanup` |
 | Checkout fails with `EACCES: permission denied` deleting files in `_work` | A `container:` job ran as root and left root-owned files, and the runner predates the job-started hook that gives them back (#54) | Red check, on every later job in that repository's workspace | `bin/homefield upgrade` installs the hook, which also fixes the files left so far |
@@ -426,6 +426,57 @@ service ports never appear there.
     is what shows whether one runner is enough. It reads the GitHub API with
     `gh`, so it needs no access to the VM, and takes a few minutes a month of
     runs. Pull requests are counted as distinct head branches.
+
+## More runners
+
+A runner runs one job at a time. When jobs wait for each other (`bin/homefield
+report` shows the queue wait), add a runner: another VM on the same Mac, or
+another Mac. Each is a VM with its own registration, under the same label and
+runner group as the first, and GitHub gives each queued job to whichever
+runner is idle. Repositories and their routing don't change.
+
+**On the same Mac**, a second instance:
+
+```bash
+homefield install --instance homefield-2 --url https://github.com/<org>
+```
+
+It is named `<local hostname>-homefield-2`. Every command takes `--instance`
+(or `HOMEFIELD_INSTANCE`): `status`, `upgrade`, `memory` and `uninstall` act
+on one instance, so upgrade each. `route` and `adopt` act on repositories and
+cover every runner. If the first runner was installed with a `--label`,
+`--group` or `--packages` other than the defaults, pass the same ones, and
+install the same hooks ([Adding tools](#adding-tools)): a job can land on
+either.
+
+Memory is the cost. Each VM holds up to its `memory` on the Mac even while
+idle, because Virtualization.framework doesn't return the guest's pages
+([Maintenance](#maintenance), "Host memory"). The default is 5 GiB
+(`vm/lima.yaml`), so two VMs at the default take about 10 GiB. `--memory` and
+`--cpus` size a new VM; check the first one's peak with `homefield memory`
+before going lower.
+
+**On another Mac**, install the tool there ([Setup](#setup-once-per-machine))
+and run `homefield install` with the same URL, label, group, packages and
+hooks. The runner is named after that Mac, so it doesn't collide with the
+first; a name already in use is refused ([Failure modes](#failure-modes)). The
+runner group already exists and is used as it is. Registering at an
+organization needs an organization owner's `gh` login with `admin:org`, or a
+registration token pasted when asked.
+
+Once there are several:
+
+- Every runner serves every repository in the group, so the
+  [trust boundary](#trust-boundary)'s "Across repositories" holds on each.
+  Jobs that run at the same time are in separate VMs and share no Docker
+  daemon, disk or memory.
+- `bin/homefield route hosted --repo <owner>/<repo>` takes a repository off
+  all of them at once.
+- To take one away, `homefield uninstall --instance <name>` while it is idle
+  (on the Mac that runs it).
+
+Several runners in one VM, to save the memory, is tracked in
+[#14](https://github.com/i2Dev-com/homefield/issues/14).
 
 ## Moving a registration
 
