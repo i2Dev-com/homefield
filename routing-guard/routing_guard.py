@@ -44,6 +44,12 @@ the list fails, including an expression this check cannot evaluate and a
 multi-line `runs-on` (a list or mapping on the following lines). Write those
 on one line, or keep the job on a hosted image name.
 
+The file is read line by line, with no YAML parser, so it can only vouch for
+the plain block style. Valid YAML that says the same thing another way (a
+quoted `"runs-on"` key, a job written as a `{...}` mapping, a `<<` merge key,
+`? runs-on`, a top-level key the scan cannot read) would pass unseen. Those
+fail too, with a message that says how to write them plainly.
+
 The set of opted-in jobs must equal --jobs exactly, so routing a job to the
 local runner is always a deliberate, reviewed change.
 
@@ -186,6 +192,23 @@ def guards(events: list, dependabot: str, fallback: str) -> list:
     return found
 
 
+# This check reads workflows line by line, with no YAML parser, so it can only
+# vouch for the plain block style GitHub's own examples use. Valid YAML that
+# says the same thing another way (a quoted `"runs-on"` key, a job written as a
+# `{...}` mapping, a `<<` merge key, `? runs-on`) would pass unseen, so these
+# fail instead, and the message says how to write it.
+PLAIN_KEY = re.compile(r"""^(['"]?)[A-Za-z0-9_-]+\1:(\s|$)""")
+UNREAD = (
+    (re.compile(r"""["']runs-on["']"""), "a quoted runs-on key"),
+    (re.compile(r"""[{,]\s*runs-on\s*:"""), "runs-on inside a {...} mapping"),
+    (re.compile(r"""^\s*-?\s*\?\s*["']?runs-on"""), "runs-on as a ? complex key"),
+    (re.compile(r"""^\s*runs-on\s+:"""), "a space before the colon of runs-on"),
+    (re.compile(r"""^\s*["']?<<["']?\s*:"""), "a << merge key"),
+    (re.compile(r"""^\s*-?\s*"[^"]*\\[^"]*"\s*:"""), "a double-quoted key with an escape"),
+)
+HOW = "write routing as a plain `runs-on: ...` line directly under a plain `job-id:` line"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--workflows-dir", default=".github/workflows")
@@ -290,22 +313,38 @@ def main() -> int:
                 # quoted key missed below would credit its runs-on to the
                 # previous job.
                 top = re.match(r"""^(['"]?)([A-Za-z0-9_-]+)\1:""", code)
+                if code.strip() and not code[0].isspace():
+                    # Every top-level line is a plain `key:`. Anything else
+                    # (`jobs :`, `? jobs`, a flow mapping's closing brace)
+                    # could hide the jobs from this scan.
+                    if code.strip() not in ("---", "...") and not PLAIN_KEY.match(code):
+                        fail(f"{name}:{lineno}: unreadable top-level line; {HOW}")
+                        in_jobs = False
+                        job = None
+                        job_indent = None
+                        continue
                 if top:
                     in_jobs = top.group(2) == "jobs"
                     job = None
                     job_indent = None
+                    if in_jobs and code[top.end():].strip():
+                        fail(f"{name}:{lineno}: jobs: has its jobs on the same line; {HOW}")
                 m = re.match(r"""^(\s*)(['"]?)([A-Za-z0-9_-]+)\2:\s*$""", code)
-                if in_jobs and m:
-                    indent = len(m.group(1))
-                    if indent == 0:
-                        job = None
-                    elif job_indent is None:
-                        # The first key under `jobs:` is a job id; everything
+                if in_jobs and code.strip() and not top:
+                    indent = len(code) - len(code.lstrip())
+                    if job_indent is None:
+                        # The first line under `jobs:` is a job id; everything
                         # at that depth is one, anything deeper is its body.
                         job_indent = indent
-                        job = m.group(3)
-                    elif indent == job_indent:
-                        job = m.group(3)
+                    if indent == job_indent:
+                        if m:
+                            job = m.group(3)
+                        else:
+                            job = None
+                            fail(f"{name}:{lineno}: unreadable job id; {HOW}")
+                            continue
+                    elif indent < job_indent:
+                        fail(f"{name}:{lineno}: unreadable indentation under jobs; {HOW}")
                 where = f"{name}:{lineno} (job {job})"
                 m = re.match(r"^\s*runs-on:\s*(.*?)\s*$", code)
                 # Only runs-on lines inside `jobs:` matter: a key named
@@ -314,6 +353,11 @@ def main() -> int:
                 # below, and a multi-line runs-on already fails on its first
                 # line, so the label appearing elsewhere (a step name, a docs
                 # URL in a run string) is not routing.
+                if in_jobs and not m:
+                    for pattern, what in UNREAD:
+                        if pattern.search(code):
+                            fail(f"{where}: {what} is not read by this check; {HOW}")
+                            break
                 if not in_jobs or not m:
                     continue
                 value = m.group(1)

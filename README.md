@@ -179,7 +179,11 @@ image are options of the action, and the expression changes with them
 
 It also fails on any other `runs-on` that could reach the runner (a bare
 `self-hosted`, a label list, a runner group), because GitHub hands a job to
-any runner whose labels are a superset of the request.
+any runner whose labels are a superset of the request. The check reads
+workflows line by line, so a workflow written in a way it cannot read (a
+quoted `"runs-on"` key, a job written as a `{...}` mapping, a `<<` merge key)
+fails with a message asking for the plain form: `job-id:` on a line of its
+own, with `runs-on: ...` on a line below it.
 
 ## Cost
 
