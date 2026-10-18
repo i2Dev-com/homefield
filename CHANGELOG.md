@@ -20,6 +20,13 @@ fail, such as a new guard in the routing expression, bumps the minor version
   whose callers all have it; a `continue-on-error` expression is a warning.
   Quoted keys (`"continue-on-error": true`) count the same.
   This affected v0.1.0 and v0.1.1.
+- The routing guard fails on workflow syntax it cannot read, instead of passing
+  it. It scans workflow files line by line, so a job whose `runs-on` was
+  written another way (a quoted `"runs-on"` key, a job as a `{...}` mapping, a
+  `<<` merge key, `? runs-on`, or a `jobs :` key with a space) was not seen,
+  and an unguarded self-hosted job could sit beside two compliant ones with the
+  guard green. It now fails and says to write the job plainly. This affected
+  v0.1.0 and v0.1.1. `homefield adopt` shows the same reason.
 - `homefield report` now counts a GitHub-hosted job that never got a runner
   (#64). A hosted job still queued, or cancelled before a runner was assigned,
   has no runner name and was dropped as if it had been skipped, so it never

@@ -76,6 +76,31 @@ case_ "runner group, inline"             fail "$EXPECTED" "s/^    runs-on: ubunt
 case_ "runner group, multi-line"         fail "$EXPECTED" "" "$(printf '  grouped:\n    runs-on:\n      group: homefield-ci\n    steps:\n      - run: echo grouped')"
 case_ "label list, multi-line"           fail "$EXPECTED" "" "$(printf '  listed:\n    runs-on:\n      - linux\n      - arm64\n    steps:\n      - run: echo listed')"
 case_ "unevaluable expression"           fail "$EXPECTED" "s/^    runs-on: ubuntu-latest$/    runs-on: \${{ matrix.os }}/"
+# Valid YAML that says "runs-on" another way: the line scan cannot see it, so
+# it fails and says how to write it plainly (GHSA-4795-jpw2-47v2).
+case_ "quoted runs-on key"               fail "$EXPECTED" "" "$(printf '  unsafe:\n    "runs-on": self-hosted\n    steps:\n      - run: echo unsafe')"
+case_ "single-quoted runs-on key"        fail "$EXPECTED" "" "$(printf "  unsafe:\n    'runs-on': self-hosted\n    steps:\n      - run: echo unsafe")"
+case_ "job written as a {...} mapping"   fail "$EXPECTED" "" "  unsafe: {runs-on: self-hosted, steps: [{run: echo unsafe}]}"
+case_ "quoted key in a {...} job"        fail "$EXPECTED" "" '  unsafe: {"runs-on": Self-Hosted}'
+case_ "{...} mapping on the next line"   fail "$EXPECTED" "" "$(printf '  unsafe:\n    {runs-on: self-hosted}')"
+case_ "runs-on through a merge key"      fail "$EXPECTED" "" "$(printf '  unsafe:\n    <<: {runs-on: self-hosted}\n    steps: []')"
+case_ "runs-on as a ? complex key"       fail "$EXPECTED" "" "$(printf '  unsafe:\n    ? runs-on\n    : self-hosted')"
+case_ "space before the colon"           fail "$EXPECTED" "" "$(printf '  unsafe:\n    runs-on : self-hosted')"
+case_ "key spelled with an escape"       fail "$EXPECTED" "" "$(printf '  unsafe:\n    "\\x72uns-on": self-hosted')"
+case_ "job id as an alias"               fail "$EXPECTED" "" "  unsafe: *shared"
+case_ "jobs: given as one {...} line"    fail "$EXPECTED" "" "s/^jobs:\$/jobs: {a: {runs-on: self-hosted}}/"
+case_ "spaced top-level jobs key"        fail "$EXPECTED" "" "s/^jobs:\$/jobs :/"
+case_ "quoted key left open on its line"  fail "$EXPECTED" "" "$(printf '  unsafe:\n    "runs-\\\n    on": self-hosted')"
+case_ "? key split by a trailing \\"     fail "$EXPECTED" "" "$(printf '  unsafe:\n    ? "runs-\\\n      on"\n    : self-hosted')"
+case_ "single-quoted key left open"     fail "$EXPECTED" "" "$(printf "  unsafe:\n    'runs-\n    on': self-hosted")"
+# Plain forms around them that must keep passing.
+# Plain text that merely mentions the field must keep passing.
+case_ "a step script that quotes runs-on" pass "$EXPECTED" "s/^      - run: echo docker\$/      - run: echo \"runs-on\"/"
+case_ "a step script with {runs-on: x}"  pass "$EXPECTED" "s/^      - run: echo docker\$/      - run: echo '{runs-on: self-hosted}'/"
+case_ "a block script that quotes it"    pass "$EXPECTED" "" "$(printf '  doc:\n    runs-on: ubuntu-latest\n    steps:\n      - run: |\n          echo "runs-on"\n          echo "a, runs-on: x"')"
+case_ "trailing comment after jobs:"     pass "$EXPECTED" "s/^jobs:\$/jobs: # the jobs/"
+case_ "document start marker"            pass "$EXPECTED" "1s/^/---\\n/"
+case_ "plain flow data elsewhere"        pass "$EXPECTED" "s/^      - run: echo docker\$/      - run: echo docker\\n        env: {A: b}/"
 # Hosted forms that must keep passing.
 case_ "hosted image, quoted and pinned"  pass "$EXPECTED" "s/^    runs-on: ubuntu-latest$/    runs-on: 'ubuntu-24.04'/"
 case_ "hosted image, other case"         pass "$EXPECTED" "s/^    runs-on: ubuntu-latest$/    runs-on: Ubuntu-Latest/"
