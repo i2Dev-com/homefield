@@ -18,6 +18,11 @@ fail, such as a new guard in the routing expression, bumps the minor version
   version), upgrading Mac by Mac, keeping extra packages and hooks alike on
   every VM, and that GitHub removes a runner offline for more than 14 days
   (recovery tracked in #76).
+- The docs are shorter. The runbook's Setup leads with the one-liner and keeps
+  the manual steps under *What `install` does, by hand*; the routing
+  expression, the guard rules, the runner-group commands and the test list each
+  live in one place and the other documents link to it. Nothing about
+  behaviour changed.
 
 ## v0.2.1 (2026-10-18)
 

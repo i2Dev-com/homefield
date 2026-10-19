@@ -15,18 +15,16 @@ Commands below use the default VM name, `homefield`. If you installed with
 
 ## How routing works
 
-Every opted-in job uses this `runs-on`, inline:
-
-```yaml
-runs-on: ${{ vars.CI_RUNNER == 'local' && github.event_name == 'pull_request' && github.actor != 'dependabot[bot]' && !startsWith(github.head_ref, 'dependabot/') && github.event.pull_request.head.repo.full_name == github.repository && fromJSON('["self-hosted","linux","arm64","homefield-ci"]') || 'ubuntu-latest' }}
-```
+Routed jobs carry the [canonical `runs-on` expression](adopting.md#2-route-them),
+and the [`routing-guard`](../routing-guard/action.yml) action, run in each
+repository's CI, keeps every copy identical ([README: How routing
+works](../README.md#how-routing-works)). What the expression does:
 
 - The **repository** variable `CI_RUNNER` is the switch, so each repository
-  opts in and out on its own. `local` sends the routed jobs (pull requests by
-  default, see below) to the runner with the routing label, `homefield-ci`
-  unless the runner was registered with another `RUNNER_LABEL`. Unset, or any
-  other value, sends them to the hosted fallback image, `ubuntu-latest` by
-  default.
+  opts in and out on its own. `local` sends the routed jobs to the runner with
+  the routing label, `homefield-ci` unless the runner was registered with
+  another `RUNNER_LABEL`. Unset, or any other value, sends them to the hosted
+  fallback image, `ubuntu-latest` by default.
 - **Pushes run hosted by default**, whatever `CI_RUNNER` says. Deploys wait on
   the default branch's CI, and a merge must not sit queued behind a sleeping
   Mac. A repository whose `events` option adds `push` (or
@@ -36,29 +34,10 @@ runs-on: ${{ vars.CI_RUNNER == 'local' && github.event_name == 'pull_request' &&
 - **Dependabot runs hosted by default.** Checked by actor and by branch name.
   `dependabot: local` drops both checks, which puts Dependabot's unreviewed
   install scripts on a VM that is not thrown away after the job.
-- **Pull requests from forks always run hosted**, whatever the options. Only
-  a branch of the repository itself is routed, which covers private repositories that allow
-  forking. It does not make a public repository safe: a fork PR runs the
-  workflow files from its own merge commit, so it can rewrite `runs-on`
-  altogether. See the trust boundary below.
-- The [`routing-guard`](../routing-guard/action.yml) action, run in each
-  repository's CI, enforces three things:
-  - every copy of the expression is identical to the canonical one for the
-    action's `events`, `dependabot` and `fallback` options (see
-    [adopting: Routing options](adopting.md#routing-options));
-  - any `runs-on` that asks for `self-hosted` is that expression. A bare
-    `self-hosted` would match this runner, because its labels are a superset;
-  - every job is written in the plain block style the check can read: a
-    `job-id:` line, then `runs-on: ...` on a line of its own. Valid YAML that
-    spells it another way (a quoted `"runs-on"`, a job as a `{...}` mapping, a
-    `<<` merge key) would pass unseen, so it fails and says to write it plainly;
-  - the jobs that opt in are exactly the repository's `jobs` list.
-
-**Why the expression is inline and not an action.** GitHub evaluates `runs-on`
-before any step runs, so no action can choose a job's runner. A separate
-"choose the runner" job could pass its answer through `needs`, but that job is
-itself billed a whole minute on every run, which is the cost the local runner
-exists to remove. The copies are kept honest by `routing-guard` instead.
+- **Pull requests from forks always run hosted**, whatever the options. That
+  covers private repositories that allow forking. It does not make a public
+  repository safe: a fork PR runs the workflow files from its own merge
+  commit, so it can rewrite `runs-on` altogether (see the trust boundary).
 
 **Keep on hosted:** Docker image builds (x86-64 images, GHA build cache), and
 every job holding cloud or production credentials.
@@ -71,7 +50,7 @@ every job holding cloud or production credentials.
 | Unreviewed dependency code | Dependabot PRs are routed hosted by default (see above). With `dependabot: local` their install scripts run on the VM. |
 | Host files and credentials | Lima VM with **no mounts** (`mounts: []` + `--mount-none`), no SSH-agent forwarding, and no host SSH keys. `~/.aws`, `gh` auth, `.env` files and working trees on the Mac are not reachable from the guest. |
 | Guest ports on the Mac | Guest→host port forwarding is disabled, so a job's service containers never appear on the Mac's `localhost`. |
-| **Mac and LAN services from the guest** | **Not isolated.** The guest reaches the Mac at `host.lima.internal` (192.168.5.2, also its gateway and DNS), which Lima maps to the Mac's loopback: every service listening on the Mac is reachable, including ones bound only to `127.0.0.1`, as is the LAN. A firewall inside the guest would not hold, since jobs are root-equivalent there. Until [#18](https://github.com/i2Dev-com/homefield/issues/18) is closed, keep sensitive services off the Mac that hosts the runner. The mapping is hardcoded in Lima (no option turns it off yet); omitting it was tested to close the loopback exposure without breaking DNS, package installs or `limactl shell`, and is being proposed upstream. Even then, a service bound to all interfaces stays reachable through the Mac's LAN address. |
+| **Mac and LAN services from the guest** | **Not isolated.** The guest reaches the Mac at `host.lima.internal` (192.168.5.2, also its gateway and DNS), which Lima maps to the Mac's loopback: every service listening on the Mac is reachable, including ones bound only to `127.0.0.1`, as is the LAN. A firewall inside the guest would not hold, since jobs are root-equivalent there. Until [#18](https://github.com/i2Dev-com/homefield/issues/18) is closed, keep sensitive services off the Mac that hosts the runner. |
 | Production | The VM holds no cloud credentials and no AWS CLI. Deploy jobs stay hosted and get their credentials through OIDC. |
 | Secrets in jobs | Jobs on the runner receive the secrets their workflow passes, on same-repo PRs. Push-only secrets never reach it by default, because pushes run hosted; they do when `events` includes `push`, `workflow_dispatch` or `schedule`. |
 | Across repositories | Every allowed repository's PR jobs share one VM, one after another. Workspaces are per repository, but anything a job leaves in the guest (Docker images, `/tmp`) is visible to the next job from another repository. Allow only repositories you would trust with each other's PR code. |
@@ -82,9 +61,8 @@ an owner left, a Mac replaced) and now and then regardless. The first two
 need an organization owner (`admin:org`):
 
 - The runner group admits exactly the repositories that should use the
-  runner, and refuses public ones:
-  `gh api orgs/<org>/actions/runner-groups --jq '.runner_groups[] | {name, visibility, allows_public_repositories}'`
-  and `gh api orgs/<org>/actions/runner-groups/<id>/repositories --jq '.repositories[].full_name'`.
+  runner, and refuses public ones (the commands are under
+  [Runner group](#runner-group)).
 - Every repository on that list is private.
 - Each adopting repository has `CI_RUNNER` set the way you expect
   (`gh variable get CI_RUNNER --repo <owner>/<repo>`), and its
@@ -98,85 +76,67 @@ need an organization owner (`admin:org`):
 
 ## Runner group
 
-The organization's runner group is what decides which repositories can use the
+The organization's runner group decides which repositories can use the
 runner, because an org runner without a restricted group is usable by every
 repository in the organization. `bin/homefield install` looks the group up
 before registering and creates it if it is missing: **selected
 repositories**, **Allow public repositories** off, so that no repository can
-use it until you add one: `bin/homefield adopt --repo <owner>/<repo>` adds a repository
-([adopting, step 5](adopting.md#5-merge-then-run-homefield-adopt)).
-If the group already exists and is open to all repositories (or to public ones),
-it prints a warning and goes on; narrowing it is up to you. The steps below
-are the manual way, and the reference for what the group should look like.
+use it until `bin/homefield adopt --repo <owner>/<repo>` adds one
+([adopting, step 5](adopting.md#5-merge-then-run-homefield-adopt)). If the
+group already exists and is open to all repositories (or to public ones), it
+prints a warning and goes on; narrowing it is up to you.
 
-Custom runner groups need the GitHub Team plan or Enterprise. On the Free plan
-an organization has only the Default group, which every repository in it can
-use: register there only if you would trust every repository with the others'
-pull-request code, keep **Allow public repositories** off on it, and register
-with `--group Default` (`RUNNER_GROUP=Default` by hand). `install` cannot
-create `homefield-ci` on that plan: it prints what GitHub said and stops, and
-`--group Default` skips the group step. The
-alternative is a repository-scoped runner, which only that repository can use.
-A personal account has no account-wide runners at all: register per
-repository, one VM per repository.
-
-*Organization settings → Actions → Runner groups → New runner group*:
-
-- Name `homefield-ci`.
-- Repository access: **Selected repositories**. Add only the repositories that
-  have adopted the runner.
-- Leave **Allow public repositories** off.
-
-`bin/homefield install` registers into `--group` (default `homefield-ci`) for an
-organization URL; a repository-scoped runner has no group. Looking up and
-creating groups needs the `admin:org` scope. If gh lacks it, `install` on a
-terminal offers to run `gh auth refresh -h github.com -s admin:org` (it does
-not when `GITHUB_TOKEN` or `GH_TOKEN` is set, which gh uses instead of its
-stored login), and without gh it asks before going on with the group
-unchecked. Without a terminal it cannot ask, so it stops. If you created and
-checked the group by hand, pass `--group-exists` to go on without asking: the
-closing message still calls the group unchecked, and registration fails if
-it is missing. With `GITHUB_TOKEN` or `GH_TOKEN` set, running the command
-with them empty (`GITHUB_TOKEN= GH_TOKEN= homefield install ...`) lets gh use
-its stored login instead, which may have `admin:org`. A group list that
-works and does not show the group is not overridden: `install` creates the
-group as usual. Check the group by hand:
+By hand: *Organization settings → Actions → Runner groups → New runner group*,
+named `homefield-ci`, repository access **Selected repositories** (add only
+the repositories that have adopted the runner), **Allow public repositories**
+off. To check a group:
 
 ```bash
 gh api orgs/<org>/actions/runner-groups -q '.runner_groups[] | "\(.id) \(.name) \(.visibility) public=\(.allows_public_repositories)"'
 gh api orgs/<org>/actions/runner-groups/<id>/repositories -q '.repositories[].full_name'
 ```
 
+**Plans.** Custom runner groups need the GitHub Team plan or Enterprise. On
+the Free plan an organization has only the Default group, which every
+repository in it can use: register there only if you would trust every
+repository with the others' pull-request code, keep **Allow public
+repositories** off, and register with `--group Default` (`RUNNER_GROUP=Default`
+by hand). `install` cannot create `homefield-ci` on that plan: it prints what
+GitHub said and stops. The alternative is a repository-scoped runner, which
+only that repository can use. A personal account has no account-wide runners
+at all: register per repository, one VM per repository.
+
+**The `admin:org` scope.** Looking up and creating groups needs it. If `gh`
+lacks it, `install` on a terminal offers to run `gh auth refresh -h github.com
+-s admin:org`. It does not offer when `GITHUB_TOKEN` or `GH_TOKEN` is set,
+because `gh` uses that instead of its stored login; run
+`GITHUB_TOKEN= GH_TOKEN= homefield install ...` to use the stored login, which
+may have the scope. Without `gh`, `install` asks before going on with the group
+unchecked, and without a terminal it stops. If you created and checked the
+group by hand, pass `--group-exists` to go on without asking (registration
+fails if the group is missing).
+
 ## Setup (once per machine)
 
-Requires Lima ≥ 1.1 (`brew install lima`; verified on 2.2.0).
-
-**The short way:** the one-liner in the [README](../README.md#quick-start)
-runs `install.sh`, which downloads the tool for a ref (`HOMEFIELD_REF`,
-default `v0.2.1`) into `~/.local/share/homefield` (`HOMEFIELD_HOME`), writes a
-`homefield` command into Homebrew's `bin` or `~/.local/bin`
-(`HOMEFIELD_BIN_DIR`; it prints the line to add to `~/.zshrc` if that is not
-on your PATH), installs or upgrades Lima (1.1 or later) if you agree, and runs `homefield install`.
-Running it again replaces the tool, which is how it is upgraded; with no
-arguments it leaves an existing VM alone (`homefield upgrade` updates that).
-`homefield version` shows the ref and commit, and asks GitHub (through `gh`, or
-the public API with `curl` when `gh` is missing)
-whether that ref has moved since: if so it prints the command that updates the
-tool. If the ref is a release tag and a later release exists, it says so, to
-read `CHANGELOG.md` for breaking changes first, and prints the command that
-installs it.
-If it cannot reach GitHub it says so and still exits 0. From a checkout,
+Run the [README's one-liner](../README.md#quick-start), or, from a checkout,
 `bin/homefield install --url https://github.com/<org>` (or
-`https://github.com/<owner>/<repo>`; options: `bin/homefield help`) is the
-same command. Either way it does every step below, asks for the URL if it
-was not given, creates the runner group, waits until the runner is online and
-enables autostart. It names the runner after the Mac and the instance
-(`<local hostname>-homefield`, from `scutil --get LocalHostName`; `--name`
-picks another), and before creating anything refuses a name that is already
-registered in the scope. The name shows on the runners page and in job
-logs. It fetches the registration token with `gh` when it can,
-and otherwise asks you to paste one. The steps are what it does, and the way
-to do it by hand, from a checkout of this repository:
+`https://github.com/<owner>/<repo>`; options: `bin/homefield help`). It needs
+Lima ≥ 1.1 (verified on 2.2.0), which the one-liner installs. It does every
+step below: it asks for the URL if it was not given, creates the VM and checks
+its isolation, provisions it, creates the runner group, registers the runner,
+waits until it is online and enables autostart.
+
+The runner is named after the Mac and the instance (`<local hostname>-homefield`,
+from `scutil --get LocalHostName`; `--name` picks another), and `install`
+refuses a name that is already registered in the scope. The name shows on the
+runners page and in job logs. The registration token comes from `gh` when it
+can fetch one, and otherwise you paste it. `homefield version` shows the
+release you have and says when a newer one exists; read `CHANGELOG.md` for
+breaking changes before moving to it.
+
+### What `install` does, by hand
+
+From a checkout of this repository:
 
 ```bash
 # 1. Create and start the VM (no mounts, no port forwards, Ubuntu 24.04 arm64)
@@ -210,13 +170,10 @@ the repository's *Settings → Actions → Runners*), confirm the runner
 (its `RUNNER_NAME`, such as `my-mac-homefield`) is **Idle**, in the `homefield-ci`
 group for an organization, with labels `self-hosted, Linux, ARM64, homefield-ci`.
 
-Re-running `provision.sh` on a registered runner (to upgrade it) needs no
-settings: the registration is kept as it is. `bin/homefield upgrade` does
-that: it refuses while a job is running, then stops the runner so no job can
-start mid-upgrade, and `provision.sh` starts it again at the end (or the
-command does, if provisioning fails). Run by hand on a runner that is
-running, `provision.sh` stops it only to replace the runner binary, and
-starts it again if anything fails from then on.
+Re-running `provision.sh` on a registered runner upgrades it and keeps the
+registration. `bin/homefield upgrade` does that: it refuses while a job is
+running, stops the runner so no job can start mid-upgrade, and starts it again
+at the end (or on failure).
 
 **Registration tokens.** A registration token is valid for one hour, and the
 runner exchanges it for its own identity at registration. An organization
@@ -320,61 +277,49 @@ gh run rerun <run-id> --repo <owner>/<repo>
 | Checkout fails with `EACCES: permission denied` deleting files in `_work` | A `container:` job ran as root and left root-owned files, and the runner predates the job-started hook that gives them back (#54) | Red check, on every later job in that repository's workspace | `bin/homefield upgrade` installs the hook, which also fixes the files left so far |
 | Cancelled job still "in progress" for ~40 s | The runner gives the running step a grace period before killing it | Ends `cancelled`, and service containers are removed | Wait. Only investigate if it lasts minutes |
 
-Observed in drills: an offline runner leaves the job queued, and
-after switching to hosted it stays queued until it is cancelled and re-run. A
-restarted VM's runner is back online within seconds. Two concurrent runs
-serialise.
-
 **Inspecting the guest.** The Lima login user is not in the `docker` group, so
 use `limactl shell homefield sudo docker ps`. Plain `docker ps` shows
-nothing, which is easy to misread as "no containers". On the Mac, `limactl`
-listens only on two loopback ports for its own SSH and host agent. A job's
-service ports never appear there.
+nothing, which is easy to misread as "no containers".
 
 ## Maintenance
 
 - **Runner updates.** The runner updates itself when GitHub releases a new
-  version. `provision.sh` pins the version used for a *fresh* install. Bump
+  version. `provision.sh` pins the version used for a *fresh* install: bump
   `RUNNER_VERSION` and `RUNNER_SHA256` together (the asset `digest` from
-  `gh api repos/actions/runner/releases/latest`). Re-running `provision.sh`
-  after a bump stops the service, replaces the binary and starts it again.
-  Stopping cancels any job in progress, so do it while the runner is idle.
+  `gh api repos/actions/runner/releases/latest`). Re-running it after a bump
+  replaces the binary, which stops the service and cancels a running job, so do
+  it while the runner is idle.
 - **Guest OS updates.** Automatic. Ubuntu's own `unattended-upgrades` is
   switched off, because it restarts the runner, containerd and Docker at
   06:00–07:00 whether or not a job is running, and has failed jobs that way
-  ([#8](https://github.com/i2Dev-com/homefield/issues/8)). In its place, `homefield-maintenance.timer` runs daily at 07:00 guest
-  time, which Lima takes from the Mac. Pick an hour when pull requests are
-  rarely opened: `limactl shell homefield sudo systemctl edit
-  homefield-maintenance.timer`, and add `[Timer]`, an empty `OnCalendar=`
-  (timers add up otherwise) and `OnCalendar=*-*-* 03:00`. Re-provisioning
-  keeps the drop-in. If a job is running it skips the day.
-  Otherwise it stops the runner, runs `apt-get upgrade`, and then either
-  starts the runner again or, if the update needs one
-  (`/var/run/reboot-required`), reboots the guest. The runner starts on boot.
-  Queued jobs wait through it, typically under a minute and longer on a
-  reboot. To update now, while idle:
-  `limactl shell homefield sudo systemctl start --no-block homefield-maintenance`.
-  (`--no-block`, because the upgrade may restart D-Bus and drop a client
-  waiting on the unit.)
-  Its log: `limactl shell homefield sudo journalctl -u homefield-maintenance`.
-  To check whether a reboot is pending:
-  `limactl shell homefield ls /var/run/reboot-required`.
-  To reboot by hand while idle, run `limactl shell homefield sudo systemctl reboot`.
-  A guest reboot keeps the VM running under `vz`.
-- **Checking health after an update.** After a runner bump, a guest upgrade
-  or a reboot (the 07:00 maintenance may do any of them):
-  `bin/homefield status` should show the VM running, the service running and
-  the job state. The runner's own version, which moves when it updates itself,
-  is `limactl shell homefield sudo -u runner /opt/actions-runner/bin/Runner.Listener --version`;
-  compare it with `gh api repos/actions/runner/releases/latest --jq .tag_name`.
-  (`bin/homefield status` shows the version `provision.sh` installed, which
-  stays put.) The maintenance run's log is
-  `limactl shell homefield sudo journalctl -u homefield-maintenance`, and the
-  runner's diagnostic logs are in `/opt/actions-runner/_diag/` (root-readable).
-  Then look at the next PR jobs: queued jobs should have started, and
-  `bin/homefield memory --days 1` and `bin/homefield report --repo
-  <owner>/<repo> [--repo ...] --since <date>` show whether anything looks off
-  since.
+  ([#8](https://github.com/i2Dev-com/homefield/issues/8)). In its place,
+  `homefield-maintenance.timer` runs daily at 07:00 guest time (Lima takes the
+  Mac's). If a job is running it skips the day. Otherwise it stops the runner,
+  runs `apt-get upgrade`, and starts the runner again, or reboots the guest
+  first if the update needs it (`/var/run/reboot-required`). Queued jobs wait
+  through it, typically under a minute and longer on a reboot.
+  - A different hour, when pull requests are rarely opened:
+    `limactl shell homefield sudo systemctl edit homefield-maintenance.timer`,
+    then add `[Timer]`, an empty `OnCalendar=` (timers add up otherwise) and
+    `OnCalendar=*-*-* 03:00`. Re-provisioning keeps it.
+  - To update now, while idle: `limactl shell homefield sudo systemctl start
+    --no-block homefield-maintenance` (`--no-block`, because the upgrade may
+    restart D-Bus and drop a client waiting on the unit).
+  - Its log: `limactl shell homefield sudo journalctl -u homefield-maintenance`.
+    Whether a reboot is pending: `limactl shell homefield ls
+    /var/run/reboot-required`. To reboot by hand while idle: `limactl shell
+    homefield sudo systemctl reboot`; the VM keeps running under `vz`.
+- **Checking health after an update** (a runner bump, a guest upgrade or a
+  reboot): `bin/homefield status` should show the VM running, the service
+  running and the job state. It shows the runner version `provision.sh`
+  installed, which stays put; the runner's own version, which moves when it
+  updates itself, is
+  `limactl shell homefield sudo -u runner /opt/actions-runner/bin/Runner.Listener --version`
+  (compare with `gh api repos/actions/runner/releases/latest --jq .tag_name`).
+  The runner's diagnostic logs are in `/opt/actions-runner/_diag/`
+  (root-readable). Then check the next PR jobs: queued jobs should have
+  started, and `bin/homefield memory --days 1` and `bin/homefield report` show
+  whether anything looks off.
 - **Cleanup.** A daily systemd timer (`homefield-cleanup.timer`) prunes
   stopped containers, unused networks, dangling layers and build cache older
   than 24 h. It also removes any workspace with nothing modified inside it for
@@ -388,56 +333,45 @@ service ports never appear there.
   job-started hook (`ACTIONS_RUNNER_HOOK_JOB_STARTED` in
   `/opt/actions-runner/.env`) runs `/usr/local/sbin/homefield-workspace-owner`
   through sudo, which gives anything in `_work` not owned by `runner` back to
-  it. `/etc/sudoers.d/homefield-workspace-owner` allows that one script, with
-  no arguments, and nothing else. The hook's output is in the job log, under
-  "Set up runner".
+  it; sudo allows that one script, with no arguments, and nothing else. The
+  hook's output is in the job log, under "Set up runner".
 - **Host memory.** The VM process on the Mac ("Virtual Machine Service") sits
   at roughly the configured `memory` even while idle. The guest fills spare RAM
   with page cache, and Virtualization.framework does not return pages to the
-  host once the guest has used them; dropping caches in the guest does not
-  lower it either. The size is therefore the idle footprint: `memory` in
-  `vm/lima.yaml` is kept close to what jobs need. Restarting the VM while the
-  runner is idle resets the footprint until the next jobs refill the cache. To
-  resize an existing VM, while idle:
+  host once the guest has used them. The size is therefore the idle footprint:
+  `memory` in `vm/lima.yaml` is kept close to what jobs need. Restarting the VM
+  while the runner is idle resets the footprint until the next jobs refill the
+  cache. To resize an existing VM, while idle:
   `limactl stop homefield && limactl edit homefield --memory 5 && limactl start homefield`.
   Queued PR jobs wait through the restart and are then picked up.
-  If `limactl stop` hangs ("did not receive an event with the `exiting`
-  status"), power the guest off cleanly with
-  `limactl shell homefield sudo systemctl poweroff`, then clear the
-  leftover host agent with `limactl stop --force homefield`.
-  If the error came after the VM had already stopped, the next `limactl start`
-  can hang at "Explicitly start ssh ControlMaster": the old SSH multiplexer
-  still holds `~/.lima/homefield/ssh.sock`, pointing at the previous boot's
-  port. Close it with
-  `ssh -S ~/.lima/homefield/ssh.sock -O exit homefield` and the start
-  completes. A `limactl hostagent` for the instance whose PID is not in
-  `~/.lima/homefield/ha.pid` is a leftover with no VM; end it with `kill -9`,
-  because a normal shutdown can remove the live agent's files.
+  - If `limactl stop` hangs ("did not receive an event with the `exiting`
+    status"), power the guest off with `limactl shell homefield sudo systemctl
+    poweroff`, then run `limactl stop --force homefield`.
+  - If the next `limactl start` hangs at "Explicitly start ssh ControlMaster",
+    close the old SSH multiplexer: `ssh -S ~/.lima/homefield/ssh.sock -O exit homefield`.
+  - A `limactl hostagent` whose PID is not in `~/.lima/homefield/ha.pid` is a
+    leftover with no VM; end it with `kill -9`, because a normal shutdown can
+    remove the live agent's files.
 - **Measuring it.** Two commands answer "is the runner big enough, and is it
   paying for itself?":
-  - `bin/homefield memory [--days N]` summarises the guest's memory log: per
-    day, the average, the highest minute, the highest minute during a job, the
-    lowest available memory and any out-of-memory kills. The guest writes one
-    line a minute to `/var/log/homefield/memwatch-<date>.csv` (kept 90 days)
-    from samples taken every 2 seconds, so a short spike is kept; the usual
-    system statistics, at 10 minutes, miss it. "Used" is total minus
-    available memory, which is what an out-of-memory kill is about. The
-    sampler (`homefield-memwatch.service`) is installed by provisioning, so an
-    existing runner needs `bin/homefield upgrade` first. Read the peak before
-    lowering `memory`: with no swap, a job that outgrows the VM is killed.
+  - `bin/homefield memory [--days N]` summarises the guest's memory log
+    (`/var/log/homefield/memwatch-<date>.csv`, one line a minute from samples
+    taken every 2 seconds, kept 90 days): per day, the average, the highest
+    minute, the highest minute during a job, the lowest available memory and
+    any out-of-memory kills. "Used" is total minus available memory. Read the
+    peak before lowering `memory`: with no swap, a job that outgrows the VM is
+    killed. A runner provisioned before the sampler existed needs
+    `bin/homefield upgrade` first.
   - `bin/homefield report --repo <owner>/<repo> [--repo ...] [--since DATE]`
     lists, per repository, workflow and job, how many jobs ran locally and
     on GitHub's runners, how long they queued and ran, and how many minutes
     they used (for local jobs, what they would have cost hosted). Queue wait
     is what shows whether one runner is enough. It reads the GitHub API with
-    `gh`, so it needs no access to the VM, and takes a few minutes a month of
-    runs. Pull requests are counted as distinct head branches. A job that is
-    still queued, or was cancelled before a runner was assigned, has no
-    runner yet, so it is told apart by its labels: it counts as hosted (and
-    shows as "queued or running now" or "cancelled before starting") only
-    when it asks for one of GitHub's standard images (`ubuntu-*`, `macos-*`,
-    `windows-*`) without `self-hosted`. A larger runner or a runner group has
-    its own name, so such a job is not counted until a runner takes it.
+    `gh`, so it needs no access to the VM. A job still queued, or cancelled
+    before a runner was assigned, counts as hosted only when it asks for one of
+    GitHub's standard images (`ubuntu-*`, `macos-*`, `windows-*`) without
+    `self-hosted`; a larger runner or a runner group has its own name, so such
+    a job is not counted until a runner takes it.
 
 ## More runners
 
@@ -453,19 +387,17 @@ runner is idle. Repositories and their routing don't change.
 homefield install --instance homefield-2 --url https://github.com/<org>
 ```
 
-It is named `<local hostname>-homefield-2`. Every command takes `--instance`
-(or `HOMEFIELD_INSTANCE`): `status`, `upgrade`, `memory` and `uninstall` act
-on one instance, so upgrade each. `route` and `adopt` act on repositories and
-cover every runner. If the first runner was installed with a `--label`,
-`--group` or `--packages` other than the defaults, pass the same ones: a job
-can land on either.
+It is named `<local hostname>-homefield-2`. `status`, `upgrade`, `memory` and
+`uninstall` act on one instance (`--instance`, or `HOMEFIELD_INSTANCE`), so run
+them for each; `route` and `adopt` act on repositories and cover every runner.
+If the first runner was installed with a `--label`, `--group` or `--packages`
+other than the defaults, pass the same ones.
 
-If the first runner has hooks ([Adding tools](#adding-tools)), put them in
-the new VM *before* it registers, or the jobs it takes in between run without
-them. `install` uses a VM that already exists and runs its hooks before
-registering, so create the VM first. The file is
-`$HOMEFIELD_HOME/vm/lima.yaml` (from a checkout, `vm/lima.yaml`), and
-`--cpus` and `--memory` go here, not on `install`:
+If the first runner has hooks ([Adding tools](#adding-tools)), create the
+second VM first and put the hooks in before `install` registers it, or the
+jobs it takes in between run without them (a failing hook stops `install`
+before it registers). `--cpus` and `--memory` go on `limactl create`, not on
+`install`:
 
 ```bash
 limactl create --name=homefield-2 --mount-none --tty=false ~/.local/share/homefield/vm/lima.yaml
@@ -475,54 +407,38 @@ limactl shell homefield-2 sudo install -D -m 755 /tmp/50-awscli.sh /etc/homefiel
 homefield install --instance homefield-2 --url https://github.com/<org>
 ```
 
-A failing hook stops `install` before the runner is registered.
-
-Memory is the cost. Each VM holds up to its `memory` on the Mac even while
-idle, because Virtualization.framework doesn't return the guest's pages
-([Maintenance](#maintenance), "Host memory"). The default is 5 GiB
-(`vm/lima.yaml`), so two VMs at the default take about 10 GiB. `--memory` and
-`--cpus` size a new VM; check the first one's peak with `homefield memory`
-before going lower.
+Memory is the cost: each VM holds up to its `memory` (5 GiB by default) on
+the Mac even while idle ([Maintenance](#maintenance), "Host memory"), so two
+take about 10 GiB. Check the first one's peak with `homefield memory` before
+going lower.
 
 **On another Mac**, install the tool there ([Setup](#setup-once-per-machine))
 and run `homefield install` with the same URL, label, group and packages, and
-the hooks put in first as above. The runner is named after that Mac, so it
-doesn't collide with the first; a name already in use is refused
-([Failure modes](#failure-modes)). The runner group already exists and is
-used as it is. Registering at an organization needs an organization owner's
+the hooks put in first as above. The runner is named after that Mac, and a name
+already in use is refused ([Failure modes](#failure-modes)). The runner group
+is used as it is. Registering at an organization needs an organization owner's
 `gh` login with `admin:org`, or a registration token pasted when asked.
 
-**v0.1.0** names the runner differently. The name is the guest's
-hostname, `lima-<instance>`, so the default instance is `lima-homefield` on
-every Mac, and it registers with `config.sh --replace`, which takes over any
-runner of that name. Installed with the defaults on another Mac, it takes
-over the first Mac's registration: the first Mac's runner stops getting jobs,
-and nothing reports an error. With v0.1.0, pass a `--name` that no
-other runner in the scope uses (CHANGELOG, #52).
+With **v0.1.0**, the runner is named `lima-homefield` on every Mac and
+registered with `config.sh --replace`, so a second Mac takes over the first's
+registration and nothing reports an error. Pass a `--name` that no other
+runner in the scope uses (CHANGELOG, #52).
 
-Once there are several:
-
-- Every runner serves every repository in the group, so the
-  [trust boundary](#trust-boundary)'s "Across repositories" holds on each.
-  Jobs that run at the same time are in separate VMs and share no Docker
-  daemon, disk or memory.
-- `bin/homefield route hosted --repo <owner>/<repo>` takes a repository off
-  all of them at once.
-- To take one away, `homefield uninstall --instance <name>` while it is idle
-  (on the Mac that runs it).
-
-Several runners in one VM, to save the memory, is tracked in
+Every runner serves every repository in the group, so the
+[trust boundary](#trust-boundary)'s "Across repositories" holds on each; jobs
+that run at the same time are in separate VMs. `bin/homefield route hosted
+--repo <owner>/<repo>` takes a repository off all of them at once. Several
+runners in one VM, to save the memory, is tracked in
 [#14](https://github.com/i2Dev-com/homefield/issues/14).
 
 ### Operating several runners
 
-Every command except `route` and `adopt` acts on one VM on the Mac you run it
-on, so nothing in the tool shows the whole set. Three things to do by hand.
+Nothing in the tool shows the whole set: every command except `route` and
+`adopt` acts on one VM on the Mac you run it on.
 
-**See them all.** GitHub's runner list is the one place that has every runner,
-whichever Mac it is on. It needs an organization owner with `admin:org` (a
-repository admin, for a runner registered at a repository), the same access
-`install` uses to check a name is free:
+**List them.** GitHub's runner list is the one place that has every runner. It
+needs an organization owner with `admin:org` (a repository admin, for a
+repository's runner):
 
 ```bash
 gh api --paginate "orgs/<org>/actions/runners?per_page=100" --jq '
@@ -530,39 +446,32 @@ gh api --paginate "orgs/<org>/actions/runners?per_page=100" --jq '
   | [.name, .status, (.busy | tostring), .version, (.labels | map(.name) | join(","))] | @tsv'
 ```
 
-Use your `RUNNER_LABEL` for `homefield-ci`. A runner that is `offline` has
-its Mac asleep or off, or its VM or service stopped: run `bin/homefield
-status` on that Mac. `version` is the runner's own version, which moves when
-it updates itself; it is not the `homefield` version. A runner you expect
-that is missing was never registered, or was removed. GitHub removes a
-runner that has not connected for more than 14 days, so a Mac left off for
-two weeks comes back without its registration, while `bin/homefield status`
-still says "registered", because it reads the file in the VM. The runner's
-absence from the list above is the check. Recovering such a runner is not
-yet documented or tested ([#76](https://github.com/i2Dev-com/homefield/issues/76)).
+Use your `RUNNER_LABEL` for `homefield-ci`. `offline` means the Mac is asleep
+or off, or the VM or service is stopped: run `bin/homefield status` on it.
+`version` is the runner's own version, which moves when it updates itself, not
+the `homefield` version. GitHub removes a runner that has not connected for
+more than 14 days, so a Mac left off that long comes back unregistered while
+`bin/homefield status` still says "registered" (it reads a file in the VM); a
+runner missing from this list is the sign. Recovery is not yet documented
+([#76](https://github.com/i2Dev-com/homefield/issues/76)).
 
-**Upgrade them.** On each Mac, run `homefield version`, then the README's
-one-liner again to replace the tool (it leaves an existing VM alone), then
-`homefield upgrade --instance <name>` for each VM on it, as in
-[Setup](#setup-once-per-machine). `upgrade` refuses while a job is running
-and takes the runner down until it is done, so do the runners one at a time:
-the others keep taking jobs, and a queued job waits for whichever is next
-idle. Runners on different versions work side by side, because each takes
-jobs from the queue on its own, and the routing guard lives in the consumers'
-workflows, not on the runner. But a fix that changes the VM only reaches a
-runner when `upgrade` runs on it (the job-started hook for root-owned files,
-#54, is one), so a Mac you skip keeps the old behaviour, and a failure that
-appears on only some runs is probably that. Read the CHANGELOG's upgrade
-notes before a release, and check `homefield version` on each Mac afterwards.
+**Upgrade them.** On each Mac: `homefield version`, the README's one-liner
+again, then `homefield upgrade --instance <name>` for each VM on it.
+`upgrade` refuses while a job is running and takes the runner down until it is
+done, so do one runner at a time; the others keep taking jobs. Runners on
+different versions work together, because each takes jobs on its own and the
+routing guard lives in the repositories' workflows. But a fix to the VM only
+reaches a runner when `upgrade` runs on it (the job-started hook, #54, is one),
+so a failure on only some runs may be a Mac you skipped. Read the CHANGELOG's
+upgrade notes first.
 
-**Keep them alike.** The extra packages and the hooks live only in each guest,
-so two runners under one label can differ without anything noticing, and a
-job passes or fails depending on which one it lands on. Keep the hooks in a
-versioned directory and install them on every VM from it, and give every Mac
-the same `--packages`. To compare, `bin/homefield status` prints `extra
-packages:` for a VM, and `limactl shell <instance> ls
-/etc/homefield/provision.d` lists its hooks; run both on each Mac. `upgrade`
-runs the hooks again, so a hook that changed is applied by the next upgrade.
+**Keep them alike.** Extra packages and hooks live only in each guest, so two
+runners under one label can differ unnoticed, and a job passes or fails
+depending on which one it lands on. Keep the hooks in a versioned directory,
+install them on every VM from it, and give every Mac the same `--packages`. To
+compare, `bin/homefield status` prints `extra packages:` and `limactl shell
+<instance> ls /etc/homefield/provision.d` lists the hooks. `upgrade` runs the
+hooks again, so a changed hook applies on the next upgrade.
 
 ## Moving a registration
 
@@ -618,13 +527,12 @@ unset REMOVE
 limactl delete --force homefield
 ```
 
-`config.sh remove` refuses while the service is installed, so the service is
-uninstalled first. If GitHub then refuses the removal (a rejected token, no
-network), `bin/homefield uninstall` installs the service again and starts it:
-the runner is still registered and takes jobs, and you run it again once the
-cause is fixed. By hand that is `./svc.sh install runner` and starting the
-unit from `.service`. If the reinstall fails too, the runner is registered
-with no service; `bin/homefield install` sets the service up again.
+`config.sh remove` refuses while the service is installed, so the service goes
+first. If GitHub then refuses the removal (a rejected token, no network),
+`bin/homefield uninstall` installs the service again and starts it, so the
+runner keeps taking jobs; run it again once the cause is fixed. By hand that
+is `./svc.sh install runner` and starting the unit from `.service`. If that
+fails too, `bin/homefield install` sets the service up again.
 
 If the VM is already gone, delete the stale registration on the runners page.
 
@@ -640,39 +548,33 @@ limactl shell homefield cat /etc/homefield/extra-packages   # pass as RUNNER_EXT
 limactl shell homefield sudo tar -C /etc/homefield -cf - provision.d > provision.d.tar
 ```
 
-On another Mac, repeat Setup with the same `RUNNER_EXTRA_PACKAGES` and the
-hooks installed before provisioning. On a Linux box, run `provision.sh`
-directly on an Ubuntu 24.04 host or VM. It hardcodes the linux-arm64 tarball, so an x86-64 host needs a
-different tarball and checksum, and consumers' `routing-guard` then takes
-`arch: x64` along with the matching expression. Register the new runner with
-the same `RUNNER_LABEL`, confirm it is online, then remove the old one.
+On a Linux box, run `provision.sh` directly on an Ubuntu 24.04 host or VM. It
+hardcodes the linux-arm64 tarball, so an x86-64 host needs a different tarball
+and checksum, and consumers' `routing-guard` then takes `arch: x64` along with
+the matching expression. On another Mac, repeat [Setup](#setup-once-per-machine).
 
-As a checklist:
+The move, as a checklist:
 
 1. Copy the extra-packages list and the hooks out of the old guest (above),
    and keep the hooks in version control.
-2. Provision the new machine with the same `RUNNER_LABEL` and group, a
-   different `RUNNER_NAME` (`bin/homefield install` names it after the Mac,
-   and refuses a name already in use), and the same extra packages and
-   hooks. Two runners
-   with one label share the queue, so it starts taking jobs once it is online.
+2. Provision the new machine with the same `RUNNER_LABEL`, group, extra
+   packages and hooks, and a different `RUNNER_NAME` (`bin/homefield install`
+   names it after the Mac and refuses a name already in use). Two runners with
+   one label share the queue, so it takes jobs once it is online.
 3. Confirm it is online on the runners page.
-4. Same CPU architecture: jobs go to whichever runner is free, so to see a
-   job from each adopting repository pass on the new one, stop the old
-   runner's service while it is idle
+4. Same CPU architecture: to see a job from each adopting repository pass on
+   the new runner, stop the old runner's service while it is idle
    (`limactl shell homefield sudo systemctl stop "$(limactl shell homefield sudo cat /opt/actions-runner/.service)"`),
    run a PR in each repository, and check that the run's log names the new
    runner. If it fails, start the old service again.
    Different architecture: the expression's labels name the old one, so no job
    can reach the new runner yet. Once it is online, change the `routing-guard`
    `arch` and the expression's labels in each adopting repository, one PR
-   each. That PR's own routed jobs then run on the new runner and are the
-   validation. Jobs from repositories not yet changed keep going to the old
-   runner, so nothing waits.
+   each; that PR's own routed jobs run on the new runner and are the
+   validation. Repositories not yet changed keep going to the old runner.
 5. Retire the old runner while it is idle: `bin/homefield uninstall` on the old
-   Mac. If the new runner is not up yet, switch the repositories to hosted
-   first.
-6. The memory log (`/var/log/homefield/`) stays with the old guest. Copy it
-   out first if you want the history for comparison.
-7. Re-check "Access checklist" for the new machine, and compare `bin/homefield
+   Mac (switch the repositories to hosted first if the new runner is not up).
+   The memory log (`/var/log/homefield/`) stays with the old guest; copy it
+   out first if you want the history.
+6. Re-check "Access checklist" for the new machine, and compare `bin/homefield
    report` before and after.

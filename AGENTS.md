@@ -55,8 +55,8 @@ bash tests/adopt.sh                # bin/homefield adopt and tools/adopt.py, wit
 ## The routing expression is a versioned contract
 
 The canonical `runs-on` expression lives in copies that must change together:
-`routing-guard/routing_guard.py`, `vm/provision.sh`, `README.md`,
-`docs/adopting.md`, `docs/runbook.md`.
+`routing-guard/routing_guard.py`, `vm/provision.sh`, `README.md` and
+`docs/adopting.md` (the runbook links to it instead of repeating it).
 `tests/label-rule.sh` exists to keep provision.sh and routing-guard in
 agreement — run it when touching either.
 
