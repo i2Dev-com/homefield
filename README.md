@@ -39,32 +39,30 @@ On an Apple Silicon Mac, in a terminal:
 curl -fsSL https://raw.githubusercontent.com/i2Dev-com/homefield/v0.2.1/install.sh | bash
 ```
 
-This installs or upgrades [Lima](https://lima-vm.io) with Homebrew if it is missing or older than 1.1 (it
-asks first), puts the tool in `~/.local/share/homefield` with a `homefield`
-command on your PATH, and then runs `homefield install`. That asks for your
-organization or repository URL, creates the VM, checks its isolation,
-provisions it, creates the `homefield-ci` runner group for an organization (selected
-repositories only, no public ones), registers the runner with the routing label
-`homefield-ci` and waits until GitHub shows it online. To give the URL up front,
-or any other option, append it:
+This installs [Lima](https://lima-vm.io) with Homebrew if it is missing or older
+than 1.1 (it asks first), puts the tool in `~/.local/share/homefield` with a
+`homefield` command on your PATH, and runs `homefield install`. That asks for
+your organization or repository URL, creates the VM, checks its isolation,
+provisions it, creates the `homefield-ci` runner group for an organization
+(selected repositories only, no public ones), registers the runner with the
+routing label `homefield-ci` and waits until GitHub shows it online. To give
+the URL up front, or any other option, append it:
 
 ```bash
 ... | bash -s -- --url https://github.com/<org>      # or https://github.com/<owner>/<repo>
 ```
 
-From a checkout of this repository, with Lima ≥ 1.1 installed, run
-`bin/homefield install --url https://github.com/<org>` instead. Running the
-one-liner again replaces the installed tool with the current one and leaves
-an existing VM alone; `homefield upgrade` updates the VM. `homefield version`
-shows which copy you have and, using `gh` (or `curl` without it), says when a newer one exists and
-prints the command that updates it; `homefield status` shows the runner.
+From a checkout, with Lima ≥ 1.1, run `bin/homefield install --url
+https://github.com/<org>` instead. Running the one-liner again upgrades the
+tool and leaves an existing VM alone; `homefield upgrade` updates the VM,
+`homefield version` says when a newer release exists, and `homefield status`
+shows the runner.
 
 Registration needs a one-hour token, and the group needs the `admin:org`
-scope: `gh` fetches the token if you are an org owner or a repository admin
-(it offers to add the scope when it is missing), and otherwise you paste a
-token from the *New runner* page. A repository URL needs neither a group nor
-the scope. The group admits no repository until you add one; the next step
-does that for each repository.
+scope. `gh` fetches the token if you are an org owner or a repository admin
+(and offers to add the scope); otherwise you paste a token from the runners
+page's *New runner*. A repository URL needs neither a group nor the scope.
+The group admits no repository until `adopt` adds it.
 
 Then route jobs from a repository by following
 [`docs/adopting.md`](docs/adopting.md), and once that is merged:
@@ -97,22 +95,19 @@ refuses a public repository. `--dry-run` shows what it would do.
   Mac, each with its own memory ([runbook: More runners](docs/runbook.md#more-runners)).
   Several runners in one VM is tracked in [#14](https://github.com/i2Dev-com/homefield/issues/14).
 - **Only while the Mac is up.** Routed jobs wait while the Mac sleeps or the
-  VM is stopped, and GitHub fails them after 24 hours. By default pushes to the
-  default branch run hosted, so merging and deploying never wait on the Mac;
-  routing `push` too is an option ([routing options](docs/adopting.md#routing-options)),
-  and then a deploy gated on CI can queue behind a sleeping Mac.
-  To route around a sleeping runner, `bin/homefield route hosted --repo
-  <owner>/<repo>` switches the repository to hosted and re-runs whatever was
-  already waiting for the local runner
+  VM is stopped, and GitHub fails them after 24 hours. Pushes run hosted by
+  default, so merging and deploying never wait on the Mac
+  ([routing options](docs/adopting.md#routing-options)).
+  `bin/homefield route hosted --repo <owner>/<repo>` switches a repository to
+  hosted and re-runs whatever was waiting
   ([runbook: Switching](docs/runbook.md#switching-per-repository)).
-- **Organizations and plans.** On an organization, a custom runner group
-  limits which repositories can use the runner; custom groups need the GitHub
-  Team plan or Enterprise. On the Free plan there is only the Default group,
-  which every repository in the organization can use, so only register there
-  if you trust all of them, and pass `--group Default` (the default,
-  `homefield-ci`, cannot be created there, so `install` stops and says so). A **personal account** cannot have an
-  account-wide runner: register per repository (`--url
-  https://github.com/<you>/<repo>`), one VM per repository.
+- **Organizations and plans.** A custom runner group, which limits which
+  repositories can use the runner, needs the GitHub Team plan or Enterprise. On
+  the Free plan there is only the Default group, which every repository in the
+  organization can use: register there only if you trust all of them, with
+  `--group Default`. A **personal account** cannot have an account-wide
+  runner: register per repository (`--url https://github.com/<you>/<repo>`),
+  one VM per repository ([runbook: Runner group](docs/runbook.md#runner-group)).
 - **Less software than `ubuntu-latest`.** The VM starts small. Add what your
   jobs need with `--packages` or a hook
   ([runbook: Adding tools](docs/runbook.md#adding-tools)).
@@ -135,19 +130,17 @@ Mac hosting the runner that the repositories using it shouldn't be able to
 reach.
 
 By default the routing expression keeps pushes, Dependabot and pull requests
-from forks on hosted runners. Fork pull requests stay hosted whatever the
-options. Which events are routed (`events`) and whether Dependabot is routed
-(`dependabot`) are defaults a repository can change
-([routing options](docs/adopting.md#routing-options)): routing Dependabot
-puts unreviewed install scripts on a VM that is not thrown away after the job,
-and routing push, schedule or dispatch jobs makes them depend on the Mac being
-awake. `pull_request_target` cannot be routed. The fork rule is defence in
-depth only: what keeps strangers off the runner is that only private
-repositories can reach it.
-Repositories that share the runner share one VM, one job after another, and
-can see what earlier jobs left behind, so share it only between repositories
-you would trust with each other's pull requests. Registration tokens reach
-the VM on stdin, never on a command line. The full table:
+from forks on hosted runners; fork pull requests stay hosted whatever the
+options. Routing Dependabot puts unreviewed install scripts on a VM that is
+not thrown away after the job, and routing push, schedule or dispatch jobs
+makes them depend on the Mac being awake
+([routing options](docs/adopting.md#routing-options)).
+`pull_request_target` cannot be routed. The fork rule is defence in depth
+only: what keeps strangers off the runner is that only private repositories
+can reach it. Repositories that share the runner share one VM, one job after
+another, and can see what earlier jobs left behind, so share it only between
+repositories you would trust with each other's pull requests. Registration
+tokens reach the VM on stdin, never on a command line. The full table:
 [runbook: Trust boundary](docs/runbook.md#trust-boundary).
 
 ## How routing works
@@ -179,11 +172,8 @@ image are options of the action, and the expression changes with them
 
 It also fails on any other `runs-on` that could reach the runner (a bare
 `self-hosted`, a label list, a runner group), because GitHub hands a job to
-any runner whose labels are a superset of the request. The check reads
-workflows line by line, so a workflow written in a way it cannot read (a
-quoted `"runs-on"` key, a job written as a `{...}` mapping, a `<<` merge key)
-fails with a message asking for the plain form: `job-id:` on a line of its
-own, with `runs-on: ...` on a line below it.
+any runner whose labels are a superset of the request, and on workflow syntax
+it cannot read ([adopting, step 2](docs/adopting.md#2-route-them)).
 
 ## Cost
 
@@ -230,7 +220,7 @@ pull-request code away from the Mac it runs on.
 | [`install.sh`](install.sh) | The one-line installer: downloads the tool, puts `homefield` on the PATH, installs Lima, runs `homefield install` |
 | [`bin/homefield`](bin/homefield) | Install, upgrade, inspect and remove the runner on this Mac; adopt and switch repositories |
 | [`vm/lima.yaml`](vm/lima.yaml) | The VM: Ubuntu 24.04 arm64, no host mounts, no forwarding of guest ports to the Mac, no SSH-agent forwarding |
-| [`vm/provision.sh`](vm/provision.sh) | Runs inside the VM: packages, Docker, the checksum-pinned runner, cleanup and idle-time OS update timers, registration. Settings: `RUNNER_URL`, `RUNNER_LABEL`, `RUNNER_NAME`, `RUNNER_GROUP`, `RUNNER_EXTRA_PACKAGES`; hooks in `/etc/homefield/provision.d/` |
+| [`vm/provision.sh`](vm/provision.sh) | Runs inside the VM: packages, Docker, the checksum-pinned runner, maintenance timers, registration (settings at the top of the file) |
 | [`routing-guard/`](routing-guard/action.yml) | The routing guard action |
 | [`tools/`](tools) | Python helpers behind `homefield report` and `homefield adopt` |
 | [`docs/adopting.md`](docs/adopting.md) | Checklist for routing a repository's jobs to the runner |
@@ -239,23 +229,8 @@ pull-request code away from the Mac it runs on.
 
 ## Development
 
-```bash
-bash routing-guard/tests/run.sh    # fixture suite: every drift case must fail
-bash tests/label-rule.sh           # provision.sh and routing-guard accept the same labels
-bash tests/extra-packages.sh       # RUNNER_EXTRA_PACKAGES accepts package names only
-bash tests/runner-url.sh           # RUNNER_URL accepts github.com orgs and repos only
-bash tests/memwatch.sh             # the guest's memory sampler (needs bash >= 4.2 and GNU timeout to run)
-bash tests/workspace-owner.sh      # the job-started hook that gives `_work` back to `runner`
-bash tests/provision-recovery.sh   # provision.sh restarts a runner it stopped, when it fails
-bash tests/uninstall.sh            # `bin/homefield uninstall` gives the service back when removal fails
-bash tests/status.sh               # `bin/homefield status` reports on when the runner's settings can't be read
-bash tests/memory-summary.sh       # `bin/homefield memory` per-day summary
-bash tests/report.sh               # `bin/homefield report` against a fixture
-bash tests/install-sh.sh           # install.sh, with stub gh, curl, brew and Lima
-bash tests/runner-group.sh         # runner group, wait for online, `version`, install's check order
-bash tests/adopt.sh                # `bin/homefield adopt` and tools/adopt.py, with a stub gh
-shellcheck bin/homefield install.sh vm/provision.sh routing-guard/tests/run.sh tests/*.sh
-```
+The checks to run before a pull request (the test suites, `shellcheck`,
+`actionlint`) are listed in [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Versioning
 
