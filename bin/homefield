@@ -839,8 +839,6 @@ cmd_status() {
     echo "runner: not registered"
     return
   fi
-  # A read at end of input fails, which ends the command under `set -e`:
-  # fewer than two lines must reach the check below, not stop here.
   # A read at end of input fails, and under `set -e` that ends the command:
   # fewer than two lines must reach the check below, not stop here.
   local name url svc
