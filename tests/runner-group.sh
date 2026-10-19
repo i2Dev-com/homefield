@@ -67,7 +67,7 @@ case "$1" in
         ;;
     esac
     case "$*" in
-      *"test -f"*)
+      *"test -f"*"/.runner"*)
         # Is the runner registered? LIMA_REG_FAIL: the call never reaches the guest.
         if [ -n "${LIMA_REG_FAIL:-}" ]; then echo "limactl: could not connect" >&2; exit 1; fi
         printf '%s\n' "${LIMA_REGISTERED-no}"
