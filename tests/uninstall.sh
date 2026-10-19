@@ -2,12 +2,14 @@
 # `homefield uninstall` on a registered runner (#60): the service is
 # uninstalled before the registration is removed, so when GitHub refuses the
 # removal the runner has to get its service back, not only a start command for
-# a unit that is gone.
+# a unit that is gone. And (#80) a guest that cannot be asked whether the
+# runner is registered stops the command with the VM still there, instead of
+# reading as "not registered" and deleting it.
 #
 # The real cmd_uninstall runs, with the guest side run here in a scratch
-# runner directory: svc.sh, config.sh, systemctl and sudo are stubs, and the
-# VM helpers are functions. The systemctl stub starts only a unit that exists,
-# as the real one does. Nothing reaches GitHub or a VM.
+# runner directory: svc.sh, config.sh, systemctl, sudo and limactl are stubs,
+# and the VM helpers are functions. The systemctl stub starts only a unit that
+# exists, as the real one does. Nothing reaches GitHub or a VM.
 #
 # Run:  bash tests/uninstall.sh
 # shellcheck disable=SC2016  # the stub bodies expand when they run, not when defined
@@ -26,6 +28,7 @@ stub() { printf '#!/usr/bin/env bash\n%s\n' "$2" >"$stubs/$1"; chmod +x "$stubs/
 # sudo [-n] [-u user] [--preserve-env=...] <command...>: the command, as this user.
 stub sudo 'while [ $# -gt 0 ]; do case "$1" in -u) shift 2 ;; -n|--preserve-env=*) shift ;; *) break ;; esac; done
 exec "$@"'
+stub limactl 'echo "limactl $*" >>"$LOG"'
 # The unit is a file in the runner directory; it is active while a marker is.
 stub systemctl 'echo "systemctl $*" >>"$LOG"
 case "$1" in
@@ -64,20 +67,22 @@ EOF
   : >"$work/log"
 }
 
-# run: cmd_uninstall --keep-vm, in a shell of its own so its EXIT trap runs.
+# run: cmd_uninstall, in a shell of its own so its EXIT trap runs. It keeps the
+# VM unless UNINSTALL_ARGS is set (to nothing, to delete it). The guest answers
+# unless GUEST_MODE is fail (the call fails) or silent (it succeeds and says
+# nothing); registered() is the real probe.
 cat >"$work/harness.sh" <<EOF
 HOMEFIELD_SOURCE_ONLY=1
 . "$ROOT/bin/homefield"
 RUNNER_HOME="$home"
 check_host() { :; }
 vm_status() { echo Running; }
-registered() { [ -f "\$RUNNER_HOME/.runner" ]; }
 job_running() { return 1; }
 runner_setting() { echo https://github.com/acme; }
 get_token() { echo tok; }
-guest() { "\$@"; }
+guest() { case "\${GUEST_MODE:-}" in fail) return 1 ;; silent) return 0 ;; esac; "\$@"; }
 guest_stdin() { "\$@"; }
-cmd_uninstall --keep-vm
+cmd_uninstall \${UNINSTALL_ARGS---keep-vm}
 EOF
 run() {
   out="$(PATH="$stubs:$PATH" LOG="$work/log" HOME_DIR="$home" "$@" bash "$work/harness.sh" 2>&1 </dev/null)"
@@ -124,5 +129,28 @@ fresh
 rm -f "$home/unit" "$home/.service" "$home/active"
 run env
 record "removal works without a service" "0/removed" "$rc/$([ -e "$home/.runner" ] && echo registered || echo removed)"
+
+echo "the VM is deleted with the registration removed:"
+fresh
+run env UNINSTALL_ARGS=
+record "uninstall succeeds" "0" "$rc"
+record "...deregistered, then the VM was deleted once" "removed/1" "$(state | cut -d/ -f1)/$(logged 'limactl delete --force')"
+
+echo "not registered, as the guest says:"
+fresh
+rm -f "$home/.runner"
+run env UNINSTALL_ARGS=
+record "uninstall succeeds" "0" "$rc"
+record "...says there is nothing to deregister, and deletes the VM" "yes/1" "$(has "$out" 'is not registered; nothing to deregister')/$(logged 'limactl delete --force')"
+record "...without running config.sh" "0" "$(logged 'config.sh')"
+
+echo "the guest cannot be asked whether it is registered (#80):"
+for mode in fail silent; do
+  fresh
+  run env UNINSTALL_ARGS= GUEST_MODE=$mode
+  record "$mode: uninstall fails" "1" "$rc"
+  record "...says it could not ask, not that nothing is registered" "yes/no" "$(has "$out" 'could not ask VM')/$(has "$out" 'nothing to deregister')"
+  record "...the VM is neither stopped nor deleted, the registration is untouched" "0/0/0/registered" "$(logged 'limactl delete')/$(logged 'limactl stop')/$(logged 'config.sh')/$(state | cut -d/ -f1)"
+done
 
 summary

@@ -21,7 +21,7 @@ HOMEFIELD_SOURCE_ONLY=1
 . "$ROOT/bin/homefield"
 command() { return 0; }
 vm_status() { echo Running; }
-registered() { return 0; }
+registered() { return \${REG_RC:-0}; }
 job_running() { return 1; }
 runner_setting() {
   [ -z "\${SETTING_FAIL:-}" ] || return 1
@@ -70,5 +70,12 @@ status SETTING_FAIL=1 SETTING_OUT=''
 record "the read fails outright: exits 0" "0" "$rc"
 record "...says the details could not be read" "yes" "$(has "$out" 'runner: registered, but its details could not be read')"
 record "...and reports the rest" "yes/yes/yes/yes" "$(rest)"
+
+status REG_RC=1
+record "not registered: exits 0 and says so" "0/yes/no" "$rc/$(has "$out" 'runner: not registered')/$(has "$out" 'service:')"
+
+status REG_RC=2
+record "the VM cannot be asked: exits 1" "1" "$rc"
+record "...says unknown, not that it is unregistered, and stops there" "yes/no/no" "$(has "$out" 'runner: unknown')/$(has "$out" 'not registered')/$(has "$out" 'service:')"
 
 summary
