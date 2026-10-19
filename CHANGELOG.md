@@ -11,6 +11,14 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ## Unreleased
 
+### Changed
+
+- The runbook's *More runners* section has an *Operating several runners*
+  subsection: listing every runner through GitHub's API (online, busy, runner
+  version), upgrading Mac by Mac, keeping extra packages and hooks alike on
+  every VM, and that GitHub removes a runner offline for more than 14 days
+  (recovery tracked in #76).
+
 ## v0.2.1 (2026-10-18)
 
 Replaces v0.2.0, which is too strict and should not be pinned: its routing
