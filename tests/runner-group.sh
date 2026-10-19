@@ -66,6 +66,14 @@ case "$1" in
         exit 1
         ;;
     esac
+    case "$*" in
+      *"test -f"*"/.runner"*)
+        # Is the runner registered? LIMA_REG_FAIL: the call never reaches the guest.
+        if [ -n "${LIMA_REG_FAIL:-}" ]; then echo "limactl: could not connect" >&2; exit 1; fi
+        printf '%s\n' "${LIMA_REGISTERED-no}"
+        exit 0
+        ;;
+    esac
     if [ -n "${LIMA_SHELL_FAIL:-}" ]; then echo "limactl: could not connect" >&2; exit 1; fi
     printf '%s' "${LIMA_SHELL_OUT:-}"
     ;;
@@ -234,6 +242,20 @@ record "a bad URL is refused before an existing VM is touched" "nonzero/yes/0" "
 printf 'test-mac-homefield\tonline\t41\n' >"$work/runners-name-online"
 run_fn GH_GROUPS="$work/groups-ok" GH_RUNNERS="$work/runners-name-online" -- cmd_install --url https://github.com/acme
 record "no VM, the default name taken: refused before the VM is created" "nonzero/yes/0" "$(nonzero "$rc")/$(has "$out" 'test-mac-homefield is already registered and online')/$(called 'limactl create')"
+
+# A failed probe of the guest is not an answer (#80): with a VM that is already
+# there, install asks whether it is registered, and "no" starts a fresh
+# registration, where --replace deletes this VM's own runner from GitHub.
+run_fn LIMA_STATUS=Running LIMA_SHELL_OUT=0 LIMA_REG_FAIL=1 GH_GROUPS="$work/groups-ok" GH_RUNNERS="$work/runners-name-online" \
+  -- cmd_install --url https://github.com/acme --replace
+record "the registered probe fails: install stops before any change" "nonzero/yes/0/0" \
+  "$(nonzero "$rc")/$(has "$out" 'could not ask VM')/$(called 'DELETE')/$(called 'POST')"
+for answer in "yes:0" "no:1" "maybe:2" ":2"; do
+  run_fn LIMA_REGISTERED="${answer%%:*}" -- registered
+  record "registered: the guest says '${answer%%:*}'" "${answer##*:}" "$rc"
+done
+run_fn LIMA_REG_FAIL=1 -- registered
+record "registered: the call fails" "2" "$rc"
 
 # ── runner name ────────────────────────────────────────────────────────────
 echo "runner name"

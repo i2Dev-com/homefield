@@ -219,7 +219,36 @@ verify_isolation() {
   log "isolation verified: no host mounts"
 }
 
-registered() { guest sudo test -f "$RUNNER_HOME/.runner"; }
+# guest_has_file PATH: 0 if the file is there, 1 if the guest says it is not,
+# 2 if the guest could not be asked (limactl or sudo failed, or the answer was
+# neither). The test runs in the guest and prints its answer, so a failed call
+# cannot pass for "no": `test -f` alone exits 1 for a missing file and for a
+# `limactl shell` that never reached the guest. A caller that acts on "no"
+# has to stop on 2.
+guest_has_file() {
+  local answer
+  # shellcheck disable=SC2016  # the guest's shell expands $1, not this one
+  answer="$(guest sudo sh -c 'if test -f "$1"; then echo yes; else echo no; fi' sh "$1")" || return 2
+  case "$answer" in
+    yes) return 0 ;;
+    no) return 1 ;;
+    *) return 2 ;;
+  esac
+}
+
+# registered: 0 if the runner is registered, 1 if not, 2 if the VM could not be
+# asked. Commands that act on the answer call is_registered instead.
+registered() { guest_has_file "$RUNNER_HOME/.runner"; }
+# is_registered: registered, for the commands that act on "no". A VM that could
+# not be asked ends the command: read as "not registered", it would let
+# uninstall delete the VM and leave the registration on GitHub, and let install
+# register again, where --replace removes this VM's own registration.
+is_registered() {
+  local rc=0
+  registered || rc=$?
+  [ "$rc" -lt 2 ] || die "could not ask VM ${INSTANCE} whether its runner is registered; is it running? Try again when bin/homefield status answers"
+  return "$rc"
+}
 job_running() { guest pgrep -f Runner.Worker >/dev/null; }
 
 # Maintenance (upgrade, uninstall) takes the runner offline first, straight
@@ -708,7 +737,7 @@ cmd_install() {
   ensure_vm "$cpus" "$memory"
   verify_isolation
 
-  if registered; then
+  if is_registered; then
     log "${INSTANCE} is already registered; upgrading instead (registration settings are kept)"
     local args=()
     [ "$packages_set" = 1 ] && args+=(--packages "$packages")
@@ -773,7 +802,7 @@ cmd_upgrade() {
   [ -n "$(vm_status)" ] || die "no VM ${INSTANCE}; run bin/homefield install"
   ensure_vm "" ""
   verify_isolation
-  registered || die "${INSTANCE} is not registered; run bin/homefield install --url ..."
+  is_registered || die "${INSTANCE} is not registered; run bin/homefield install --url ..."
   # An upgrade can restart Docker (apt) or the runner (a new binary), which
   # would take down a running job.
   if job_running && [ "$force" != 1 ]; then
@@ -800,12 +829,16 @@ cmd_status() {
   fi
   echo "VM ${INSTANCE}: ${status}"
   [ "$status" = "Running" ] || return 0
-  if ! registered; then
+  local reg=0
+  registered || reg=$?
+  if [ "$reg" -ge 2 ]; then
+    echo "runner: unknown (could not ask the VM)"
+    return 1
+  fi
+  if [ "$reg" = 1 ]; then
     echo "runner: not registered"
     return
   fi
-  # A read at end of input fails, which ends the command under `set -e`:
-  # fewer than two lines must reach the check below, not stop here.
   # A read at end of input fails, and under `set -e` that ends the command:
   # fewer than two lines must reach the check below, not stop here.
   local name url svc
@@ -857,7 +890,7 @@ cmd_uninstall() {
   status="$(vm_status)"
   [ -n "$status" ] || die "no VM ${INSTANCE}"
   [ "$status" = "Running" ] || limactl start --tty=false "$INSTANCE"
-  if registered; then
+  if is_registered; then
     job_running && die "a job is running on ${INSTANCE}; uninstall when it is idle"
     local url token
     url="$(runner_setting gitHubUrl)"

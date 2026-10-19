@@ -20,6 +20,12 @@ fail, such as a new guard in the routing expression, bumps the minor version
   reported as a problem instead of being read as the default label or as no
   options. When listing the routed jobs fails because `routing_guard.py` does
   not run, adopt stops with that instead of reporting an empty list (#79).
+- `homefield uninstall`, `install` and `upgrade` no longer read a failed
+  `limactl shell` as "the runner is not registered". `uninstall` used to
+  delete the VM and leave the registration on GitHub; `install` with
+  `--replace` could remove this VM's own registration. They now stop with
+  "could not ask VM ..." and change nothing, and `status` prints
+  "runner: unknown" and exits 1 (#80).
 
 ### Changed
 
