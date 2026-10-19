@@ -1228,6 +1228,8 @@ adopt_routing_check() {
     # value, in which case only steps carrying it speak for it and the others
     # are already reported as a mismatch above.
     if [ "$gmatch" = 1 ]; then
+      # A guard whose own options the script refuses fails here too: the
+      # check below reports that, so an empty list is right for now.
       routed="$(python3 -I "$ROOT/routing-guard/routing_guard.py" --workflows-dir "$dir" "${opts[@]}" --list 2>/dev/null)" || routed=""
       while IFS= read -r routedjob; do
         [ -n "$routedjob" ] || continue
@@ -1264,8 +1266,11 @@ adopt_routing_check() {
       adopt_reason "no routing-guard step that runs on pull requests (docs/adopting.md, step 3)"
     fi
     # No guard to say which label applies; look with the expected one, as before.
+    # The options were checked above, so a failure here is the script not
+    # running, not "no jobs": an empty list would hide it.
     ADOPT_ROUTED="$(python3 -I "$ROOT/routing-guard/routing_guard.py" --workflows-dir "$dir" --label "$ADOPT_LABEL" \
-      --events "$ADOPT_EVENTS" --dependabot "$ADOPT_DEPENDABOT" --fallback "$ADOPT_FALLBACK" --list 2>/dev/null)" || ADOPT_ROUTED=""
+      --events "$ADOPT_EVENTS" --dependabot "$ADOPT_DEPENDABOT" --fallback "$ADOPT_FALLBACK" --list 2>/dev/null)" ||
+      die "adopt: routing_guard.py could not list the routed jobs; run it by hand on the workflows to see why"
   elif [ -n "$ADOPT_LABEL_OK" ]; then
     ADOPT_LABEL="$ADOPT_LABEL_OK"
     ADOPT_EVENTS="$ADOPT_OK_EVENTS"

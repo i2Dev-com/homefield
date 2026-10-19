@@ -74,7 +74,15 @@ if [ ! -x "$python_exe" ]; then
   echo "tests: no usable python3 on PATH (found: $(command -v python3 || echo none)); put a real interpreter first" >&2
   exit 1
 fi
-ln -s "$python_exe" "$stubs/python3"
+# A script, so that a test can make `routing_guard.py --list` fail (PY_LIST_FAIL).
+cat >"$stubs/python3" <<SHIM
+#!/bin/sh
+if [ -n "\${PY_LIST_FAIL:-}" ]; then
+  case " \$* " in *routing_guard.py*" --list "*) echo "python3: stub crash" >&2; exit 2 ;; esac
+fi
+exec "$python_exe" "\$@"
+SHIM
+chmod +x "$stubs/python3"
 cp "$work/gh" "$stubs/gh"
 
 # The group rows are name, visibility, public allowed, id.
@@ -222,6 +230,19 @@ wf_guard wf-on-squoted "'on': [push, pull_request]" "$action"
 # A job whose routing the guard cannot read must stop adopt, with the guard's reason.
 wf_guard wf-unreadable 'on: [pull_request]' "$action"
 printf '  unsafe: {runs-on: self-hosted, steps: [{run: echo unsafe}]}\n' >>"$work/wf-unreadable/ci.yml"
+# Guard text that is only text: inside a run: script.
+mkdir -p "$work/wf-heredoc"
+{
+  header
+  emit_job lint "$expr" "      - run: |" "          cat <<'X'" "$(guard ci.yml:lint | sed 's/^/    /')" "          X"
+} >"$work/wf-heredoc/ci.yml"
+# A guard step whose options adopt cannot read: a label set to nothing (the
+# guard refuses it), and a with: written on one line.
+mkdir -p "$work/wf-emptylabel" "$work/wf-flowwith" "$work/wf-withcomment"
+{ header; emit_job lint "$expr" "$(guard_label '""' ci.yml:lint)"; } >"$work/wf-emptylabel/ci.yml"
+{ header; emit_job lint "$expr" "      - uses: $action" '        with: {jobs: "ci.yml:lint"}'; } >"$work/wf-flowwith/ci.yml"
+# ...but a comment after with: is still a block.
+{ header; emit_job lint "$expr" "$(guard ci.yml:lint | sed 's/with:/with: # options/')"; } >"$work/wf-withcomment/ci.yml"
 wf_guard wf-on-block "$(printf 'on:\n  push:\n    branches: [main]\n  pull_request:')" "$action"
 wf_guard wf-on-items "$(printf 'on:\n  - push\n  - pull_request')" "$action"
 wf_guard wf-on-filter "$(printf 'on:\n  pull_request:\n    paths-ignore:\n      - docs/**')" "$action"
@@ -483,6 +504,9 @@ record "no .github/workflows at all: not ready, not an error to look" "nonzero/y
   "$(nonzero "$rc")/$(has "$out" 'no routing-guard step')/$(has "$out" 'cache keys: no workflow files')/$(called 'variable set')"
 adopt GH_WF="$work/wf-ready" GH_WF_FAIL=1 --
 record "the directory cannot be listed (not a 404): an error" "nonzero/yes/0" "$(nonzero "$rc")/$(has "$out" 'could not list .github/workflows in acme/app')/$(called 'variable set')"
+adopt PY_LIST_FAIL=1 GH_WF="$work/wf-noguard" --
+record "the routed-jobs listing crashes: adopt stops with that, not with an empty list" "nonzero/yes/0" \
+  "$(nonzero "$rc")/$(has "$out" 'routing_guard.py could not list the routed jobs')/$(called 'variable set')"
 adopt GH_WF="$work/wf-noguard" -- --jobs 'a.yml:x,b.yml:y'
 record "--jobs fills the snippet's expected list" "yes/yes/no" "$(has "$out" '            a.yml:x')/$(has "$out" '            b.yml:y')/$(has "$out" '            ci.yml:lint')"
 
@@ -628,6 +652,10 @@ route_case "a push-only workflow: the guard does not run on pull requests" wf-on
 route_case "...so there is no guard" wf-on-push not "no routing-guard step that runs on pull requests"
 route_case "pull_request_target: not a guard, and the reason says why" wf-on-prt not "runs on pull_request_target, which runs the base branch's workflow files"
 route_case "a job written as a {...} mapping: not ready, with the guard's reason" wf-unreadable not "ci.yml:$(grep -n 'unsafe:' "$work/wf-unreadable/ci.yml" | cut -d: -f1): unreadable job id"
+route_case "guard text inside a run: script is not a step: no guard" wf-heredoc not "no routing-guard step in .github/workflows"
+route_case "label: set to nothing: not ready, and the reason says so" wf-emptylabel not "sets label: to nothing, which the guard refuses"
+route_case "a with: on one line: not ready, and the reason says so" wf-flowwith not "has its with: on one line (line 9), which adopt does not read"
+route_case "a comment after with: does not make it a one-line with:" wf-withcomment ready "!on one line"
 route_case "on: [push, pull_request]" wf-on-list ready "!$may_not_run"
 route_case "\"on\": quoted" wf-on-quoted ready "!$may_not_run"
 route_case "'on': quoted, as a list" wf-on-squoted ready "!$may_not_run"
@@ -808,6 +836,11 @@ mkdir -p "$work/refs-shape"
 got="$(python3 -I "$ROOT/tools/adopt.py" guards "$work/refs-shape" | cut -f2 | tr '\n' ' ')"
 record "guards: this release and a full SHA are guards; other releases, a major, a minor, a suffix, another case and a branch are not" "ok source source source source source source source source ok " "$got"
 record "guards: a directory with no workflow files has none" "" "$(mkdir -p "$work/empty" && python3 -I "$ROOT/tools/adopt.py" guards "$work/empty")"
+record "guards: the text of a run: script has no steps" "" "$(python3 -I "$ROOT/tools/adopt.py" guards "$work/wf-heredoc")"
+got="$(python3 -I "$ROOT/tools/adopt.py" guards "$work/wf-emptylabel" | cut -f2,3)"
+record "guards: label: set to nothing is source, with label -" "$(printf 'source\t-')" "$got"
+got="$(python3 -I "$ROOT/tools/adopt.py" guards "$work/wf-flowwith" | cut -f2)"
+record "guards: a one-line with: is source" "source" "$got"
 
 cat >"$shapes/e.yml" <<'EOF'
 steps:

@@ -11,6 +11,16 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ## Unreleased
 
+### Fixed
+
+- `homefield adopt` no longer reads routing-guard text inside a `run:` script
+  as a guard step, which could report "routing: ready" and switch a repository
+  on with no guard. A step with `label:` set to nothing (which the guard
+  refuses) or its `with:` on one line (which adopt does not read) is now
+  reported as a problem instead of being read as the default label or as no
+  options. When listing the routed jobs fails because `routing_guard.py` does
+  not run, adopt stops with that instead of reporting an empty list (#79).
+
 ### Changed
 
 - The runbook's *More runners* section has an *Operating several runners*
