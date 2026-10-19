@@ -514,6 +514,56 @@ Once there are several:
 Several runners in one VM, to save the memory, is tracked in
 [#14](https://github.com/i2Dev-com/homefield/issues/14).
 
+### Operating several runners
+
+Every command except `route` and `adopt` acts on one VM on the Mac you run it
+on, so nothing in the tool shows the whole set. Three things to do by hand.
+
+**See them all.** GitHub's runner list is the one place that has every runner,
+whichever Mac it is on. It needs an organization owner with `admin:org` (a
+repository admin, for a runner registered at a repository), the same access
+`install` uses to check a name is free:
+
+```bash
+gh api --paginate "orgs/<org>/actions/runners?per_page=100" --jq '
+  .runners[] | select(.labels | map(.name) | index("homefield-ci"))
+  | [.name, .status, (.busy | tostring), .version, (.labels | map(.name) | join(","))] | @tsv'
+```
+
+Use your `RUNNER_LABEL` for `homefield-ci`. A runner that is `offline` has
+its Mac asleep or off, or its VM or service stopped: run `bin/homefield
+status` on that Mac. `version` is the runner's own version, which moves when
+it updates itself; it is not the `homefield` version. A runner you expect
+that is missing was never registered, or was removed. GitHub removes a
+runner that has not connected for more than 14 days, so a Mac left off for
+two weeks comes back without its registration, while `bin/homefield status`
+still says "registered", because it reads the file in the VM. The runner's
+absence from the list above is the check. Recovering such a runner is not
+yet documented or tested ([#76](https://github.com/i2Dev-com/homefield/issues/76)).
+
+**Upgrade them.** On each Mac, run `homefield version`, then the README's
+one-liner again to replace the tool (it leaves an existing VM alone), then
+`homefield upgrade --instance <name>` for each VM on it, as in
+[Setup](#setup-once-per-machine). `upgrade` refuses while a job is running
+and takes the runner down until it is done, so do the runners one at a time:
+the others keep taking jobs, and a queued job waits for whichever is next
+idle. Runners on different versions work side by side, because each takes
+jobs from the queue on its own, and the routing guard lives in the consumers'
+workflows, not on the runner. But a fix that changes the VM only reaches a
+runner when `upgrade` runs on it (the job-started hook for root-owned files,
+#54, is one), so a Mac you skip keeps the old behaviour, and a failure that
+appears on only some runs is probably that. Read the CHANGELOG's upgrade
+notes before a release, and check `homefield version` on each Mac afterwards.
+
+**Keep them alike.** The extra packages and the hooks live only in each guest,
+so two runners under one label can differ without anything noticing, and a
+job passes or fails depending on which one it lands on. Keep the hooks in a
+versioned directory and install them on every VM from it, and give every Mac
+the same `--packages`. To compare, `bin/homefield status` prints `extra
+packages:` for a VM, and `limactl shell <instance> ls
+/etc/homefield/provision.d` lists its hooks; run both on each Mac. `upgrade`
+runs the hooks again, so a hook that changed is applied by the next upgrade.
+
 ## Moving a registration
 
 To move the runner to another scope (for example from one repository to the
