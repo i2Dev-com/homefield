@@ -68,7 +68,11 @@ a deliberate, reviewed change.
 - it is in a workflow that runs on `pull_request` (not `pull_request_target`,
   not push-only);
 - neither the step nor its job has `if: false` or `continue-on-error: true`: a
-  guard that cannot fail the check enforces nothing.
+  guard that cannot fail the check enforces nothing;
+- its `with:` is a block (one option per line), and `label:`, if given, is not
+  empty. Adopt does not read `with: {jobs: ...}` on one line, and the guard
+  refuses an empty label, so adopt reports either one as a problem instead of
+  guessing. Guard text that sits inside a `run: |` script is not a step.
 
 A reusable workflow works if one of the repository's `pull_request` workflows
 calls it (`uses: ./.github/workflows/<file>`, one level deep) from a job

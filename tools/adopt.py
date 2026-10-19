@@ -20,7 +20,8 @@ does not have.
                             entries (spaces). status is ok (a usable guard),
                             blocked (a recognized routing-guard step that
                             cannot run on pull requests) or source (not an
-                            action adopt recognizes). blocking and warnings
+                            action adopt recognizes, or a step whose with:
+                            adopt cannot read). blocking and warnings
                             are texts joined by ";", or "-" when there are
                             none. events (spaces), dependabot and fallback
                             are the step's `with:` values, or the defaults
@@ -66,6 +67,9 @@ FILTERS = ("branches", "branches-ignore", "paths", "paths-ignore")
 ON_KEY = re.compile(r"^([\"']?)on\1:\s*(.*?)\s*$")
 # A mapping key, plain or quoted (`"continue-on-error": true` is the same key).
 KEY = re.compile(r"""^(\s*)(-\s+)?["']?([A-Za-z0-9_-]+)["']?:\s*(.*?)\s*$""")
+# A line that opens a block scalar (`key: |`, `- |`, `- key: >-`), as in
+# routing_guard.py: group 1 is the indent, 2 the dash, 3 the key.
+BLOCK_START = re.compile(r"""^(\s*)(-\s+)?([^\s#][^#]*?:\s+)?(?:[&!]\S*\s+)*[|>][-+0-9]*\s*$""")
 CACHE_KEY = re.compile(r"^(\s*)(?:-\s+)?(key|restore-keys):\s*(.*?)\s*$")
 
 
@@ -94,9 +98,29 @@ def in_block(line, base):
     return not line.strip() or indent_of(line) > base
 
 
+def block_scalar_lines(lines):
+    """The indexes of the lines that are the text of a block scalar (a
+    `run: |` script, a `with: jobs: |` list): not YAML structure, so a `uses:`
+    in one is not a step. Same rule as routing_guard.py: blank, or indented
+    deeper than the key that opened it."""
+    inside = set()
+    col = None
+    for i, line in enumerate(lines):
+        code = line.split("#", 1)[0]
+        if col is not None:
+            if not line.strip() or indent_of(line) > col:
+                inside.add(i)
+                continue
+            col = None
+        start = BLOCK_START.match(code)
+        if start:
+            col = len(start.group(1)) + (len(start.group(2)) if start.group(2) and start.group(3) else 0)
+    return inside
+
+
 def scalar(value):
     """A single-line YAML scalar: no trailing comment, no quotes."""
-    value = re.sub(r"\s+#.*$", "", value).strip()
+    value = re.sub(r"(^|\s+)#.*$", "", value).strip()
     if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
         value = value[1:-1]
     return value
@@ -130,8 +154,10 @@ def step_bounds(lines, at):
 
 
 def with_values(lines, start, end):
-    """The keys of the step's `with:` block, as {key: text}. A block scalar
-    (`|`, `>`, with or without - and +) keeps its lines, newline-joined."""
+    """(values, flow) for the step's `with:`: its block keys as {key: text}
+    (a block scalar, `|`, `>`, with or without - and +, keeps its lines,
+    newline-joined), and flow, the 1-based line of a `with:` written on one
+    line (`with: {jobs: ...}`), which is not read, or None."""
     key_indent = None
     for i in range(start, end):
         m = KEY.match(lines[i])
@@ -139,13 +165,16 @@ def with_values(lines, start, end):
             key_indent = len(m.group(1)) + (len(m.group(2)) if m.group(2) else 0)
             break
     if key_indent is None:
-        return {}
+        return {}, None
     values = {}
+    flow = None
     i = start
     while i < end:
         m = KEY.match(lines[i])
         here = len(m.group(1)) + (len(m.group(2)) if m.group(2) else 0) if m else -1
-        if m and m.group(3) == "with" and here == key_indent and not m.group(4):
+        if m and m.group(3) == "with" and here == key_indent and scalar(m.group(4)):
+            flow = i + 1
+        elif m and m.group(3) == "with" and here == key_indent:
             child = None
             i += 1
             while i < end:
@@ -172,7 +201,7 @@ def with_values(lines, start, end):
                 i += 1
             continue
         i += 1
-    return values
+    return values, flow
 
 
 def parse_triggers(lines):
@@ -406,7 +435,10 @@ def guards(directory):
     for every step that uses some routing guard. The status is "source" for
     one that is not ACTION_PATH at RELEASE or a full commit SHA (another
     repository, another release, a branch, a major-only tag), "blocked" for one that
-    cannot run on a pull request, and "ok" for a usable guard."""
+    cannot run on a pull request, and "ok" for a usable guard. A step whose
+    `with:` adopt cannot read (written on one line, or a label set to nothing)
+    is "source" too: adopt cannot vouch for it. Lines that are the text of a
+    block scalar are not steps."""
     files = {}
     for name in workflow_files(directory):
         lines = read_lines(os.path.join(directory, name))
@@ -414,22 +446,33 @@ def guards(directory):
     found = []
     for name, info in files.items():
         lines = info["lines"]
+        text = block_scalar_lines(lines)
         for at, line in enumerate(lines):
+            if at in text:
+                continue
             m = USES.match(line)
             value = scalar(m.group(3)) if m else ""
             if line.lstrip().startswith("#") or STEP_MARKER not in value:
                 continue
             where = f"{name}:{at + 1}"
             path, _, ref = value.partition("@")
-            values = with_values(lines, *step_bounds(lines, at))
+            values, flow = with_values(lines, *step_bounds(lines, at))
             jobs = [e for e in re.split(r"[\s,]+", values.get("jobs", "")) if e]
-            label = values.get("label") or DEFAULT_LABEL
+            label = values["label"] if "label" in values else DEFAULT_LABEL
             sha = SHA_REF.fullmatch(ref) is not None
             if path.lower() != ACTION_PATH.lower() or not (sha or ref == RELEASE):
                 reason = f"the routing-guard step at {where} uses {value}, but adopt recognizes {ACTION}, the release this copy of homefield checks with, or a full commit SHA (docs/adopting.md, step 3)"
                 if path.lower() == ACTION_PATH.lower() and RELEASE_REF.fullmatch(ref):
                     reason += f". {ref} may have other rules: pin {RELEASE}, or install homefield {ref} (homefield version)"
                 found.append((where, "source", label, [reason], [], DEFAULT_EVENTS, DEFAULT_DEPENDABOT, DEFAULT_FALLBACK, jobs))
+                continue
+            unreadable = None
+            if flow:
+                unreadable = f"the routing-guard step at {where} has its with: on one line (line {flow}), which adopt does not read. Write each option on its own line under with: (docs/adopting.md, step 3)"
+            elif not label:
+                unreadable = f"the routing-guard step at {where} sets label: to nothing, which the guard refuses. Remove the line to use {DEFAULT_LABEL}, or name the label (docs/adopting.md, step 3)"
+            if unreadable:
+                found.append((where, "source", label or "-", [unreadable], [], DEFAULT_EVENTS, DEFAULT_DEPENDABOT, DEFAULT_FALLBACK, jobs))
                 continue
             blocks, warns = check_guard(name, at, files)
             if sha:
