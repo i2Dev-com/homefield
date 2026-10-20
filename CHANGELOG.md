@@ -39,6 +39,10 @@ fail, such as a new guard in the routing expression, bumps the minor version
   list` as "no VM", so `install` could create a runner group and then fail to
   create a VM that exists. They stop with "could not run ..." or "could not
   ask Lima ...", and `status` prints "VM ...: unknown" and exits 1 (#85).
+- `homefield adopt` warns when the runner group allows public repositories, as
+  `install` already does, and says so in its summary line ("runner group added,
+  but the group allows public repositories"). It read that setting and never
+  used it, so a group wider than the docs describe passed silently (#84).
 
 ### Changed
 

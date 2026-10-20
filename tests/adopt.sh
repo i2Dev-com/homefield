@@ -91,6 +91,8 @@ printf 'Default\tall\tfalse\t1\nHomeField-CI\tselected\tfalse\t42\n' >"$work/gro
 printf 'Default\tall\tfalse\t1\nhomefield-ci\tall\tfalse\t42\n' >"$work/groups-all"
 printf 'Default\tall\tfalse\t1\nhomefield-ci\tprivate\tfalse\t42\n' >"$work/groups-private"
 printf 'Default\tall\tfalse\t1\n' >"$work/groups-none"
+printf 'Default\tall\tfalse\t1\nhomefield-ci\tselected\ttrue\t42\n' >"$work/groups-selected-public"
+printf 'Default\tall\tfalse\t1\nhomefield-ci\tall\ttrue\t42\n' >"$work/groups-all-public"
 printf '100\n200\n' >"$work/members-other"
 printf '100\n555\n200\n' >"$work/members-with"
 : >"$work/members-empty"
@@ -449,6 +451,20 @@ record "the group name is found in any case" "1/yes" "$(called 'X PUT')/$(has "$
 adopt GH_GROUPS="$work/groups-all" --
 record "a group open to all repositories: a warning, no PUT, no members read" "0/yes/yes/0/0" \
   "$rc/$(has "$out" 'warning: runner group homefield-ci is open to all')/$(has "$out" 'already has access and nothing was added')/$(called 'X PUT')/$(called 'repositories?')"
+adopt GH_GROUPS="$work/groups-selected-public" --
+record "selected but allowing public repositories: a warning, and still added" "0/yes/1" "$rc/$(has "$out" 'warning: runner group homefield-ci allows public repositories')/$(called 'X PUT')"
+record "...the summary does not read as a clean add" "yes" "$(has "$out" 'runner group added, but the group allows public repositories;')"
+record "...pointing at the setting to turn off" "yes" "$(has "$out" 'turn off Allow public repositories')"
+adopt GH_GROUPS="$work/groups-selected-public" GH_MEMBERS="$work/members-with" --
+record "...a member already: said so, with the same note" "yes/yes" "$(has "$out" 'already a member, but the group allows public repositories')/$(has "$out" 'allows public repositories. ')"
+adopt GH_GROUPS="$work/groups-selected-public" -- --dry-run
+record "...a dry run: would be added, with the note, nothing written" "yes/0" "$(has "$out" 'would be added (dry run), but the group allows public repositories')/$(called 'X PUT')"
+adopt GH_GROUPS="$work/groups-selected-public" GH_WF="$work/wf-noguard" --
+record "...routing not ready: not added, and the warning is given once" "nonzero/yes/0/1" "$(nonzero "$rc")/$(has "$out" 'runner group: not added, because the routing is not ready')/$(called 'X PUT')/$(printf '%s\n' "$out" | grep -c 'allows public repositories. ')"
+adopt GH_GROUPS="$work/groups-all-public" --
+record "open to all and allowing public ones: the existing warning says both" "0/yes/yes" "$rc/$(has "$out" 'is open to all repositories in acme and allows public ones')/$(has "$out" 'already open (all), but the group allows public repositories')"
+adopt GH_GROUPS="$work/groups-selected" --
+record "a selected group with public repositories off: no such warning" "no" "$(has "$out" 'allows public')"
 adopt GH_GROUPS="$work/groups-private" --
 record "a group open to private repositories: the same" "0/yes/0" "$rc/$(has "$out" 'open to private repositories')/$(called 'X PUT')"
 adopt GH_GROUPS="$work/groups-none" --
