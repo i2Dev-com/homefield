@@ -40,6 +40,7 @@ Commands:
              already registered, this is an upgrade.
   upgrade    Re-run provisioning on a registered runner: packages, hooks,
              runner binary. Refuses while a job is running, unless --force.
+             Also refuses when the VM cannot be asked whether one is.
   status     Show the VM, the registration and whether a job is running.
   uninstall  Deregister the runner and delete the VM.
   route      Switch repositories' routed jobs to hosted or local
@@ -249,7 +250,30 @@ is_registered() {
   [ "$rc" -lt 2 ] || die "could not ask VM ${INSTANCE} whether its runner is registered; is it running? Try again when bin/homefield status answers"
   return "$rc"
 }
-job_running() { guest pgrep -f Runner.Worker >/dev/null; }
+
+# job_running: 0 if a job is running, 1 if not, 2 if the guest could not be
+# asked (the call failed, or pgrep did not run). `pgrep` alone exits 1 for "no
+# job" and for a `limactl shell` that never reached the guest. The [R] keeps
+# the pattern from matching this shell's own command line.
+job_running() {
+  local answer
+  # shellcheck disable=SC2016  # the guest's shell expands these, not this one
+  answer="$(guest sh -c 'pgrep -f "[R]unner.Worker" >/dev/null; case $? in 0) echo yes ;; 1) echo no ;; esac')" || return 2
+  case "$answer" in
+    yes) return 0 ;;
+    no) return 1 ;;
+    *) return 2 ;;
+  esac
+}
+# is_job_running: job_running, for the commands that go on when it says "no".
+# A guest that could not be asked ends the command, with --force too: --force
+# overrides a job that is running, not a runner that cannot be reached.
+is_job_running() {
+  local rc=0
+  job_running || rc=$?
+  [ "$rc" -lt 2 ] || die "could not ask VM ${INSTANCE} whether a job is running; nothing was stopped. Try again when bin/homefield status answers"
+  return "$rc"
+}
 
 # Maintenance (upgrade, uninstall) takes the runner offline first, straight
 # after the idle check: a runner that is still listening can be handed a job
@@ -258,8 +282,19 @@ job_running() { guest pgrep -f Runner.Worker >/dev/null; }
 # started again on the way out; a command that succeeds calls runner_back.
 stopped_unit=""
 stop_runner() {
-  stopped_unit="$(guest sudo cat "$RUNNER_HOME/.service" 2>/dev/null || true)"
-  [ -n "$stopped_unit" ] || return 0
+  # No .service is a state of its own (provisioning never finished, or the
+  # service was removed): nothing to stop. A guest that cannot be asked is not
+  # that state, or the maintenance would go on with the runner listening.
+  local has=0 unit
+  guest_has_file "$RUNNER_HOME/.service" || has=$?
+  case "$has" in
+    0) ;;
+    1) return 0 ;;
+    *) die "could not ask VM ${INSTANCE} whether the runner has a service; nothing was stopped. Try again when bin/homefield status answers" ;;
+  esac
+  unit="$(guest sudo cat "$RUNNER_HOME/.service")" && [ -n "$unit" ] ||
+    die "could not read the runner's service name in VM ${INSTANCE}; nothing was stopped. Try again when bin/homefield status answers"
+  stopped_unit="$unit"
   trap restart_runner_on_failure EXIT
   log "stopping ${stopped_unit}: the runner takes no jobs until this finishes"
   guest sudo systemctl stop "$stopped_unit"
@@ -805,7 +840,7 @@ cmd_upgrade() {
   is_registered || die "${INSTANCE} is not registered; run bin/homefield install --url ..."
   # An upgrade can restart Docker (apt) or the runner (a new binary), which
   # would take down a running job.
-  if job_running && [ "$force" != 1 ]; then
+  if is_job_running && [ "$force" != 1 ]; then
     die "a job is running on ${INSTANCE}; try again when it is idle, or pass --force"
   fi
   stop_runner
@@ -856,7 +891,13 @@ cmd_status() {
   else
     echo "service: NOT running (${svc:-no service installed})"
   fi
-  if job_running; then echo "job: running"; else echo "job: idle"; fi
+  local job=0
+  job_running || job=$?
+  case "$job" in
+    0) echo "job: running" ;;
+    1) echo "job: idle" ;;
+    *) echo "job: unknown (could not ask the VM)" ;;
+  esac
   echo "runner version: $(guest sudo cat "$RUNNER_HOME/.provisioned-version" 2>/dev/null || echo unknown)"
   echo "extra packages: $(guest sh -c 'cat /etc/homefield/extra-packages 2>/dev/null | tr "\n" " "')"
   [ -n "$url" ] && echo "labels: see $(runners_page "$url") (not stored in the VM)"
@@ -891,7 +932,7 @@ cmd_uninstall() {
   [ -n "$status" ] || die "no VM ${INSTANCE}"
   [ "$status" = "Running" ] || limactl start --tty=false "$INSTANCE"
   if is_registered; then
-    job_running && die "a job is running on ${INSTANCE}; uninstall when it is idle"
+    is_job_running && die "a job is running on ${INSTANCE}; uninstall when it is idle"
     local url token
     url="$(runner_setting gitHubUrl)"
     echo "homefield: switch every repository that routes to this runner to hosted first:" >&2

@@ -67,6 +67,12 @@ case "$1" in
         ;;
     esac
     case "$*" in
+      *pgrep*)
+        # Is a job running? LIMA_JOB_FAIL: the call never reaches the guest.
+        if [ -n "${LIMA_JOB_FAIL:-}" ]; then echo "limactl: could not connect" >&2; exit 1; fi
+        printf '%s\n' "${LIMA_JOB-no}"
+        exit 0
+        ;;
       *"test -f"*"/.runner"*)
         # Is the runner registered? LIMA_REG_FAIL: the call never reaches the guest.
         if [ -n "${LIMA_REG_FAIL:-}" ]; then echo "limactl: could not connect" >&2; exit 1; fi
@@ -256,6 +262,23 @@ for answer in "yes:0" "no:1" "maybe:2" ":2"; do
 done
 run_fn LIMA_REG_FAIL=1 -- registered
 record "registered: the call fails" "2" "$rc"
+
+# The same for upgrade's idle check (#82): a call that failed is not "idle", with
+# --force too.
+for args in "" "--force"; do
+  run_fn LIMA_STATUS=Running LIMA_SHELL_OUT=0 LIMA_REGISTERED=yes LIMA_JOB_FAIL=1 -- cmd_upgrade $args
+  record "upgrade $args: the job probe fails: stops, nothing stopped or provisioned" "nonzero/yes/0/0" \
+    "$(nonzero "$rc")/$(has "$out" 'whether a job is running')/$(called 'systemctl')/$(called 'provision')"
+done
+run_fn LIMA_STATUS=Running LIMA_SHELL_OUT=0 LIMA_REGISTERED=yes LIMA_JOB=yes -- cmd_upgrade
+record "upgrade: a job is running: refused, pointing at --force" "nonzero/yes/0" \
+  "$(nonzero "$rc")/$(has "$out" 'a job is running on')/$(called 'systemctl')"
+for answer in "yes:0" "no:1" "maybe:2" ":2"; do
+  run_fn LIMA_JOB="${answer%%:*}" -- job_running
+  record "job_running: the guest says '${answer%%:*}'" "${answer##*:}" "$rc"
+done
+run_fn LIMA_JOB_FAIL=1 -- job_running
+record "job_running: the call fails" "2" "$rc"
 
 # ── runner name ────────────────────────────────────────────────────────────
 echo "runner name"

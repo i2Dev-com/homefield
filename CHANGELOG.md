@@ -26,6 +26,13 @@ fail, such as a new guard in the routing expression, bumps the minor version
   `--replace` could remove this VM's own registration. They now stop with
   "could not ask VM ..." and change nothing, and `status` prints
   "runner: unknown" and exits 1 (#80).
+- `homefield upgrade` and `uninstall` no longer read a failed `limactl shell`
+  as "no job is running" or "the runner has no service", which let them stop
+  the runner under a live job (and, with `upgrade`, run provisioning, which can
+  restart Docker). They stop with "could not ask VM ..." before anything is
+  stopped, `--force` included: it overrides a job that is running, not a VM
+  that cannot be reached. `status` prints "job: unknown" instead of "job:
+  idle" (#82).
 
 ### Changed
 
