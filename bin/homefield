@@ -292,8 +292,9 @@ stop_runner() {
     1) return 0 ;;
     *) die "could not ask VM ${INSTANCE} whether the runner has a service; nothing was stopped. Try again when bin/homefield status answers" ;;
   esac
-  unit="$(guest sudo cat "$RUNNER_HOME/.service")" && [ -n "$unit" ] ||
+  if ! unit="$(guest sudo cat "$RUNNER_HOME/.service")" || [ -z "$unit" ]; then
     die "could not read the runner's service name in VM ${INSTANCE}; nothing was stopped. Try again when bin/homefield status answers"
+  fi
   stopped_unit="$unit"
   trap restart_runner_on_failure EXIT
   log "stopping ${stopped_unit}: the runner takes no jobs until this finishes"
