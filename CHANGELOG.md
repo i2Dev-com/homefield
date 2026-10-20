@@ -32,7 +32,7 @@ fail, such as a new guard in the routing expression, bumps the minor version
   restart Docker). They stop with "could not ask VM ..." before anything is
   stopped, `--force` included: it overrides a job that is running, not a VM
   that cannot be reached. `status` prints "job: unknown" instead of "job:
-  idle" (#82).
+  idle", after the rest of its report, and exits 1 (#82).
 
 ### Changed
 

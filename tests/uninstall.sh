@@ -10,8 +10,11 @@
 # The real cmd_uninstall runs, with the guest side run here in a scratch
 # runner directory: svc.sh, config.sh, systemctl, sudo and limactl are stubs,
 # and the VM helpers are functions. pgrep answers from JOB (idle, running,
-# broken), never from this machine, which is itself a runner. The systemctl
-# stub starts only a unit that exists, as the real one does. Nothing reaches GitHub or a VM.
+# broken), never from this machine, which is itself a runner; like the real
+# one inside `sh -c`, it matches that shell's own command line when the pattern
+# is a plain Runner.Worker, so a pattern without the [R] reports a job. The
+# systemctl stub starts only a unit that exists, as the real one does. Nothing
+# reaches GitHub or a VM.
 #
 # Run:  bash tests/uninstall.sh
 # shellcheck disable=SC2016  # the stub bodies expand when they run, not when defined
@@ -31,7 +34,8 @@ stub() { printf '#!/usr/bin/env bash\n%s\n' "$2" >"$stubs/$1"; chmod +x "$stubs/
 stub sudo 'while [ $# -gt 0 ]; do case "$1" in -u) shift 2 ;; -n|--preserve-env=*) shift ;; *) break ;; esac; done
 exec "$@"'
 stub limactl 'echo "limactl $*" >>"$LOG"'
-stub pgrep 'case "${JOB:-idle}" in running) exit 0 ;; idle) exit 1 ;; *) exit 3 ;; esac'
+stub pgrep 'case "$*" in *"[R]unner.Worker"*) ;; *) exit 0 ;; esac
+case "${JOB:-idle}" in running) exit 0 ;; idle) exit 1 ;; *) exit 3 ;; esac'
 # The unit is a file in the runner directory; it is active while a marker is.
 stub systemctl 'echo "systemctl $*" >>"$LOG"
 case "$1" in
@@ -159,6 +163,12 @@ for mode in fail silent; do
   record "...says it could not ask, not that nothing is registered" "yes/no" "$(has "$out" 'could not ask VM')/$(has "$out" 'nothing to deregister')"
   record "...the VM is neither stopped nor deleted, the registration is untouched" "0/0/0/registered" "$(logged 'limactl delete')/$(logged 'limactl stop')/$(logged 'config.sh')/$(state | cut -d/ -f1)"
 done
+
+echo "a .service file with no name in it:"
+fresh
+: >"$home/.service"
+run env
+record "uninstall succeeds: the guest answered, there is no unit to stop" "0/0" "$rc/$(logged 'systemctl')"
 
 echo "a job is running:"
 fresh

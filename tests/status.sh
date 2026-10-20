@@ -74,7 +74,8 @@ record "...and reports the rest" "yes/yes/yes/yes" "$(rest)"
 status JOB_RC=0 SETTING_OUT='my-mac-homefield\nhttps://github.com/acme\n'
 record "a job is running: says so" "0/yes" "$rc/$(has "$out" 'job: running')"
 status JOB_RC=2 SETTING_OUT='my-mac-homefield\nhttps://github.com/acme\n'
-record "the job probe cannot ask: says unknown, not idle" "0/yes/no" "$rc/$(has "$out" 'job: unknown')/$(has "$out" 'job: idle')"
+record "the job probe cannot ask: says unknown, not idle, and exits 1" "1/yes/no" "$rc/$(has "$out" 'job: unknown')/$(has "$out" 'job: idle')"
+record "...after the rest of the report" "yes/yes" "$(has "$out" 'service: running')/$(has "$out" 'runner version: 2.337.0')"
 
 status REG_RC=1
 record "not registered: exits 0 and says so" "0/yes/no" "$rc/$(has "$out" 'runner: not registered')/$(has "$out" 'service:')"

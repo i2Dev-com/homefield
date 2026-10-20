@@ -292,9 +292,11 @@ stop_runner() {
     1) return 0 ;;
     *) die "could not ask VM ${INSTANCE} whether the runner has a service; nothing was stopped. Try again when bin/homefield status answers" ;;
   esac
-  if ! unit="$(guest sudo cat "$RUNNER_HOME/.service")" || [ -z "$unit" ]; then
+  if ! unit="$(guest sudo cat "$RUNNER_HOME/.service")"; then
     die "could not read the runner's service name in VM ${INSTANCE}; nothing was stopped. Try again when bin/homefield status answers"
   fi
+  # A file the guest answered for, with no name in it: no unit to stop.
+  [ -n "$unit" ] || return 0
   stopped_unit="$unit"
   trap restart_runner_on_failure EXIT
   log "stopping ${stopped_unit}: the runner takes no jobs until this finishes"
@@ -892,17 +894,17 @@ cmd_status() {
   else
     echo "service: NOT running (${svc:-no service installed})"
   fi
-  local job=0
+  local job=0 unknown=0
   job_running || job=$?
   case "$job" in
     0) echo "job: running" ;;
     1) echo "job: idle" ;;
-    *) echo "job: unknown (could not ask the VM)" ;;
+    *) echo "job: unknown (could not ask the VM)"; unknown=1 ;;
   esac
   echo "runner version: $(guest sudo cat "$RUNNER_HOME/.provisioned-version" 2>/dev/null || echo unknown)"
   echo "extra packages: $(guest sh -c 'cat /etc/homefield/extra-packages 2>/dev/null | tr "\n" " "')"
   [ -n "$url" ] && echo "labels: see $(runners_page "$url") (not stored in the VM)"
-  return 0
+  return "$unknown"
 }
 
 # deregister_script: what uninstall runs in the guest, as root, with the remove
