@@ -33,6 +33,12 @@ fail, such as a new guard in the routing expression, bumps the minor version
   stopped, `--force` included: it overrides a job that is running, not a VM
   that cannot be reached. `status` prints "job: unknown" instead of "job:
   idle", after the rest of its report, and exits 1 (#82).
+- The isolation check and the VM lookup no longer read a failed call as a safe
+  answer. A `mount` that fails in the VM was counted as "no host mounts"; a
+  failed `/Users` check was read as "cannot see it", and a failed `limactl
+  list` as "no VM", so `install` could create a runner group and then fail to
+  create a VM that exists. They stop with "could not run ..." or "could not
+  ask Lima ...", and `status` prints "VM ...: unknown" and exits 1 (#85).
 
 ### Changed
 

@@ -175,7 +175,30 @@ check_host() {
   fi
 }
 
-vm_status() { limactl list --format '{{.Status}}' "$INSTANCE" 2>/dev/null || true; }
+# vm_status: prints the VM's status (Running, Stopped, ...), or nothing when
+# there is no such VM. Returns 2 when Lima could not be asked. It lists every
+# instance and picks its own: `limactl list NAME` exits 1 for a missing VM
+# ("unmatched instances", Lima 2.2.0) as it does when Lima itself fails, so
+# only a successful list can say "no VM".
+vm_status() {
+  local rows name status
+  rows="$(limactl list --format '{{.Name}} {{.Status}}' 2>/dev/null)" || return 2
+  while read -r name status; do
+    if [ "$name" = "$INSTANCE" ]; then
+      echo "$status"
+      return 0
+    fi
+  done <<<"$rows"
+  return 0
+}
+# vm_lookup: vm_status into VM_STATUS (empty: no VM), for the commands that act
+# on "no VM": create one, or report that there is none. A Lima that could not be
+# asked ends the command (install would otherwise register a runner group and
+# then fail to create a VM that exists). Not a $(...), so die ends the command.
+VM_STATUS=""
+vm_lookup() {
+  VM_STATUS="$(vm_status)" || die "could not ask Lima about VM ${INSTANCE} (limactl list failed); nothing was changed"
+}
 
 # --workdir /: the host's working directory does not exist in the guest, which
 # has no mounts. stdin is closed, or `limactl shell` would swallow whatever is
@@ -186,7 +209,8 @@ guest_stdin() { limactl shell --workdir / "$INSTANCE" "$@"; }
 
 ensure_vm() {
   local cpus="$1" memory="$2" status
-  status="$(vm_status)"
+  vm_lookup
+  status="$VM_STATUS"
   if [ -z "$status" ]; then
     log "creating VM ${INSTANCE}"
     local args=(--name="$INSTANCE" --mount-none --tty=false)
@@ -207,17 +231,38 @@ ensure_vm() {
 # output as "no mounts found" would misread a broken VM as a safe one.
 verify_isolation() {
   local mounts
-  if ! mounts="$(guest sh -c 'mount | grep -Ec "virtiofs|9p|sshfs|reverse-sshfs" || true')"; then
+  # mount is run on its own: in a pipe its failure would be hidden, and grep
+  # would count nothing in its empty output. grep -c exits 1 for a count of 0,
+  # which is an answer; a status above 1 is not.
+  # shellcheck disable=SC2016  # the guest's shell expands these, not this one
+  if ! mounts="$(guest sh -c 'out="$(mount)" || exit 3; printf "%s\n" "$out" | grep -Ec "virtiofs|9p|sshfs|reverse-sshfs"; test $? -le 1')"; then
     die "could not run the isolation check in VM ${INSTANCE}; is it running? (see docs/runbook.md, Setup)"
   fi
   case "$mounts" in
     ''|*[!0-9]*) die "could not read the mount count from VM ${INSTANCE}; refusing to continue (see docs/runbook.md, Setup)" ;;
   esac
   [ "$mounts" = "0" ] || die "VM ${INSTANCE} has host mounts; refusing to continue (see docs/runbook.md, Setup)"
-  if guest test -e /Users; then
-    die "VM ${INSTANCE} can see /Users; refusing to continue"
-  fi
+  local users=0
+  guest_sees /Users || users=$?
+  case "$users" in
+    0) die "VM ${INSTANCE} can see /Users; refusing to continue" ;;
+    1) ;;
+    *) die "could not run the /Users check in VM ${INSTANCE}; refusing to continue (see docs/runbook.md, Setup)" ;;
+  esac
   log "isolation verified: no host mounts"
+}
+
+# guest_sees PATH: like guest_has_file for any kind of path, without sudo:
+# 0 if the guest can see it, 1 if not, 2 if the guest could not be asked.
+guest_sees() {
+  local answer
+  # shellcheck disable=SC2016  # the guest's shell expands $1, not this one
+  answer="$(guest sh -c 'if test -e "$1"; then echo yes; else echo no; fi' sh "$1")" || return 2
+  case "$answer" in
+    yes) return 0 ;;
+    no) return 1 ;;
+    *) return 2 ;;
+  esac
 }
 
 # guest_has_file PATH: 0 if the file is there, 1 if the guest says it is not,
@@ -766,7 +811,8 @@ cmd_install() {
   # was given is still validated before the VM is started, and the rest waits
   # for the answer to "registered?" (a registered instance is just upgraded).
   local prepared=0
-  if [ -z "$(vm_status)" ]; then
+  vm_lookup
+  if [ -z "$VM_STATUS" ]; then
     prepare_registration
     prepared=1
   elif [ -n "$url" ]; then
@@ -837,7 +883,8 @@ cmd_upgrade() {
     esac
   done
   check_host
-  [ -n "$(vm_status)" ] || die "no VM ${INSTANCE}; run bin/homefield install"
+  vm_lookup
+  [ -n "$VM_STATUS" ] || die "no VM ${INSTANCE}; run bin/homefield install"
   ensure_vm "" ""
   verify_isolation
   is_registered || die "${INSTANCE} is not registered; run bin/homefield install --url ..."
@@ -860,7 +907,10 @@ cmd_status() {
   [ $# -eq 0 ] || die "status takes no options besides --instance"
   command -v limactl >/dev/null || die "Lima is not installed"
   local status
-  status="$(vm_status)"
+  if ! status="$(vm_status)"; then
+    echo "VM ${INSTANCE}: unknown (could not ask Lima)"
+    return 1
+  fi
   if [ -z "$status" ]; then
     echo "VM ${INSTANCE}: not created"
     return
@@ -931,7 +981,8 @@ cmd_uninstall() {
   done
   check_host
   local status
-  status="$(vm_status)"
+  vm_lookup
+  status="$VM_STATUS"
   [ -n "$status" ] || die "no VM ${INSTANCE}"
   [ "$status" = "Running" ] || limactl start --tty=false "$INSTANCE"
   if is_registered; then
@@ -1567,7 +1618,8 @@ cmd_memory() {
     die "memory: --days must be a positive number"
   fi
   check_host
-  [ "$(vm_status)" = "Running" ] || die "memory: VM ${INSTANCE} is not running"
+  vm_lookup
+  [ "$VM_STATUS" = "Running" ] || die "memory: VM ${INSTANCE} is not running"
   # BSD date, as on macOS: today minus (days - 1), so --days 1 is today.
   cutoff="$(date -v-"$((days - 1))"d +%F)"
   rows="$(guest sh -c 'cat /var/log/homefield/memwatch-*.csv 2>/dev/null; true')" || exit 1

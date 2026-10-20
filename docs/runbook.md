@@ -538,7 +538,9 @@ If the VM cannot be asked (a `limactl shell` that fails) whether the runner is
 registered, whether a job is running, or whether it has a service, `uninstall`
 and `upgrade` stop before anything is stopped or deleted, `--force` included,
 and `install` stops too; `status` says "runner: unknown" or "job: unknown" and
-exits 1.
+exits 1. The same holds when Lima itself cannot say whether the VM exists
+(`limactl list` fails): the commands stop with "could not ask Lima", and
+`status` says "VM ...: unknown".
 Check that the VM is running (`limactl list`) and run the command again.
 
 If the VM is already gone, delete the stale registration on the runners page.
