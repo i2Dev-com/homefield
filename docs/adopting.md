@@ -171,7 +171,9 @@ step:
    A group that **allows public repositories** gets a warning too, and the
    summary line says so; adopt still adds the repository, since a public
    repository in the group is a setting for you to turn off (*Allow public
-   repositories*, [Runner group](runbook.md#runner-group)).
+   repositories*, [Runner group](runbook.md#runner-group)). The Default group
+   is not looked at (it is open to every repository in the organization), and
+   neither is a group whose list could not be read.
 5. **Switch.** When the routing is ready, sets `CI_RUNNER` to `local` (the same
    as `homefield route local`). If it is already `local`, it says so.
 
