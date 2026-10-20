@@ -456,11 +456,11 @@ record "selected but allowing public repositories: a warning, and still added" "
 record "...the summary does not read as a clean add" "yes" "$(has "$out" 'runner group added, but the group allows public repositories;')"
 record "...pointing at the setting to turn off" "yes" "$(has "$out" 'turn off Allow public repositories')"
 adopt GH_GROUPS="$work/groups-selected-public" GH_MEMBERS="$work/members-with" --
-record "...a member already: said so, with the same note" "yes/yes" "$(has "$out" 'already a member, but the group allows public repositories')/$(has "$out" 'allows public repositories:')"
+record "...a member already: said so, with the same note" "yes/yes" "$(has "$out" 'already a member, but the group allows public repositories')/$(has "$out" 'allows public repositories. ')"
 adopt GH_GROUPS="$work/groups-selected-public" -- --dry-run
 record "...a dry run: would be added, with the note, nothing written" "yes/0" "$(has "$out" 'would be added (dry run), but the group allows public repositories')/$(called 'X PUT')"
 adopt GH_GROUPS="$work/groups-selected-public" GH_WF="$work/wf-noguard" --
-record "...routing not ready: not added, and the warning is given once" "nonzero/yes/0/1" "$(nonzero "$rc")/$(has "$out" 'runner group: not added, because the routing is not ready')/$(called 'X PUT')/$(printf '%s\n' "$out" | grep -c 'allows public repositories:')"
+record "...routing not ready: not added, and the warning is given once" "nonzero/yes/0/1" "$(nonzero "$rc")/$(has "$out" 'runner group: not added, because the routing is not ready')/$(called 'X PUT')/$(printf '%s\n' "$out" | grep -c 'allows public repositories. ')"
 adopt GH_GROUPS="$work/groups-all-public" --
 record "open to all and allowing public ones: the existing warning says both" "0/yes/yes" "$rc/$(has "$out" 'is open to all repositories in acme and allows public ones')/$(has "$out" 'already open (all), but the group allows public repositories')"
 adopt GH_GROUPS="$work/groups-selected" --
