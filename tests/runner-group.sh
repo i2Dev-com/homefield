@@ -43,7 +43,7 @@ case "$*" in
 esac
 EOF
 chmod +x "$work/gh"
-for t in awk cat dirname git sleep tr; do ln -s "$(command -v "$t")" "$stubs/$t"; done
+for t in awk cat dirname git grep sh sleep tr; do ln -s "$(command -v "$t")" "$stubs/$t"; done
 cp "$work/gh" "$stubs/gh"
 # For the install ordering test: a Mac, and a Lima with no VM.
 cat >"$stubs/uname" <<'EOF'
@@ -56,14 +56,25 @@ echo "limactl $*" >>"$CALLS"
 case "$1" in
   --version) echo "limactl version 2.2.0" ;;
   list)
-    # The status of an existing VM only.
-    printf '%s' "${LIMA_STATUS:-}"
+    # Every instance, as `list --format '{{.Name}} {{.Status}}'`: another VM, and
+    # this one when LIMA_STATUS is set. LIMA_LIST_FAIL: Lima cannot answer.
+    if [ -n "${LIMA_LIST_FAIL:-}" ]; then echo "limactl: list failed" >&2; exit 1; fi
+    echo "other-vm Stopped"
+    # LIMA_STATUS_NONE: listed with no status, as Lima does for an instance whose config is broken.
+    [ -z "${LIMA_STATUS_NONE:-}" ] || echo "homefield "
+    [ -z "${LIMA_STATUS:-}" ] || echo "homefield ${LIMA_STATUS}"
     ;;
   shell)
     case "$*" in
-      *"test -e /Users"*)
-        [ -n "${LIMA_SEES_USERS:-}" ] && exit 0
-        exit 1
+      *"test -e"*)
+        # Can the guest see /Users? LIMA_USERS_FAIL: the call never reaches the guest.
+        if [ -n "${LIMA_USERS_FAIL:-}" ]; then echo "limactl: could not connect" >&2; exit 1; fi
+        if [ -n "${LIMA_SEES_USERS:-}" ]; then echo yes; else echo no; fi
+        exit 0
+        ;;
+      *'$(mount)'*)
+        # LIMA_RUN_GUEST: run the mount check itself here, against the mount stub.
+        if [ -n "${LIMA_RUN_GUEST:-}" ]; then shift 4; exec "$@"; fi
         ;;
     esac
     case "$*" in
@@ -91,7 +102,13 @@ cat >"$stubs/scutil" <<'EOF'
 [ -z "${SCUTIL_FAIL:-}" ] || exit 1
 echo "${SCUTIL_NAME:-Test-Mac}"
 EOF
-chmod +x "$stubs/uname" "$stubs/limactl" "$stubs/scutil"
+# What `mount` prints in the guest (MOUNT_OUT), or fails (MOUNT_FAIL).
+cat >"$stubs/mount" <<'EOF'
+#!/bin/sh
+[ -z "${MOUNT_FAIL:-}" ] || { echo "mount: cannot read /proc/mounts" >&2; exit 1; }
+printf '%s\n' "${MOUNT_OUT:-}"
+EOF
+chmod +x "$stubs/uname" "$stubs/limactl" "$stubs/scutil" "$stubs/mount"
 
 printf 'Default\tall\tfalse\nhomefield-ci\tselected\tfalse\nLocal CI\tselected\tfalse\n' >"$work/groups-ok"
 printf 'Default\tall\tfalse\nhomefield-ci\tall\tfalse\n' >"$work/groups-all"
@@ -383,6 +400,40 @@ record "the check cannot run: refused, not read as host mounts" \
 
 run_fn LIMA_SHELL_OUT=nonsense -- verify_isolation
 record "an unreadable mount count: refused" "nonzero/yes" "$(nonzero "$rc")/$(has "$out" 'could not read the mount count')"
+
+# The probes of #85, with the mount check run for real against a stub mount.
+run_fn LIMA_RUN_GUEST=1 MOUNT_OUT='proc on /proc type proc (rw)' -- verify_isolation
+record "mount lists no host mounts: verified (grep -c exits 1 for a count of 0)" "0/yes" "$rc/$(has "$out" 'isolation verified: no host mounts')"
+run_fn LIMA_RUN_GUEST=1 MOUNT_OUT='mount0 on /Users type virtiofs (rw)' -- verify_isolation
+record "mount lists a virtiofs mount: refused" "nonzero/yes/no" "$(nonzero "$rc")/$(has "$out" 'has host mounts')/$(has "$out" 'isolation verified')"
+run_fn LIMA_RUN_GUEST=1 MOUNT_FAIL=1 -- verify_isolation
+record "mount itself fails: refused as unable to run, not counted as 0" "nonzero/yes/no" "$(nonzero "$rc")/$(has "$out" 'could not run the isolation check')/$(has "$out" 'isolation verified')"
+run_fn LIMA_SHELL_OUT=0 LIMA_USERS_FAIL=1 -- verify_isolation
+record "the /Users call fails: refused, not read as 'cannot see it'" "nonzero/yes/no" "$(nonzero "$rc")/$(has "$out" 'could not run the /Users check')/$(has "$out" 'isolation verified')"
+
+# ── vm_status: Lima that cannot answer is not "no VM" (#85) ──────────────────
+echo "vm_status"
+run_fn LIMA_STATUS=Running -- vm_status
+record "an existing VM: its status" "0/Running" "$rc/$out"
+run_fn LIMA_STATUS= -- vm_status
+record "no VM among the listed ones: nothing, and success" "0/" "$rc/$out"
+run_fn LIMA_LIST_FAIL=1 -- vm_status
+record "limactl list fails: status 2, nothing printed" "2/" "$rc/$out"
+run_fn LIMA_STATUS_NONE=1 -- vm_status
+record "listed with no status (a broken config): status 2, not 'no VM'" "2/" "$rc/$out"
+run_fn LIMA_LIST_FAIL=1 GH_GROUPS="$work/groups-none" -- cmd_install --url https://github.com/acme
+record "install: Lima cannot answer: stops before a group or a VM is created" "nonzero/yes/0/0" \
+  "$(nonzero "$rc")/$(has "$out" 'could not ask Lima about VM')/$(called 'POST')/$(called 'limactl create')"
+for command in cmd_upgrade cmd_uninstall "cmd_memory --days 1"; do
+  # shellcheck disable=SC2086  # the command and its option are words
+  run_fn LIMA_LIST_FAIL=1 -- $command
+  record "${command%% *}: Lima cannot answer: says so, not that there is no VM" "nonzero/yes/no" \
+    "$(nonzero "$rc")/$(has "$out" 'could not ask Lima about VM')/$(has "$out" 'no VM')"
+done
+run_fn LIMA_LIST_FAIL=1 -- cmd_status
+record "status: Lima cannot answer: unknown, not 'not created', exit 1" "1/yes/no" "$rc/$(has "$out" 'VM homefield: unknown')/$(has "$out" 'not created')"
+run_fn -- cmd_status
+record "status: no VM: not created, exit 0" "0/yes" "$rc/$(has "$out" 'VM homefield: not created')"
 
 # ── version ────────────────────────────────────────────────────────────────
 echo "version"
