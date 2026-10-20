@@ -534,9 +534,11 @@ runner keeps taking jobs; run it again once the cause is fixed. By hand that
 is `./svc.sh install runner` and starting the unit from `.service`. If that
 fails too, `bin/homefield install` sets the service up again.
 
-If the VM cannot be asked whether the runner is registered (a `limactl shell`
-that fails), `uninstall` stops with the VM and the registration untouched, and
-so do `install` and `upgrade`; `status` says "runner: unknown" and exits 1.
+If the VM cannot be asked (a `limactl shell` that fails) whether the runner is
+registered, whether a job is running, or whether it has a service, `uninstall`
+and `upgrade` stop before anything is stopped or deleted, `--force` included,
+and `install` stops too; `status` says "runner: unknown" or "job: unknown" and
+exits 1.
 Check that the VM is running (`limactl list`) and run the command again.
 
 If the VM is already gone, delete the stale registration on the runners page.

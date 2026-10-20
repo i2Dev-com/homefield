@@ -22,7 +22,7 @@ HOMEFIELD_SOURCE_ONLY=1
 command() { return 0; }
 vm_status() { echo Running; }
 registered() { return \${REG_RC:-0}; }
-job_running() { return 1; }
+job_running() { return \${JOB_RC:-1}; }
 runner_setting() {
   [ -z "\${SETTING_FAIL:-}" ] || return 1
   printf '%b' "\$SETTING_OUT"
@@ -70,6 +70,12 @@ status SETTING_FAIL=1 SETTING_OUT=''
 record "the read fails outright: exits 0" "0" "$rc"
 record "...says the details could not be read" "yes" "$(has "$out" 'runner: registered, but its details could not be read')"
 record "...and reports the rest" "yes/yes/yes/yes" "$(rest)"
+
+status JOB_RC=0 SETTING_OUT='my-mac-homefield\nhttps://github.com/acme\n'
+record "a job is running: says so" "0/yes" "$rc/$(has "$out" 'job: running')"
+status JOB_RC=2 SETTING_OUT='my-mac-homefield\nhttps://github.com/acme\n'
+record "the job probe cannot ask: says unknown, not idle, and exits 1" "1/yes/no" "$rc/$(has "$out" 'job: unknown')/$(has "$out" 'job: idle')"
+record "...after the rest of the report" "yes/yes" "$(has "$out" 'service: running')/$(has "$out" 'runner version: 2.337.0')"
 
 status REG_RC=1
 record "not registered: exits 0 and says so" "0/yes/no" "$rc/$(has "$out" 'runner: not registered')/$(has "$out" 'service:')"

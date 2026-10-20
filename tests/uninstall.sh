@@ -2,14 +2,19 @@
 # `homefield uninstall` on a registered runner (#60): the service is
 # uninstalled before the registration is removed, so when GitHub refuses the
 # removal the runner has to get its service back, not only a start command for
-# a unit that is gone. And (#80) a guest that cannot be asked whether the
-# runner is registered stops the command with the VM still there, instead of
-# reading as "not registered" and deleting it.
+# a unit that is gone. And a guest that cannot be asked stops the command
+# with nothing changed, instead of reading as "no": whether the runner is
+# registered (#80, or the VM would be deleted), whether a job is running and
+# whether the runner has a service (#82, or a live job would be stopped).
 #
 # The real cmd_uninstall runs, with the guest side run here in a scratch
 # runner directory: svc.sh, config.sh, systemctl, sudo and limactl are stubs,
-# and the VM helpers are functions. The systemctl stub starts only a unit that
-# exists, as the real one does. Nothing reaches GitHub or a VM.
+# and the VM helpers are functions. pgrep answers from JOB (idle, running,
+# broken), never from this machine, which is itself a runner; like the real
+# one inside `sh -c`, it matches that shell's own command line when the pattern
+# is a plain Runner.Worker, so a pattern without the [R] reports a job. The
+# systemctl stub starts only a unit that exists, as the real one does. Nothing
+# reaches GitHub or a VM.
 #
 # Run:  bash tests/uninstall.sh
 # shellcheck disable=SC2016  # the stub bodies expand when they run, not when defined
@@ -29,6 +34,8 @@ stub() { printf '#!/usr/bin/env bash\n%s\n' "$2" >"$stubs/$1"; chmod +x "$stubs/
 stub sudo 'while [ $# -gt 0 ]; do case "$1" in -u) shift 2 ;; -n|--preserve-env=*) shift ;; *) break ;; esac; done
 exec "$@"'
 stub limactl 'echo "limactl $*" >>"$LOG"'
+stub pgrep 'case "$*" in *"[R]unner.Worker"*) ;; *) exit 0 ;; esac
+case "${JOB:-idle}" in running) exit 0 ;; idle) exit 1 ;; *) exit 3 ;; esac'
 # The unit is a file in the runner directory; it is active while a marker is.
 stub systemctl 'echo "systemctl $*" >>"$LOG"
 case "$1" in
@@ -70,17 +77,21 @@ EOF
 # run: cmd_uninstall, in a shell of its own so its EXIT trap runs. It keeps the
 # VM unless UNINSTALL_ARGS is set (to nothing, to delete it). The guest answers
 # unless GUEST_MODE is fail (the call fails) or silent (it succeeds and says
-# nothing); registered() is the real probe.
+# nothing), or FAIL_ON is set and the call's arguments contain it. The probes
+# are the real ones.
 cat >"$work/harness.sh" <<EOF
 HOMEFIELD_SOURCE_ONLY=1
 . "$ROOT/bin/homefield"
 RUNNER_HOME="$home"
 check_host() { :; }
 vm_status() { echo Running; }
-job_running() { return 1; }
 runner_setting() { echo https://github.com/acme; }
 get_token() { echo tok; }
-guest() { case "\${GUEST_MODE:-}" in fail) return 1 ;; silent) return 0 ;; esac; "\$@"; }
+guest() {
+  case "\${GUEST_MODE:-}" in fail) return 1 ;; silent) return 0 ;; esac
+  [ -z "\${FAIL_ON:-}" ] || case "\$*" in *"\$FAIL_ON"*) return 1 ;; esac
+  "\$@"
+}
 guest_stdin() { "\$@"; }
 cmd_uninstall \${UNINSTALL_ARGS---keep-vm}
 EOF
@@ -151,6 +162,29 @@ for mode in fail silent; do
   record "$mode: uninstall fails" "1" "$rc"
   record "...says it could not ask, not that nothing is registered" "yes/no" "$(has "$out" 'could not ask VM')/$(has "$out" 'nothing to deregister')"
   record "...the VM is neither stopped nor deleted, the registration is untouched" "0/0/0/registered" "$(logged 'limactl delete')/$(logged 'limactl stop')/$(logged 'config.sh')/$(state | cut -d/ -f1)"
+done
+
+echo "a .service file with no name in it:"
+fresh
+: >"$home/.service"
+run env
+record "uninstall succeeds: the guest answered, there is no unit to stop" "0/0" "$rc/$(logged 'systemctl')"
+
+echo "a job is running:"
+fresh
+run env JOB=running
+record "uninstall refuses" "1/yes" "$rc/$(has "$out" 'a job is running')"
+record "...the runner was not stopped" "0/registered/unit/.service/active" "$(logged 'systemctl')/$(state)"
+
+echo "the guest cannot be asked about the job, the service or its name (#82):"
+for case_ in "JOB=broken:whether a job is running" "FAIL_ON=pgrep:whether a job is running" \
+  "FAIL_ON=.service:whether the runner has a service" "FAIL_ON=sudo cat:read the runner's service name"; do
+  fresh
+  run env "${case_%%:*}"
+  record "${case_%%:*}: uninstall fails" "1" "$rc"
+  record "...saying what it could not ask" "yes/no" "$(has "$out" "${case_#*:}")/$(has "$out" 'a job is running on')"
+  record "...nothing was stopped, deregistered or deleted" "0/0/0/registered/unit/.service/active" \
+    "$(logged 'systemctl')/$(logged 'config.sh')/$(logged 'limactl delete')/$(state)"
 done
 
 summary
