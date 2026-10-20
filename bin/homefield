@@ -1151,10 +1151,12 @@ adopt_repository() {
 # say whether the repository is already in it. Not being able to check is a
 # warning, not an error: group access is an organization-admin matter that the
 # person running this may not be, and the rest of the checks are still worth
-# having.
+# having. A group that allows public repositories is a warning too, and goes on
+# into the outcome line: whatever else it says, the group is not the boundary
+# the docs describe.
 adopt_group_access() {
   local repo="$1" group="$2" dry="$3" org="${1%%/*}" rows="" listed=0 name vis pub gid
-  local found="" members byhand=""
+  local found="" members byhand="" widen=""
   [ "$ADOPT_READY" = 0 ] || byhand="; add ${repo} by hand (docs/adopting.md step 5)"
   if [ "$ADOPT_OWNER_TYPE" != Organization ]; then
     ADOPT_GROUP_OUTCOME="none needed (${org} is a personal account)"
@@ -1187,32 +1189,36 @@ adopt_group_access() {
     log "runner group: ${org} has no group ${group}; the runner may be repository-scoped or in another group, so nothing was changed"
     return 0
   fi
+  [ "$pub" != true ] || widen=" (the group allows public repositories)"
   if [ "$vis" != selected ]; then
-    ADOPT_GROUP_OUTCOME="already open (${vis})"
-    adopt_warn "runner group ${found} is open to ${vis} repositories in ${org}, so ${repo} already has access and nothing was added; narrow it to selected repositories (docs/runbook.md, \"Runner group\")"
+    ADOPT_GROUP_OUTCOME="already open (${vis})${widen}"
+    adopt_warn "runner group ${found} is open to ${vis} repositories in ${org}${widen:+ and allows public ones}, so ${repo} already has access and nothing was added; narrow it to selected repositories with public ones off (docs/runbook.md, \"Runner group\")"
     return 0
   fi
+  if [ -n "$widen" ]; then
+    adopt_warn "runner group ${found} allows public repositories: a public repository in it could run a pull request's own workflow files on the runner, and the README's security model rests on there being none; turn off Allow public repositories for the group (docs/runbook.md, \"Runner group\")"
+  fi
   if ! members="$(gh api --paginate "orgs/${org}/actions/runner-groups/${gid}/repositories?per_page=100" --jq '.repositories[].id' 2>/dev/null)"; then
-    ADOPT_GROUP_OUTCOME="not checked"
+    ADOPT_GROUP_OUTCOME="not checked${widen}"
     adopt_warn "could not read the repositories of runner group ${found}${byhand}"
     return 0
   fi
   if printf '%s\n' "$members" | grep -qx "$ADOPT_REPO_ID"; then
-    ADOPT_GROUP_OUTCOME="already a member"
+    ADOPT_GROUP_OUTCOME="already a member${widen}"
     log "runner group: ${repo} already has access to ${found}"
     if [ "$ADOPT_READY" = 0 ]; then
       adopt_warn "${repo} is already in runner group ${found}, so its workflows can already send jobs to the runner although its routing is not ready; take it out of the group until the routing is merged (docs/runbook.md, \"Runner group\")"
     fi
   elif [ "$ADOPT_READY" = 0 ]; then
-    ADOPT_GROUP_OUTCOME="not added (the routing is not ready)"
+    ADOPT_GROUP_OUTCOME="not added (the routing is not ready)${widen}"
     log "runner group: not added, because the routing is not ready"
   elif [ "$dry" = 1 ]; then
-    ADOPT_GROUP_OUTCOME="would be added (dry run)"
+    ADOPT_GROUP_OUTCOME="would be added (dry run)${widen}"
     log "runner group: would add ${repo} to ${found} (dry run)"
   else
     gh api -X PUT "orgs/${org}/actions/runner-groups/${gid}/repositories/${ADOPT_REPO_ID}" >/dev/null ||
       die "adopt: could not add ${repo} to runner group ${found}; add it by hand (docs/adopting.md step 5)"
-    ADOPT_GROUP_OUTCOME="added"
+    ADOPT_GROUP_OUTCOME="added${widen}"
     log "runner group: added ${repo} to ${found}"
   fi
 }

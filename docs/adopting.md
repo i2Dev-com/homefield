@@ -168,6 +168,10 @@ step:
    group, a personal account, a group that does not exist (the runner may be
    repository-scoped or in another group), and, with a warning, a group that
    is open to all or all private repositories, where there is nothing to add.
+   A group that **allows public repositories** gets a warning too, and the
+   summary line says so; adopt still adds the repository, since a public
+   repository in the group is a setting for you to turn off (*Allow public
+   repositories*, [Runner group](runbook.md#runner-group)).
 5. **Switch.** When the routing is ready, sets `CI_RUNNER` to `local` (the same
    as `homefield route local`). If it is already `local`, it says so.
 
