@@ -60,6 +60,8 @@ case "$1" in
     # this one when LIMA_STATUS is set. LIMA_LIST_FAIL: Lima cannot answer.
     if [ -n "${LIMA_LIST_FAIL:-}" ]; then echo "limactl: list failed" >&2; exit 1; fi
     echo "other-vm Stopped"
+    # LIMA_STATUS_NONE: listed with no status, as Lima does for an instance whose config is broken.
+    [ -z "${LIMA_STATUS_NONE:-}" ] || echo "homefield "
     [ -z "${LIMA_STATUS:-}" ] || echo "homefield ${LIMA_STATUS}"
     ;;
   shell)
@@ -417,6 +419,8 @@ run_fn LIMA_STATUS= -- vm_status
 record "no VM among the listed ones: nothing, and success" "0/" "$rc/$out"
 run_fn LIMA_LIST_FAIL=1 -- vm_status
 record "limactl list fails: status 2, nothing printed" "2/" "$rc/$out"
+run_fn LIMA_STATUS_NONE=1 -- vm_status
+record "listed with no status (a broken config): status 2, not 'no VM'" "2/" "$rc/$out"
 run_fn LIMA_LIST_FAIL=1 GH_GROUPS="$work/groups-none" -- cmd_install --url https://github.com/acme
 record "install: Lima cannot answer: stops before a group or a VM is created" "nonzero/yes/0/0" \
   "$(nonzero "$rc")/$(has "$out" 'could not ask Lima about VM')/$(called 'POST')/$(called 'limactl create')"

@@ -176,7 +176,8 @@ check_host() {
 }
 
 # vm_status: prints the VM's status (Running, Stopped, ...), or nothing when
-# there is no such VM. Returns 2 when Lima could not be asked. It lists every
+# there is no such VM. Returns 2 when Lima could not be asked, or lists the VM
+# without a status. It lists every
 # instance and picks its own: `limactl list NAME` exits 1 for a missing VM
 # ("unmatched instances", Lima 2.2.0) as it does when Lima itself fails, so
 # only a successful list can say "no VM".
@@ -185,6 +186,9 @@ vm_status() {
   rows="$(limactl list --format '{{.Name}} {{.Status}}' 2>/dev/null)" || return 2
   while read -r name status; do
     if [ "$name" = "$INSTANCE" ]; then
+      # Listed with no status: its config is broken (Lima warns and lists it
+      # with an empty status). It exists, so it is not "no VM".
+      [ -n "$status" ] || return 2
       echo "$status"
       return 0
     fi
@@ -197,7 +201,7 @@ vm_status() {
 # then fail to create a VM that exists). Not a $(...), so die ends the command.
 VM_STATUS=""
 vm_lookup() {
-  VM_STATUS="$(vm_status)" || die "could not ask Lima about VM ${INSTANCE} (limactl list failed); nothing was changed"
+  VM_STATUS="$(vm_status)" || die "could not ask Lima about VM ${INSTANCE} (limactl list failed, or lists it without a status); stopping here"
 }
 
 # --workdir /: the host's working directory does not exist in the guest, which
