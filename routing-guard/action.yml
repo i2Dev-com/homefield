@@ -19,7 +19,7 @@ inputs:
     required: false
     default: homefield-ci
   arch:
-    description: The runner's architecture label (arm64 or x64).
+    description: The runner's architecture label, arm64 or x64. Any other value is refused.
     required: false
     default: arm64
   events:

@@ -13,6 +13,13 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ### Changed
 
+- **The routing guard refuses an `arch` other than `arm64` or `x64`**, as
+  `--print-expression`, `--list` and a check, the way it already refuses a bad
+  `label` or `fallback`. A typo such as `amd64` used to become the expression
+  the guard enforced, so every job carrying it passed and then waited for a
+  runner with that label, and a value with a quote in it added labels of its
+  own. A workflow that passed `arch: ARM64` or any other value now fails, so
+  this needs a minor release (#87).
 - Restoring the runner's service has one implementation,
   `provision.sh ensure-service [--start]`, used after registration on every
   provisioning run, when a move is rolled back, and by `homefield uninstall`

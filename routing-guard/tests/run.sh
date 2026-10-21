@@ -238,6 +238,15 @@ invalid "events in another case" "'Push' is not one of" --events Push
 invalid "dependabot an unknown value" "must be hosted or local" --dependabot maybe
 invalid "dependabot empty" "must be hosted or local" --dependabot ""
 invalid "dependabot in another case" "must be hosted or local" --dependabot Local
+invalid "arch a typo" "'amd64' must be arm64 or x64" --arch amd64
+invalid "arch in another case" "'ARM64' must be arm64 or x64" --arch ARM64
+invalid "arch empty" "must be arm64 or x64" --arch ""
+invalid "arch carrying extra labels" "must be arm64 or x64" --arch 'x64","self-hosted'
+if python3 "$SCRIPT" --workflows-dir "${HERE}/base" --arch amd64 --list >/dev/null 2>&1; then
+  echo "  FAIL --list with arch amd64: wanted fail, got pass"; fail=$((fail + 1))
+else
+  echo "  ok   --list with arch amd64 (fail)"; pass=$((pass + 1))
+fi
 invalid "fallback self-hosted" "bare GitHub-hosted image name" --fallback self-hosted
 invalid "fallback the routing label" "bare GitHub-hosted image name" --fallback homefield-ci
 invalid "fallback a list" "bare GitHub-hosted image name" --fallback "[ubuntu-latest]"

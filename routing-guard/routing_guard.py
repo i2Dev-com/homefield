@@ -107,6 +107,12 @@ REFUSED = {
 }
 DEFAULT_EVENTS = "pull_request"
 DEPENDABOT = ("hosted", "local")
+# The runner's architecture label, the third label in the expression. Written
+# as GitHub's lowercase label names. A typo here would pass every copy that
+# carries it and leave those jobs waiting for a runner that has no such label,
+# and a value with a quote in it would add labels of its own. A new
+# architecture is added here deliberately (#21).
+ARCHS = ("arm64", "x64")
 # The fallback must be a bare GitHub-hosted image name: a self-hosted label
 # here would send the job to the runner whenever CI_RUNNER is not `local`.
 FALLBACK = re.compile(r"(ubuntu|windows|macos)-[a-z0-9._-]+", re.IGNORECASE)
@@ -126,7 +132,9 @@ def parse_events(text: str) -> list:
     return [e for e in EVENTS if e in given]
 
 
-def option_problem(dependabot: str, fallback: str) -> str:
+def option_problem(arch: str, dependabot: str, fallback: str) -> str:
+    if arch not in ARCHS:
+        return f"arch: {arch!r} must be {' or '.join(ARCHS)}"
     if dependabot not in DEPENDABOT:
         return f"dependabot: {dependabot!r} must be hosted or local"
     if not FALLBACK.fullmatch(fallback):
@@ -224,7 +232,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--workflows-dir", default=".github/workflows")
     ap.add_argument("--label", default="homefield-ci")
-    ap.add_argument("--arch", default="arm64")
+    ap.add_argument("--arch", default="arm64", help=" or ".join(ARCHS))
     ap.add_argument(
         "--events",
         default=DEFAULT_EVENTS,
@@ -262,7 +270,7 @@ def main() -> int:
     except ValueError as err:
         print(f"  \033[31mFAIL\033[0m {err}")
         return 1
-    problem = option_problem(args.dependabot, args.fallback)
+    problem = option_problem(args.arch, args.dependabot, args.fallback)
     if problem:
         print(f"  \033[31mFAIL\033[0m {problem}")
         return 1
