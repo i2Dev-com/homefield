@@ -24,6 +24,10 @@ chmod +x "$work/src/homefield-abc1234/bin/homefield"
 echo "name: homefield" >"$work/src/homefield-abc1234/vm/lima.yaml"
 echo "#!/bin/sh" >"$work/src/homefield-abc1234/vm/provision.sh"
 tar -czf "$work/fixture.tgz" -C "$work/src" homefield-abc1234
+# The same, with bin/homefield packed without its executable bit.
+cp -R "$work/src" "$work/noexec"
+chmod -x "$work/noexec/homefield-abc1234/bin/homefield"
+tar -czf "$work/noexec.tgz" -C "$work/noexec" homefield-abc1234
 # A tarball that is not this tool.
 mkdir -p "$work/other/something-1234567"
 echo hi >"$work/other/something-1234567/README"
@@ -214,6 +218,9 @@ record "a checkout with bin/homefield but no .homefield-ref is left alone" "nonz
 new_env gh curl limactl
 run_install FIXTURE_FOR_GH="$work/other.tgz"
 record "a tarball without bin/homefield is refused" "nonzero/yes/no" "$(nonzero "$rc")/$(has "$out" 'the download is not homefield')/$([ -e "$home/share" ] && echo yes || echo no)"
+new_env gh curl limactl
+run_install FIXTURE_FOR_GH="$work/noexec.tgz"
+record "a tarball whose bin/homefield is not executable is refused" "nonzero/yes/no" "$(nonzero "$rc")/$(has "$out" 'bin/homefield in the download is not executable')/$([ -e "$home/share" ] && echo yes || echo no)"
 
 # The wrapper only replaces a wrapper.
 new_env gh curl limactl
@@ -297,5 +304,60 @@ record "no VM yet, terminal, no arguments: install runs" "homefield stub: instal
 new_env gh curl limactl
 run_install FAKE_VM_STATUS=Running -- --url https://github.com/acme
 record "VM exists but arguments given: install runs with them" "homefield stub: install --url https://github.com/acme" "$(echo "$out" | grep 'homefield stub' || true)"
+
+# ── Instance names ─────────────────────────────────────────────────────────
+# install.sh and bin/homefield apply the same rule, Lima's for an instance
+# name, so each name gets the same verdict from both.
+echo "instance names"
+long="$(printf 'a%.0s' {1..76})"
+# shown <name>: the name for the test's line, escaped, or its length.
+shown() { if [ ${#1} -gt 20 ]; then echo "${#1} characters"; else printf '%q' "$1"; fi; }
+instance_verdicts() {
+  local name="$1" i h
+  new_env gh curl limactl
+  run_install "HOMEFIELD_INSTANCE=$name"
+  if [ "$rc" -eq 0 ]; then
+    i=ok
+  elif [ "$(has "$out" 'HOMEFIELD_INSTANCE must be a Lima instance name')" = yes ] && [ "$(wc -l <"$calls" | tr -d ' ')" = 0 ]; then
+    i=reject
+  else
+    i="unexpected($rc)"
+  fi
+  out="$(env -i HOME="$home" PATH="$stubs" CALLS="$calls" "$BASH" "$ROOT/bin/homefield" version --instance "$name" 2>&1)"
+  rc=$?
+  if [ "$rc" -eq 0 ]; then
+    h=ok
+  elif [ "$(has "$out" '--instance (or HOMEFIELD_INSTANCE) must be a Lima instance name')" = yes ]; then
+    h=reject
+  else
+    h="unexpected($rc)"
+  fi
+  echo "$i/$h"
+}
+for name in homefield homefield-2 a A1 my_vm.test a.b-c_d "$long"; do
+  record "instance [$(shown "$name")] is accepted by both" "ok/ok" "$(instance_verdicts "$name")"
+done
+# shellcheck disable=SC2016  # the values are meant to stay literal
+for name in --help -x 'a b' a/b ../x a..b a. .a -a a- a--b x.yml x.YAML h.Yaml "${long}a" $'a\nb' '$(x)' 'é'; do
+  record "instance [$(shown "$name")] is refused by both" "reject/reject" "$(instance_verdicts "$name")"
+done
+
+new_env gh curl limactl
+run_install HOMEFIELD_INSTANCE=--help
+record "HOMEFIELD_INSTANCE=--help: refused before anything is downloaded" "nonzero/0" "$(nonzero "$rc")/$(wc -l <"$calls" | tr -d ' ')"
+for args in "status --instance --help" "--instance --help upgrade"; do
+  new_env limactl
+  # shellcheck disable=SC2086  # the words are the arguments
+  out="$(env -i HOME="$home" PATH="$stubs" CALLS="$calls" "$BASH" "$ROOT/bin/homefield" $args 2>&1)"
+  rc=$?
+  record "bin/homefield $args: refused, limactl never run" "nonzero/yes/0" "$(nonzero "$rc")/$(has "$out" 'must be a Lima instance name')/$(wc -l <"$calls" | tr -d ' ')"
+done
+new_env limactl
+out="$(env -i HOME="$home" PATH="$stubs" CALLS="$calls" HOMEFIELD_INSTANCE=--help "$BASH" "$ROOT/bin/homefield" status 2>&1)"
+rc=$?
+record "HOMEFIELD_INSTANCE=--help bin/homefield status: refused, limactl never run" "nonzero/yes/0" "$(nonzero "$rc")/$(has "$out" 'got: --help')/$(wc -l <"$calls" | tr -d ' ')"
+out="$(env -i HOME="$home" PATH="$stubs" CALLS="$calls" HOMEFIELD_INSTANCE=--help "$BASH" "$ROOT/bin/homefield" help 2>&1)"
+rc=$?
+record "...but help still prints the usage" "0/yes" "$rc/$(has "$out" 'Usage: bin/homefield')"
 
 summary

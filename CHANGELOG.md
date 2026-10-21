@@ -32,6 +32,14 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ### Fixed
 
+- `homefield` and `install.sh` refuse an instance name (`--instance` or
+  `HOMEFIELD_INSTANCE`) that Lima would not accept: letters and digits with a
+  single `.`, `_` or `-` between them, at most 76 characters, not ending in
+  `.yml` or `.yaml`. `HOMEFIELD_INSTANCE=--help` used to reach `limactl list`
+  as an option, and install.sh read its output as "the VM exists".
+  `install.sh` also refuses a download whose `bin/homefield` is not
+  executable, which used to install and then fail with "Permission denied"
+  (#86).
 - A runner GitHub removed after 14 days offline is no longer reported as
   registered. `homefield status` checks GitHub's runner list by the runner's
   id when gh can read it, prints `github: listed`, `github: NOT listed` with

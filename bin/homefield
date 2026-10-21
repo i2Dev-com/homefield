@@ -177,6 +177,15 @@ check_host() {
   fi
 }
 
+# check_instance: INSTANCE is a name Lima accepts (ValidateInstName, the same
+# from Lima 1.1 to 2.2), the same check as install.sh's. Anything else would
+# reach limactl as an option (--help) or a path.
+check_instance() {
+  local re='^[A-Za-z0-9]+([._-][A-Za-z0-9]+)*$'
+  [[ "$INSTANCE" =~ $re && ${#INSTANCE} -le 76 && ! "$INSTANCE" =~ [.][Yy][Aa]?[Mm][Ll]$ ]] ||
+    die "--instance (or HOMEFIELD_INSTANCE) must be a Lima instance name: letters and digits, with a single '.', '_' or '-' between them, at most 76 characters, not ending in .yml or .yaml; got: $INSTANCE"
+}
+
 # vm_status: prints the VM's status (Running, Stopped, ...), or nothing when
 # there is no such VM. Returns 2 when Lima could not be asked, or lists the VM
 # without a status. It lists every
@@ -1877,6 +1886,7 @@ main() {
     esac
   done
   [ -n "$cmd" ] || { usage >&2; exit 1; }
+  case "$cmd" in help | -h | --help) ;; *) check_instance ;; esac
   set -- "${rest[@]+"${rest[@]}"}"
   case "$cmd" in
     install) cmd_install "$@" ;;
