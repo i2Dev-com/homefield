@@ -26,9 +26,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LIMA_YAML="$ROOT/vm/lima.yaml"
 PROVISION="$ROOT/vm/provision.sh"
+GUEST_PROVISION="/tmp/provision.sh"
 INSTANCE="${HOMEFIELD_INSTANCE:-homefield}"
 RUNNER_HOME="/opt/actions-runner"
-UNIT_DIR="/etc/systemd/system"
 
 usage() {
   cat <<'EOF'
@@ -347,6 +347,17 @@ stop_runner() {
   fi
   # A file the guest answered for, with no name in it: no unit to stop.
   [ -n "$unit" ] || return 0
+  # A name whose unit file is gone (an uninstall cut off before it deleted
+  # .service) names nothing that runs. systemctl stop would fail with "not
+  # loaded" and end the command before provisioning could repair it (#99).
+  local load
+  if ! load="$(guest systemctl show -p LoadState --value "$unit")"; then
+    die "could not ask VM ${INSTANCE} whether ${unit} is installed; nothing was stopped. Try again when bin/homefield status answers"
+  fi
+  if [ "$load" = not-found ]; then
+    log "${unit} is not installed; nothing to stop"
+    return 0
+  fi
   stopped_unit="$unit"
   trap restart_runner_on_failure EXIT
   log "stopping ${stopped_unit}: the runner takes no jobs until this finishes"
@@ -776,8 +787,8 @@ wait_online() {
 run_provision() {
   local input="$1"
   shift
-  limactl copy "$PROVISION" "${INSTANCE}:/tmp/provision.sh"
-  printf '%s' "$input" | guest_stdin sudo "$@" bash /tmp/provision.sh
+  limactl copy "$PROVISION" "${INSTANCE}:${GUEST_PROVISION}"
+  printf '%s' "$input" | guest_stdin sudo "$@" bash "$GUEST_PROVISION"
 }
 
 enable_autostart() {
@@ -967,34 +978,15 @@ cmd_status() {
 # installed, so the service goes first, and if anything after that fails (svc.sh
 # uninstall partway through, or GitHub refusing the removal: a rejected token,
 # a network failure) the runner is still registered and has to get its service
-# back: the host's restart_runner_on_failure only starts a unit. svc.sh
-# uninstall disables the unit, deletes its file, then deletes .service, and can
-# stop after any of those (#83): a unit file that is gone is reinstalled, which
-# recreates the same unit and .service; one that is still there gets .service
-# back and is enabled again. The host then starts it, or, when .service held
-# no name for it to stop and start, the script does. If that fails too, the
-# runner is registered with no service, and `homefield install` sets the
-# service up again.
+# back. provision.sh's ensure-service does that and starts it (#99): this
+# release's copy, put in the guest by cmd_uninstall, so a VM provisioned by an
+# older one gets it too. If that fails as well, the runner is registered with
+# no service, and `homefield install` sets the service up again.
 deregister_script() {
   # shellcheck disable=SC2016  # the guest's shell expands these, not this one
-  local script='cd @HOME@ || exit 1
-read -r t || exit 1
-s=0 u=""
-if [ -f .service ]; then s=1; u="$(cat .service)"; fi
-restore() {
-  if [ -n "$u" ] && [ -f "@UNITS@/$u" ]; then
-    [ -f .service ] || { echo "$u" >.service && chown runner:runner .service; } || echo "homefield: could not write .service for $u" >&2
-    systemctl enable "$u" || echo "homefield: could not enable $u again" >&2
-  else
-    rm -f .service
-    ./svc.sh install runner || { echo "homefield: could not install the runner service again" >&2; return; }
-    [ -n "$u" ] || systemctl start "$(cat .service)" || echo "homefield: could not start the reinstalled runner service" >&2
-  fi
-}
-if [ "$s" = 1 ]; then ./svc.sh uninstall || { rc=$?; restore; exit "$rc"; }; fi
-ACTIONS_RUNNER_INPUT_TOKEN="$t" sudo --preserve-env=ACTIONS_RUNNER_INPUT_TOKEN -u runner ./config.sh remove || { rc=$?; [ "$s" = 0 ] || restore; exit "$rc"; }'
+  local script='cd @HOME@ && read -r t && s=0 && { [ ! -f .service ] || s=1; } && { [ "$s" = 0 ] || ./svc.sh uninstall || { rc=$?; bash @PROVISION@ ensure-service --start; exit "$rc"; }; } && { ACTIONS_RUNNER_INPUT_TOKEN="$t" sudo --preserve-env=ACTIONS_RUNNER_INPUT_TOKEN -u runner ./config.sh remove || { rc=$?; [ "$s" = 0 ] || bash @PROVISION@ ensure-service --start; exit "$rc"; }; }'
   script="${script//@HOME@/$RUNNER_HOME}"
-  printf '%s' "${script//@UNITS@/$UNIT_DIR}"
+  printf '%s' "${script//@PROVISION@/$GUEST_PROVISION}"
 }
 
 cmd_uninstall() {
@@ -1017,6 +1009,10 @@ cmd_uninstall() {
     url="$(runner_setting gitHubUrl)"
     echo "homefield: switch every repository that routes to this runner to hosted first:" >&2
     echo "homefield:   gh variable set CI_RUNNER --repo <owner>/<repo> --body hosted" >&2
+    # The restore deregister_script falls back on, copied in while nothing
+    # has changed yet.
+    limactl copy "$PROVISION" "${INSTANCE}:${GUEST_PROVISION}" ||
+      die "could not copy provision.sh into VM ${INSTANCE}; nothing was changed"
     # Offline before the token is fetched or typed, which can take a while.
     stop_runner
     token="$(get_token remove "$url")"

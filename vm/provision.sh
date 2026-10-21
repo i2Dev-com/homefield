@@ -60,6 +60,11 @@
 # current scope and RUNNER_TOKEN for the new one. The old registration is
 # removed and the runner registered again under RUNNER_NAME and RUNNER_LABEL,
 # so pass the current values to keep them.
+#
+# `bash provision.sh ensure-service [--start]` does only one thing: gives a
+# registered runner its systemd service back, whatever an svc.sh install or
+# uninstall left half done, and with --start starts it. bin/homefield
+# uninstall copies this script in and runs that when deregistering fails.
 set -euo pipefail
 
 RUNNER_VERSION="2.337.0"
@@ -123,6 +128,72 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 
+# ── Runner service ──────────────────────────────────────────────────────────
+# ensure_service [--start]: the one place that gives a registered runner its
+# systemd service (#83, #99). Called after registration on every run, when a
+# move is rolled back, and by bin/homefield uninstall (ensure-service below)
+# when deregistering fails after svc.sh uninstall began.
+#
+# svc.sh uninstall disables the unit, deletes its file, then deletes .service;
+# svc.sh install writes .service last and refuses a unit file that exists.
+# Either can stop partway. A unit file and the .service naming it means the
+# service is there, at most disabled by a cut-off uninstall, so it is enabled.
+# Anything else is reinstalled cleanly: a leftover unit file (its name is the
+# one svc.sh has baked in) is removed first, since a cut-off install may not
+# have finished it.
+ensure_service() {
+  local start=0 unit="" baked rc=0
+  # A typo typed by hand (--strt) must not repair without starting, silently.
+  case "$#:${1:-}" in
+    0:) ;;
+    1:--start) start=1 ;;
+    *)
+      echo "provision.sh: ensure-service takes only --start, got: $*" >&2
+      return 2
+      ;;
+  esac
+  if [ -f "$RUNNER_HOME/.service" ]; then
+    unit="$(cat "$RUNNER_HOME/.service")"
+  fi
+  if [ -n "$unit" ] && [ -f "/etc/systemd/system/$unit" ]; then
+    if ! systemctl enable "$unit"; then
+      echo "provision.sh: could not enable ${unit}" >&2
+      rc=1
+    fi
+  else
+    if ! baked="$(sed -n 's/^SVC_NAME="\(.*\)"$/\1/p' "$RUNNER_HOME/svc.sh" | tr ' ' _)"; then
+      echo "provision.sh: could not read the service name from svc.sh" >&2
+      return 1
+    fi
+    if [ -n "$baked" ] && [ -f "/etc/systemd/system/$baked" ]; then
+      echo "provision.sh: replacing ${baked}, left half done by svc.sh"
+      if ! systemctl disable "$baked"; then
+        echo "provision.sh: could not disable ${baked}" >&2
+      fi
+      if ! rm -f "/etc/systemd/system/$baked" || ! systemctl daemon-reload; then
+        echo "provision.sh: could not remove ${baked}" >&2
+        return 1
+      fi
+    fi
+    rm -f "$RUNNER_HOME/.service"
+    if ! (cd "$RUNNER_HOME" && ./svc.sh install "$RUNNER_USER"); then
+      echo "provision.sh: could not install the runner service" >&2
+      return 1
+    fi
+    unit="$(cat "$RUNNER_HOME/.service")"
+  fi
+  if [ "$start" = 1 ] && ! systemctl start "$unit"; then
+    echo "provision.sh: could not start ${unit}" >&2
+    rc=1
+  fi
+  return "$rc"
+}
+if [ "${1:-}" = ensure-service ]; then
+  shift
+  ensure_service "$@"
+  exit
+fi
+
 # ── Tokens ──────────────────────────────────────────────────────────────────
 if [ -n "${RUNNER_TOKEN:-}${RUNNER_REMOVE_TOKEN:-}" ]; then
   echo "provision.sh: pass tokens on stdin, not in the environment or on the" \
@@ -180,21 +251,10 @@ restart_old_on_failure() {
   local rc=$?
   if [ "$rc" -ne 0 ] && [ -n "$svc_unit" ]; then
     echo "provision.sh: move failed before the old registration was removed; restarting ${svc_unit}" >&2
-    # svc.sh uninstall disables and removes the unit before deleting .service.
-    # It may fail at any of those steps; svc.sh install refuses an existing
-    # unit, so only reinstall when the unit itself is gone.
-    if [ ! -f "/etc/systemd/system/$svc_unit" ]; then
-      rm -f "$RUNNER_HOME/.service"
-      (cd "$RUNNER_HOME" && ./svc.sh install "$RUNNER_USER") || return "$rc"
-    elif [ ! -f "$RUNNER_HOME/.service" ]; then
-      printf '%s\n' "$svc_unit" >"$RUNNER_HOME/.service"
-      chown "$RUNNER_USER:$RUNNER_USER" "$RUNNER_HOME/.service"
-    fi
-    if ! systemctl enable "$svc_unit"; then
-      echo "provision.sh: could not re-enable ${svc_unit}" >&2
-    fi
-    if ! systemctl start "$svc_unit"; then
-      echo "provision.sh: could not restart ${svc_unit}" >&2
+    # The uninstall may have stopped partway; ensure_service puts back what
+    # it removed.
+    if ! ensure_service --start; then
+      echo "provision.sh: the old runner has no working service; run install again" >&2
     fi
   fi
 }
@@ -390,25 +450,9 @@ RUNNER_TOKEN=""
 RUNNER_REMOVE_TOKEN=""
 # Straight after registration, with nothing in between that can fail, so a
 # registered runner always gets its service (#83). The .env below is read only
-# when the service starts. Running this again repairs what an earlier run or
-# an uninstall left half done: a .service whose unit file is gone is no
-# service, and a unit file with no .service is an svc.sh install that stopped
-# before its last step (it writes .service last). svc.sh install refuses an
-# existing unit, so that one is removed first; its name is the one svc.sh has
-# baked in.
-if [ -f "$RUNNER_HOME/.service" ] && [ ! -f "/etc/systemd/system/$(cat "$RUNNER_HOME/.service")" ]; then
-  rm -f "$RUNNER_HOME/.service"
-fi
-if [ ! -f "$RUNNER_HOME/.service" ]; then
-  half_unit="$(sed -n 's/^SVC_NAME="\(.*\)"$/\1/p' "$RUNNER_HOME/svc.sh" | tr ' ' _)"
-  if [ -n "$half_unit" ] && [ -f "/etc/systemd/system/$half_unit" ]; then
-    echo "provision.sh: removing ${half_unit}, left by an svc.sh install that did not finish"
-    systemctl disable "$half_unit"
-    rm -f "/etc/systemd/system/$half_unit"
-    systemctl daemon-reload
-  fi
-  (cd "$RUNNER_HOME" && ./svc.sh install "$RUNNER_USER")
-fi
+# when the service starts. Running this again also repairs a service an
+# earlier run or an uninstall left half done.
+ensure_service
 
 # The runner reads .env (written by config.sh) only when it starts, so a
 # changed .env restarts it below. The previous .env is kept until the runner

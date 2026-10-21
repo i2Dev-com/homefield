@@ -11,8 +11,23 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ## Unreleased
 
+### Changed
+
+- Restoring the runner's service has one implementation,
+  `provision.sh ensure-service [--start]`, used after registration on every
+  provisioning run, when a move is rolled back, and by `homefield uninstall`
+  when deregistering fails. `uninstall` now copies `provision.sh` into the VM
+  before it stops anything, so a VM provisioned by an older release gets the
+  same restore. A provisioning run now also enables a runner service a cut-off
+  uninstall left disabled (#99).
+
 ### Fixed
 
+- `homefield upgrade` and `uninstall` no longer stop with "Unit ... not
+  loaded" when `.service` names a unit whose file is gone (an uninstall cut
+  off partway): there is nothing to stop, so they go on, and `upgrade`
+  repairs the service. Found on a throwaway VM; before this, the repair that
+  #83 describes for this state never ran (#99).
 - A first registration or a move no longer leaves the runner registered with
   no service when the workspace hook's setup fails: that setup now runs before
   registration (in a move, before the old registration is removed, so the old

@@ -35,15 +35,18 @@ stub() { printf '#!/usr/bin/env bash\n%s\n' "$2" >"$stubs/$1"; chmod +x "$stubs/
 # sudo [-n] [-u user] [--preserve-env=...] <command...>: the command, as this user.
 stub sudo 'while [ $# -gt 0 ]; do case "$1" in -u) shift 2 ;; -n|--preserve-env=*) shift ;; *) break ;; esac; done
 exec "$@"'
-stub limactl 'echo "limactl $*" >>"$LOG"'
+stub limactl 'echo "limactl $*" >>"$LOG"
+[ "$1" != copy ] || [ "${FAIL_COPY:-}" != 1 ]'
 stub chown 'exit 0'
+stub id 'case "$1" in -u) echo 0 ;; *) exec /usr/bin/id "$@" ;; esac'
 stub pgrep 'case "$*" in *"[R]unner.Worker"*) ;; *) exit 0 ;; esac
 case "${JOB:-idle}" in running) exit 0 ;; idle) exit 1 ;; *) exit 3 ;; esac'
 # The unit is a file in the unit directory; it is enabled and active while a
 # marker in the runner directory is.
 stub systemctl 'echo "systemctl $*" >>"$LOG"
 case "$1" in
-  stop) rm -f "$HOME_DIR/active" ;;
+  stop) [ -e "$UNITS/$2" ] || { echo "Failed to stop $2: Unit $2 not loaded." >&2; exit 5; }; rm -f "$HOME_DIR/active" ;;
+  show) [ -e "$UNITS/${!#}" ] && echo loaded || echo not-found ;;
   start) [ -e "$UNITS/$2" ] || { echo "Unit $2 not found." >&2; exit 5; }; : >"$HOME_DIR/active" ;;
   enable) [ "${FAIL_ENABLE:-}" != 1 ] || exit 1; [ -e "$UNITS/$2" ] || { echo "Unit $2 not found." >&2; exit 1; }; : >"$HOME_DIR/enabled" ;;
   disable) rm -f "$HOME_DIR/enabled" ;;
@@ -64,6 +67,7 @@ fresh() {
   : >"$home/active"
   cat >"$home/svc.sh" <<'EOF'
 #!/bin/sh
+SVC_NAME="actions.runner.acme.test.service"
 echo "svc.sh $*" >>"$LOG"
 case "$1" in
   uninstall)
@@ -96,6 +100,11 @@ EOF
   : >"$work/log"
 }
 
+# The restore is provision.sh's ensure-service, with its paths in the scratch
+# tree; cmd_uninstall's copy of it into the guest is the limactl stub's no-op.
+sed -e "s|/opt/actions-runner|$home|g" -e "s|/etc/systemd/system|$units|g" \
+  "$ROOT/vm/provision.sh" >"$work/provision.sh"
+
 # run: cmd_uninstall, in a shell of its own so its EXIT trap runs. It keeps the
 # VM unless UNINSTALL_ARGS is set (to nothing, to delete it). The guest answers
 # unless GUEST_MODE is fail (the call fails) or silent (it succeeds and says
@@ -105,7 +114,7 @@ cat >"$work/harness.sh" <<EOF
 HOMEFIELD_SOURCE_ONLY=1
 . "$ROOT/bin/homefield"
 RUNNER_HOME="$home"
-UNIT_DIR="$units"
+GUEST_PROVISION="$work/provision.sh"
 check_host() { :; }
 vm_status() { echo Running; }
 runner_setting() { echo https://github.com/acme; }
@@ -138,12 +147,23 @@ record "...deregistered, service uninstalled, runner left stopped" "removed/no-u
 record "...the token reached config.sh through its environment" "1" "$(logged 'config.sh remove token-in-env=yes')"
 record "...no start was attempted" "0" "$(logged 'systemctl start')"
 
+echo "provision.sh is copied in for the restore (#99):"
+fresh
+run env
+record "...once, before the runner is stopped" "1/limactl copy" "$(logged 'limactl copy')/$(grep -m1 -e 'limactl copy' -e 'systemctl stop' "$work/log" | cut -d' ' -f1-2)"
+fresh
+run env FAIL_COPY=1
+record "the copy fails: uninstall fails, saying so" "1/yes" "$rc/$(has "$out" 'could not copy provision.sh')"
+record "...nothing was stopped or deregistered" "0/0/registered/unit/.service/active" "$(logged 'systemctl')/$(logged 'config.sh')/$(state)"
+
 echo "GitHub refuses the removal:"
 fresh
 run env FAIL_REMOVE=1
 record "uninstall fails" "1" "$rc"
 record "...still registered, with its service back and running" "registered/unit/.service/active" "$(state)"
-record "...the service was reinstalled once, and started" "1/1" "$(logged 'svc.sh install runner')/$(logged 'systemctl start')"
+# Started by ensure-service in the guest and again by the host's trap, which
+# also covers a failure before the guest script runs; a second start is a no-op.
+record "...the service was reinstalled once, and started" "1/yes" "$(logged 'svc.sh install runner')/$([ "$(logged 'systemctl start')" -ge 1 ] && echo yes || echo no)"
 record "...the message says so" "yes" "$(has "$out" 'starting '"$unit"' again')"
 
 echo "svc.sh uninstall fails partway (#83):"
@@ -215,6 +235,18 @@ echo "svc.sh uninstall fails and so does enabling the unit again:"
 fresh
 run env FAIL_UNINSTALL=disable FAIL_ENABLE=1
 record "uninstall fails, saying the unit is not enabled" "1/yes" "$rc/$(has "$out" 'could not enable')"
+
+echo "a .service whose unit file is gone (an uninstall cut off, #99):"
+fresh
+rm -f "$units/$unit" "$home/enabled" "$home/active"
+run env
+record "uninstall succeeds" "0" "$rc"
+record "...says there is nothing to stop, and stops nothing" "yes/0" "$(has "$out" 'is not installed; nothing to stop')/$(logged 'systemctl stop')"
+record "...deregistered" "removed" "$(state | cut -d/ -f1)"
+fresh
+run env FAIL_ON='systemctl show'
+record "the guest cannot be asked whether the unit is installed: uninstall fails" "1/yes" "$rc/$(has "$out" 'is installed; nothing was stopped')"
+record "...nothing was stopped or deregistered" "0/0/registered" "$(logged 'systemctl stop')/$(logged 'config.sh')/$(state | cut -d/ -f1)"
 
 echo "a job is running:"
 fresh

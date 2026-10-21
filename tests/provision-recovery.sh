@@ -111,6 +111,7 @@ case "$1" in
     systemctl daemon-reload
     ;;
   install)
+    [ "${FAIL_AT:-}" != svc_install ] || exit 1
     [ ! -f "$UNIT_DIR/$UNIT" ] || exit 1
     : >"$UNIT_DIR/$UNIT"
     systemctl daemon-reload
@@ -276,5 +277,38 @@ run
 rc=$?
 record "a .service with no unit file (an uninstall cut off): provisioning succeeds" "0" "$rc"
 record "...the service is installed again, enabled and running" "$unit/present/enabled/running/1" "$(cat "$work/runner/.service")/$(unit_present)/$(enabled)/$(running)/$(svc_calls install)"
+
+echo "provision.sh ensure-service, as uninstall runs it (#99):"
+# ensure [--start]: only the subcommand, with FAIL_AT.
+ensure() {
+  PATH="$stubs:$PATH" STATE="$work/state" UNIT="$unit" UNIT_DIR="$work/systemd" FAIL_AT="${FAIL_AT:-}" \
+    bash "$work/provision.sh" ensure-service "$@" </dev/null >"$work/out" 2>&1
+}
+fresh "$current" stopped
+rm -f "$work/state.enabled"
+ensure --start
+rc=$?
+record "intact but disabled (an uninstall cut off): exits 0" "0" "$rc"
+record "...enabled and started, not reinstalled, nothing else run" "enabled/running/0/0" "$(enabled)/$(running)/$(svc_calls install)/$(grep -c '^config ' "$work/state.log")"
+fresh "$current" stopped
+rm -f "$work/runner/.service"
+ensure
+rc=$?
+record "a unit file with no .service, no --start: exits 0" "0" "$rc"
+record "...reinstalled and enabled, not started" "$unit/enabled/stopped/1" "$(cat "$work/runner/.service")/$(enabled)/$(running)/$(svc_calls install)"
+fresh "$current" stopped
+rm -f "$work/runner/.service" "$work/systemd/$unit"
+FAIL_AT=svc_install ensure --start
+rc=$?
+record "svc.sh install fails: exits 1, says so, starts nothing" "1/yes/0" "$rc/$(grep -q 'could not install the runner service' "$work/out" && echo yes || echo no)/$(calls start)"
+for args in --strt "--start extra"; do
+  fresh "$current" stopped
+  rm -f "$work/runner/.service"
+  # shellcheck disable=SC2086  # split on purpose: "--start extra" is two arguments
+  ensure $args
+  rc=$?
+  record "ensure-service $args: refused with exit 2, saying so" "2/yes" "$rc/$(grep -q 'takes only --start' "$work/out" && echo yes || echo no)"
+  record "...and runs nothing: no svc.sh, systemctl or config.sh call" "0/stopped" "$(if [ -f "$work/state.log" ]; then wc -l <"$work/state.log" | tr -d ' '; else echo 0; fi)/$(running)"
+done
 
 summary
