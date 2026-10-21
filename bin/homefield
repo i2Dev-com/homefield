@@ -971,7 +971,8 @@ cmd_status() {
 # uninstall disables the unit, deletes its file, then deletes .service, and can
 # stop after any of those (#83): a unit file that is gone is reinstalled, which
 # recreates the same unit and .service; one that is still there gets .service
-# back and is enabled again. The host then starts it. If that fails too, the
+# back and is enabled again. The host then starts it, or, when .service held
+# no name for it to stop and start, the script does. If that fails too, the
 # runner is registered with no service, and `homefield install` sets the
 # service up again.
 deregister_script() {
@@ -982,9 +983,12 @@ s=0 u=""
 if [ -f .service ]; then s=1; u="$(cat .service)"; fi
 restore() {
   if [ -n "$u" ] && [ -f "@UNITS@/$u" ]; then
-    { [ -f .service ] || { echo "$u" >.service && chown runner:runner .service; }; } && systemctl enable "$u"
+    [ -f .service ] || { echo "$u" >.service && chown runner:runner .service; } || echo "homefield: could not write .service for $u" >&2
+    systemctl enable "$u" || echo "homefield: could not enable $u again" >&2
   else
-    rm -f .service && ./svc.sh install runner
+    rm -f .service
+    ./svc.sh install runner || { echo "homefield: could not install the runner service again" >&2; return; }
+    [ -n "$u" ] || systemctl start "$(cat .service)" || echo "homefield: could not start the reinstalled runner service" >&2
   fi
 }
 if [ "$s" = 1 ]; then ./svc.sh uninstall || { rc=$?; restore; exit "$rc"; }; fi

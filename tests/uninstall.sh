@@ -45,13 +45,13 @@ stub systemctl 'echo "systemctl $*" >>"$LOG"
 case "$1" in
   stop) rm -f "$HOME_DIR/active" ;;
   start) [ -e "$UNITS/$2" ] || { echo "Unit $2 not found." >&2; exit 5; }; : >"$HOME_DIR/active" ;;
-  enable) [ -e "$UNITS/$2" ] || { echo "Unit $2 not found." >&2; exit 1; }; : >"$HOME_DIR/enabled" ;;
+  enable) [ "${FAIL_ENABLE:-}" != 1 ] || exit 1; [ -e "$UNITS/$2" ] || { echo "Unit $2 not found." >&2; exit 1; }; : >"$HOME_DIR/enabled" ;;
   disable) rm -f "$HOME_DIR/enabled" ;;
 esac'
 
 # What a runner directory has: the scripts the runner ships, with the service
 # installed and the runner registered. svc.sh uninstall takes the real one's
-# steps (disable, delete the unit, delete .service, reload) and fails at the
+# steps (stop, disable, delete the unit, delete .service, reload) and fails at the
 # one FAIL_UNINSTALL names: a disable that fails has disabled the unit, the
 # other steps fail without doing their part.
 fresh() {
@@ -67,6 +67,7 @@ fresh() {
 echo "svc.sh $*" >>"$LOG"
 case "$1" in
   uninstall)
+    rm -f "$HOME_DIR/active"
     systemctl disable actions.runner.acme.test.service
     [ "${FAIL_UNINSTALL:-}" != disable ] || exit 1
     [ "${FAIL_UNINSTALL:-}" != unit_remove ] || exit 1
@@ -202,6 +203,18 @@ fresh
 : >"$home/.service"
 run env
 record "uninstall succeeds: the guest answered, there is no unit to stop" "0/0" "$rc/$(logged 'systemctl st')"
+
+echo "a .service file with no name in it, and GitHub refuses the removal:"
+fresh
+: >"$home/.service"
+run env FAIL_REMOVE=1
+record "uninstall fails" "1" "$rc"
+record "...the reinstalled service is started by the guest, since the host had no name to start" "registered/unit/.service/active" "$(state)"
+
+echo "svc.sh uninstall fails and so does enabling the unit again:"
+fresh
+run env FAIL_UNINSTALL=disable FAIL_ENABLE=1
+record "uninstall fails, saying the unit is not enabled" "1/yes" "$rc/$(has "$out" 'could not enable')"
 
 echo "a job is running:"
 fresh
