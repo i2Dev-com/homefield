@@ -98,6 +98,7 @@ EOF
   chmod +x "$work/runner/config.sh"
   cat >"$work/runner/svc.sh" <<'EOF'
 #!/usr/bin/env bash
+SVC_NAME="actions.runner.test.service"
 echo "svc $*" >>"$STATE.log"
 case "$1" in
   uninstall)
@@ -261,5 +262,19 @@ run_first env
 rc=$?
 record "writing .env fails after registering: provisioning fails" "1" "$rc"
 record "...with the service already installed and enabled" "registered/$unit/present/enabled" "$(registration)/$(cat "$work/runner/.service")/$(unit_present)/$(enabled)"
+
+echo "a service left half done (#83):"
+fresh "$current" active
+rm -f "$work/runner/.service" "$work/state.active"
+run
+rc=$?
+record "a unit file with no .service (an svc.sh install cut off): provisioning succeeds" "0" "$rc"
+record "...the unit is replaced, enabled and running" "$unit/present/enabled/running/1" "$(cat "$work/runner/.service")/$(unit_present)/$(enabled)/$(running)/$(svc_calls install)"
+fresh "$current" active
+rm -f "$work/systemd/$unit" "$work/state.active" "$work/state.enabled"
+run
+rc=$?
+record "a .service with no unit file (an uninstall cut off): provisioning succeeds" "0" "$rc"
+record "...the service is installed again, enabled and running" "$unit/present/enabled/running/1" "$(cat "$work/runner/.service")/$(unit_present)/$(enabled)/$(running)/$(svc_calls install)"
 
 summary

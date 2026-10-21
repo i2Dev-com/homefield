@@ -390,8 +390,23 @@ RUNNER_TOKEN=""
 RUNNER_REMOVE_TOKEN=""
 # Straight after registration, with nothing in between that can fail, so a
 # registered runner always gets its service (#83). The .env below is read only
-# when the service starts.
+# when the service starts. Running this again repairs what an earlier run or
+# an uninstall left half done: a .service whose unit file is gone is no
+# service, and a unit file with no .service is an svc.sh install that stopped
+# before its last step (it writes .service last). svc.sh install refuses an
+# existing unit, so that one is removed first; its name is the one svc.sh has
+# baked in.
+if [ -f "$RUNNER_HOME/.service" ] && [ ! -f "/etc/systemd/system/$(cat "$RUNNER_HOME/.service")" ]; then
+  rm -f "$RUNNER_HOME/.service"
+fi
 if [ ! -f "$RUNNER_HOME/.service" ]; then
+  half_unit="$(sed -n 's/^SVC_NAME="\(.*\)"$/\1/p' "$RUNNER_HOME/svc.sh" | tr ' ' _)"
+  if [ -n "$half_unit" ] && [ -f "/etc/systemd/system/$half_unit" ]; then
+    echo "provision.sh: removing ${half_unit}, left by an svc.sh install that did not finish"
+    systemctl disable "$half_unit"
+    rm -f "/etc/systemd/system/$half_unit"
+    systemctl daemon-reload
+  fi
   (cd "$RUNNER_HOME" && ./svc.sh install "$RUNNER_USER")
 fi
 
