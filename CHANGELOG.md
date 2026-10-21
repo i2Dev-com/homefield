@@ -19,7 +19,9 @@ fail, such as a new guard in the routing expression, bumps the minor version
   runner is started again), and the service is installed straight after it.
   `homefield uninstall` now also gives the service back (unit, `.service` and
   enabled at boot) when `svc.sh uninstall` fails partway, not only when GitHub
-  refuses the removal (#83).
+  refuses the removal. Running `homefield install` again now repairs a service
+  left half done (a unit file with no `.service`, or the reverse) instead of
+  failing the same way each time (#83).
 - Moving a runner now reinstalls and starts its old service if service
   uninstall or registration removal fails, while the old registration still
   exists. `install --replace` documentation now states that it removes the
