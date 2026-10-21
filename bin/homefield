@@ -177,9 +177,10 @@ check_host() {
   fi
 }
 
-# check_instance: INSTANCE is a name Lima accepts (ValidateInstName, the same
-# from Lima 1.1 to 2.2), the same check as install.sh's. Anything else would
-# reach limactl as an option (--help) or a path.
+# check_instance: INSTANCE is a name Lima accepts (ValidateInstName, Lima 1.2
+# on; 1.1 checks the same characters and length, not the .yml/.yaml ending),
+# the same check as install.sh's. Anything else would reach limactl as an
+# option (--help) or a path.
 check_instance() {
   local re='^[A-Za-z0-9]+([._-][A-Za-z0-9]+)*$'
   [[ "$INSTANCE" =~ $re && ${#INSTANCE} -le 76 && ! "$INSTANCE" =~ [.][Yy][Aa]?[Mm][Ll]$ ]] ||
