@@ -308,7 +308,7 @@ for args in --strt "--start extra"; do
   ensure $args
   rc=$?
   record "ensure-service $args: refused with exit 2, saying so" "2/yes" "$rc/$(grep -q 'takes only --start' "$work/out" && echo yes || echo no)"
-  record "...and runs nothing: no svc.sh, systemctl or config.sh call" "0/stopped" "$(cat "$work/state.log" 2>/dev/null | wc -l | tr -d ' ')/$(running)"
+  record "...and runs nothing: no svc.sh, systemctl or config.sh call" "0/stopped" "$(if [ -f "$work/state.log" ]; then wc -l <"$work/state.log" | tr -d ' '; else echo 0; fi)/$(running)"
 done
 
 summary
