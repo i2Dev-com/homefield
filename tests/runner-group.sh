@@ -36,6 +36,11 @@ case "$*" in
     if [ -n "${GH_LIST_FAIL:-}" ]; then echo '{"message":"Must have admin rights"}'; echo "gh: HTTP 403" >&2; exit 1; fi
     cat "$GH_GROUPS"
     ;;
+  *'.runners[].id'*)
+    # runner_on_github: the ids GitHub lists (GH_IDS), or a failed list.
+    if [ -n "${GH_RUNNERS_FAIL:-}" ]; then echo '{"message":"Not Found"}'; exit 1; fi
+    printf '%b' "${GH_IDS:-}"
+    ;;
   *actions/runners*)
     if [ -n "${GH_RUNNERS_FAIL:-}" ]; then echo '{"message":"Not Found"}'; exit 1; fi
     cat "$GH_RUNNERS"
@@ -290,6 +295,20 @@ done
 run_fn LIMA_STATUS=Running LIMA_SHELL_OUT=0 LIMA_REGISTERED=yes LIMA_JOB=yes -- cmd_upgrade
 record "upgrade: a job is running: refused, pointing at --force" "nonzero/yes/0" \
   "$(nonzero "$rc")/$(has "$out" 'a job is running on')/$(called 'systemctl')"
+# A registration GitHub removed (#76): refused before anything is stopped, as
+# provisioning would only fail at the end, when the runner cannot start. The
+# runner's settings come back as the guest's output: the URL, the id, the name.
+settings=$'https://github.com/acme\n42\nbuild-1\n'
+run_fn LIMA_STATUS=Running LIMA_RUN_GUEST=1 LIMA_SHELL_OUT="$settings" LIMA_REGISTERED=yes GH_IDS='41\n' -- cmd_upgrade
+record "upgrade: GitHub does not list the runner: refused, nothing stopped or provisioned" "nonzero/yes/0/0/0" \
+  "$(nonzero "$rc")/$(has "$out" 'GitHub no longer has homefield'"'"'s runner (id 42) at https://github.com/acme')/$(called 'systemctl')/$(called 'provision')/$(called pgrep)"
+record "...naming the way to register it again, under its old name" "yes/yes" "$(has "$out" 'uninstall --instance homefield --keep-vm, then bin/homefield install --instance homefield --url https://github.com/acme --name build-1')/$(has "$out" 'Nothing was stopped')"
+run_fn LIMA_STATUS=Running LIMA_RUN_GUEST=1 LIMA_SHELL_OUT="$settings" LIMA_REGISTERED=yes GH_IDS='42\n' LIMA_JOB=yes -- cmd_upgrade
+record "upgrade: GitHub lists it: goes on to the idle check" "nonzero/no/yes" \
+  "$(nonzero "$rc")/$(has "$out" 'no longer has')/$(has "$out" 'a job is running on')"
+run_fn LIMA_STATUS=Running LIMA_RUN_GUEST=1 LIMA_SHELL_OUT="$settings" LIMA_REGISTERED=yes GH_RUNNERS_FAIL=1 LIMA_JOB=yes -- cmd_upgrade
+record "upgrade: GitHub cannot be asked: goes on too" "nonzero/no/yes" \
+  "$(nonzero "$rc")/$(has "$out" 'no longer has')/$(has "$out" 'a job is running on')"
 for answer in "yes:0" "no:1" "maybe:2" ":2"; do
   run_fn LIMA_JOB="${answer%%:*}" -- job_running
   record "job_running: the guest says '${answer%%:*}'" "${answer##*:}" "$rc"

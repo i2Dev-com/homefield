@@ -3,7 +3,8 @@
 # uninstalled before the registration is removed, so when GitHub refuses the
 # removal the runner has to get its service back, not only a start command for
 # a unit that is gone; so does an svc.sh uninstall that stops partway (#83).
-# And a guest that cannot be asked stops the command with nothing changed,
+# A runner GitHub no longer lists (#76) is removed from the VM only, with no
+# token. And a guest that cannot be asked stops the command with nothing changed,
 # instead of reading as "no": whether the runner is registered (#80, or the VM
 # would be deleted), whether a job is running and whether the runner has a
 # service (#82, or a live job would be stopped).
@@ -117,8 +118,10 @@ RUNNER_HOME="$home"
 GUEST_PROVISION="$work/provision.sh"
 check_host() { :; }
 vm_status() { echo Running; }
-runner_setting() { echo https://github.com/acme; }
-get_token() { echo tok; }
+runner_setting() { [ -n "\${NO_SETTINGS:-}" ] || printf '%s\\n' https://github.com/acme 42; }
+get_token() { echo "get_token \$1" >>"\$LOG"; echo tok; }
+# Whether GitHub lists the runner: GH_ON 0 (yes), 1 (no), 2 (could not ask).
+runner_on_github() { echo "runner_on_github \$*" >>"\$LOG"; return "\${GH_ON:-2}"; }
 guest() {
   case "\${GUEST_MODE:-}" in fail) return 1 ;; silent) return 0 ;; esac
   [ -z "\${FAIL_ON:-}" ] || case "\$*" in *"\$FAIL_ON"*) return 1 ;; esac
@@ -146,6 +149,27 @@ record "uninstall succeeds" "0" "$rc"
 record "...deregistered, service uninstalled, runner left stopped" "removed/no-unit/no-.service/stopped" "$(state)"
 record "...the token reached config.sh through its environment" "1" "$(logged 'config.sh remove token-in-env=yes')"
 record "...no start was attempted" "0" "$(logged 'systemctl start')"
+
+record "...with a remove token, GitHub checked by the runner's URL and id" "1/1" "$(logged 'get_token remove')/$(logged 'runner_on_github https://github.com/acme 42')"
+fresh
+run env GH_ON=0
+record "GitHub lists the runner: the full removal, with a token" "0/removed/1/1/0" "$rc/$(state | cut -d/ -f1)/$(logged 'get_token remove')/$(logged 'config.sh remove token-in-env=yes')/$(logged 'remove --local')"
+
+echo "GitHub no longer lists the runner (#76):"
+fresh
+run env GH_ON=1
+record "uninstall succeeds" "0" "$rc"
+record "...removed from the VM only, service uninstalled, runner left stopped" "removed/no-unit/no-.service/stopped" "$(state)"
+record "...with config.sh remove --local, and no token asked for or passed" "1/0/1" "$(logged 'config.sh remove --local token-in-env=no')/$(logged 'get_token')/$(logged 'config.sh')"
+record "...saying so" "yes" "$(has "$out" 'removing its registration from the VM only')"
+fresh
+run env GH_ON=1 FAIL_REMOVE=1
+record "the local removal fails: uninstall fails, the service is back" "1/registered/unit/.service/active" "$rc/$(state)"
+
+echo "the runner's settings cannot be read:"
+fresh
+run env NO_SETTINGS=1
+record "uninstall fails before anything is stopped" "1/yes/0/0" "$rc/$(has "$out" "could not read the runner's registration")/$(logged 'systemctl')/$(logged 'config.sh')"
 
 echo "provision.sh is copied in for the restore (#99):"
 fresh

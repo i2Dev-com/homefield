@@ -2,10 +2,11 @@
 # `homefield status` when the runner's settings cannot be read (#63): the
 # report goes on to the service, the job and the version, as the comment on
 # that branch promises, instead of ending at the first failed `read` under
-# `set -e`.
+# `set -e`. And whether GitHub still lists the runner (#76): it removes one
+# that has not connected for more than 14 days, and the VM cannot tell.
 #
-# The real cmd_status runs; the VM helpers are functions that answer from the
-# environment. Nothing reaches a VM.
+# The real cmd_status runs; the VM helpers and gh are functions that answer
+# from the environment. Nothing reaches a VM or GitHub.
 #
 # Run:  bash tests/status.sh
 set -uo pipefail
@@ -27,6 +28,13 @@ runner_setting() {
   [ -z "\${SETTING_FAIL:-}" ] || return 1
   printf '%b' "\$SETTING_OUT"
 }
+# The runner ids GitHub lists (GH_IDS), or a gh that fails unless GH_FAIL=0.
+gh() {
+  echo "gh \$*" >>"$work/gh-calls"
+  [ "\${GH_FAIL:-1}" = 0 ] || return 1
+  printf '%b' "\${GH_IDS:-}"
+}
+offer_scope_refresh() { echo "offer_scope_refresh" >>"$work/gh-calls"; return 1; }
 guest() {
   case "\$*" in
     "sudo cat "*/.service) echo actions.runner.acme.test.service ;;
@@ -39,6 +47,7 @@ cmd_status
 EOF
 # status [VAR=value ...]: out and rc.
 status() {
+  : >"$work/gh-calls"
   out="$(env "$@" bash "$work/harness.sh" 2>&1 </dev/null)"
   rc=$?
 }
@@ -49,11 +58,41 @@ rest() {
     "$(has "$out" 'runner version: 2.337.0')" "$(has "$out" 'extra packages: libpq-dev')"
 }
 
-status SETTING_OUT='my-mac-homefield\nhttps://github.com/acme\n'
-record "both settings read: exits 0" "0" "$rc"
+status SETTING_OUT='my-mac-homefield\nhttps://github.com/acme\n42\n'
+record "all settings read, GitHub not asked: exits 0" "0" "$rc"
 record "...names the runner and where it is registered" "yes" "$(has "$out" 'runner: my-mac-homefield, registered at https://github.com/acme')"
 record "...and reports the rest" "yes/yes/yes/yes" "$(rest)"
 record "...with the runners page, which needs the URL" "yes" "$(has "$out" 'labels: see https://github.com/organizations/acme/settings/actions/runners')"
+record "...says GitHub was not checked" "yes" "$(has "$out" 'github: not checked (needs gh with admin access to https://github.com/acme)')"
+
+echo "GitHub's list (#76):"
+gh_calls() { grep -c -e "$1" "$work/gh-calls" || true; }
+status GH_FAIL=0 GH_IDS='41\n42\n' SETTING_OUT='my-mac-homefield\nhttps://github.com/acme\n42\n'
+record "listed: exits 0 and says so" "0/yes" "$rc/$(has "$out" 'github: listed')"
+record "...asking github.com for the scope's runners, paginated" "1" "$(gh_calls 'api --hostname github.com --paginate orgs/acme/actions/runners')"
+record "...and reports the rest" "yes/yes/yes/yes" "$(rest)"
+status GH_FAIL=0 GH_IDS='41\n420\n4\n' SETTING_OUT='my-mac-homefield\nhttps://github.com/acme/app\n42\n'
+record "not listed: exits 1, says so" "1/yes" "$rc/$(has "$out" 'github: NOT listed')"
+record "...matching the id whole, not a prefix or part" "no" "$(has "$out" 'github: listed')"
+record "...asks the repository's list for a repository URL" "1" "$(gh_calls 'repos/acme/app/actions/runners')"
+record "...with the way to register it again, under its old name" "yes" "$(has "$out" 'uninstall --instance homefield --keep-vm, then bin/homefield install --instance homefield --url https://github.com/acme/app --name my-mac-homefield, with the --label and --group of the first install')"
+record "...and reports the rest" "yes/yes/yes/yes" "$(rest)"
+status GH_FAIL=0 GH_IDS='' SETTING_OUT='my-mac-homefield\nhttps://github.com/acme\n42\n'
+record "an empty list is not listed either" "1/yes" "$rc/$(has "$out" 'github: NOT listed')"
+status GH_FAIL=1 SETTING_OUT='my-mac-homefield\nhttps://github.com/acme\n42\n'
+record "gh fails: not checked, exit unchanged" "0/yes/no" "$rc/$(has "$out" 'github: not checked')/$(has "$out" 'NOT listed')"
+record "...and no scope refresh is offered" "0" "$(gh_calls offer_scope_refresh)"
+status GH_FAIL=0 GH_IDS='42\n' SETTING_OUT='my-mac-homefield\nhttps://github.com/acme\n'
+record "no id read: not checked, saying why, gh not called" "0/yes/0" "$rc/$(has "$out" "github: not checked (no runner id in the VM's settings)")/$(gh_calls 'gh ')"
+status GH_FAIL=0 GH_IDS='' JOB_RC=2 SETTING_OUT='my-mac-homefield\nhttps://github.com/acme\n42\n'
+record "not listed and the job probe cannot ask: exits 1" "1/yes" "$rc/$(has "$out" 'job: unknown')"
+
+# runner_setting itself, on a .runner without one of the keys: the others
+# still come back, the missing one as an empty line.
+printf '\xef\xbb\xbf{"agentName": "my-mac-homefield", "gitHubUrl": "https://github.com/acme"}' >"$work/.runner"
+# shellcheck disable=SC2016  # expanded by the inner bash
+settings="$(HOMEFIELD_SOURCE_ONLY=1 bash -c '. "$1"; RUNNER_HOME="$2"; guest() { shift; "$@"; }; runner_setting agentName gitHubUrl agentId | tr "\n" "|"' _ "$ROOT/bin/homefield" "$work" 2>&1)"
+record "runner_setting: a missing key is an empty line, not a failure" "my-mac-homefield|https://github.com/acme||" "$settings"
 
 status SETTING_OUT='my-mac-homefield\n'
 record "one line only: exits 0" "0" "$rc"

@@ -520,8 +520,13 @@ else
     sleep 1
   done
   if [ "$ready" != "1" ] || ! systemctl is-active --quiet "$svc_unit"; then
-    journalctl -u "$svc_unit" --since "$since" --no-pager | tail -20 || true
+    journal="$(journalctl -u "$svc_unit" --since "$since" --no-pager 2>&1 || true)"
+    printf '%s\n' "$journal" | tail -20
     echo "provision.sh: ${svc_unit} did not reach \"Listening for Jobs\"" >&2
+    # The runner's own words, as a hint only (#76).
+    if [[ "$journal" == *"registration has been deleted from the server"* ]]; then
+      echo "provision.sh: GitHub no longer has this runner's registration (it removes runners that have not connected for more than 14 days); docs/runbook.md, \"Operating several runners\", says how to register it again" >&2
+    fi
     exit 1
   fi
   trap - EXIT
