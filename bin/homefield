@@ -42,7 +42,8 @@ Commands:
   upgrade    Re-run provisioning on a registered runner: packages, hooks,
              runner binary. Refuses while a job is running, unless --force.
              Also refuses when the VM cannot be asked whether one is.
-  status     Show the VM, the registration and whether a job is running.
+  status     Show the VM, the registration (and whether GitHub still lists
+             it) and whether a job is running.
   uninstall  Deregister the runner and delete the VM.
   route      Switch repositories' routed jobs to hosted or local
              (the CI_RUNNER variable). Switching to hosted also cancels and
@@ -311,16 +312,17 @@ runner_on_github() {
   local scope ids id
   [ -n "$2" ] && command -v gh >/dev/null || return 2
   scope="$(api_scope "$1" 2>/dev/null)" || return 2
-  ids="$(gh api --paginate "${scope}/actions/runners?per_page=100" --jq '.runners[].id' 2>/dev/null)" || return 2
+  ids="$(gh api --hostname github.com --paginate "${scope}/actions/runners?per_page=100" --jq '.runners[].id' 2>/dev/null)" || return 2
   while read -r id; do
     [ "$id" != "$2" ] || return 0
   done <<<"$ids"
   return 1
 }
 
-# removed_recovery <url>: how to register a runner GitHub removed again.
+# removed_recovery <url> <name>: how to register a runner GitHub removed again,
+# under its old name. The label and group are not stored in the VM.
 removed_recovery() {
-  echo "bin/homefield uninstall --instance ${INSTANCE} --keep-vm, then bin/homefield install --instance ${INSTANCE} --url $1"
+  echo "bin/homefield uninstall --instance ${INSTANCE} --keep-vm, then bin/homefield install --instance ${INSTANCE} --url $1${2:+ --name $2}, with the --label and --group of the first install if they were not the defaults"
 }
 
 # job_running: 0 if a job is running, 1 if not, 2 if the guest could not be
@@ -398,10 +400,10 @@ runner_back() {
   stopped_unit=""
 }
 
-# Prints the named settings from the runner's config, one per line: a name
-# may contain spaces.
+# Prints the named settings from the runner's config, one per line (empty for
+# one that is missing): a name may contain spaces.
 runner_setting() {
-  guest sudo python3 -c 'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8-sig")); print(*(d[k] for k in sys.argv[2:]), sep="\n")' \
+  guest sudo python3 -c 'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8-sig")); print(*(d.get(k, "") for k in sys.argv[2:]), sep="\n")' \
     "$RUNNER_HOME/.runner" "$@"
 }
 
@@ -928,10 +930,10 @@ cmd_upgrade() {
   is_registered || die "${INSTANCE} is not registered; run bin/homefield install --url ..."
   # A registration GitHub removed would only fail at the end, when the runner
   # cannot start a session; one that cannot be checked goes ahead.
-  local url="" id="" on=0
-  { read -r url || true; read -r id || true; } < <(runner_setting gitHubUrl agentId)
+  local url="" id="" name="" on=0
+  { read -r url || true; read -r id || true; read -r name || true; } < <(runner_setting gitHubUrl agentId agentName)
   runner_on_github "$url" "$id" || on=$?
-  [ "$on" != 1 ] || die "GitHub no longer has ${INSTANCE}'s runner (id ${id}) at ${url}: it removes runners that have not connected for more than 14 days. Nothing was changed. Register it again: $(removed_recovery "$url")"
+  [ "$on" != 1 ] || die "GitHub no longer has ${INSTANCE}'s runner (id ${id}) at ${url}: it removes runners that have not connected for more than 14 days. Nothing was stopped. Register it again: $(removed_recovery "$url" "$name")"
   # An upgrade can restart Docker (apt) or the runner (a new binary), which
   # would take down a running job.
   if is_job_running && [ "$force" != 1 ]; then
@@ -982,10 +984,16 @@ cmd_status() {
       0) echo "github: listed" ;;
       1)
         echo "github: NOT listed: GitHub removes runners that have not connected for more than 14 days."
-        echo "  Register it again: $(removed_recovery "$url")"
+        echo "  Register it again: $(removed_recovery "$url" "$name")"
         removed=1
         ;;
-      *) echo "github: not checked (needs gh with admin access to ${url})" ;;
+      *)
+        if [ -n "$id" ]; then
+          echo "github: not checked (needs gh with admin access to ${url})"
+        else
+          echo "github: not checked (no runner id in the VM's settings)"
+        fi
+        ;;
     esac
   else
     # The registration exists (.runner is there) but its details could not be

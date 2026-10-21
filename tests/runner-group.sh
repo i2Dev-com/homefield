@@ -297,12 +297,12 @@ record "upgrade: a job is running: refused, pointing at --force" "nonzero/yes/0"
   "$(nonzero "$rc")/$(has "$out" 'a job is running on')/$(called 'systemctl')"
 # A registration GitHub removed (#76): refused before anything is stopped, as
 # provisioning would only fail at the end, when the runner cannot start. The
-# runner's settings come back as the guest's output: the URL, then the id.
-settings=$'https://github.com/acme\n42\n'
+# runner's settings come back as the guest's output: the URL, the id, the name.
+settings=$'https://github.com/acme\n42\nbuild-1\n'
 run_fn LIMA_STATUS=Running LIMA_RUN_GUEST=1 LIMA_SHELL_OUT="$settings" LIMA_REGISTERED=yes GH_IDS='41\n' -- cmd_upgrade
 record "upgrade: GitHub does not list the runner: refused, nothing stopped or provisioned" "nonzero/yes/0/0/0" \
   "$(nonzero "$rc")/$(has "$out" 'GitHub no longer has homefield'"'"'s runner (id 42) at https://github.com/acme')/$(called 'systemctl')/$(called 'provision')/$(called pgrep)"
-record "...naming the way to register it again" "yes" "$(has "$out" 'uninstall --instance homefield --keep-vm, then bin/homefield install --instance homefield --url https://github.com/acme')"
+record "...naming the way to register it again, under its old name" "yes/yes" "$(has "$out" 'uninstall --instance homefield --keep-vm, then bin/homefield install --instance homefield --url https://github.com/acme --name build-1')/$(has "$out" 'Nothing was stopped')"
 run_fn LIMA_STATUS=Running LIMA_RUN_GUEST=1 LIMA_SHELL_OUT="$settings" LIMA_REGISTERED=yes GH_IDS='42\n' LIMA_JOB=yes -- cmd_upgrade
 record "upgrade: GitHub lists it: goes on to the idle check" "nonzero/no/yes" \
   "$(nonzero "$rc")/$(has "$out" 'no longer has')/$(has "$out" 'a job is running on')"
