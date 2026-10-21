@@ -180,10 +180,22 @@ restart_old_on_failure() {
   local rc=$?
   if [ "$rc" -ne 0 ] && [ -n "$svc_unit" ]; then
     echo "provision.sh: move failed before the old registration was removed; restarting ${svc_unit}" >&2
-    if [ ! -f "$RUNNER_HOME/.service" ]; then
+    # svc.sh uninstall disables and removes the unit before deleting .service.
+    # It may fail at any of those steps; svc.sh install refuses an existing
+    # unit, so only reinstall when the unit itself is gone.
+    if [ ! -f "/etc/systemd/system/$svc_unit" ]; then
+      rm -f "$RUNNER_HOME/.service"
       (cd "$RUNNER_HOME" && ./svc.sh install "$RUNNER_USER") || return "$rc"
+    elif [ ! -f "$RUNNER_HOME/.service" ]; then
+      printf '%s\n' "$svc_unit" >"$RUNNER_HOME/.service"
+      chown "$RUNNER_USER:$RUNNER_USER" "$RUNNER_HOME/.service"
     fi
-    systemctl start "$svc_unit" || true
+    if ! systemctl enable "$svc_unit"; then
+      echo "provision.sh: could not re-enable ${svc_unit}" >&2
+    fi
+    if ! systemctl start "$svc_unit"; then
+      echo "provision.sh: could not restart ${svc_unit}" >&2
+    fi
   fi
 }
 if [ "$move" = "1" ]; then
