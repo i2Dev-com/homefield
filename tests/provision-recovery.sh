@@ -3,7 +3,9 @@
 # service to replace the runner binary, any failure before the service is
 # started again must leave the runner running, as the host-side `upgrade`
 # does for the VM it stops itself. A move also restores the old service if
-# uninstall or registration removal fails (#81).
+# uninstall or registration removal fails (#81). A first registration is
+# followed straight away by its service, with the steps that can fail before
+# it (#83).
 #
 # The real script runs, cut off before its cleanup timer, in a scratch tree:
 # its absolute paths are rewritten into it and every command that would touch
@@ -96,6 +98,7 @@ EOF
   chmod +x "$work/runner/config.sh"
   cat >"$work/runner/svc.sh" <<'EOF'
 #!/usr/bin/env bash
+SVC_NAME="actions.runner.test.service"
 echo "svc $*" >>"$STATE.log"
 case "$1" in
   uninstall)
@@ -134,6 +137,14 @@ run_move() {
   printf 'RUNNER_REMOVE_TOKEN=old-token\nRUNNER_TOKEN=new-token\n' |
     PATH="$stubs:$PATH" STATE="$work/state" UNIT="$unit" UNIT_DIR="$work/systemd" FAIL_AT="$1" \
       RUNNER_REREGISTER=1 RUNNER_URL=https://github.com/new-scope \
+      bash "$work/provision.sh" >"$work/out" 2>&1
+}
+# run_first [FAIL_AT]: the first registration, on an unregistered runner.
+run_first() {
+  rm -f "$work/runner/.runner" "$work/runner/.service" "$work/systemd/$unit" "$work/state.enabled"
+  printf 'RUNNER_TOKEN=new-token\n' |
+    PATH="$stubs:$PATH" STATE="$work/state" UNIT="$unit" UNIT_DIR="$work/systemd" FAIL_AT="${1:-}" \
+      RUNNER_URL=https://github.com/new-scope \
       bash "$work/provision.sh" >"$work/out" 2>&1
 }
 running() { [ -e "$work/state.active" ] && echo running || echo stopped; }
@@ -211,6 +222,12 @@ for at in disable unit_remove marker_remove uninstall remove; do
 done
 record "...removal was attempted only after successful uninstall" "1" "$(grep -c '^config remove$' "$work/state.log")"
 
+fresh "$current" active
+run_move visudo
+rc=$?
+record "the workspace hook's sudo rule fails during a move: provisioning fails" "1" "$rc"
+record "...before the old registration is removed, which keeps its service and runs" "https://github.com/acme/$unit/0/running" "$(sed -n 's/.*"gitHubUrl":"\([^"]*\)".*/\1/p' "$work/runner/.runner")/$(cat "$work/runner/.service")/$(svc_calls install)/$(running)"
+
 echo "a move after old registration removal:"
 fresh "$current" active
 run_move ""
@@ -227,5 +244,37 @@ record "registration fails after removal: provisioning fails" "1" "$rc"
 record "...old registration is gone" "absent" "$([ -e "$work/runner/.runner" ] && echo present || echo absent)"
 record "...old service is not reinstalled" "absent/0" "$([ -e "$work/runner/.service" ] && echo present || echo absent)/$(svc_calls install)"
 record "...old service is not restarted" "stopped/0" "$(running)/$(calls start)"
+
+echo "the first registration (#83):"
+registration() { [ -e "$work/runner/.runner" ] && echo registered || echo unregistered; }
+fresh "$current" stopped
+run_first
+rc=$?
+record "success: exits 0" "0" "$rc"
+record "...registered, with its service installed and running" "registered/$unit/present/running" "$(registration)/$(cat "$work/runner/.service")/$(unit_present)/$(running)"
+fresh "$current" stopped
+run_first visudo
+rc=$?
+record "the workspace hook's sudo rule fails: provisioning fails" "1" "$rc"
+record "...before registering, so no registration is left without a service" "0/unregistered" "$(grep -c '^config ' "$work/state.log")/$(registration)"
+fresh "$current" stopped
+run_first env
+rc=$?
+record "writing .env fails after registering: provisioning fails" "1" "$rc"
+record "...with the service already installed and enabled" "registered/$unit/present/enabled" "$(registration)/$(cat "$work/runner/.service")/$(unit_present)/$(enabled)"
+
+echo "a service left half done (#83):"
+fresh "$current" active
+rm -f "$work/runner/.service" "$work/state.active"
+run
+rc=$?
+record "a unit file with no .service (an svc.sh install cut off): provisioning succeeds" "0" "$rc"
+record "...the unit is replaced, enabled and running" "$unit/present/enabled/running/1" "$(cat "$work/runner/.service")/$(unit_present)/$(enabled)/$(running)/$(svc_calls install)"
+fresh "$current" active
+rm -f "$work/systemd/$unit" "$work/state.active" "$work/state.enabled"
+run
+rc=$?
+record "a .service with no unit file (an uninstall cut off): provisioning succeeds" "0" "$rc"
+record "...the service is installed again, enabled and running" "$unit/present/enabled/running/1" "$(cat "$work/runner/.service")/$(unit_present)/$(enabled)/$(running)/$(svc_calls install)"
 
 summary

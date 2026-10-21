@@ -13,6 +13,15 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ### Fixed
 
+- A first registration or a move no longer leaves the runner registered with
+  no service when the workspace hook's setup fails: that setup now runs before
+  registration (in a move, before the old registration is removed, so the old
+  runner is started again), and the service is installed straight after it.
+  `homefield uninstall` now also gives the service back (unit, `.service` and
+  enabled at boot) when `svc.sh uninstall` fails partway, not only when GitHub
+  refuses the removal. Running `homefield install` again now repairs a service
+  left half done (a unit file with no `.service`, or the reverse) instead of
+  failing the same way each time (#83).
 - Moving a runner now reinstalls and starts its old service if service
   uninstall or registration removal fails, while the old registration still
   exists. `install --replace` documentation now states that it removes the

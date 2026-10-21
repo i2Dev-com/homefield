@@ -311,6 +311,42 @@ if [ ! -x "$RUNNER_HOME/config.sh" ] || ! grep -qx "$RUNNER_VERSION" "$RUNNER_HO
 fi
 chown -R "$RUNNER_USER:$RUNNER_USER" "$RUNNER_HOME"
 
+# ── Workspace ownership ─────────────────────────────────────────────────────
+# A `container:` job runs as root in its container, with _work mounted in it,
+# so whatever its steps write there is owned by root. The next job's checkout
+# runs as runner and fails to delete it (EACCES; #54, actions/runner#434). A
+# job-started hook hands _work back to runner before every job, which also
+# covers a container job that was cancelled. That takes root, so runner may run
+# this one script, with no arguments, through sudo. It grants nothing new: the
+# docker group already makes runner root-equivalent in the guest. None of it
+# needs the registration, so it runs before it: a failure here must not leave
+# a newly registered runner with no service (#83).
+cat > /usr/local/sbin/homefield-workspace-owner <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+work=/opt/actions-runner/_work
+[ -d "$work" ] || exit 0
+# find does not follow symlinks and chown -h changes the link itself, so a
+# job's symlink to a file outside _work never hands that file to runner.
+find "$work" -xdev ! -user runner -exec chown -h runner:runner {} +
+EOF
+chmod 755 /usr/local/sbin/homefield-workspace-owner
+# The runner picks the interpreter by extension, so the hook needs ".sh".
+cat > /usr/local/sbin/homefield-job-started.sh <<'EOF'
+#!/usr/bin/env bash
+# The runner's job-started hook (ACTIONS_RUNNER_HOOK_JOB_STARTED), run as runner.
+exec sudo -n /usr/local/sbin/homefield-workspace-owner
+EOF
+chmod 755 /usr/local/sbin/homefield-job-started.sh
+sudoers="$(mktemp)"
+echo 'runner ALL=(root) NOPASSWD: /usr/local/sbin/homefield-workspace-owner ""' >"$sudoers"
+visudo -cqf "$sudoers"
+install -m 440 "$sudoers" /etc/sudoers.d/homefield-workspace-owner
+rm -f "$sudoers"
+# Run it once now, as the hook will: this proves the sudo rule works before
+# any job depends on it, and fixes what earlier container jobs left.
+sudo -u "$RUNNER_USER" /usr/local/sbin/homefield-job-started.sh
+
 # ── Registration + service ──────────────────────────────────────────────────
 # config.sh reads `--token` from ACTIONS_RUNNER_INPUT_TOKEN when the flag is
 # absent, which keeps the token off its command line. --preserve-env passes
@@ -352,40 +388,28 @@ if [ ! -f "$RUNNER_HOME/.runner" ]; then
 fi
 RUNNER_TOKEN=""
 RUNNER_REMOVE_TOKEN=""
+# Straight after registration, with nothing in between that can fail, so a
+# registered runner always gets its service (#83). The .env below is read only
+# when the service starts. Running this again repairs what an earlier run or
+# an uninstall left half done: a .service whose unit file is gone is no
+# service, and a unit file with no .service is an svc.sh install that stopped
+# before its last step (it writes .service last). svc.sh install refuses an
+# existing unit, so that one is removed first; its name is the one svc.sh has
+# baked in.
+if [ -f "$RUNNER_HOME/.service" ] && [ ! -f "/etc/systemd/system/$(cat "$RUNNER_HOME/.service")" ]; then
+  rm -f "$RUNNER_HOME/.service"
+fi
+if [ ! -f "$RUNNER_HOME/.service" ]; then
+  half_unit="$(sed -n 's/^SVC_NAME="\(.*\)"$/\1/p' "$RUNNER_HOME/svc.sh" | tr ' ' _)"
+  if [ -n "$half_unit" ] && [ -f "/etc/systemd/system/$half_unit" ]; then
+    echo "provision.sh: removing ${half_unit}, left by an svc.sh install that did not finish"
+    systemctl disable "$half_unit"
+    rm -f "/etc/systemd/system/$half_unit"
+    systemctl daemon-reload
+  fi
+  (cd "$RUNNER_HOME" && ./svc.sh install "$RUNNER_USER")
+fi
 
-# ── Workspace ownership ─────────────────────────────────────────────────────
-# A `container:` job runs as root in its container, with _work mounted in it,
-# so whatever its steps write there is owned by root. The next job's checkout
-# runs as runner and fails to delete it (EACCES; #54, actions/runner#434). A
-# job-started hook hands _work back to runner before every job, which also
-# covers a container job that was cancelled. That takes root, so runner may run
-# this one script, with no arguments, through sudo. It grants nothing new: the
-# docker group already makes runner root-equivalent in the guest.
-cat > /usr/local/sbin/homefield-workspace-owner <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-work=/opt/actions-runner/_work
-[ -d "$work" ] || exit 0
-# find does not follow symlinks and chown -h changes the link itself, so a
-# job's symlink to a file outside _work never hands that file to runner.
-find "$work" -xdev ! -user runner -exec chown -h runner:runner {} +
-EOF
-chmod 755 /usr/local/sbin/homefield-workspace-owner
-# The runner picks the interpreter by extension, so the hook needs ".sh".
-cat > /usr/local/sbin/homefield-job-started.sh <<'EOF'
-#!/usr/bin/env bash
-# The runner's job-started hook (ACTIONS_RUNNER_HOOK_JOB_STARTED), run as runner.
-exec sudo -n /usr/local/sbin/homefield-workspace-owner
-EOF
-chmod 755 /usr/local/sbin/homefield-job-started.sh
-sudoers="$(mktemp)"
-echo 'runner ALL=(root) NOPASSWD: /usr/local/sbin/homefield-workspace-owner ""' >"$sudoers"
-visudo -cqf "$sudoers"
-install -m 440 "$sudoers" /etc/sudoers.d/homefield-workspace-owner
-rm -f "$sudoers"
-# Run it once now, as the hook will: this proves the sudo rule works before
-# any job depends on it, and fixes what earlier container jobs left.
-sudo -u "$RUNNER_USER" /usr/local/sbin/homefield-job-started.sh
 # The runner reads .env (written by config.sh) only when it starts, so a
 # changed .env restarts it below. The previous .env is kept until the runner
 # is back, to restore it if it is not.
@@ -405,9 +429,6 @@ if ! grep -qx "$hook_line" "$RUNNER_HOME/.env" 2>/dev/null; then
   env_changed=1
 fi
 
-if [ ! -f "$RUNNER_HOME/.service" ]; then
-  (cd "$RUNNER_HOME" && ./svc.sh install "$RUNNER_USER")
-fi
 svc_unit="$(cat "$RUNNER_HOME/.service")"
 
 # A runner that fails to come up must fail provisioning: otherwise every CI
