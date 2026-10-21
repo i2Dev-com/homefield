@@ -1641,7 +1641,7 @@ cmd_adopt() {
   # they fail.
   out="$(python3 -I "$ROOT/routing-guard/routing_guard.py" --print-expression --label "$label" \
     --events "${ADOPT_FLAG_EVENTS:-pull_request}" --dependabot "${ADOPT_FLAG_DEPENDABOT:-hosted}" \
-    --fallback "${ADOPT_FLAG_FALLBACK:-ubuntu-latest}")" ||
+    --fallback "${ADOPT_FLAG_FALLBACK:-ubuntu-latest}" 2>&1)" ||
     die "adopt: the routing options cannot be routed on: $(printf '%s' "$out" | sed $'s/\033\\[[0-9;]*m//g')"
   [ "$dry" = 0 ] || log "dry run: nothing will be changed"
 

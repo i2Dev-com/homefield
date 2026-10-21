@@ -208,24 +208,29 @@ check "options with a label and arch together" \
   "\${{ vars.CI_RUNNER == 'local' && github.event_name == 'push' && ${DEP} && ${FORKANY} && fromJSON('[\"self-hosted\",\"linux\",\"x64\",\"acme-ci\"]') || 'ubuntu-latest' }}" \
   "$(printed --events push --label acme-ci --arch x64)"
 
-# invalid <name> <message fragment> <flags...>: --print-expression and a check
-# both refuse, with the reason in the output.
+# invalid <name> <message fragment> <flags...>: --print-expression, --list and
+# a check all refuse, with the reason in the output. The two that print keep
+# stdout for what they print, so their refusal is on stderr and stdout is empty.
 invalid() {
-  local name="$1" fragment="$2" out rc=0
+  local name="$1" fragment="$2" mode out err rc
   shift 2
-  out="$(python3 "$SCRIPT" --print-expression "$@" 2>&1)" || rc=$?
-  if [ "$rc" -ne 0 ] && case "$out" in *"$fragment"*) true ;; *) false ;; esac; then
-    echo "  ok   ${name} (refused)"; pass=$((pass + 1))
-  else
-    echo "  FAIL ${name}: wanted a refusal naming '${fragment}', got status ${rc}: ${out}"; fail=$((fail + 1))
-  fi
-  rc=0
-  python3 "$SCRIPT" --workflows-dir "${HERE}/base" --jobs "$EXPECTED" "$@" >/dev/null 2>&1 || rc=$?
-  if [ "$rc" -ne 0 ]; then
-    echo "  ok   ${name}, as a check (refused)"; pass=$((pass + 1))
-  else
-    echo "  FAIL ${name}, as a check: wanted a refusal, got pass"; fail=$((fail + 1))
-  fi
+  for mode in --print-expression --list check; do
+    rc=0
+    err="$(mktemp)"
+    if [ "$mode" = check ]; then
+      out="$(python3 "$SCRIPT" --workflows-dir "${HERE}/base" --jobs "$EXPECTED" "$@" 2>&1)" || rc=$?
+    else
+      out="$(python3 "$SCRIPT" --workflows-dir "${HERE}/base" "$mode" "$@" 2>"$err")" || rc=$?
+      [ -z "$out" ] || out="stdout not empty: ${out}"
+      [ -n "$out" ] || out="$(cat "$err")"
+    fi
+    rm -f "$err"
+    if [ "$rc" -ne 0 ] && case "$out" in *"stdout not empty"*) false ;; *"$fragment"*) true ;; *) false ;; esac; then
+      echo "  ok   ${name}, ${mode#--} (refused)"; pass=$((pass + 1))
+    else
+      echo "  FAIL ${name}, ${mode#--}: wanted a refusal naming '${fragment}', got status ${rc}: ${out}"; fail=$((fail + 1))
+    fi
+  done
 }
 invalid "events pull_request_target" "pull_request_target is refused" --events pull_request_target
 invalid "events pull_request_target among others" "secrets on code from forks" --events "pull_request,pull_request_target"
@@ -238,6 +243,10 @@ invalid "events in another case" "'Push' is not one of" --events Push
 invalid "dependabot an unknown value" "must be hosted or local" --dependabot maybe
 invalid "dependabot empty" "must be hosted or local" --dependabot ""
 invalid "dependabot in another case" "must be hosted or local" --dependabot Local
+invalid "arch a typo" "'amd64' must be arm64 or x64" --arch amd64
+invalid "arch in another case" "'ARM64' must be arm64 or x64" --arch ARM64
+invalid "arch empty" "must be arm64 or x64" --arch ""
+invalid "arch carrying extra labels" "must be arm64 or x64" --arch 'x64","self-hosted'
 invalid "fallback self-hosted" "bare GitHub-hosted image name" --fallback self-hosted
 invalid "fallback the routing label" "bare GitHub-hosted image name" --fallback homefield-ci
 invalid "fallback a list" "bare GitHub-hosted image name" --fallback "[ubuntu-latest]"
