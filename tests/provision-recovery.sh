@@ -221,6 +221,12 @@ for at in disable unit_remove marker_remove uninstall remove; do
 done
 record "...removal was attempted only after successful uninstall" "1" "$(grep -c '^config remove$' "$work/state.log")"
 
+fresh "$current" active
+run_move visudo
+rc=$?
+record "the workspace hook's sudo rule fails during a move: provisioning fails" "1" "$rc"
+record "...before the old registration is removed, which keeps its service and runs" "https://github.com/acme/$unit/0/running" "$(sed -n 's/.*"gitHubUrl":"\([^"]*\)".*/\1/p' "$work/runner/.runner")/$(cat "$work/runner/.service")/$(svc_calls install)/$(running)"
+
 echo "a move after old registration removal:"
 fresh "$current" active
 run_move ""
