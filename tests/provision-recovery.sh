@@ -2,7 +2,8 @@
 # provision.sh on a runner that is running (#61): once it has stopped the
 # service to replace the runner binary, any failure before the service is
 # started again must leave the runner running, as the host-side `upgrade`
-# does for the VM it stops itself.
+# does for the VM it stops itself. A move also restores the old service if
+# uninstall or registration removal fails (#81).
 #
 # The real script runs, cut off before its cleanup timer, in a scratch tree:
 # its absolute paths are rewritten into it and every command that would touch
@@ -75,8 +76,30 @@ fresh() {
   mkdir -p "$work/runner/bin" "$work/sbin" "$work/sudoers.d" "$work/etc"
   printf '#!/bin/sh\nexit 0\n' >"$work/runner/bin/installdependencies.sh"
   chmod +x "$work/runner/bin/installdependencies.sh"
-  : >"$work/runner/config.sh"
+  cat >"$work/runner/config.sh" <<'EOF'
+#!/usr/bin/env bash
+echo "config $*" >>"$STATE.log"
+if [ "$1" = remove ]; then
+  [ "${FAIL_AT:-}" != remove ] || exit 1
+  rm -f "$(dirname "$0")/.runner"
+else
+  [ "${FAIL_AT:-}" != register ] || exit 1
+  echo '{"gitHubUrl":"https://github.com/new-scope"}' >"$(dirname "$0")/.runner"
+fi
+EOF
   chmod +x "$work/runner/config.sh"
+  cat >"$work/runner/svc.sh" <<'EOF'
+#!/usr/bin/env bash
+echo "svc $*" >>"$STATE.log"
+case "$1" in
+  uninstall)
+    rm -f "$(dirname "$0")/.service"
+    [ "${FAIL_AT:-}" != uninstall ] || exit 1
+    ;;
+  install) echo "$UNIT" >"$(dirname "$0")/.service" ;;
+esac
+EOF
+  chmod +x "$work/runner/svc.sh"
   echo "$unit" >"$work/runner/.service"
   echo "$1" >"$work/runner/.provisioned-version"
   echo '{"gitHubUrl":"https://github.com/acme"}' >"$work/runner/.runner"
@@ -86,10 +109,17 @@ fresh() {
 }
 # run [FAIL_AT]: provision, as root, against the scratch tree.
 run() {
-  PATH="$stubs:$PATH" STATE="$work/state" FAIL_AT="${1:-}" bash "$work/provision.sh" </dev/null >"$work/out" 2>&1
+  PATH="$stubs:$PATH" STATE="$work/state" UNIT="$unit" FAIL_AT="${1:-}" bash "$work/provision.sh" </dev/null >"$work/out" 2>&1
+}
+run_move() {
+  printf 'RUNNER_REMOVE_TOKEN=old-token\nRUNNER_TOKEN=new-token\n' |
+    PATH="$stubs:$PATH" STATE="$work/state" UNIT="$unit" FAIL_AT="$1" \
+      RUNNER_REREGISTER=1 RUNNER_URL=https://github.com/new-scope \
+      bash "$work/provision.sh" >"$work/out" 2>&1
 }
 running() { [ -e "$work/state.active" ] && echo running || echo stopped; }
 calls() { grep -c "^systemctl $1 " "$work/state.log" 2>/dev/null || true; }
+svc_calls() { grep -c "^svc $1" "$work/state.log" 2>/dev/null || true; }
 
 # The version in provision.sh, so every case replaces the binary (old) or none.
 current="$(sed -n 's/^RUNNER_VERSION="\(.*\)"$/\1/p' "$ROOT/vm/provision.sh")"
@@ -139,5 +169,39 @@ record "...and does not start what it did not stop" "stopped" "$(running)"
 fresh 2.0.0 stopped
 run
 record "success: the runner is started" "0/running" "$?/$(running)"
+
+echo "a move fails before old registration removal:"
+fresh 2.0.0 active
+run_move tar
+rc=$?
+record "binary replacement fails during a move: provisioning fails" "1" "$rc"
+record "...the move recovery still starts the old runner" "running/1" "$(running)/$(calls start)"
+for at in uninstall remove; do
+  fresh "$current" active
+  run_move "$at"
+  rc=$?
+  record "$at fails: provisioning fails" "1" "$rc"
+  record "...old registration remains" "https://github.com/acme" "$(sed -n 's/.*"gitHubUrl":"\([^"]*\)".*/\1/p' "$work/runner/.runner")"
+  record "...service is reinstalled" "$unit/1" "$(cat "$work/runner/.service")/$(svc_calls install)"
+  record "...old service is running" "running/1" "$(running)/$(calls start)"
+done
+record "...removal was attempted only after successful uninstall" "1" "$(grep -c '^config remove$' "$work/state.log")"
+
+echo "a move after old registration removal:"
+fresh "$current" active
+run_move ""
+rc=$?
+record "success: provisioning exits 0" "0" "$rc"
+record "...new registration replaces old" "https://github.com/new-scope" "$(sed -n 's/.*"gitHubUrl":"\([^"]*\)".*/\1/p' "$work/runner/.runner")"
+record "...new service is running" "$unit/running" "$(cat "$work/runner/.service")/$(running)"
+record "...old service was not restarted" "0" "$(calls start)"
+
+fresh "$current" active
+run_move register
+rc=$?
+record "registration fails after removal: provisioning fails" "1" "$rc"
+record "...old registration is gone" "absent" "$([ -e "$work/runner/.runner" ] && echo present || echo absent)"
+record "...old service is not reinstalled" "absent/0" "$([ -e "$work/runner/.service" ] && echo present || echo absent)/$(svc_calls install)"
+record "...old service is not restarted" "stopped/0" "$(running)/$(calls start)"
 
 summary

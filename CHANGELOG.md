@@ -13,6 +13,11 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ### Fixed
 
+- Moving a runner now reinstalls and starts its old service if service
+  uninstall or registration removal fails, while the old registration still
+  exists. `install --replace` documentation now states that it removes the
+  old registration before provisioning, so a
+  failure in between leaves that name unregistered (#81).
 - `homefield adopt` no longer reads routing-guard text inside a `run:` script
   as a guard step, which could report "routing: ready" and switch a repository
   on with no guard. A step with `label:` set to nothing (which the guard
