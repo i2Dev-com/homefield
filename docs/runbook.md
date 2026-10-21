@@ -390,7 +390,8 @@ homefield install --instance homefield-2 --url https://github.com/<org>
 
 It is named `<local hostname>-homefield-2`. An instance name follows Lima's
 rule (letters and digits, with a single `.`, `_` or `-` between them, at most
-76 characters), and homefield refuses any other. `status`, `upgrade`, `memory` and
+76 characters, not ending in `.yml` or `.yaml`), and homefield refuses any
+other. `status`, `upgrade`, `memory` and
 `uninstall` act on one instance (`--instance`, or `HOMEFIELD_INSTANCE`), so run
 them for each; `route` and `adopt` act on repositories and cover every runner.
 If the first runner was installed with a `--label`, `--group` or `--packages`

@@ -323,11 +323,13 @@ instance_verdicts() {
   else
     i="unexpected($rc)"
   fi
-  out="$(env -i HOME="$home" PATH="$stubs" CALLS="$calls" "$BASH" "$ROOT/bin/homefield" version --instance "$name" 2>&1)"
+  # status goes on to ask the limactl stub, so a name it takes is one that
+  # gets past the check, whatever status then reports.
+  out="$(env -i HOME="$home" PATH="$stubs" CALLS="$calls" "$BASH" "$ROOT/bin/homefield" status --instance "$name" 2>&1)"
   rc=$?
-  if [ "$rc" -eq 0 ]; then
+  if [ "$(has "$out" 'must be a Lima instance name')" = no ]; then
     h=ok
-  elif [ "$(has "$out" '--instance (or HOMEFIELD_INSTANCE) must be a Lima instance name')" = yes ]; then
+  elif [ "$rc" -ne 0 ] && [ "$(has "$out" '--instance (or HOMEFIELD_INSTANCE) must be a Lima instance name')" = yes ]; then
     h=reject
   else
     h="unexpected($rc)"
@@ -359,5 +361,32 @@ record "HOMEFIELD_INSTANCE=--help bin/homefield status: refused, limactl never r
 out="$(env -i HOME="$home" PATH="$stubs" CALLS="$calls" HOMEFIELD_INSTANCE=--help "$BASH" "$ROOT/bin/homefield" help 2>&1)"
 rc=$?
 record "...but help still prints the usage" "0/yes" "$rc/$(has "$out" 'Usage: bin/homefield')"
+# The commands that never use the VM are not stopped by a stale value.
+for cmd in version route adopt report; do
+  out="$(env -i HOME="$home" PATH="$stubs" CALLS="$calls" HOMEFIELD_INSTANCE='my vm' "$BASH" "$ROOT/bin/homefield" $cmd 2>&1)"
+  record "HOMEFIELD_INSTANCE='my vm' bin/homefield $cmd: the instance is not checked" "no" "$(has "$out" 'must be a Lima instance name')"
+done
+out="$(env -i HOME="$home" PATH="$stubs" CALLS="$calls" HOMEFIELD_INSTANCE='my vm' "$BASH" "$ROOT/bin/homefield" bogus 2>&1)"
+record "...and an unknown command still gets the usage" "yes/no" "$(has "$out" 'Usage: bin/homefield')/$(has "$out" 'must be a Lima instance name')"
+
+# install.sh looks the VM up only when it has no arguments; with arguments
+# bin/homefield checks the instance, and an --instance wins over the variable.
+new_env gh curl limactl
+run_install 'HOMEFIELD_INSTANCE=old/name' -- --instance homefield-2 --url https://github.com/acme
+record "install.sh with arguments leaves the instance to bin/homefield" "0/homefield stub: install --instance homefield-2 --url https://github.com/acme" \
+  "$rc/$(echo "$out" | grep 'homefield stub' || true)"
+
+# The commands install.sh prints name a non-default instance, which may have
+# been set for that run only.
+new_env gh curl limactl
+run_install HOMEFIELD_INSTANCE=homefield-2 FAKE_VM_STATUS=Running
+record "VM homefield-2 exists: the advice names it" "yes/yes/yes" \
+  "$(has "$out" '  homefield upgrade --instance homefield-2')/$(has "$out" 'homefield status --instance homefield-2 shows')/$(has "$out" '  homefield install --instance homefield-2')"
+new_env gh curl limactl
+run_install HOMEFIELD_INSTANCE=homefield-2
+record "no VM homefield-2, no terminal: the set-up advice names it" "yes" "$(has "$out" '  homefield install --instance homefield-2 --url https://github.com/<org>')"
+new_env gh curl limactl
+run_install FAKE_VM_STATUS=Running
+record "the default instance: the advice has no --instance" "no" "$(has "$out" '--instance')"
 
 summary

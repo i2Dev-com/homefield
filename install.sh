@@ -63,9 +63,15 @@ check_settings() {
   if [ -n "${HOMEFIELD_BIN_DIR:-}" ]; then
     [[ "$HOMEFIELD_BIN_DIR" =~ ^/ ]] || die "HOMEFIELD_BIN_DIR must be an absolute path, got: $HOMEFIELD_BIN_DIR"
   fi
-  # Lima's rule for an instance name, the same check as check_instance in
-  # bin/homefield (tests/install-sh.sh runs the same names through both).
-  # Anything else would reach limactl as an option, such as --help.
+}
+
+# check_instance: Lima's rule for an instance name, the same check as
+# check_instance in bin/homefield (tests/install-sh.sh runs the same names
+# through both). Anything else would reach limactl as an option, such as
+# --help. Only for a run with no arguments, the one that looks the VM up:
+# with arguments, bin/homefield checks the instance, and an --instance among
+# them wins over HOMEFIELD_INSTANCE.
+check_instance() {
   local instance_re='^[A-Za-z0-9]+([._-][A-Za-z0-9]+)*$'
   [[ "$INSTANCE" =~ $instance_re && ${#INSTANCE} -le 76 && ! "$INSTANCE" =~ [.][Yy][Aa]?[Mm][Ll]$ ]] ||
     die "HOMEFIELD_INSTANCE must be a Lima instance name: letters and digits, with a single '.', '_' or '-' between them, at most 76 characters, not ending in .yml or .yaml; got: $INSTANCE"
@@ -215,6 +221,7 @@ main() {
   trap cleanup EXIT
   check_host
   check_settings
+  [ $# -gt 0 ] || check_instance
 
   # Next to the destination, so that the swap below is a rename.
   mkdir -p "$(dirname "$INSTALL_DIR")"
@@ -239,6 +246,10 @@ main() {
   WORK=""
   trap - EXIT
   local installed="$INSTALL_DIR/bin/homefield"
+  # HOMEFIELD_INSTANCE may have been set for this run only, so the commands
+  # printed below name the instance themselves.
+  local on=""
+  [ "$INSTANCE" = homefield ] || on=" --instance ${INSTANCE}"
   # Run again with no arguments on a Mac that already has the VM, this is a
   # tool update, with or without a terminal: `install` there would upgrade the
   # VM and briefly stop the runner, which nobody asked for, and advice to set
@@ -246,9 +257,9 @@ main() {
   if [ $# -eq 0 ] && vm_exists; then
     echo
     echo "The VM ${INSTANCE} already exists and was not changed. To update it too:"
-    echo "  homefield upgrade"
-    echo "If its setup never finished (homefield status shows no registration), finish it with:"
-    echo "  homefield install"
+    echo "  homefield upgrade${on}"
+    echo "If its setup never finished (homefield status${on} shows no registration), finish it with:"
+    echo "  homefield install${on}"
     return 0
   fi
   if [ $# -gt 0 ] || have_tty; then
@@ -260,7 +271,7 @@ main() {
   fi
   echo
   echo "Next, set up the runner:"
-  echo "  homefield install --url https://github.com/<org>      # or https://github.com/<owner>/<repo>"
+  echo "  homefield install${on} --url https://github.com/<org>      # or https://github.com/<owner>/<repo>"
 }
 
 main "$@"

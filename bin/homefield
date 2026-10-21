@@ -1887,7 +1887,9 @@ main() {
     esac
   done
   [ -n "$cmd" ] || { usage >&2; exit 1; }
-  case "$cmd" in help | -h | --help) ;; *) check_instance ;; esac
+  # Only the commands that act on the VM: route, adopt, report and version
+  # never use it, so a stale HOMEFIELD_INSTANCE does not stop them.
+  case "$cmd" in install | upgrade | status | uninstall | memory) check_instance ;; esac
   set -- "${rest[@]+"${rest[@]}"}"
   case "$cmd" in
     install) cmd_install "$@" ;;
