@@ -301,5 +301,14 @@ rm -f "$work/runner/.service" "$work/systemd/$unit"
 FAIL_AT=svc_install ensure --start
 rc=$?
 record "svc.sh install fails: exits 1, says so, starts nothing" "1/yes/0" "$rc/$(grep -q 'could not install the runner service' "$work/out" && echo yes || echo no)/$(calls start)"
+for args in --strt "--start extra"; do
+  fresh "$current" stopped
+  rm -f "$work/runner/.service"
+  # shellcheck disable=SC2086  # split on purpose: "--start extra" is two arguments
+  ensure $args
+  rc=$?
+  record "ensure-service $args: refused with exit 2, saying so" "2/yes" "$rc/$(grep -q 'takes only --start' "$work/out" && echo yes || echo no)"
+  record "...and runs nothing: no svc.sh, systemctl or config.sh call" "0/stopped" "$(cat "$work/state.log" 2>/dev/null | wc -l | tr -d ' ')/$(running)"
+done
 
 summary

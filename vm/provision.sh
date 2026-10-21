@@ -143,7 +143,15 @@ fi
 # have finished it.
 ensure_service() {
   local start=0 unit="" baked rc=0
-  [ "${1:-}" != --start ] || start=1
+  # A typo typed by hand (--strt) must not repair without starting, silently.
+  case "$#:${1:-}" in
+    0:) ;;
+    1:--start) start=1 ;;
+    *)
+      echo "provision.sh: ensure-service takes only --start, got: $*" >&2
+      return 2
+      ;;
+  esac
   if [ -f "$RUNNER_HOME/.service" ]; then
     unit="$(cat "$RUNNER_HOME/.service")"
   fi
