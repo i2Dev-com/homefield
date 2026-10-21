@@ -111,6 +111,7 @@ case "$1" in
     systemctl daemon-reload
     ;;
   install)
+    [ "${FAIL_AT:-}" != svc_install ] || exit 1
     [ ! -f "$UNIT_DIR/$UNIT" ] || exit 1
     : >"$UNIT_DIR/$UNIT"
     systemctl daemon-reload
@@ -276,5 +277,29 @@ run
 rc=$?
 record "a .service with no unit file (an uninstall cut off): provisioning succeeds" "0" "$rc"
 record "...the service is installed again, enabled and running" "$unit/present/enabled/running/1" "$(cat "$work/runner/.service")/$(unit_present)/$(enabled)/$(running)/$(svc_calls install)"
+
+echo "provision.sh ensure-service, as uninstall runs it (#99):"
+# ensure [--start]: only the subcommand, with FAIL_AT.
+ensure() {
+  PATH="$stubs:$PATH" STATE="$work/state" UNIT="$unit" UNIT_DIR="$work/systemd" FAIL_AT="${FAIL_AT:-}" \
+    bash "$work/provision.sh" ensure-service "$@" </dev/null >"$work/out" 2>&1
+}
+fresh "$current" stopped
+rm -f "$work/state.enabled"
+ensure --start
+rc=$?
+record "intact but disabled (an uninstall cut off): exits 0" "0" "$rc"
+record "...enabled and started, not reinstalled, nothing else run" "enabled/running/0/0" "$(enabled)/$(running)/$(svc_calls install)/$(grep -c '^config ' "$work/state.log")"
+fresh "$current" stopped
+rm -f "$work/runner/.service"
+ensure
+rc=$?
+record "a unit file with no .service, no --start: exits 0" "0" "$rc"
+record "...reinstalled and enabled, not started" "$unit/enabled/stopped/1" "$(cat "$work/runner/.service")/$(enabled)/$(running)/$(svc_calls install)"
+fresh "$current" stopped
+rm -f "$work/runner/.service" "$work/systemd/$unit"
+FAIL_AT=svc_install ensure --start
+rc=$?
+record "svc.sh install fails: exits 1, says so, starts nothing" "1/yes/0" "$rc/$(grep -q 'could not install the runner service' "$work/out" && echo yes || echo no)/$(calls start)"
 
 summary

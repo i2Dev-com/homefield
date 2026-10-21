@@ -11,6 +11,16 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ## Unreleased
 
+### Changed
+
+- Restoring the runner's service has one implementation,
+  `provision.sh ensure-service [--start]`, used after registration on every
+  provisioning run, when a move is rolled back, and by `homefield uninstall`
+  when deregistering fails. `uninstall` now copies `provision.sh` into the VM
+  before it stops anything, so a VM provisioned by an older release gets the
+  same restore. A provisioning run now also enables a runner service a cut-off
+  uninstall left disabled (#99).
+
 ### Fixed
 
 - A first registration or a move no longer leaves the runner registered with

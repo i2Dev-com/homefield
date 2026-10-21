@@ -35,8 +35,10 @@ stub() { printf '#!/usr/bin/env bash\n%s\n' "$2" >"$stubs/$1"; chmod +x "$stubs/
 # sudo [-n] [-u user] [--preserve-env=...] <command...>: the command, as this user.
 stub sudo 'while [ $# -gt 0 ]; do case "$1" in -u) shift 2 ;; -n|--preserve-env=*) shift ;; *) break ;; esac; done
 exec "$@"'
-stub limactl 'echo "limactl $*" >>"$LOG"'
+stub limactl 'echo "limactl $*" >>"$LOG"
+[ "$1" != copy ] || [ "${FAIL_COPY:-}" != 1 ]'
 stub chown 'exit 0'
+stub id 'case "$1" in -u) echo 0 ;; *) exec /usr/bin/id "$@" ;; esac'
 stub pgrep 'case "$*" in *"[R]unner.Worker"*) ;; *) exit 0 ;; esac
 case "${JOB:-idle}" in running) exit 0 ;; idle) exit 1 ;; *) exit 3 ;; esac'
 # The unit is a file in the unit directory; it is enabled and active while a
@@ -64,6 +66,7 @@ fresh() {
   : >"$home/active"
   cat >"$home/svc.sh" <<'EOF'
 #!/bin/sh
+SVC_NAME="actions.runner.acme.test.service"
 echo "svc.sh $*" >>"$LOG"
 case "$1" in
   uninstall)
@@ -96,6 +99,11 @@ EOF
   : >"$work/log"
 }
 
+# The restore is provision.sh's ensure-service, with its paths in the scratch
+# tree; cmd_uninstall's copy of it into the guest is the limactl stub's no-op.
+sed -e "s|/opt/actions-runner|$home|g" -e "s|/etc/systemd/system|$units|g" \
+  "$ROOT/vm/provision.sh" >"$work/provision.sh"
+
 # run: cmd_uninstall, in a shell of its own so its EXIT trap runs. It keeps the
 # VM unless UNINSTALL_ARGS is set (to nothing, to delete it). The guest answers
 # unless GUEST_MODE is fail (the call fails) or silent (it succeeds and says
@@ -105,7 +113,7 @@ cat >"$work/harness.sh" <<EOF
 HOMEFIELD_SOURCE_ONLY=1
 . "$ROOT/bin/homefield"
 RUNNER_HOME="$home"
-UNIT_DIR="$units"
+GUEST_PROVISION="$work/provision.sh"
 check_host() { :; }
 vm_status() { echo Running; }
 runner_setting() { echo https://github.com/acme; }
@@ -138,12 +146,23 @@ record "...deregistered, service uninstalled, runner left stopped" "removed/no-u
 record "...the token reached config.sh through its environment" "1" "$(logged 'config.sh remove token-in-env=yes')"
 record "...no start was attempted" "0" "$(logged 'systemctl start')"
 
+echo "provision.sh is copied in for the restore (#99):"
+fresh
+run env
+record "...once, before the runner is stopped" "1/limactl copy" "$(logged 'limactl copy')/$(grep -m1 -e 'limactl copy' -e 'systemctl stop' "$work/log" | cut -d' ' -f1-2)"
+fresh
+run env FAIL_COPY=1
+record "the copy fails: uninstall fails, saying so" "1/yes" "$rc/$(has "$out" 'could not copy provision.sh')"
+record "...nothing was stopped or deregistered" "0/0/registered/unit/.service/active" "$(logged 'systemctl')/$(logged 'config.sh')/$(state)"
+
 echo "GitHub refuses the removal:"
 fresh
 run env FAIL_REMOVE=1
 record "uninstall fails" "1" "$rc"
 record "...still registered, with its service back and running" "registered/unit/.service/active" "$(state)"
-record "...the service was reinstalled once, and started" "1/1" "$(logged 'svc.sh install runner')/$(logged 'systemctl start')"
+# Started by ensure-service in the guest and again by the host's trap, which
+# also covers a failure before the guest script runs; a second start is a no-op.
+record "...the service was reinstalled once, and started" "1/yes" "$(logged 'svc.sh install runner')/$([ "$(logged 'systemctl start')" -ge 1 ] && echo yes || echo no)"
 record "...the message says so" "yes" "$(has "$out" 'starting '"$unit"' again')"
 
 echo "svc.sh uninstall fails partway (#83):"

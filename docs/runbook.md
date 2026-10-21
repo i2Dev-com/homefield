@@ -534,10 +534,15 @@ limactl delete --force homefield
 first. If GitHub then refuses the removal (a rejected token, no network), or
 `svc.sh uninstall` stops partway, `bin/homefield uninstall` gives the service
 back and starts it, so the runner keeps taking jobs; run it again once the
-cause is fixed. By hand that is `./svc.sh install runner` and starting the unit
-from `.service`; if the unit file is still in `/etc/systemd/system`, put its
-name back in `.service` and `systemctl enable` it instead. If that fails too,
-`bin/homefield install` sets the service up again.
+cause is fixed. By hand, `provision.sh` does that and works out what the
+uninstall left behind:
+
+```bash
+limactl copy vm/provision.sh homefield:/tmp/provision.sh
+limactl shell homefield sudo bash /tmp/provision.sh ensure-service --start
+```
+
+If that fails too, `bin/homefield install` sets the service up again.
 
 If the VM cannot be asked (a `limactl shell` that fails) whether the runner is
 registered, whether a job is running, or whether it has a service, `uninstall`
