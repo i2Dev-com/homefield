@@ -23,6 +23,16 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ### Fixed
 
+- A runner GitHub removed after 14 days offline is no longer reported as
+  registered. `homefield status` checks GitHub's runner list by the runner's
+  id when gh can read it, prints `github: listed`, `github: NOT listed` with
+  the way to register it again, or `github: not checked`, and exits 1 when it
+  is not listed. `upgrade` (and `install` on that VM) refuse before anything
+  is stopped instead of failing at the end; `uninstall` removes only the VM's
+  copy of the registration (`config.sh remove --local`, no token), so
+  `uninstall --keep-vm` then `install --url ...` registers the VM again.
+  Without gh, a provisioning run that fails because of it says so. Recovery
+  is in docs/runbook.md, "Operating several runners" (#76).
 - `homefield upgrade` and `uninstall` no longer stop with "Unit ... not
   loaded" when `.service` names a unit whose file is gone (an uninstall cut
   off partway): there is nothing to stop, so they go on, and `upgrade`

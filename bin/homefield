@@ -301,6 +301,28 @@ is_registered() {
   return "$rc"
 }
 
+# runner_on_github <url> <id>: 0 if GitHub lists a runner with the id at <url>,
+# 1 if it lists the scope's runners and that id is not among them, 2 if it
+# could not be asked (no gh, no admin access, no network). GitHub removes a
+# runner that has not connected for more than 14 days, and the VM's .runner
+# stays (#76). Matched by id: another Mac can register the name again. Never
+# prompts, status calls it.
+runner_on_github() {
+  local scope ids id
+  [ -n "$2" ] && command -v gh >/dev/null || return 2
+  scope="$(api_scope "$1" 2>/dev/null)" || return 2
+  ids="$(gh api --paginate "${scope}/actions/runners?per_page=100" --jq '.runners[].id' 2>/dev/null)" || return 2
+  while read -r id; do
+    [ "$id" != "$2" ] || return 0
+  done <<<"$ids"
+  return 1
+}
+
+# removed_recovery <url>: how to register a runner GitHub removed again.
+removed_recovery() {
+  echo "bin/homefield uninstall --instance ${INSTANCE} --keep-vm, then bin/homefield install --instance ${INSTANCE} --url $1"
+}
+
 # job_running: 0 if a job is running, 1 if not, 2 if the guest could not be
 # asked (the call failed, or pgrep did not run). `pgrep` alone exits 1 for "no
 # job" and for a `limactl shell` that never reached the guest. The [R] keeps
@@ -904,6 +926,12 @@ cmd_upgrade() {
   ensure_vm "" ""
   verify_isolation
   is_registered || die "${INSTANCE} is not registered; run bin/homefield install --url ..."
+  # A registration GitHub removed would only fail at the end, when the runner
+  # cannot start a session; one that cannot be checked goes ahead.
+  local url="" id="" on=0
+  { read -r url || true; read -r id || true; } < <(runner_setting gitHubUrl agentId)
+  runner_on_github "$url" "$id" || on=$?
+  [ "$on" != 1 ] || die "GitHub no longer has ${INSTANCE}'s runner (id ${id}) at ${url}: it removes runners that have not connected for more than 14 days. Nothing was changed. Register it again: $(removed_recovery "$url")"
   # An upgrade can restart Docker (apt) or the runner (a new binary), which
   # would take down a running job.
   if is_job_running && [ "$force" != 1 ]; then
@@ -944,11 +972,21 @@ cmd_status() {
     return
   fi
   # A read at end of input fails, and under `set -e` that ends the command:
-  # fewer than two lines must reach the check below, not stop here.
-  local name url svc
-  { read -r name || true; read -r url || true; } < <(runner_setting agentName gitHubUrl)
+  # fewer than three lines must reach the check below, not stop here.
+  local name url id svc removed=0 on=0
+  { read -r name || true; read -r url || true; read -r id || true; } < <(runner_setting agentName gitHubUrl agentId)
   if [ -n "$name" ] && [ -n "$url" ]; then
     echo "runner: ${name}, registered at ${url}"
+    runner_on_github "$url" "$id" || on=$?
+    case "$on" in
+      0) echo "github: listed" ;;
+      1)
+        echo "github: NOT listed: GitHub removes runners that have not connected for more than 14 days."
+        echo "  Register it again: $(removed_recovery "$url")"
+        removed=1
+        ;;
+      *) echo "github: not checked (needs gh with admin access to ${url})" ;;
+    esac
   else
     # The registration exists (.runner is there) but its details could not be
     # read just now; the rest of the report still stands on its own.
@@ -970,6 +1008,7 @@ cmd_status() {
   echo "runner version: $(guest sudo cat "$RUNNER_HOME/.provisioned-version" 2>/dev/null || echo unknown)"
   echo "extra packages: $(guest sh -c 'cat /etc/homefield/extra-packages 2>/dev/null | tr "\n" " "')"
   [ -n "$url" ] && echo "labels: see $(runners_page "$url") (not stored in the VM)"
+  [ "$removed" = 0 ] || return 1
   return "$unknown"
 }
 
@@ -982,10 +1021,17 @@ cmd_status() {
 # release's copy, put in the guest by cmd_uninstall, so a VM provisioned by an
 # older one gets it too. If that fails as well, the runner is registered with
 # no service, and `homefield install` sets the service up again.
+#
+# deregister_script local: for a runner GitHub no longer has (#76), removes
+# only the VM's copy of the registration (`config.sh remove --local`, which
+# asks GitHub nothing), with an empty line for the token.
 deregister_script() {
   # shellcheck disable=SC2016  # the guest's shell expands these, not this one
-  local script='cd @HOME@ && read -r t && s=0 && { [ ! -f .service ] || s=1; } && { [ "$s" = 0 ] || ./svc.sh uninstall || { rc=$?; bash @PROVISION@ ensure-service --start; exit "$rc"; }; } && { ACTIONS_RUNNER_INPUT_TOKEN="$t" sudo --preserve-env=ACTIONS_RUNNER_INPUT_TOKEN -u runner ./config.sh remove || { rc=$?; [ "$s" = 0 ] || bash @PROVISION@ ensure-service --start; exit "$rc"; }; }'
+  local script='cd @HOME@ && read -r t && s=0 && { [ ! -f .service ] || s=1; } && { [ "$s" = 0 ] || ./svc.sh uninstall || { rc=$?; bash @PROVISION@ ensure-service --start; exit "$rc"; }; } && { ACTIONS_RUNNER_INPUT_TOKEN="$t" sudo --preserve-env=ACTIONS_RUNNER_INPUT_TOKEN -u runner ./config.sh remove@LOCAL@ || { rc=$?; [ "$s" = 0 ] || bash @PROVISION@ ensure-service --start; exit "$rc"; }; }'
+  local flag=""
+  [ "${1:-}" != local ] || flag=" --local"
   script="${script//@HOME@/$RUNNER_HOME}"
+  script="${script//@LOCAL@/$flag}"
   printf '%s' "${script//@PROVISION@/$GUEST_PROVISION}"
 }
 
@@ -1005,8 +1051,10 @@ cmd_uninstall() {
   [ "$status" = "Running" ] || limactl start --tty=false "$INSTANCE"
   if is_registered; then
     is_job_running && die "a job is running on ${INSTANCE}; uninstall when it is idle"
-    local url token
-    url="$(runner_setting gitHubUrl)"
+    local url="" id="" token on=0
+    { read -r url || true; read -r id || true; } < <(runner_setting gitHubUrl agentId)
+    [ -n "$url" ] || die "could not read the runner's registration in VM ${INSTANCE}; nothing was changed"
+    runner_on_github "$url" "$id" || on=$?
     echo "homefield: switch every repository that routes to this runner to hosted first:" >&2
     echo "homefield:   gh variable set CI_RUNNER --repo <owner>/<repo> --body hosted" >&2
     # The restore deregister_script falls back on, copied in while nothing
@@ -1015,10 +1063,16 @@ cmd_uninstall() {
       die "could not copy provision.sh into VM ${INSTANCE}; nothing was changed"
     # Offline before the token is fetched or typed, which can take a while.
     stop_runner
-    token="$(get_token remove "$url")"
-    log "deregistering from ${url}"
-    printf '%s\n' "$token" | guest_stdin sudo sh -c "$(deregister_script)"
-    token=""
+    if [ "$on" = 1 ]; then
+      # A full removal would ask GitHub to delete a runner it does not have.
+      log "GitHub no longer has this runner (id ${id}) at ${url}; removing its registration from the VM only"
+      printf '\n' | guest_stdin sudo sh -c "$(deregister_script local)"
+    else
+      token="$(get_token remove "$url")"
+      log "deregistering from ${url}"
+      printf '%s\n' "$token" | guest_stdin sudo sh -c "$(deregister_script)"
+      token=""
+    fi
     runner_back
   else
     log "${INSTANCE} is not registered; nothing to deregister"

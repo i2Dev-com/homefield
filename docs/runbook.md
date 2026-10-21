@@ -450,11 +450,30 @@ gh api --paginate "orgs/<org>/actions/runners?per_page=100" --jq '
 Use your `RUNNER_LABEL` for `homefield-ci`. `offline` means the Mac is asleep
 or off, or the VM or service is stopped: run `bin/homefield status` on it.
 `version` is the runner's own version, which moves when it updates itself, not
-the `homefield` version. GitHub removes a runner that has not connected for
-more than 14 days, so a Mac left off that long comes back unregistered while
-`bin/homefield status` still says "registered" (it reads a file in the VM); a
-runner missing from this list is the sign. Recovery is not yet documented
-([#76](https://github.com/i2Dev-com/homefield/issues/76)).
+the `homefield` version.
+
+**A runner GitHub removed.** GitHub removes a runner that has not connected
+for more than 14 days, so a Mac left off that long comes back unregistered:
+the VM still has its registration, but the runner fails with "The runner
+registration has been deleted from the server" and its service stops. A runner
+missing from this list is the sign, and `bin/homefield status` says
+`github: NOT listed` (and exits 1) when gh can read the list; otherwise it
+says `github: not checked` and the VM's copy is all it can see. `upgrade`, and
+`install` on that VM, refuse before anything is stopped; without gh, the
+upgrade runs and fails at the end, when the service does not reach "Listening
+for Jobs", and says why. Register it again (#76):
+
+```bash
+bin/homefield uninstall --instance <name> --keep-vm
+bin/homefield install --instance <name> --url https://github.com/<org>
+```
+
+`uninstall` removes only the VM's copy of a registration GitHub no longer
+lists (`config.sh remove --local`, no token); without gh to tell, it asks for a
+remove token, and the runner (2.337.0) skips the server part for a runner that
+is gone. The VM and its extra packages are kept. The label and group are not
+stored in the VM, so pass `install` the same `--label`, `--group` and `--name`
+as the first time if they were not the defaults.
 
 **Upgrade them.** On each Mac: `homefield version`, the README's one-liner
 again, then `homefield upgrade --instance <name>` for each VM on it.

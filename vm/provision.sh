@@ -522,6 +522,10 @@ else
   if [ "$ready" != "1" ] || ! systemctl is-active --quiet "$svc_unit"; then
     journalctl -u "$svc_unit" --since "$since" --no-pager | tail -20 || true
     echo "provision.sh: ${svc_unit} did not reach \"Listening for Jobs\"" >&2
+    # The runner's own words, as a hint only (#76).
+    if journalctl -u "$svc_unit" --since "$since" --no-pager 2>/dev/null | grep "registration has been deleted from the server" >/dev/null; then
+      echo "provision.sh: GitHub no longer has this runner's registration (it removes runners that have not connected for more than 14 days); docs/runbook.md, \"Operating several runners\", says how to register it again" >&2
+    fi
     exit 1
   fi
   trap - EXIT
