@@ -58,7 +58,9 @@ Exit status: 0 if every check passes, 1 otherwise.
 Two flags print instead of checking, for tools that build on the same rules
 (bin/homefield adopt): --list names the jobs that carry the canonical
 expression, and --print-expression prints the expression itself. Both take
-the same options as a check (--events, --dependabot, --fallback).
+the same options as a check (--label, --arch, --events, --dependabot,
+--fallback) and refuse the same values, on stderr, so stdout holds only what
+they print.
 """
 import argparse
 import os
@@ -67,7 +69,7 @@ import sys
 
 # A GitHub-hosted image label, optionally quoted. Case-insensitive, as GitHub's
 # label matching is. None of these can name the local runner, whose labels are
-# self-hosted, Linux, ARM64 and the routing label.
+# self-hosted, Linux, its architecture (ARM64 or X64) and the routing label.
 # Also accepted as a one-element flow list, `[ubuntu-latest]`.
 HOSTED = re.compile(
     r"""^(\[\s*)?(['"]?)(ubuntu|windows|macos)-[a-z0-9._-]+\2(?(1)\s*\])$""",
@@ -261,19 +263,22 @@ def main() -> int:
     )
     args = ap.parse_args()
 
+    def refuse(msg: str) -> int:
+        # --list and --print-expression keep stdout for what they print.
+        out = sys.stderr if args.list or args.print_expression else sys.stdout
+        print(f"  \033[31mFAIL\033[0m {msg}", file=out)
+        return 1
+
     problem = label_problem(args.label)
     if problem:
-        print(f"  \033[31mFAIL\033[0m label {args.label!r} {problem}")
-        return 1
+        return refuse(f"label {args.label!r} {problem}")
     try:
         events = parse_events(args.events)
     except ValueError as err:
-        print(f"  \033[31mFAIL\033[0m {err}")
-        return 1
+        return refuse(str(err))
     problem = option_problem(args.arch, args.dependabot, args.fallback)
     if problem:
-        print(f"  \033[31mFAIL\033[0m {problem}")
-        return 1
+        return refuse(problem)
     canonical = canonical_expression(args.label, args.arch, events, args.dependabot, args.fallback)
     if args.print_expression:
         print(canonical)

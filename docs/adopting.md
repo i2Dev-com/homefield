@@ -102,6 +102,11 @@ adopt` refuses a guard whose options differ from the flags you pass it.
 | `dependabot` | `hosted` | `hosted`, `local` | With `local`, Dependabot's branches bring unreviewed install scripts onto a VM that is not thrown away after the job. |
 | `fallback` | `ubuntu-latest` | a GitHub-hosted image name: `ubuntu-*`, `windows-*` or `macos-*` | None to the guarantee: it is the image jobs run on when `CI_RUNNER` is not `local`, such as `ubuntu-24.04-arm` for jobs that build for arm64. A self-hosted label is refused, because it would send the job to the runner whenever the switch is off. The guard checks only the prefix, so `homefield adopt` warns about a name that is not one of GitHub's standard labels: a typo would make jobs wait. |
 
+The guard also takes `arch`, the runner's architecture label (default
+`arm64`, the VM's). It is not a routing choice: leave it unless the runner
+is an x86-64 Linux host ([Moving to dedicated hardware](runbook.md#moving-to-dedicated-hardware)), which takes
+`x64`. Any other value is refused, `ARM64` and `amd64` included.
+
 The expression changes with the options, and the guard checks it. For
 example, `events: push` gives:
 

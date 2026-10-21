@@ -19,7 +19,9 @@ fail, such as a new guard in the routing expression, bumps the minor version
   the guard enforced, so every job carrying it passed and then waited for a
   runner with that label, and a value with a quote in it added labels of its
   own. A workflow that passed `arch: ARM64` or any other value now fails, so
-  this needs a minor release (#87).
+  this needs a minor release. `--list` and `--print-expression` now print a
+  refused option on stderr, so their stdout holds only the jobs or the
+  expression (#87).
 - Restoring the runner's service has one implementation,
   `provision.sh ensure-service [--start]`, used after registration on every
   provisioning run, when a move is rolled back, and by `homefield uninstall`
