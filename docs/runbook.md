@@ -469,9 +469,17 @@ bin/homefield install --instance <name> --url https://github.com/<org>
 ```
 
 `uninstall` removes only the VM's copy of a registration GitHub no longer
-lists (`config.sh remove --local`, no token); without gh to tell, it asks for a
-remove token, and the runner (2.337.0) skips the server part for a runner that
-is gone. The VM and its extra packages are kept. The label and group are not
+lists (`config.sh remove --local`, no token). Without gh to tell, it asks for a
+remove token and runs the full `config.sh remove`; on the registrations we have
+seen, the runner (2.337.0) finds no runner on GitHub and skips that part. If it
+fails instead (the runner's service is put back, still unregistered), remove
+the VM's copy by hand, then run `install` as above:
+
+```bash
+limactl shell <name> sudo sh -c 'cd /opt/actions-runner && ./svc.sh uninstall && sudo -u runner ./config.sh remove --local'
+```
+
+The VM and its extra packages are kept. The label and group are not
 stored in the VM, so pass `install` the same `--label`, `--group` and `--name`
 as the first time if they were not the defaults.
 
