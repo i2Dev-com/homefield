@@ -45,7 +45,8 @@ case "${JOB:-idle}" in running) exit 0 ;; idle) exit 1 ;; *) exit 3 ;; esac'
 # marker in the runner directory is.
 stub systemctl 'echo "systemctl $*" >>"$LOG"
 case "$1" in
-  stop) rm -f "$HOME_DIR/active" ;;
+  stop) [ -e "$UNITS/$2" ] || { echo "Failed to stop $2: Unit $2 not loaded." >&2; exit 5; }; rm -f "$HOME_DIR/active" ;;
+  show) [ -e "$UNITS/${!#}" ] && echo loaded || echo not-found ;;
   start) [ -e "$UNITS/$2" ] || { echo "Unit $2 not found." >&2; exit 5; }; : >"$HOME_DIR/active" ;;
   enable) [ "${FAIL_ENABLE:-}" != 1 ] || exit 1; [ -e "$UNITS/$2" ] || { echo "Unit $2 not found." >&2; exit 1; }; : >"$HOME_DIR/enabled" ;;
   disable) rm -f "$HOME_DIR/enabled" ;;
@@ -234,6 +235,18 @@ echo "svc.sh uninstall fails and so does enabling the unit again:"
 fresh
 run env FAIL_UNINSTALL=disable FAIL_ENABLE=1
 record "uninstall fails, saying the unit is not enabled" "1/yes" "$rc/$(has "$out" 'could not enable')"
+
+echo "a .service whose unit file is gone (an uninstall cut off, #99):"
+fresh
+rm -f "$units/$unit" "$home/enabled" "$home/active"
+run env
+record "uninstall succeeds" "0" "$rc"
+record "...says there is nothing to stop, and stops nothing" "yes/0" "$(has "$out" 'is not installed; nothing to stop')/$(logged 'systemctl stop')"
+record "...deregistered" "removed" "$(state | cut -d/ -f1)"
+fresh
+run env FAIL_ON='systemctl show'
+record "the guest cannot be asked whether the unit is installed: uninstall fails" "1/yes" "$rc/$(has "$out" 'is installed; nothing was stopped')"
+record "...nothing was stopped or deregistered" "0/0/registered" "$(logged 'systemctl stop')/$(logged 'config.sh')/$(state | cut -d/ -f1)"
 
 echo "a job is running:"
 fresh

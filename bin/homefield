@@ -347,6 +347,17 @@ stop_runner() {
   fi
   # A file the guest answered for, with no name in it: no unit to stop.
   [ -n "$unit" ] || return 0
+  # A name whose unit file is gone (an uninstall cut off before it deleted
+  # .service) names nothing that runs. systemctl stop would fail with "not
+  # loaded" and end the command before provisioning could repair it (#99).
+  local load
+  if ! load="$(guest systemctl show -p LoadState --value "$unit")"; then
+    die "could not ask VM ${INSTANCE} whether ${unit} is installed; nothing was stopped. Try again when bin/homefield status answers"
+  fi
+  if [ "$load" = not-found ]; then
+    log "${unit} is not installed; nothing to stop"
+    return 0
+  fi
   stopped_unit="$unit"
   trap restart_runner_on_failure EXIT
   log "stopping ${stopped_unit}: the runner takes no jobs until this finishes"

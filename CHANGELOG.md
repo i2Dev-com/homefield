@@ -23,6 +23,11 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ### Fixed
 
+- `homefield upgrade` and `uninstall` no longer stop with "Unit ... not
+  loaded" when `.service` names a unit whose file is gone (an uninstall cut
+  off partway): there is nothing to stop, so they go on, and `upgrade`
+  repairs the service. Found on a throwaway VM; before this, the repair that
+  #83 describes for this state never ran (#99).
 - A first registration or a move no longer leaves the runner registered with
   no service when the workspace hook's setup fails: that setup now runs before
   registration (in a move, before the old registration is removed, so the old
