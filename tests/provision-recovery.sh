@@ -2,7 +2,8 @@
 # provision.sh on a runner that is running (#61): once it has stopped the
 # service to replace the runner binary, any failure before the service is
 # started again must leave the runner running, as the host-side `upgrade`
-# does for the VM it stops itself.
+# does for the VM it stops itself. A move also restores the old service if
+# uninstall or registration removal fails (#81).
 #
 # The real script runs, cut off before its cleanup timer, in a scratch tree:
 # its absolute paths are rewritten into it and every command that would touch
@@ -52,7 +53,12 @@ stub systemctl 'echo "systemctl $*" >>"$STATE.log"
 case "$1" in
   is-active) [ -e "$STATE.active" ] ;;
   stop) rm -f "$STATE.active" ;;
-  start|restart) [ "${FAIL_AT:-}" = start ] && [ "$1" = restart ] && exit 1; : >"$STATE.active" ;;
+  disable) rm -f "$STATE.enabled"; [ "${FAIL_AT:-}" != disable ] ;;
+  enable) [ "$2" = --now ] && exit 0; [ -f "$UNIT_DIR/$2" ] || exit 1; : >"$STATE.enabled" ;;
+  start|restart)
+    [ "${FAIL_AT:-}" = start ] && [ "$1" = restart ] && exit 1
+    [ -f "$UNIT_DIR/$2" ] || exit 1
+    : >"$STATE.active" ;;
   *) exit 0 ;;
 esac'
 stub journalctl '[ "${FAIL_AT:-}" != listen ] && [ -e "$STATE.active" ] && echo "Listening for Jobs"; exit 0'
@@ -63,6 +69,7 @@ sed -n '1,/^# ── Cleanup timer/p' "$ROOT/vm/provision.sh" |
   sed -e "s|/opt/actions-runner|$work/runner|g" \
     -e "s|/usr/local/sbin|$work/sbin|g" \
     -e "s|/etc/sudoers.d|$work/sudoers.d|g" \
+    -e "s|/etc/systemd/system|$work/systemd|g" \
     -e "s|/etc/homefield|$work/etc|g" \
     -e "s|mktemp /tmp/actions-runner.XXXXXX.tar.gz|mktemp $work/tarball.XXXXXX|" \
     >"$work/provision.sh"
@@ -71,13 +78,48 @@ record "the script was cut at its cleanup timer" "yes" "$(grep -q '^# ── Cle
 unit="actions.runner.test.service"
 # fresh <version> <active|stopped>: a registered runner at that version.
 fresh() {
-  rm -rf "${work:?}/runner" "${work:?}/sbin" "${work:?}/sudoers.d" "${work:?}/etc" "${work:?}"/state*
-  mkdir -p "$work/runner/bin" "$work/sbin" "$work/sudoers.d" "$work/etc"
+  rm -rf "${work:?}/runner" "${work:?}/sbin" "${work:?}/sudoers.d" "${work:?}/etc" "${work:?}/systemd" "${work:?}"/state*
+  mkdir -p "$work/runner/bin" "$work/sbin" "$work/sudoers.d" "$work/etc" "$work/systemd"
   printf '#!/bin/sh\nexit 0\n' >"$work/runner/bin/installdependencies.sh"
   chmod +x "$work/runner/bin/installdependencies.sh"
-  : >"$work/runner/config.sh"
+  cat >"$work/runner/config.sh" <<'EOF'
+#!/usr/bin/env bash
+echo "config $*" >>"$STATE.log"
+if [ "$1" = remove ]; then
+  [ "${FAIL_AT:-}" != remove ] || exit 1
+  rm -f "$(dirname "$0")/.runner"
+else
+  [ "${FAIL_AT:-}" != register ] || exit 1
+  echo '{"gitHubUrl":"https://github.com/new-scope"}' >"$(dirname "$0")/.runner"
+fi
+EOF
   chmod +x "$work/runner/config.sh"
+  cat >"$work/runner/svc.sh" <<'EOF'
+#!/usr/bin/env bash
+echo "svc $*" >>"$STATE.log"
+case "$1" in
+  uninstall)
+    systemctl disable "$UNIT" || exit 1
+    [ "${FAIL_AT:-}" != unit_remove ] || exit 1
+    rm -f "$UNIT_DIR/$UNIT"
+    [ "${FAIL_AT:-}" != marker_remove ] || exit 1
+    rm -f "$(dirname "$0")/.service"
+    [ "${FAIL_AT:-}" != uninstall ] || exit 1
+    systemctl daemon-reload
+    ;;
+  install)
+    [ ! -f "$UNIT_DIR/$UNIT" ] || exit 1
+    : >"$UNIT_DIR/$UNIT"
+    systemctl daemon-reload
+    systemctl enable "$UNIT"
+    echo "$UNIT" >"$(dirname "$0")/.service"
+    ;;
+esac
+EOF
+  chmod +x "$work/runner/svc.sh"
   echo "$unit" >"$work/runner/.service"
+  : >"$work/systemd/$unit"
+  : >"$work/state.enabled"
   echo "$1" >"$work/runner/.provisioned-version"
   echo '{"gitHubUrl":"https://github.com/acme"}' >"$work/runner/.runner"
   echo 'LANG=C' >"$work/runner/.env"
@@ -86,10 +128,19 @@ fresh() {
 }
 # run [FAIL_AT]: provision, as root, against the scratch tree.
 run() {
-  PATH="$stubs:$PATH" STATE="$work/state" FAIL_AT="${1:-}" bash "$work/provision.sh" </dev/null >"$work/out" 2>&1
+  PATH="$stubs:$PATH" STATE="$work/state" UNIT="$unit" UNIT_DIR="$work/systemd" FAIL_AT="${1:-}" bash "$work/provision.sh" </dev/null >"$work/out" 2>&1
+}
+run_move() {
+  printf 'RUNNER_REMOVE_TOKEN=old-token\nRUNNER_TOKEN=new-token\n' |
+    PATH="$stubs:$PATH" STATE="$work/state" UNIT="$unit" UNIT_DIR="$work/systemd" FAIL_AT="$1" \
+      RUNNER_REREGISTER=1 RUNNER_URL=https://github.com/new-scope \
+      bash "$work/provision.sh" >"$work/out" 2>&1
 }
 running() { [ -e "$work/state.active" ] && echo running || echo stopped; }
+enabled() { [ -e "$work/state.enabled" ] && echo enabled || echo disabled; }
+unit_present() { [ -f "$work/systemd/$unit" ] && echo present || echo absent; }
 calls() { grep -c "^systemctl $1 " "$work/state.log" 2>/dev/null || true; }
+svc_calls() { grep -c "^svc $1" "$work/state.log" 2>/dev/null || true; }
 
 # The version in provision.sh, so every case replaces the binary (old) or none.
 current="$(sed -n 's/^RUNNER_VERSION="\(.*\)"$/\1/p' "$ROOT/vm/provision.sh")"
@@ -139,5 +190,42 @@ record "...and does not start what it did not stop" "stopped" "$(running)"
 fresh 2.0.0 stopped
 run
 record "success: the runner is started" "0/running" "$?/$(running)"
+
+echo "a move fails before old registration removal:"
+fresh 2.0.0 active
+run_move tar
+rc=$?
+record "binary replacement fails during a move: provisioning fails" "1" "$rc"
+record "...the move recovery still starts the old runner" "running/1" "$(running)/$(calls start)"
+for at in disable unit_remove marker_remove uninstall remove; do
+  fresh "$current" active
+  run_move "$at"
+  rc=$?
+  record "$at fails: provisioning fails" "1" "$rc"
+  record "...old registration remains" "https://github.com/acme" "$(sed -n 's/.*"gitHubUrl":"\([^"]*\)".*/\1/p' "$work/runner/.runner")"
+  record "...service marker is restored" "$unit" "$(cat "$work/runner/.service")"
+  record "...unit exists and is enabled" "present/enabled" "$(unit_present)/$(enabled)"
+  case "$at" in disable|unit_remove) installs=0 ;; *) installs=1 ;; esac
+  record "...service install matches the unit state" "$installs" "$(svc_calls install)"
+  record "...old service is running" "running/1" "$(running)/$(calls start)"
+done
+record "...removal was attempted only after successful uninstall" "1" "$(grep -c '^config remove$' "$work/state.log")"
+
+echo "a move after old registration removal:"
+fresh "$current" active
+run_move ""
+rc=$?
+record "success: provisioning exits 0" "0" "$rc"
+record "...new registration replaces old" "https://github.com/new-scope" "$(sed -n 's/.*"gitHubUrl":"\([^"]*\)".*/\1/p' "$work/runner/.runner")"
+record "...new service is running" "$unit/running" "$(cat "$work/runner/.service")/$(running)"
+record "...old service was not restarted" "0" "$(calls start)"
+
+fresh "$current" active
+run_move register
+rc=$?
+record "registration fails after removal: provisioning fails" "1" "$rc"
+record "...old registration is gone" "absent" "$([ -e "$work/runner/.runner" ] && echo present || echo absent)"
+record "...old service is not reinstalled" "absent/0" "$([ -e "$work/runner/.service" ] && echo present || echo absent)/$(svc_calls install)"
+record "...old service is not restarted" "stopped/0" "$(running)/$(calls start)"
 
 summary

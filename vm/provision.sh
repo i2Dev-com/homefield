@@ -178,9 +178,24 @@ if [ "${RUNNER_REREGISTER:-0}" = "1" ] && [ -f "$RUNNER_HOME/.runner" ]; then
 fi
 restart_old_on_failure() {
   local rc=$?
-  if [ "$rc" -ne 0 ]; then
+  if [ "$rc" -ne 0 ] && [ -n "$svc_unit" ]; then
     echo "provision.sh: move failed before the old registration was removed; restarting ${svc_unit}" >&2
-    systemctl start "$svc_unit" || true
+    # svc.sh uninstall disables and removes the unit before deleting .service.
+    # It may fail at any of those steps; svc.sh install refuses an existing
+    # unit, so only reinstall when the unit itself is gone.
+    if [ ! -f "/etc/systemd/system/$svc_unit" ]; then
+      rm -f "$RUNNER_HOME/.service"
+      (cd "$RUNNER_HOME" && ./svc.sh install "$RUNNER_USER") || return "$rc"
+    elif [ ! -f "$RUNNER_HOME/.service" ]; then
+      printf '%s\n' "$svc_unit" >"$RUNNER_HOME/.service"
+      chown "$RUNNER_USER:$RUNNER_USER" "$RUNNER_HOME/.service"
+    fi
+    if ! systemctl enable "$svc_unit"; then
+      echo "provision.sh: could not re-enable ${svc_unit}" >&2
+    fi
+    if ! systemctl start "$svc_unit"; then
+      echo "provision.sh: could not restart ${svc_unit}" >&2
+    fi
   fi
 }
 if [ "$move" = "1" ]; then
@@ -193,9 +208,9 @@ if [ "$move" = "1" ]; then
     exit 1
   fi
   # Stopped before anything else, so no job can start while the tokens exist.
-  # Until the old registration is removed below, the old runner is still
-  # whole, so a failure on the way there (apt, a hook, the runner binary)
-  # starts it again instead of leaving it offline.
+  # Until the old registration is removed below, a failure starts it again.
+  # Removing the registration first uninstalls its service, so recovery may
+  # need to reinstall the service before starting it.
   if [ -n "$svc_unit" ]; then
     systemctl stop "$svc_unit"
     trap restart_old_on_failure EXIT
@@ -286,7 +301,7 @@ if [ ! -x "$RUNNER_HOME/config.sh" ] || ! grep -qx "$RUNNER_VERSION" "$RUNNER_HO
     systemctl stop "$svc_unit"
     restart_old=1
   fi
-  if [ "$restart_old" = "1" ]; then
+  if [ "$restart_old" = "1" ] && [ "$move" != "1" ]; then
     trap restart_replaced_runner EXIT
   fi
   tar -xzf "$tarball" -C "$RUNNER_HOME"
@@ -308,13 +323,12 @@ runner_config() {
     "$RUNNER_HOME/config.sh" "$@"
 }
 if [ "$move" = "1" ]; then
-  # From here on the old registration is being dismantled; there is nothing
-  # left to restart. A failure now needs the same command re-run (runbook).
-  trap - EXIT
   if [ -f "$RUNNER_HOME/.service" ]; then
     (cd "$RUNNER_HOME" && ./svc.sh uninstall)
   fi
   runner_config "$RUNNER_REMOVE_TOKEN" remove
+  # The old registration is gone; the old service must no longer restart.
+  trap - EXIT
 fi
 if [ ! -f "$RUNNER_HOME/.runner" ]; then
   # A ${RUNNER_GROUP:+--runnergroup "$RUNNER_GROUP"} expansion would split a
