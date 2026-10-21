@@ -411,6 +411,10 @@ run_fn -- cmd_adopt --repo acme/app --label 'a b'
 record "a bad label: refused" "nonzero/yes/0" "$(nonzero "$rc")/$(has "$out" '--label must be one label')/$(called gh)"
 run_fn -- cmd_adopt --repo acme/app --label linux
 record "a reserved label: refused with the guard's reason" "nonzero/yes/0" "$(nonzero "$rc")/$(has "$out" 'custom label')/$(called gh)"
+# The reason is in adopt's own message, without the guard's colours: the guard
+# prints a refusal on stderr, so adopt has to capture that too.
+record "...the reason is in the refusal line, not coloured" "1/no" \
+  "$(printf '%s\n' "$out" | grep -c 'cannot be routed on: .*custom label')/$(has "$out" $'\033')"
 run_fn -- cmd_adopt --repo acme/app --frobnicate
 record "an unknown option: refused" "nonzero/yes" "$(nonzero "$rc")/$(has "$out" 'unknown option --frobnicate')"
 mv "$stubs/gh" "$work/gh.away"
