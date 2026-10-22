@@ -30,7 +30,7 @@ stub() { printf '#!/usr/bin/env bash\n%s\n' "$2" >"$stubs/$1"; chmod +x "$stubs/
 
 stub id 'case "$1" in -u) echo 0 ;; esac'
 stub hostname 'echo lima-test'
-stub apt-get 'exit 0'
+stub apt-get 'echo "apt-get $*" >>"$STATE.log"'
 stub useradd 'exit 0'
 stub usermod 'exit 0'
 stub sleep 'exit 0'
@@ -73,15 +73,15 @@ sed -n '1,/^# ── Cleanup timer/p' "$ROOT/vm/provision.sh" |
     -e "s|/etc/sudoers.d|$work/sudoers.d|g" \
     -e "s|/etc/systemd/system|$work/systemd|g" \
     -e "s|/etc/homefield|$work/etc|g" \
-    -e "s|mktemp /tmp/actions-runner.XXXXXX.tar.gz|mktemp $work/tarball.XXXXXX|" \
+    -e "s|new_tmp /tmp/actions-runner.XXXXXX.tar.gz|new_tmp $work/tarball.XXXXXX|" \
     >"$work/provision.sh"
 record "the script was cut at its cleanup timer" "yes" "$(grep -q '^# ── Cleanup timer' "$work/provision.sh" && echo yes || echo no)"
 
 unit="actions.runner.test.service"
 # fresh <version> <active|stopped>: a registered runner at that version.
 fresh() {
-  rm -rf "${work:?}/runner" "${work:?}/sbin" "${work:?}/sudoers.d" "${work:?}/etc" "${work:?}/systemd" "${work:?}"/state*
-  mkdir -p "$work/runner/bin" "$work/sbin" "$work/sudoers.d" "$work/etc" "$work/systemd"
+  rm -rf "${work:?}/runner" "${work:?}/sbin" "${work:?}/sudoers.d" "${work:?}/etc" "${work:?}/systemd" "${work:?}"/state* "${work:?}/tmp"
+  mkdir -p "$work/runner/bin" "$work/sbin" "$work/sudoers.d" "$work/etc" "$work/systemd" "$work/tmp"
   printf '#!/bin/sh\nexit 0\n' >"$work/runner/bin/installdependencies.sh"
   chmod +x "$work/runner/bin/installdependencies.sh"
   cat >"$work/runner/config.sh" <<'EOF'
@@ -132,11 +132,11 @@ EOF
 }
 # run [FAIL_AT]: provision, as root, against the scratch tree.
 run() {
-  PATH="$stubs:$PATH" STATE="$work/state" UNIT="$unit" UNIT_DIR="$work/systemd" FAIL_AT="${1:-}" bash "$work/provision.sh" </dev/null >"$work/out" 2>&1
+  PATH="$stubs:$PATH" TMPDIR="$work/tmp" STATE="$work/state" UNIT="$unit" UNIT_DIR="$work/systemd" FAIL_AT="${1:-}" bash "$work/provision.sh" </dev/null >"$work/out" 2>&1
 }
 run_move() {
   printf 'RUNNER_REMOVE_TOKEN=old-token\nRUNNER_TOKEN=new-token\n' |
-    PATH="$stubs:$PATH" STATE="$work/state" UNIT="$unit" UNIT_DIR="$work/systemd" FAIL_AT="$1" \
+    PATH="$stubs:$PATH" TMPDIR="$work/tmp" STATE="$work/state" UNIT="$unit" UNIT_DIR="$work/systemd" FAIL_AT="$1" \
       RUNNER_REREGISTER=1 RUNNER_URL=https://github.com/new-scope \
       bash "$work/provision.sh" >"$work/out" 2>&1
 }
@@ -144,11 +144,13 @@ run_move() {
 run_first() {
   rm -f "$work/runner/.runner" "$work/runner/.service" "$work/systemd/$unit" "$work/state.enabled"
   printf 'RUNNER_TOKEN=new-token\n' |
-    PATH="$stubs:$PATH" STATE="$work/state" UNIT="$unit" UNIT_DIR="$work/systemd" FAIL_AT="${1:-}" \
+    PATH="$stubs:$PATH" TMPDIR="$work/tmp" STATE="$work/state" UNIT="$unit" UNIT_DIR="$work/systemd" FAIL_AT="${1:-}" \
       RUNNER_URL=https://github.com/new-scope \
       bash "$work/provision.sh" >"$work/out" 2>&1
 }
 running() { [ -e "$work/state.active" ] && echo running || echo stopped; }
+# leftovers: the temp files a run left, in TMPDIR and where the tarball goes.
+leftovers() { find "$work/tmp" "$work" -maxdepth 1 -type f \( -path "$work/tmp/*" -o -name 'tarball.*' \) | wc -l | tr -d ' '; }
 enabled() { [ -e "$work/state.enabled" ] && echo enabled || echo disabled; }
 unit_present() { [ -f "$work/systemd/$unit" ] && echo present || echo absent; }
 calls() { grep -c "^systemctl $1 " "$work/state.log" 2>/dev/null || true; }
@@ -165,6 +167,7 @@ record "success: exits 0" "0" "$rc"
 record "...the runner is running" "running" "$(running)"
 record "...stopped once to replace the binary, then restarted once" "1/1" "$(calls stop)/$(calls restart)"
 record "...records the new version" "$current" "$(cat "$work/runner/.provisioned-version")"
+record "...and leaves no temp files (#89)" "0" "$(leftovers)"
 
 for at in tar chown visudo env; do
   fresh 2.0.0 active
@@ -172,6 +175,7 @@ for at in tar chown visudo env; do
   rc=$?
   record "$at fails: provisioning fails" "1" "$rc"
   record "...and the runner is running again" "running" "$(running)"
+  record "...and leaves no temp files (#89)" "0" "$(leftovers)"
 done
 
 fresh 2.0.0 active
@@ -185,6 +189,10 @@ run listen
 rc=$?
 record "it never logs \"Listening for Jobs\": provisioning fails" "1" "$rc"
 record "...and the trap starts the service once more" "running/1" "$(running)/$(calls start)"
+# The binary replacement stopped the runner, so the .env this run changed is
+# put back too, as when only the .env changed (#89).
+record "...with the .env it had" "LANG=C" "$(cat "$work/runner/.env")"
+record "...and leaves no temp files" "0" "$(leftovers)"
 
 echo "a running runner, already current:"
 fresh "$current" active
@@ -202,6 +210,19 @@ record "...and does not start what it did not stop" "stopped" "$(running)"
 fresh 2.0.0 stopped
 run
 record "success: the runner is started" "0/running" "$?/$(running)"
+
+echo "the saved package list (#89):"
+fresh "$current" active
+printf 'tree\njq\n' >"$work/etc/extra-packages"
+run
+rc=$?
+record "a saved list of package names: installed" "0/1" "$rc/$(grep -c '^apt-get install .* docker-buildx tree jq$' "$work/state.log")"
+fresh "$current" active
+printf 'tree\n-oAPT::Get::AllowUnauthenticated=true\n' >"$work/etc/extra-packages"
+run
+rc=$?
+record "an option in the saved list: refused before apt-get, saying where" "1/0/yes" \
+  "$rc/$(cat "$work/state.log" 2>/dev/null | grep -c '^apt-get')/$(grep -q 'extra-packages: not a package name: -oAPT' "$work/out" && echo yes || echo no)"
 
 echo "a move fails before old registration removal:"
 fresh 2.0.0 active
@@ -281,7 +302,7 @@ record "...the service is installed again, enabled and running" "$unit/present/e
 echo "provision.sh ensure-service, as uninstall runs it (#99):"
 # ensure [--start]: only the subcommand, with FAIL_AT.
 ensure() {
-  PATH="$stubs:$PATH" STATE="$work/state" UNIT="$unit" UNIT_DIR="$work/systemd" FAIL_AT="${FAIL_AT:-}" \
+  PATH="$stubs:$PATH" TMPDIR="$work/tmp" STATE="$work/state" UNIT="$unit" UNIT_DIR="$work/systemd" FAIL_AT="${FAIL_AT:-}" \
     bash "$work/provision.sh" ensure-service "$@" </dev/null >"$work/out" 2>&1
 }
 fresh "$current" stopped
@@ -310,5 +331,24 @@ for args in --strt "--start extra"; do
   record "ensure-service $args: refused with exit 2, saying so" "2/yes" "$rc/$(grep -q 'takes only --start' "$work/out" && echo yes || echo no)"
   record "...and runs nothing: no svc.sh, systemctl or config.sh call" "0/stopped" "$(if [ -f "$work/state.log" ]; then wc -l <"$work/state.log" | tr -d ' '; else echo 0; fi)/$(running)"
 done
+
+echo "the final report (#89):"
+# The last lines of provision.sh, with its runner_setting, against a .runner
+# in the scratch tree: the runner is set up by then, so a config that cannot
+# be read must not fail the run.
+{
+  echo 'set -euo pipefail'
+  printf 'RUNNER_VERSION=9.9.9\nRUNNER_HOME=%s\n' "$work/final"
+  sed -n '/^runner_setting() {/,/^}/p' "$ROOT/vm/provision.sh"
+  sed -n '/^# Reports the registration/,$p' "$ROOT/vm/provision.sh"
+} >"$work/final.sh"
+mkdir -p "$work/final"
+report() { bash "$work/final.sh" >"$work/out" 2>&1; echo "$?/$(grep -c "$1" "$work/out")"; }
+echo '{"agentName":"lima-test","gitHubUrl":"https://github.com/acme"}' >"$work/final/.runner"
+record "a full config: reported" "0/1" "$(report 'runner lima-test (9.9.9) registered at https://github.com/acme')"
+echo '{"gitHubUrl":"https://github.com/acme"}' >"$work/final/.runner"
+record "no agentName in it: exits 0, saying so" "0/1" "$(report 'could not read its name and URL')"
+rm -f "$work/final/.runner"
+record "no config at all: exits 0, saying so" "0/1" "$(report 'could not read its name and URL')"
 
 summary

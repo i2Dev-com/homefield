@@ -112,13 +112,19 @@ if [[ "${RUNNER_EXTRA_PACKAGES:-}" == *$'\n'* ]]; then
   echo "provision.sh: RUNNER_EXTRA_PACKAGES: separate packages with spaces, on one line" >&2
   exit 1
 fi
+# check_packages <where> <name>...: the same rule for the saved list below.
+check_packages() {
+  local where="$1" pkg
+  shift
+  for pkg in "$@"; do
+    if ! [[ "$pkg" =~ ^[a-z0-9][a-z0-9+.-]+$ ]]; then
+      echo "provision.sh: ${where}: not a package name: $pkg" >&2
+      exit 1
+    fi
+  done
+}
 read -ra requested_packages <<<"${RUNNER_EXTRA_PACKAGES:-}"
-for pkg in ${requested_packages[@]+"${requested_packages[@]}"}; do
-  if ! [[ "$pkg" =~ ^[a-z0-9][a-z0-9+.-]+$ ]]; then
-    echo "provision.sh: RUNNER_EXTRA_PACKAGES: not a package name: $pkg" >&2
-    exit 1
-  fi
-done
+check_packages RUNNER_EXTRA_PACKAGES ${requested_packages[@]+"${requested_packages[@]}"}
 CONFIG_DIR="/etc/homefield"
 RUNNER_USER="runner"
 RUNNER_HOME="/opt/actions-runner"
@@ -194,6 +200,28 @@ if [ "${1:-}" = ensure-service ]; then
   exit
 fi
 
+# ── On exit ─────────────────────────────────────────────────────────────────
+# The run's one EXIT trap. It removes the temp files in tmp_files, and when
+# the run fails it calls on_failure: the step that puts back what the run had
+# stopped or changed at that point. A step arms the next one by setting
+# on_failure, and disarms it with on_failure="", so no step can drop another's
+# temp files by replacing the trap.
+tmp_files=()
+on_failure=""
+on_exit() {
+  local rc=$?
+  if [ "$rc" -ne 0 ] && [ -n "$on_failure" ]; then
+    "$on_failure"
+  fi
+  rm -f ${tmp_files[@]+"${tmp_files[@]}"}
+}
+trap on_exit EXIT
+# new_tmp [template]: sets tmp to a new temp file, which is removed on exit.
+new_tmp() {
+  tmp="$(mktemp "$@")"
+  tmp_files+=("$tmp")
+}
+
 # ── Tokens ──────────────────────────────────────────────────────────────────
 if [ -n "${RUNNER_TOKEN:-}${RUNNER_REMOVE_TOKEN:-}" ]; then
   echo "provision.sh: pass tokens on stdin, not in the environment or on the" \
@@ -248,8 +276,7 @@ if [ "${RUNNER_REREGISTER:-0}" = "1" ] && [ -f "$RUNNER_HOME/.runner" ]; then
   fi
 fi
 restart_old_on_failure() {
-  local rc=$?
-  if [ "$rc" -ne 0 ] && [ -n "$svc_unit" ]; then
+  if [ -n "$svc_unit" ]; then
     echo "provision.sh: move failed before the old registration was removed; restarting ${svc_unit}" >&2
     # The uninstall may have stopped partway; ensure_service puts back what
     # it removed.
@@ -273,7 +300,7 @@ if [ "$move" = "1" ]; then
   # need to reinstall the service before starting it.
   if [ -n "$svc_unit" ]; then
     systemctl stop "$svc_unit"
-    trap restart_old_on_failure EXIT
+    on_failure=restart_old_on_failure
   fi
 elif [ ! -f "$RUNNER_HOME/.runner" ] && [ -z "$RUNNER_TOKEN" ]; then
   echo "provision.sh: first registration needs RUNNER_TOKEN on stdin" >&2
@@ -299,6 +326,8 @@ if [ -n "${RUNNER_EXTRA_PACKAGES+set}" ]; then
   extra_packages=(${requested_packages[@]+"${requested_packages[@]}"})
 elif [ -f "$CONFIG_DIR/extra-packages" ]; then
   mapfile -t extra_packages <"$CONFIG_DIR/extra-packages"
+  # Written by root only, but it reaches apt-get as arguments all the same.
+  check_packages "$CONFIG_DIR/extra-packages" ${extra_packages[@]+"${extra_packages[@]}"}
 fi
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -q
@@ -339,19 +368,20 @@ done
 # a running Runner.Listener fails with ETXTBSY, and a running service keeps
 # executing the old binary anyway. Stopping cancels any job in progress, so
 # upgrade while idle (runbook). From the stop until the service is back and
-# listening, any failure starts it again rather than leaving it down; the
-# start block below clears the trap once it is.
+# listening, any failure starts it again rather than leaving it down, with the
+# .env it had if the run changed it; the start block below disarms this once
+# the runner is listening.
 restart_replaced_runner() {
-  local rc=$?
-  if [ "$rc" -ne 0 ]; then
-    echo "provision.sh: failed after stopping the runner; starting ${svc_unit} again" >&2
-    rm -f "${env_prev:-}"
-    systemctl start "$svc_unit" || true
+  echo "provision.sh: failed after stopping the runner; starting ${svc_unit} again" >&2
+  if [ -n "${env_prev:-}" ]; then
+    install -o "$RUNNER_USER" -g "$RUNNER_USER" -m 644 "$env_prev" "$RUNNER_HOME/.env" || true
   fi
+  systemctl start "$svc_unit" || true
 }
 mkdir -p "$RUNNER_HOME"
 if [ ! -x "$RUNNER_HOME/config.sh" ] || ! grep -qx "$RUNNER_VERSION" "$RUNNER_HOME/.provisioned-version" 2>/dev/null; then
-  tarball="$(mktemp /tmp/actions-runner.XXXXXX.tar.gz)"
+  new_tmp /tmp/actions-runner.XXXXXX.tar.gz
+  tarball="$tmp"
   curl -fsSL -o "$tarball" \
     "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-arm64-${RUNNER_VERSION}.tar.gz"
   echo "${RUNNER_SHA256}  ${tarball}" | sha256sum -c -
@@ -362,7 +392,7 @@ if [ ! -x "$RUNNER_HOME/config.sh" ] || ! grep -qx "$RUNNER_VERSION" "$RUNNER_HO
     restart_old=1
   fi
   if [ "$restart_old" = "1" ] && [ "$move" != "1" ]; then
-    trap restart_replaced_runner EXIT
+    on_failure=restart_replaced_runner
   fi
   tar -xzf "$tarball" -C "$RUNNER_HOME"
   rm -f "$tarball"
@@ -398,7 +428,8 @@ cat > /usr/local/sbin/homefield-job-started.sh <<'EOF'
 exec sudo -n /usr/local/sbin/homefield-workspace-owner
 EOF
 chmod 755 /usr/local/sbin/homefield-job-started.sh
-sudoers="$(mktemp)"
+new_tmp
+sudoers="$tmp"
 echo 'runner ALL=(root) NOPASSWD: /usr/local/sbin/homefield-workspace-owner ""' >"$sudoers"
 visudo -cqf "$sudoers"
 install -m 440 "$sudoers" /etc/sudoers.d/homefield-workspace-owner
@@ -424,7 +455,7 @@ if [ "$move" = "1" ]; then
   fi
   runner_config "$RUNNER_REMOVE_TOKEN" remove
   # The old registration is gone; the old service must no longer restart.
-  trap - EXIT
+  on_failure=""
 fi
 if [ ! -f "$RUNNER_HOME/.runner" ]; then
   # A ${RUNNER_GROUP:+--runnergroup "$RUNNER_GROUP"} expansion would split a
@@ -461,9 +492,11 @@ hook_line="ACTIONS_RUNNER_HOOK_JOB_STARTED=/usr/local/sbin/homefield-job-started
 env_changed=0
 env_prev=""
 if ! grep -qx "$hook_line" "$RUNNER_HOME/.env" 2>/dev/null; then
-  env_new="$(mktemp)"
+  new_tmp
+  env_new="$tmp"
   if [ -f "$RUNNER_HOME/.env" ]; then
-    env_prev="$(mktemp)"
+    new_tmp
+    env_prev="$tmp"
     cp "$RUNNER_HOME/.env" "$env_prev"
     grep -v '^ACTIONS_RUNNER_HOOK_JOB_STARTED=' "$RUNNER_HOME/.env" >"$env_new" || [ $? = 1 ]
   fi
@@ -485,18 +518,15 @@ svc_unit="$(cat "$RUNNER_HOME/.service")"
 # stops a working runner, so if it does not come back, any failure from here
 # puts the previous .env back and starts the runner again before exiting.
 # Every other path gets here with the runner stopped (first registration, a
-# move, a new runner binary, bin/homefield upgrade) and has nothing to
-# restore.
+# move, a new runner binary, bin/homefield upgrade). After a new runner
+# binary, restart_replaced_runner (above) is still armed and does the same;
+# the others have nothing to restore.
 restore_running_runner() {
-  local rc=$?
-  if [ "$rc" -ne 0 ]; then
-    echo "provision.sh: ${svc_unit} did not come back with the job-started hook; restarting it as it was" >&2
-    if [ -n "$env_prev" ]; then
-      install -o "$RUNNER_USER" -g "$RUNNER_USER" -m 644 "$env_prev" "$RUNNER_HOME/.env" || true
-      rm -f "$env_prev"
-    fi
-    systemctl restart "$svc_unit" || true
+  echo "provision.sh: ${svc_unit} did not come back with the job-started hook; restarting it as it was" >&2
+  if [ -n "$env_prev" ]; then
+    install -o "$RUNNER_USER" -g "$RUNNER_USER" -m 644 "$env_prev" "$RUNNER_HOME/.env" || true
   fi
+  systemctl restart "$svc_unit" || true
 }
 was_active=0
 if systemctl is-active --quiet "$svc_unit"; then
@@ -506,7 +536,7 @@ if [ "$env_changed" = "0" ] && [ "$was_active" = "1" ]; then
   echo "provision.sh: ${svc_unit} already running"
 else
   if [ "$was_active" = "1" ]; then
-    trap restore_running_runner EXIT
+    on_failure=restore_running_runner
   fi
   since="$(date '+%Y-%m-%d %H:%M:%S')"
   systemctl restart "$svc_unit"
@@ -529,11 +559,8 @@ else
     fi
     exit 1
   fi
-  trap - EXIT
+  on_failure=""
   echo "provision.sh: ${svc_unit} is listening for jobs"
-fi
-if [ -n "$env_prev" ]; then
-  rm -f "$env_prev"
 fi
 
 # ── Cleanup timer ───────────────────────────────────────────────────────────
@@ -790,5 +817,9 @@ systemctl restart homefield-memwatch.service
 # Reports the registration as it is, which differs from the settings when an
 # existing registration was kept. Labels are not in the runner's config; the
 # runners page shows them.
-{ read -r reg_name; read -r reg_url; } < <(runner_setting agentName gitHubUrl)
-echo "provision.sh: runner ${reg_name} (${RUNNER_VERSION}) registered at ${reg_url}"
+# The runner is set up by now, so a config it cannot read fails nothing.
+if { read -r reg_name && read -r reg_url; } < <(runner_setting agentName gitHubUrl); then
+  echo "provision.sh: runner ${reg_name} (${RUNNER_VERSION}) registered at ${reg_url}"
+else
+  echo "provision.sh: runner provisioned (${RUNNER_VERSION}); could not read its name and URL from ${RUNNER_HOME}/.runner" >&2
+fi
