@@ -11,6 +11,16 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ## Unreleased
 
+## v0.3.0 (2026-10-21)
+
+Not a drop-in for v0.2.1, by the rule above: the routing guard now refuses an
+`arch` other than `arm64` or `x64` (below). A workflow that leaves `arch` out,
+or passes `arm64` or `x64`, is unaffected, and the expression and its
+guarantees are unchanged. To upgrade, run the README's one-liner again, then
+`homefield upgrade` on each runner while it is idle, which brings in the
+provisioning fixes below. Bump `routing-guard@v0.2.1` pins to `@v0.3.0`:
+`homefield adopt` counts only its own release.
+
 ### Changed
 
 - **The routing guard refuses an `arch` other than `arm64` or `x64`**, as
@@ -18,10 +28,10 @@ fail, such as a new guard in the routing expression, bumps the minor version
   `label` or `fallback`. A typo such as `amd64` used to become the expression
   the guard enforced, so every job carrying it passed and then waited for a
   runner with that label, and a value with a quote in it added labels of its
-  own. A workflow that passed `arch: ARM64` or any other value now fails, so
-  this needs a minor release. `--list` and `--print-expression` now print a
-  refused option on stderr, so their stdout holds only the jobs or the
-  expression (#87).
+  own. A workflow that passed `arch: ARM64` or any other value now fails,
+  which is why this release is a minor one. `--list` and `--print-expression`
+  now print a refused option on stderr, so their stdout holds only the jobs or
+  the expression (#87).
 - Restoring the runner's service has one implementation,
   `provision.sh ensure-service [--start]`, used after registration on every
   provisioning run, when a move is rolled back, and by `homefield uninstall`
@@ -29,6 +39,16 @@ fail, such as a new guard in the routing expression, bumps the minor version
   before it stops anything, so a VM provisioned by an older release gets the
   same restore. A provisioning run now also enables a runner service a cut-off
   uninstall left disabled (#99).
+- The runbook's *More runners* section has an *Operating several runners*
+  subsection: listing every runner through GitHub's API (online, busy, runner
+  version), upgrading Mac by Mac, keeping extra packages and hooks alike on
+  every VM, and that GitHub removes a runner offline for more than 14 days
+  (the recovery is under Fixed, #76).
+- The docs are shorter. The runbook's Setup leads with the one-liner and keeps
+  the manual steps under *What `install` does, by hand*; the routing
+  expression, the guard rules, the runner-group commands and the test list each
+  live in one place and the other documents link to it. Nothing about
+  behaviour changed.
 
 ### Fixed
 
@@ -108,19 +128,6 @@ fail, such as a new guard in the routing expression, bumps the minor version
   `install` already does, and says so in its summary line ("runner group added,
   but the group allows public repositories"). It read that setting and never
   used it, so a group wider than the docs describe passed silently (#84).
-
-### Changed
-
-- The runbook's *More runners* section has an *Operating several runners*
-  subsection: listing every runner through GitHub's API (online, busy, runner
-  version), upgrading Mac by Mac, keeping extra packages and hooks alike on
-  every VM, and that GitHub removes a runner offline for more than 14 days
-  (recovery tracked in #76).
-- The docs are shorter. The runbook's Setup leads with the one-liner and keeps
-  the manual steps under *What `install` does, by hand*; the routing
-  expression, the guard rules, the runner-group commands and the test list each
-  live in one place and the other documents link to it. Nothing about
-  behaviour changed.
 
 ## v0.2.1 (2026-10-18)
 

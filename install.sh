@@ -2,12 +2,12 @@
 # One-line installer for homefield: downloads the tool, puts `homefield` on the
 # PATH, makes sure Lima is there, and hands over to `homefield install`.
 #
-#   curl -fsSL https://raw.githubusercontent.com/i2Dev-com/homefield/v0.2.1/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/i2Dev-com/homefield/v0.3.0/install.sh | bash
 #   ... | bash -s -- --url https://github.com/<org>      # install options pass through
 #
 # Settings, all optional:
 #   HOMEFIELD_REPO      owner/repo to download from (default i2Dev-com/homefield)
-#   HOMEFIELD_REF       branch, tag or commit to install (default v0.2.1)
+#   HOMEFIELD_REF       branch, tag or commit to install (default v0.3.0)
 #   HOMEFIELD_HOME      where the tool goes (default ~/.local/share/homefield)
 #   HOMEFIELD_BIN_DIR   where the `homefield` command goes (default: Homebrew's
 #                       bin when writable, else ~/.local/bin)
@@ -22,7 +22,7 @@
 set -euo pipefail
 
 REPO="${HOMEFIELD_REPO:-i2Dev-com/homefield}"
-REF="${HOMEFIELD_REF:-v0.2.1}"
+REF="${HOMEFIELD_REF:-v0.3.0}"
 INSTALL_DIR="${HOMEFIELD_HOME:-$HOME/.local/share/homefield}"
 INSTANCE="${HOMEFIELD_INSTANCE:-homefield}"
 # The terminal to ask on. Under `curl | bash` stdin is this script, so prompts
