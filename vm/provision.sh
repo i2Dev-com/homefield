@@ -510,9 +510,11 @@ if ! grep -qx "$hook_line" "$RUNNER_HOME/.env" 2>/dev/null; then
   new_tmp
   env_new="$tmp"
   if [ -f "$RUNNER_HOME/.env" ]; then
+    # Set only once the copy is whole: restore_runner may already be armed,
+    # and must not put a failed copy over a .env that is still good.
     new_tmp
+    cp "$RUNNER_HOME/.env" "$tmp"
     env_prev="$tmp"
-    cp "$RUNNER_HOME/.env" "$env_prev"
     grep -v '^ACTIONS_RUNNER_HOOK_JOB_STARTED=' "$RUNNER_HOME/.env" >"$env_new" || [ $? = 1 ]
   fi
   echo "$hook_line" >>"$env_new"

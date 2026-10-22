@@ -42,6 +42,12 @@ stub tar '[ "${FAIL_AT:-}" != tar ] || { echo "tar: injected failure" >&2; exit 
 # chown -R runner:runner <home> is provision.sh's own; the rest come from the
 # workspace hook. FAIL_AT=chown fails the first only.
 stub chown '[ "${FAIL_AT:-}" = chown ] && [ "$1" = -R ] && { echo "chown: injected failure" >&2; exit 1; }; exit 0'
+# cp: FAIL_AT=backup fails the copy of the runner's .env, leaving the
+# destination empty, as a full disk would.
+stub cp 'if [ "${FAIL_AT:-}" = backup ] && [ $# = 2 ] && case "$1" in */.env) true ;; *) false ;; esac; then
+  : >"$2"; echo "cp: injected failure" >&2; exit 1
+fi
+exec /bin/cp "$@"'
 stub visudo '[ "${FAIL_AT:-}" != visudo ] || { echo "visudo: injected failure" >&2; exit 1; }'
 # install [-o u] [-g g] [-m mode] <src> <dst>: a copy; FAIL_AT=env fails the
 # one onto the runner's .env.
@@ -206,6 +212,14 @@ record "...and the trap restarts the service once more" "running/2" "$(running)/
 # put back too, as when only the .env changed (#89).
 record "...with the .env it had" "LANG=C" "$(cat "$work/runner/.env")"
 record "...and leaves no temp files" "0" "$(leftovers)"
+
+# The .env backup fails after the binary replacement armed the recovery: it
+# must not install the empty backup over the .env, which is still good.
+fresh 2.0.0 active
+run backup
+rc=$?
+record "the .env backup fails: provisioning fails" "1" "$rc"
+record "...the .env is left as it was, and the runner is running again" "LANG=C/running" "$(cat "$work/runner/.env")/$(running)"
 
 echo "a running runner, already current:"
 fresh "$current" active
