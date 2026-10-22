@@ -210,17 +210,33 @@ tmp_files=()
 on_failure=""
 on_exit() {
   local rc=$?
+  # Best effort: a recovery command that fails (even an echo to a closed
+  # terminal) must not skip the rest of it, or the cleanup below.
   if [ "$rc" -ne 0 ] && [ -n "$on_failure" ]; then
-    "$on_failure"
+    "$on_failure" || true
   fi
   rm -f ${tmp_files[@]+"${tmp_files[@]}"}
 }
 trap on_exit EXIT
 # new_tmp [template]: sets tmp to a new temp file, which is removed on exit.
+# Each caller copies tmp straight away.
 new_tmp() {
   tmp="$(mktemp "$@")"
   tmp_files+=("$tmp")
 }
+
+# The saved package list, read here, before anything is stopped, so that a
+# bad one fails the run while nothing has changed. One or more names per line,
+# as written below or edited by hand; blank lines and spaces are fine. Written
+# by root only, but the names reach apt-get as arguments all the same.
+saved_packages=()
+if [ -z "${RUNNER_EXTRA_PACKAGES+set}" ] && [ -f "$CONFIG_DIR/extra-packages" ]; then
+  while IFS= read -r line || [ -n "$line" ]; do
+    read -ra words <<<"$line"
+    saved_packages+=(${words[@]+"${words[@]}"})
+  done <"$CONFIG_DIR/extra-packages"
+  check_packages "$CONFIG_DIR/extra-packages" ${saved_packages[@]+"${saved_packages[@]}"}
+fi
 
 # ── Tokens ──────────────────────────────────────────────────────────────────
 if [ -n "${RUNNER_TOKEN:-}${RUNNER_REMOVE_TOKEN:-}" ]; then
@@ -321,13 +337,9 @@ mkdir -p "$CONFIG_DIR/provision.d"
 # This run's extras: RUNNER_EXTRA_PACKAGES when set (even empty), else the list
 # saved by the last run that set it. Saved only once apt has installed it, so
 # a misspelt name or a network failure leaves the saved list as it was.
-extra_packages=()
+extra_packages=(${saved_packages[@]+"${saved_packages[@]}"})
 if [ -n "${RUNNER_EXTRA_PACKAGES+set}" ]; then
   extra_packages=(${requested_packages[@]+"${requested_packages[@]}"})
-elif [ -f "$CONFIG_DIR/extra-packages" ]; then
-  mapfile -t extra_packages <"$CONFIG_DIR/extra-packages"
-  # Written by root only, but it reaches apt-get as arguments all the same.
-  check_packages "$CONFIG_DIR/extra-packages" ${extra_packages[@]+"${extra_packages[@]}"}
 fi
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -q
@@ -371,12 +383,15 @@ done
 # listening, any failure starts it again rather than leaving it down, with the
 # .env it had if the run changed it; the start block below disarms this once
 # the runner is listening.
-restart_replaced_runner() {
-  echo "provision.sh: failed after stopping the runner; starting ${svc_unit} again" >&2
+# restore_runner: the .env the runner had, if this run changed it, then a
+# restart. Not `start`: that does nothing to a runner that is still active
+# but never reached "Listening for Jobs", which would keep the new .env.
+restore_runner() {
+  echo "provision.sh: failed after stopping or restarting ${svc_unit}; restarting it as it was" >&2
   if [ -n "${env_prev:-}" ]; then
-    install -o "$RUNNER_USER" -g "$RUNNER_USER" -m 644 "$env_prev" "$RUNNER_HOME/.env" || true
+    install -o "$RUNNER_USER" -g "$RUNNER_USER" -m 644 "$env_prev" "$RUNNER_HOME/.env"
   fi
-  systemctl start "$svc_unit" || true
+  systemctl restart "$svc_unit"
 }
 mkdir -p "$RUNNER_HOME"
 if [ ! -x "$RUNNER_HOME/config.sh" ] || ! grep -qx "$RUNNER_VERSION" "$RUNNER_HOME/.provisioned-version" 2>/dev/null; then
@@ -392,7 +407,7 @@ if [ ! -x "$RUNNER_HOME/config.sh" ] || ! grep -qx "$RUNNER_VERSION" "$RUNNER_HO
     restart_old=1
   fi
   if [ "$restart_old" = "1" ] && [ "$move" != "1" ]; then
-    on_failure=restart_replaced_runner
+    on_failure=restore_runner
   fi
   tar -xzf "$tarball" -C "$RUNNER_HOME"
   rm -f "$tarball"
@@ -519,15 +534,8 @@ svc_unit="$(cat "$RUNNER_HOME/.service")"
 # puts the previous .env back and starts the runner again before exiting.
 # Every other path gets here with the runner stopped (first registration, a
 # move, a new runner binary, bin/homefield upgrade). After a new runner
-# binary, restart_replaced_runner (above) is still armed and does the same;
-# the others have nothing to restore.
-restore_running_runner() {
-  echo "provision.sh: ${svc_unit} did not come back with the job-started hook; restarting it as it was" >&2
-  if [ -n "$env_prev" ]; then
-    install -o "$RUNNER_USER" -g "$RUNNER_USER" -m 644 "$env_prev" "$RUNNER_HOME/.env" || true
-  fi
-  systemctl restart "$svc_unit" || true
-}
+# binary, restore_runner (above) is still armed for the same; the others
+# have nothing to restore.
 was_active=0
 if systemctl is-active --quiet "$svc_unit"; then
   was_active=1
@@ -536,7 +544,7 @@ if [ "$env_changed" = "0" ] && [ "$was_active" = "1" ]; then
   echo "provision.sh: ${svc_unit} already running"
 else
   if [ "$was_active" = "1" ]; then
-    on_failure=restore_running_runner
+    on_failure=restore_runner
   fi
   since="$(date '+%Y-%m-%d %H:%M:%S')"
   systemctl restart "$svc_unit"

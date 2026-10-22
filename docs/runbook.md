@@ -202,9 +202,10 @@ Add what your jobs need without editing the script. Per-job toolchains
 saved in the guest (`/etc/homefield/extra-packages`), so upgrade runs keep it
 without passing it again, and the idle-time maintenance upgrades these
 packages along with the rest. Passing it again replaces the list; passing it
-empty clears it. Neither uninstalls anything. The saved list, one package per
-line, is checked against the same rule as the variable, so a hand edit that
-puts anything but a package name in it stops provisioning before apt runs.
+empty clears it. Neither uninstalls anything. The saved list holds one package
+per line; a hand edit may add blank lines or several names on a line, but
+anything that is not a package name stops provisioning before the runner is
+touched, as it does in the variable.
 
 ```bash
 bin/homefield upgrade --instance homefield --packages "libpq-dev shellcheck"

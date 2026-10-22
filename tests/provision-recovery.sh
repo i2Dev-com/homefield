@@ -58,7 +58,12 @@ case "$1" in
   disable) rm -f "$STATE.enabled"; [ "${FAIL_AT:-}" != disable ] ;;
   enable) [ "$2" = --now ] && exit 0; [ -f "$UNIT_DIR/$2" ] || exit 1; : >"$STATE.enabled" ;;
   start|restart)
-    [ "${FAIL_AT:-}" = start ] && [ "$1" = restart ] && exit 1
+    # FAIL_AT=start fails the first restart only, as a runner that fails once
+    # and then comes back would.
+    if [ "${FAIL_AT:-}" = start ] && [ "$1" = restart ] && [ ! -e "$STATE.failed-restart" ]; then
+      : >"$STATE.failed-restart"
+      exit 1
+    fi
     [ -f "$UNIT_DIR/$2" ] || exit 1
     : >"$STATE.active" ;;
   *) exit 0 ;;
@@ -67,6 +72,9 @@ stub journalctl '[ "${FAIL_AT:-}" != listen ] && [ -e "$STATE.active" ] && echo 
 
 # The script up to the cleanup timer, with its absolute paths in the scratch
 # tree. BSD mktemp keeps a template's suffix literally, so the tarball's goes.
+# The other temp files get a template in the tree too: macOS's mktemp with no
+# template ignores TMPDIR, so they would land in the user's temp directory,
+# where the test cannot see what a run left behind.
 sed -n '1,/^# ── Cleanup timer/p' "$ROOT/vm/provision.sh" |
   sed -e "s|/opt/actions-runner|$work/runner|g" \
     -e "s|/usr/local/sbin|$work/sbin|g" \
@@ -74,8 +82,10 @@ sed -n '1,/^# ── Cleanup timer/p' "$ROOT/vm/provision.sh" |
     -e "s|/etc/systemd/system|$work/systemd|g" \
     -e "s|/etc/homefield|$work/etc|g" \
     -e "s|new_tmp /tmp/actions-runner.XXXXXX.tar.gz|new_tmp $work/tarball.XXXXXX|" \
+    -e "s|^\( *\)new_tmp\$|\1new_tmp $work/tmp/tmp.XXXXXX|" \
     >"$work/provision.sh"
 record "the script was cut at its cleanup timer" "yes" "$(grep -q '^# ── Cleanup timer' "$work/provision.sh" && echo yes || echo no)"
+record "every temp file gets a template in the scratch tree" "4/0" "$(grep -c '^ *new_tmp /' "$work/provision.sh")/$(grep -c '^ *new_tmp$' "$work/provision.sh")"
 
 unit="actions.runner.test.service"
 # fresh <version> <active|stopped>: a registered runner at that version.
@@ -132,11 +142,11 @@ EOF
 }
 # run [FAIL_AT]: provision, as root, against the scratch tree.
 run() {
-  PATH="$stubs:$PATH" TMPDIR="$work/tmp" STATE="$work/state" UNIT="$unit" UNIT_DIR="$work/systemd" FAIL_AT="${1:-}" bash "$work/provision.sh" </dev/null >"$work/out" 2>&1
+  PATH="$stubs:$PATH" STATE="$work/state" UNIT="$unit" UNIT_DIR="$work/systemd" FAIL_AT="${1:-}" bash "$work/provision.sh" </dev/null >"$work/out" 2>&1
 }
 run_move() {
   printf 'RUNNER_REMOVE_TOKEN=old-token\nRUNNER_TOKEN=new-token\n' |
-    PATH="$stubs:$PATH" TMPDIR="$work/tmp" STATE="$work/state" UNIT="$unit" UNIT_DIR="$work/systemd" FAIL_AT="$1" \
+    PATH="$stubs:$PATH" STATE="$work/state" UNIT="$unit" UNIT_DIR="$work/systemd" FAIL_AT="$1" \
       RUNNER_REREGISTER=1 RUNNER_URL=https://github.com/new-scope \
       bash "$work/provision.sh" >"$work/out" 2>&1
 }
@@ -144,7 +154,7 @@ run_move() {
 run_first() {
   rm -f "$work/runner/.runner" "$work/runner/.service" "$work/systemd/$unit" "$work/state.enabled"
   printf 'RUNNER_TOKEN=new-token\n' |
-    PATH="$stubs:$PATH" TMPDIR="$work/tmp" STATE="$work/state" UNIT="$unit" UNIT_DIR="$work/systemd" FAIL_AT="${1:-}" \
+    PATH="$stubs:$PATH" STATE="$work/state" UNIT="$unit" UNIT_DIR="$work/systemd" FAIL_AT="${1:-}" \
       RUNNER_URL=https://github.com/new-scope \
       bash "$work/provision.sh" >"$work/out" 2>&1
 }
@@ -153,7 +163,8 @@ running() { [ -e "$work/state.active" ] && echo running || echo stopped; }
 leftovers() { find "$work/tmp" "$work" -maxdepth 1 -type f \( -path "$work/tmp/*" -o -name 'tarball.*' \) | wc -l | tr -d ' '; }
 enabled() { [ -e "$work/state.enabled" ] && echo enabled || echo disabled; }
 unit_present() { [ -f "$work/systemd/$unit" ] && echo present || echo absent; }
-calls() { grep -c "^systemctl $1 " "$work/state.log" 2>/dev/null || true; }
+# 0 when nothing ran at all, so there is no log.
+calls() { [ -f "$work/state.log" ] || { echo 0; return; }; grep -c "^systemctl $1 " "$work/state.log" || true; }
 svc_calls() { grep -c "^svc $1" "$work/state.log" 2>/dev/null || true; }
 
 # The version in provision.sh, so every case replaces the binary (old) or none.
@@ -182,13 +193,15 @@ fresh 2.0.0 active
 run start
 rc=$?
 record "the final restart fails: provisioning fails" "1" "$rc"
-record "...and the runner is started again, by the trap" "running/1" "$(running)/$(calls start)"
+record "...and the runner is restarted again, by the trap" "running/2" "$(running)/$(calls restart)"
 
 fresh 2.0.0 active
 run listen
 rc=$?
 record "it never logs \"Listening for Jobs\": provisioning fails" "1" "$rc"
-record "...and the trap starts the service once more" "running/1" "$(running)/$(calls start)"
+# A restart, not a start: the runner is still active, and a start would leave
+# it as it is, with the new .env.
+record "...and the trap restarts the service once more" "running/2" "$(running)/$(calls restart)"
 # The binary replacement stopped the runner, so the .env this run changed is
 # put back too, as when only the .env changed (#89).
 record "...with the .env it had" "LANG=C" "$(cat "$work/runner/.env")"
@@ -223,6 +236,17 @@ run
 rc=$?
 record "an option in the saved list: refused before apt-get, saying where" "1/0/yes" \
   "$rc/$(cat "$work/state.log" 2>/dev/null | grep -c '^apt-get')/$(grep -q 'extra-packages: not a package name: -oAPT' "$work/out" && echo yes || echo no)"
+
+fresh "$current" active
+printf '\ntree \n  jq git\n\n' >"$work/etc/extra-packages"
+run
+rc=$?
+record "blank lines and spaces in the saved list (a hand edit): the names are installed" "0/1" "$rc/$(grep -c '^apt-get install .* docker-buildx tree jq git$' "$work/state.log")"
+fresh "$current" active
+printf -- '-oAPT::Get::AllowUnauthenticated=true\n' >"$work/etc/extra-packages"
+run_move ""
+rc=$?
+record "a bad saved list on a move: refused before the runner is stopped" "1/0/running" "$rc/$(calls stop)/$(running)"
 
 echo "a move fails before old registration removal:"
 fresh 2.0.0 active
@@ -302,7 +326,7 @@ record "...the service is installed again, enabled and running" "$unit/present/e
 echo "provision.sh ensure-service, as uninstall runs it (#99):"
 # ensure [--start]: only the subcommand, with FAIL_AT.
 ensure() {
-  PATH="$stubs:$PATH" TMPDIR="$work/tmp" STATE="$work/state" UNIT="$unit" UNIT_DIR="$work/systemd" FAIL_AT="${FAIL_AT:-}" \
+  PATH="$stubs:$PATH" STATE="$work/state" UNIT="$unit" UNIT_DIR="$work/systemd" FAIL_AT="${FAIL_AT:-}" \
     bash "$work/provision.sh" ensure-service "$@" </dev/null >"$work/out" 2>&1
 }
 fresh "$current" stopped
