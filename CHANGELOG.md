@@ -32,6 +32,15 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ### Fixed
 
+- `provision.sh` has one EXIT trap. It removes the run's temp files (the
+  runner tarball, the sudoers draft and the `.env` copies) on every exit, which
+  used to stay in `/tmp` after a failed download, `visudo` check or service
+  start. When a run that replaced the runner binary fails after changing
+  `.env`, the previous `.env` is now put back with the runner's restart, as the
+  comment promised; it used to be deleted. The saved package list
+  (`/etc/homefield/extra-packages`) is checked like `RUNNER_EXTRA_PACKAGES`
+  before it reaches apt-get. Reading the runner's name and URL for the last
+  line no longer fails a run that has finished provisioning (#89).
 - `homefield` and `install.sh` refuse an instance name (`--instance` or
   `HOMEFIELD_INSTANCE`) that Lima would not accept: letters and digits with a
   single `.`, `_` or `-` between them, at most 76 characters, not ending in

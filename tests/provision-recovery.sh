@@ -30,7 +30,7 @@ stub() { printf '#!/usr/bin/env bash\n%s\n' "$2" >"$stubs/$1"; chmod +x "$stubs/
 
 stub id 'case "$1" in -u) echo 0 ;; esac'
 stub hostname 'echo lima-test'
-stub apt-get 'exit 0'
+stub apt-get 'echo "apt-get $*" >>"$STATE.log"'
 stub useradd 'exit 0'
 stub usermod 'exit 0'
 stub sleep 'exit 0'
@@ -42,6 +42,12 @@ stub tar '[ "${FAIL_AT:-}" != tar ] || { echo "tar: injected failure" >&2; exit 
 # chown -R runner:runner <home> is provision.sh's own; the rest come from the
 # workspace hook. FAIL_AT=chown fails the first only.
 stub chown '[ "${FAIL_AT:-}" = chown ] && [ "$1" = -R ] && { echo "chown: injected failure" >&2; exit 1; }; exit 0'
+# cp: FAIL_AT=backup fails the copy of the runner's .env, leaving the
+# destination empty, as a full disk would.
+stub cp 'if [ "${FAIL_AT:-}" = backup ] && [ $# = 2 ] && case "$1" in */.env) true ;; *) false ;; esac; then
+  : >"$2"; echo "cp: injected failure" >&2; exit 1
+fi
+exec /bin/cp "$@"'
 stub visudo '[ "${FAIL_AT:-}" != visudo ] || { echo "visudo: injected failure" >&2; exit 1; }'
 # install [-o u] [-g g] [-m mode] <src> <dst>: a copy; FAIL_AT=env fails the
 # one onto the runner's .env.
@@ -58,7 +64,12 @@ case "$1" in
   disable) rm -f "$STATE.enabled"; [ "${FAIL_AT:-}" != disable ] ;;
   enable) [ "$2" = --now ] && exit 0; [ -f "$UNIT_DIR/$2" ] || exit 1; : >"$STATE.enabled" ;;
   start|restart)
-    [ "${FAIL_AT:-}" = start ] && [ "$1" = restart ] && exit 1
+    # FAIL_AT=start fails the first restart only, as a runner that fails once
+    # and then comes back would.
+    if [ "${FAIL_AT:-}" = start ] && [ "$1" = restart ] && [ ! -e "$STATE.failed-restart" ]; then
+      : >"$STATE.failed-restart"
+      exit 1
+    fi
     [ -f "$UNIT_DIR/$2" ] || exit 1
     : >"$STATE.active" ;;
   *) exit 0 ;;
@@ -67,21 +78,26 @@ stub journalctl '[ "${FAIL_AT:-}" != listen ] && [ -e "$STATE.active" ] && echo 
 
 # The script up to the cleanup timer, with its absolute paths in the scratch
 # tree. BSD mktemp keeps a template's suffix literally, so the tarball's goes.
+# The other temp files get a template in the tree too: macOS's mktemp with no
+# template ignores TMPDIR, so they would land in the user's temp directory,
+# where the test cannot see what a run left behind.
 sed -n '1,/^# ── Cleanup timer/p' "$ROOT/vm/provision.sh" |
   sed -e "s|/opt/actions-runner|$work/runner|g" \
     -e "s|/usr/local/sbin|$work/sbin|g" \
     -e "s|/etc/sudoers.d|$work/sudoers.d|g" \
     -e "s|/etc/systemd/system|$work/systemd|g" \
     -e "s|/etc/homefield|$work/etc|g" \
-    -e "s|mktemp /tmp/actions-runner.XXXXXX.tar.gz|mktemp $work/tarball.XXXXXX|" \
+    -e "s|new_tmp /tmp/actions-runner.XXXXXX.tar.gz|new_tmp $work/tarball.XXXXXX|" \
+    -e "s|^\( *\)new_tmp\$|\1new_tmp $work/tmp/tmp.XXXXXX|" \
     >"$work/provision.sh"
 record "the script was cut at its cleanup timer" "yes" "$(grep -q '^# ── Cleanup timer' "$work/provision.sh" && echo yes || echo no)"
+record "every temp file gets a template in the scratch tree" "4/0" "$(grep -c '^ *new_tmp /' "$work/provision.sh")/$(grep -c '^ *new_tmp$' "$work/provision.sh")"
 
 unit="actions.runner.test.service"
 # fresh <version> <active|stopped>: a registered runner at that version.
 fresh() {
-  rm -rf "${work:?}/runner" "${work:?}/sbin" "${work:?}/sudoers.d" "${work:?}/etc" "${work:?}/systemd" "${work:?}"/state*
-  mkdir -p "$work/runner/bin" "$work/sbin" "$work/sudoers.d" "$work/etc" "$work/systemd"
+  rm -rf "${work:?}/runner" "${work:?}/sbin" "${work:?}/sudoers.d" "${work:?}/etc" "${work:?}/systemd" "${work:?}"/state* "${work:?}/tmp"
+  mkdir -p "$work/runner/bin" "$work/sbin" "$work/sudoers.d" "$work/etc" "$work/systemd" "$work/tmp"
   printf '#!/bin/sh\nexit 0\n' >"$work/runner/bin/installdependencies.sh"
   chmod +x "$work/runner/bin/installdependencies.sh"
   cat >"$work/runner/config.sh" <<'EOF'
@@ -149,9 +165,12 @@ run_first() {
       bash "$work/provision.sh" >"$work/out" 2>&1
 }
 running() { [ -e "$work/state.active" ] && echo running || echo stopped; }
+# leftovers: the temp files a run left, in TMPDIR and where the tarball goes.
+leftovers() { find "$work/tmp" "$work" -maxdepth 1 -type f \( -path "$work/tmp/*" -o -name 'tarball.*' \) | wc -l | tr -d ' '; }
 enabled() { [ -e "$work/state.enabled" ] && echo enabled || echo disabled; }
 unit_present() { [ -f "$work/systemd/$unit" ] && echo present || echo absent; }
-calls() { grep -c "^systemctl $1 " "$work/state.log" 2>/dev/null || true; }
+# 0 when nothing ran at all, so there is no log.
+calls() { [ -f "$work/state.log" ] || { echo 0; return; }; grep -c "^systemctl $1 " "$work/state.log" || true; }
 svc_calls() { grep -c "^svc $1" "$work/state.log" 2>/dev/null || true; }
 
 # The version in provision.sh, so every case replaces the binary (old) or none.
@@ -165,6 +184,7 @@ record "success: exits 0" "0" "$rc"
 record "...the runner is running" "running" "$(running)"
 record "...stopped once to replace the binary, then restarted once" "1/1" "$(calls stop)/$(calls restart)"
 record "...records the new version" "$current" "$(cat "$work/runner/.provisioned-version")"
+record "...and leaves no temp files (#89)" "0" "$(leftovers)"
 
 for at in tar chown visudo env; do
   fresh 2.0.0 active
@@ -172,19 +192,34 @@ for at in tar chown visudo env; do
   rc=$?
   record "$at fails: provisioning fails" "1" "$rc"
   record "...and the runner is running again" "running" "$(running)"
+  record "...and leaves no temp files (#89)" "0" "$(leftovers)"
 done
 
 fresh 2.0.0 active
 run start
 rc=$?
 record "the final restart fails: provisioning fails" "1" "$rc"
-record "...and the runner is started again, by the trap" "running/1" "$(running)/$(calls start)"
+record "...and the runner is restarted again, by the trap" "running/2" "$(running)/$(calls restart)"
 
 fresh 2.0.0 active
 run listen
 rc=$?
 record "it never logs \"Listening for Jobs\": provisioning fails" "1" "$rc"
-record "...and the trap starts the service once more" "running/1" "$(running)/$(calls start)"
+# A restart, not a start: the runner is still active, and a start would leave
+# it as it is, with the new .env.
+record "...and the trap restarts the service once more" "running/2" "$(running)/$(calls restart)"
+# The binary replacement stopped the runner, so the .env this run changed is
+# put back too, as when only the .env changed (#89).
+record "...with the .env it had" "LANG=C" "$(cat "$work/runner/.env")"
+record "...and leaves no temp files" "0" "$(leftovers)"
+
+# The .env backup fails after the binary replacement armed the recovery: it
+# must not install the empty backup over the .env, which is still good.
+fresh 2.0.0 active
+run backup
+rc=$?
+record "the .env backup fails: provisioning fails" "1" "$rc"
+record "...the .env is left as it was, and the runner is running again" "LANG=C/running" "$(cat "$work/runner/.env")/$(running)"
 
 echo "a running runner, already current:"
 fresh "$current" active
@@ -202,6 +237,30 @@ record "...and does not start what it did not stop" "stopped" "$(running)"
 fresh 2.0.0 stopped
 run
 record "success: the runner is started" "0/running" "$?/$(running)"
+
+echo "the saved package list (#89):"
+fresh "$current" active
+printf 'tree\njq\n' >"$work/etc/extra-packages"
+run
+rc=$?
+record "a saved list of package names: installed" "0/1" "$rc/$(grep -c '^apt-get install .* docker-buildx tree jq$' "$work/state.log")"
+fresh "$current" active
+printf 'tree\n-oAPT::Get::AllowUnauthenticated=true\n' >"$work/etc/extra-packages"
+run
+rc=$?
+record "an option in the saved list: refused before apt-get, saying where" "1/0/yes" \
+  "$rc/$(grep -c '^apt-get' "$work/state.log" 2>/dev/null || echo 0)/$(grep -q 'extra-packages: not a package name: -oAPT' "$work/out" && echo yes || echo no)"
+
+fresh "$current" active
+printf '\ntree \n  jq git\n\n' >"$work/etc/extra-packages"
+run
+rc=$?
+record "blank lines and spaces in the saved list (a hand edit): the names are installed" "0/1" "$rc/$(grep -c '^apt-get install .* docker-buildx tree jq git$' "$work/state.log")"
+fresh "$current" active
+printf -- '-oAPT::Get::AllowUnauthenticated=true\n' >"$work/etc/extra-packages"
+run_move ""
+rc=$?
+record "a bad saved list on a move: refused before the runner is stopped" "1/0/running" "$rc/$(calls stop)/$(running)"
 
 echo "a move fails before old registration removal:"
 fresh 2.0.0 active
@@ -310,5 +369,24 @@ for args in --strt "--start extra"; do
   record "ensure-service $args: refused with exit 2, saying so" "2/yes" "$rc/$(grep -q 'takes only --start' "$work/out" && echo yes || echo no)"
   record "...and runs nothing: no svc.sh, systemctl or config.sh call" "0/stopped" "$(if [ -f "$work/state.log" ]; then wc -l <"$work/state.log" | tr -d ' '; else echo 0; fi)/$(running)"
 done
+
+echo "the final report (#89):"
+# The last lines of provision.sh, with its runner_setting, against a .runner
+# in the scratch tree: the runner is set up by then, so a config that cannot
+# be read must not fail the run.
+{
+  echo 'set -euo pipefail'
+  printf 'RUNNER_VERSION=9.9.9\nRUNNER_HOME=%s\n' "$work/final"
+  sed -n '/^runner_setting() {/,/^}/p' "$ROOT/vm/provision.sh"
+  sed -n '/^# Reports the registration/,$p' "$ROOT/vm/provision.sh"
+} >"$work/final.sh"
+mkdir -p "$work/final"
+report() { bash "$work/final.sh" >"$work/out" 2>&1; echo "$?/$(grep -c "$1" "$work/out")"; }
+echo '{"agentName":"lima-test","gitHubUrl":"https://github.com/acme"}' >"$work/final/.runner"
+record "a full config: reported" "0/1" "$(report 'runner lima-test (9.9.9) registered at https://github.com/acme')"
+echo '{"gitHubUrl":"https://github.com/acme"}' >"$work/final/.runner"
+record "no agentName in it: exits 0, saying so" "0/1" "$(report 'could not read its name and URL')"
+rm -f "$work/final/.runner"
+record "no config at all: exits 0, saying so" "0/1" "$(report 'could not read its name and URL')"
 
 summary
