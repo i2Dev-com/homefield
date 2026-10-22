@@ -235,7 +235,7 @@ printf 'tree\n-oAPT::Get::AllowUnauthenticated=true\n' >"$work/etc/extra-package
 run
 rc=$?
 record "an option in the saved list: refused before apt-get, saying where" "1/0/yes" \
-  "$rc/$(cat "$work/state.log" 2>/dev/null | grep -c '^apt-get')/$(grep -q 'extra-packages: not a package name: -oAPT' "$work/out" && echo yes || echo no)"
+  "$rc/$(grep -c '^apt-get' "$work/state.log" 2>/dev/null || echo 0)/$(grep -q 'extra-packages: not a package name: -oAPT' "$work/out" && echo yes || echo no)"
 
 fresh "$current" active
 printf '\ntree \n  jq git\n\n' >"$work/etc/extra-packages"
