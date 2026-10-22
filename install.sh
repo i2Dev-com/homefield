@@ -13,6 +13,8 @@
 #                       bin when writable, else ~/.local/bin)
 #   HOMEFIELD_YES=1     install Lima with Homebrew without asking (needed when
 #                       there is no terminal to ask on)
+#   HOMEFIELD_INSTANCE  the VM's Lima instance name (default homefield), as for
+#                       bin/homefield
 #
 # Everything is inside functions and `main` is the last line, so a download
 # that stops half way runs nothing. Runs on macOS's stock bash 3.2. Running it
@@ -22,6 +24,7 @@ set -euo pipefail
 REPO="${HOMEFIELD_REPO:-i2Dev-com/homefield}"
 REF="${HOMEFIELD_REF:-v0.2.1}"
 INSTALL_DIR="${HOMEFIELD_HOME:-$HOME/.local/share/homefield}"
+INSTANCE="${HOMEFIELD_INSTANCE:-homefield}"
 # The terminal to ask on. Under `curl | bash` stdin is this script, so prompts
 # read from the controlling terminal instead. Settable so the tests can stand
 # in for it with a file, or with nothing.
@@ -62,6 +65,18 @@ check_settings() {
   fi
 }
 
+# check_instance: Lima's rule for an instance name, the same check as
+# check_instance in bin/homefield (tests/install-sh.sh runs the same names
+# through both). Anything else would reach limactl as an option, such as
+# --help. Only for a run with no arguments, the one that looks the VM up:
+# with arguments, bin/homefield checks the instance, and an --instance among
+# them wins over HOMEFIELD_INSTANCE.
+check_instance() {
+  local instance_re='^[A-Za-z0-9]+([._-][A-Za-z0-9]+)*$'
+  [[ "$INSTANCE" =~ $instance_re && ${#INSTANCE} -le 76 && ! "$INSTANCE" =~ [.][Yy][Aa]?[Mm][Ll]$ ]] ||
+    die "HOMEFIELD_INSTANCE must be a Lima instance name: letters and digits, with a single '.', '_' or '-' between them, at most 76 characters, not ending in .yml or .yaml; got: $INSTANCE"
+}
+
 # fetch_tarball <file>: the source of REF. gh when it works, which also reads
 # a private fork (HOMEFIELD_REPO); otherwise a plain download.
 fetch_tarball() {
@@ -94,7 +109,10 @@ tarball_commit() {
 
 # install_tree <tarball>: unpacks next to the destination (same filesystem, so
 # the final move is a rename), checks it is this tool, records where it came
-# from and swaps it in. The old copy is only removed once the new one is in.
+# from and swaps it in. The old copy is put back only if the swap itself
+# fails; after that it goes with $WORK when the script exits, even if a later
+# step fails. Running this again (HOMEFIELD_REF=<tag> for an older one) is the
+# way back.
 install_tree() {
   local tarball="$1" stage="$WORK/tree" top commit f
   mkdir -p "$stage"
@@ -102,6 +120,8 @@ install_tree() {
   for f in bin/homefield vm/lima.yaml vm/provision.sh; do
     [ -f "$stage/$f" ] || die "the download is not homefield: $f is missing"
   done
+  # The wrapper execs it; provision.sh is run with bash, so only this one.
+  [ -x "$stage/bin/homefield" ] || die "bin/homefield in the download is not executable; it was not packed with its file modes"
   top="$(tar -tzf "$tarball" | sed -n '1s,/.*,,p')"
   commit="$(tarball_commit "$tarball" "$top")"
   printf 'repo=%s\nref=%s\ncommit=%s\n' "$REPO" "$REF" "$commit" >"$stage/.homefield-ref"
@@ -194,13 +214,14 @@ ensure_lima() {
 }
 
 vm_exists() {
-  [ -n "$(limactl list --format '{{.Status}}' "${HOMEFIELD_INSTANCE:-homefield}" 2>/dev/null)" ]
+  [ -n "$(limactl list --format '{{.Status}}' "$INSTANCE" 2>/dev/null)" ]
 }
 
 main() {
   trap cleanup EXIT
   check_host
   check_settings
+  [ $# -gt 0 ] || check_instance
 
   # Next to the destination, so that the swap below is a rename.
   mkdir -p "$(dirname "$INSTALL_DIR")"
@@ -225,16 +246,20 @@ main() {
   WORK=""
   trap - EXIT
   local installed="$INSTALL_DIR/bin/homefield"
+  # HOMEFIELD_INSTANCE may have been set for this run only, so the commands
+  # printed below name the instance themselves.
+  local on=""
+  [ "$INSTANCE" = homefield ] || on=" --instance ${INSTANCE}"
   # Run again with no arguments on a Mac that already has the VM, this is a
   # tool update, with or without a terminal: `install` there would upgrade the
   # VM and briefly stop the runner, which nobody asked for, and advice to set
   # up a runner would be wrong.
   if [ $# -eq 0 ] && vm_exists; then
     echo
-    echo "The VM ${HOMEFIELD_INSTANCE:-homefield} already exists and was not changed. To update it too:"
-    echo "  homefield upgrade"
-    echo "If its setup never finished (homefield status shows no registration), finish it with:"
-    echo "  homefield install"
+    echo "The VM ${INSTANCE} already exists and was not changed. To update it too:"
+    echo "  homefield upgrade${on}"
+    echo "If its setup never finished (homefield status${on} shows no registration), finish it with:"
+    echo "  homefield install${on}"
     return 0
   fi
   if [ $# -gt 0 ] || have_tty; then
@@ -246,7 +271,7 @@ main() {
   fi
   echo
   echo "Next, set up the runner:"
-  echo "  homefield install --url https://github.com/<org>      # or https://github.com/<owner>/<repo>"
+  echo "  homefield install${on} --url https://github.com/<org>      # or https://github.com/<owner>/<repo>"
 }
 
 main "$@"
