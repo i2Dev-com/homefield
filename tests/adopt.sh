@@ -112,7 +112,7 @@ emit_job() {
 }
 header() { printf 'name: CI\non: [pull_request]\njobs:\n'; }
 # guard <job entries>  or guard_label <label> <block lines>
-guard() { guard_uses i2Dev-com/homefield/routing-guard@v0.2.1 "$@"; }
+guard() { guard_uses i2Dev-com/homefield/routing-guard@v0.3.0 "$@"; }
 guard_uses() {
   local uses="$1" e
   shift
@@ -162,7 +162,7 @@ mkdir -p "$work/wf-ready/subdir"
 } >"$work/wf-mismatch/ci.yml"
 {
   header
-  emit_job lint ubuntu-latest "$(printf '      - name: Routing guard\n        uses: i2Dev-com/homefield/routing-guard@v0.2.1\n        with:\n          jobs: '"''"'')"
+  emit_job lint ubuntu-latest "$(printf '      - name: Routing guard\n        uses: i2Dev-com/homefield/routing-guard@v0.3.0\n        with:\n          jobs: '"''"'')"
 } >"$work/wf-norouted/ci.yml"
 {
   header
@@ -210,20 +210,20 @@ wf_guard() {
     emit_job lint "$expr" "$(guard_uses "$3" ci.yml:lint)"
   } >"$work/$1/ci.yml"
 }
-action="i2Dev-com/homefield/routing-guard@v0.2.1"
+action="i2Dev-com/homefield/routing-guard@v0.3.0"
 sha40="0123456789abcdef0123456789abcdef01234567"
-wf_guard wf-src-other 'on: [pull_request]' other-org/homefield/routing-guard@v0.2.1
+wf_guard wf-src-other 'on: [pull_request]' other-org/homefield/routing-guard@v0.3.0
 wf_guard wf-src-v1 'on: [pull_request]' i2Dev-com/homefield/routing-guard@v1
 wf_guard wf-src-v3 'on: [pull_request]' i2Dev-com/homefield/routing-guard@v3
 wf_guard wf-src-minor 'on: [pull_request]' i2Dev-com/homefield/routing-guard@v0.1
-wf_guard wf-src-later 'on: [pull_request]' i2Dev-com/homefield/routing-guard@v0.3.0
-wf_guard wf-src-suffix 'on: [pull_request]' i2Dev-com/homefield/routing-guard@v0.2.1-rc1
+wf_guard wf-src-later 'on: [pull_request]' i2Dev-com/homefield/routing-guard@v0.4.0
+wf_guard wf-src-suffix 'on: [pull_request]' i2Dev-com/homefield/routing-guard@v0.3.0-rc1
 wf_guard wf-src-main 'on: [pull_request]' i2Dev-com/homefield/routing-guard@main
 wf_guard wf-src-short 'on: [pull_request]' i2Dev-com/homefield/routing-guard@${sha40%?}
 wf_guard wf-src-sha 'on: [pull_request]' "i2Dev-com/homefield/routing-guard@${sha40}"
 wf_guard wf-src-quoted 'on: [pull_request]' "'${action}'"
 wf_guard wf-src-dquoted 'on: [pull_request]' "\"${action}\""
-wf_guard wf-src-case 'on: [pull_request]' I2DEV-COM/HomeField/routing-guard@v0.2.1
+wf_guard wf-src-case 'on: [pull_request]' I2DEV-COM/HomeField/routing-guard@v0.3.0
 wf_guard wf-on-push 'on: [push]' "$action"
 wf_guard wf-on-prt 'on: pull_request_target' "$action"
 wf_guard wf-on-list 'on: [push, pull_request]' "$action"
@@ -509,7 +509,7 @@ record "no guard step: not ready, nothing switched, exit 1" "nonzero/yes/yes/0" 
   "$(nonzero "$rc")/$(has "$out" 'routing: not ready')/$(has "$out" 'no routing-guard step in .github/workflows')/$(called 'variable set')"
 record "...the canonical expression is printed" "yes" "$(has "$out" "runs-on: $expr")"
 record "...and the guard step, with the jobs that are routed" "yes/yes/yes" \
-  "$(has "$out" 'uses: i2Dev-com/homefield/routing-guard@v0.2.1')/$(has "$out" '            ci.yml:lint')/$(has "$out" '            ci.yml:test')"
+  "$(has "$out" 'uses: i2Dev-com/homefield/routing-guard@v0.3.0')/$(has "$out" '            ci.yml:lint')/$(has "$out" '            ci.yml:test')"
 record "...the default label is not written into the guard" "no" "$(has "$out" 'label: homefield-ci')"
 record "...and the last line says to merge first" "yes" "$(has "$out" 'not switched: merge the routing first, then run homefield adopt again')"
 
@@ -651,14 +651,14 @@ route_case() {
 }
 may_not_run='the routing guard may not run on every pull request'
 recognizes="adopt recognizes ${action}, the release this copy of homefield checks with, or a full commit SHA"
-route_case "another repository's routing-guard: not a guard, and says what it uses" wf-src-other not "ci.yml:9 uses other-org/homefield/routing-guard@v0.2.1, but $recognizes"
+route_case "another repository's routing-guard: not a guard, and says what it uses" wf-src-other not "ci.yml:9 uses other-org/homefield/routing-guard@v0.3.0, but $recognizes"
 route_case "@v1, a major only: not a guard" wf-src-v1 not "uses i2Dev-com/homefield/routing-guard@v1, but $recognizes"
 route_case "@v3, a major only: not a guard" wf-src-v3 not "uses i2Dev-com/homefield/routing-guard@v3, but $recognizes"
 route_case "@v0.1, a minor only: not a guard" wf-src-minor not "uses i2Dev-com/homefield/routing-guard@v0.1, but $recognizes"
-route_case "@v0.2.1-rc1, a suffix: not a guard" wf-src-suffix not "uses i2Dev-com/homefield/routing-guard@v0.2.1-rc1, but $recognizes"
-route_case "the current release, @v0.2.1: ready" wf-on-list ready "routing: ready, the guard passes and these jobs are routed: ci.yml:lint"
-route_case "another exact release, @v0.3.0: not a guard, its rules may differ" wf-src-later not "uses i2Dev-com/homefield/routing-guard@v0.3.0, but $recognizes"
-route_case "...and says to pin this release or install that one" wf-src-later not "v0.3.0 may have other rules: pin v0.2.1, or install homefield v0.3.0"
+route_case "@v0.3.0-rc1, a suffix: not a guard" wf-src-suffix not "uses i2Dev-com/homefield/routing-guard@v0.3.0-rc1, but $recognizes"
+route_case "the current release, @v0.3.0: ready" wf-on-list ready "routing: ready, the guard passes and these jobs are routed: ci.yml:lint"
+route_case "another exact release, @v0.4.0: not a guard, its rules may differ" wf-src-later not "uses i2Dev-com/homefield/routing-guard@v0.4.0, but $recognizes"
+route_case "...and says to pin this release or install that one" wf-src-later not "v0.4.0 may have other rules: pin v0.3.0, or install homefield v0.4.0"
 route_case "@main: not a guard" wf-src-main not "uses i2Dev-com/homefield/routing-guard@main, but $recognizes"
 route_case "...and nothing else is said to be usable" wf-src-main not "no routing-guard step that runs on pull requests"
 route_case "a 39-character ref is not a commit: not a guard" wf-src-short not "but $recognizes"
@@ -782,8 +782,8 @@ on: pull_request
 jobs:
   one:
     steps:
-      # - uses: x/homefield/routing-guard@v0.2.1   (commented out)
-      - uses: i2Dev-com/homefield/routing-guard@v0.2.1
+      # - uses: x/homefield/routing-guard@v0.3.0   (commented out)
+      - uses: i2Dev-com/homefield/routing-guard@v0.3.0
         with:
           jobs: a.yml:one a.yml:two
   two:
@@ -792,14 +792,14 @@ jobs:
         with:
           label: "acme-ci"
           jobs: "a.yml:one, a.yml:two"
-        uses: 'i2Dev-com/homefield/routing-guard@v0.2.1'
+        uses: 'i2Dev-com/homefield/routing-guard@v0.3.0'
       - uses: actions/checkout@v5
         with:
           jobs: not-a-guard
   three:
     steps:
       - name: Guard, comments in and after the block
-        uses: i2Dev-com/homefield/routing-guard@v0.2.1 # pinned
+        uses: i2Dev-com/homefield/routing-guard@v0.3.0 # pinned
         with:
           jobs: |-
             a.yml:one
@@ -807,11 +807,11 @@ jobs:
           # a comment at the key's depth ends the scalar
       - run: echo done
 EOF
-printf 'on: [push, pull_request]\r\njobs:\r\n  j:\r\n    steps:\r\n      - uses: i2dev-com/homefield/routing-guard@v0.2.1\r\n        with:\r\n          jobs: |\r\n            b.yml:j\r\n' >"$shapes/b.yaml"
-printf 'jobs:\n  j:\n    steps:\n      - uses: o/r/routing-guard@v0.2.1\n' >"$shapes/c.yml"
+printf 'on: [push, pull_request]\r\njobs:\r\n  j:\r\n    steps:\r\n      - uses: i2dev-com/homefield/routing-guard@v0.3.0\r\n        with:\r\n          jobs: |\r\n            b.yml:j\r\n' >"$shapes/b.yaml"
+printf 'jobs:\n  j:\n    steps:\n      - uses: o/r/routing-guard@v0.3.0\n' >"$shapes/c.yml"
 echo "not a workflow" >"$shapes/d.txt"
 got="$(python3 -I "$ROOT/tools/adopt.py" guards "$shapes")"
-want="$(printf 'a.yml:6\tok\thomefield-ci\t-\t-\tpull_request\thosted\tubuntu-latest\ta.yml:one a.yml:two\na.yml:15\tok\tacme-ci\t-\t-\tpull_request\thosted\tubuntu-latest\ta.yml:one a.yml:two\na.yml:22\tok\thomefield-ci\t-\t-\tpull_request\thosted\tubuntu-latest\ta.yml:one\nb.yaml:5\tok\thomefield-ci\t-\t-\tpull_request\thosted\tubuntu-latest\tb.yml:j\nc.yml:4\tsource\thomefield-ci\tthe routing-guard step at c.yml:4 uses o/r/routing-guard@v0.2.1, but adopt recognizes i2Dev-com/homefield/routing-guard@v0.2.1, the release this copy of homefield checks with, or a full commit SHA (docs/adopting.md, step 3)\t-\tpull_request\thosted\tubuntu-latest\t')"
+want="$(printf 'a.yml:6\tok\thomefield-ci\t-\t-\tpull_request\thosted\tubuntu-latest\ta.yml:one a.yml:two\na.yml:15\tok\tacme-ci\t-\t-\tpull_request\thosted\tubuntu-latest\ta.yml:one a.yml:two\na.yml:22\tok\thomefield-ci\t-\t-\tpull_request\thosted\tubuntu-latest\ta.yml:one\nb.yaml:5\tok\thomefield-ci\t-\t-\tpull_request\thosted\tubuntu-latest\tb.yml:j\nc.yml:4\tsource\thomefield-ci\tthe routing-guard step at c.yml:4 uses o/r/routing-guard@v0.3.0, but adopt recognizes i2Dev-com/homefield/routing-guard@v0.3.0, the release this copy of homefield checks with, or a full commit SHA (docs/adopting.md, step 3)\t-\tpull_request\thosted\tubuntu-latest\t')"
 record "guards: shapes of the step (block, inline, quoted, uses after with, CRLF, none, another action)" "$want" "$got"
 got="$(python3 -I "$ROOT/tools/adopt.py" guards "$work/wf-i2dev")"
 want="$(printf 'ci-checks.yml:9\tok\thomefield-ci\t-\tci.yml:5: the pull_request trigger has branches, paths-ignore filters;ci.yml:19: job checks, which calls ci-checks.yml, has an if: condition\tpull_request\thosted\tubuntu-latest\tci-checks.yml:lint ci-checks.yml:test')"
@@ -822,7 +822,7 @@ on: pull_request
 jobs:
   j:
     steps:
-      - uses: i2Dev-com/homefield/routing-guard@v0.2.1
+      - uses: i2Dev-com/homefield/routing-guard@v0.3.0
         with:
           jobs: ci.yml:j
           events: |
@@ -830,11 +830,11 @@ jobs:
             schedule
           dependabot: local
           fallback: "ubuntu-24.04-arm"
-      - uses: i2Dev-com/homefield/routing-guard@v0.2.1
+      - uses: i2Dev-com/homefield/routing-guard@v0.3.0
         with:
           jobs: ci.yml:j
           events: push, workflow_dispatch # trailing
-      - uses: i2Dev-com/homefield/routing-guard@v0.2.1
+      - uses: i2Dev-com/homefield/routing-guard@v0.3.0
         with:
           jobs: ci.yml:j
           events: ''
@@ -843,13 +843,13 @@ got="$(python3 -I "$ROOT/tools/adopt.py" guards "$work/opts-shape" | cut -f1,2,6
 want="$(printf 'ci.yml:5\tok\tpush schedule\tlocal\tubuntu-24.04-arm\tci.yml:j\nci.yml:13\tok\tpush workflow_dispatch\thosted\tubuntu-latest\tci.yml:j\nci.yml:17\tok\t-\thosted\tubuntu-latest\tci.yml:j')"
 record "guards: events, dependabot and fallback columns (block, inline, empty)" "$want" "$got"
 mkdir -p "$work/no-on"
-printf 'jobs:\n  j:\n    steps:\n      - uses: i2Dev-com/homefield/routing-guard@v0.2.1\n' >"$work/no-on/ci.yml"
+printf 'jobs:\n  j:\n    steps:\n      - uses: i2Dev-com/homefield/routing-guard@v0.3.0\n' >"$work/no-on/ci.yml"
 record "guards: a workflow whose on: cannot be read is blocked, not trusted" "blocked/yes" \
   "$(python3 -I "$ROOT/tools/adopt.py" guards "$work/no-on" | cut -f2)/$(has "$(python3 -I "$ROOT/tools/adopt.py" guards "$work/no-on" | cut -f4)" 'could not read the on: of ci.yml')"
 mkdir -p "$work/refs-shape"
 {
   printf 'on: pull_request\njobs:\n  j:\n    steps:\n'
-  for ref in v0.2.1 v0.3.0 v10.20.30 v3 v0.1 v0.2.1-rc1 v0.2.1.1 V0.1.0 main "$sha40"; do
+  for ref in v0.3.0 v0.4.0 v10.20.30 v3 v0.1 v0.3.0-rc1 v0.3.0.1 V0.1.0 main "$sha40"; do
     printf '      - uses: i2Dev-com/homefield/routing-guard@%s\n        with:\n          jobs: ci.yml:j\n' "$ref"
   done
 } >"$work/refs-shape/ci.yml"
