@@ -615,6 +615,21 @@ record "...the routed jobs are listed from the passing guard" "yes/yes" \
 record "...the passing guard's label is the one advised" "yes/no" \
   "$(has "$out" "runs-on: $expr_acme")/$(has "$out" "runs-on: $expr")"
 
+# The same shape, with the stale guard carrying arch x64 instead: the refusal
+# is adopt's (the VM is arm64), the step's own check passes, and the arm64
+# guard's jobs are still the ones advised.
+mkdir -p "$work/wf-arch-two"
+{
+  header
+  emit_job lint "$expr_x64" "$(guard_opts ci.yml:lint 'arch: x64')"
+  emit_job test "$expr" "$(guard ci.yml:test)"
+} >"$work/wf-arch-two/ci.yml"
+adopt GH_WF="$work/wf-arch-two" --
+record "two guards, one on arch x64: not ready, with the arch refusal" "nonzero/yes/0" \
+  "$(nonzero "$rc")/$(has "$out" 'uses arch x64, but adopt sets up an arm64 VM')/$(called 'variable set')"
+record "...the arm64 guard's routed jobs are the ones advised" "yes/no" \
+  "$(has "$out" '            ci.yml:test')/$(has "$out" '            ci.yml:lint')"
+
 # ── Group access waits for the routing ─────────────────────────────────────
 echo "group access order"
 adopt GH_WF="$work/wf-noguard" --
