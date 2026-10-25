@@ -359,6 +359,22 @@ is_job_running() {
   return "$rc"
 }
 
+# npm_state: whether the runner's bundled npm runs (#110), as with
+# job_running: 0 ok, 1 broken, 2 the VM could not be asked. Verify only: the
+# repair belongs to the job-started hook (vm/provision.sh), which relinks the
+# externals symlinks a runner self-update flattens (actions/runner#2094)
+# before every job. `cd /` keeps a project .npmrc out of the check.
+npm_state() {
+  local answer
+  # shellcheck disable=SC2016  # the guest's shell expands these, not this one
+  answer="$(guest sh -c 'for n in node20 node24; do d="/opt/actions-runner/externals/$n/bin"; [ -e "$d/npm" ] || continue; (cd / && "$d/node" "$d/npm" --version" >/dev/null 2>&1) || { echo broken; exit 0; }; done; echo ok')" || return 2
+  case "$answer" in
+    ok) return 0 ;;
+    broken) return 1 ;;
+    *) return 2 ;;
+  esac
+}
+
 # Maintenance (upgrade, uninstall) takes the runner offline first, straight
 # after the idle check: a runner that is still listening can be handed a job
 # at any moment, and apt restarting Docker or the service being uninstalled
@@ -1024,6 +1040,16 @@ cmd_status() {
     *) echo "job: unknown (could not ask the VM)"; unknown=1 ;;
   esac
   echo "runner version: $(guest sudo cat "$RUNNER_HOME/.provisioned-version" 2>/dev/null || echo unknown)"
+  local npm=0
+  npm_state || npm=$?
+  case "$npm" in
+    0) echo "npm: ok" ;;
+    1)
+      echo "npm: BROKEN (the next job's hook relinks a flattened externals; docs/runbook.md, \"Runner updates\")"
+      unknown=1
+      ;;
+    *) echo "npm: unknown (could not ask the VM)"; unknown=1 ;;
+  esac
   echo "extra packages: $(guest sh -c 'cat /etc/homefield/extra-packages 2>/dev/null | tr "\n" " "')"
   [ -n "$url" ] && echo "labels: see $(runners_page "$url") (not stored in the VM)"
   [ "$removed" = 0 ] || return 1

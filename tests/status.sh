@@ -39,7 +39,8 @@ guest() {
   case "\$*" in
     "sudo cat "*/.service) echo actions.runner.acme.test.service ;;
     "systemctl is-active "*) return 0 ;;
-    "sudo cat "*/.provisioned-version) echo 2.337.0 ;;
+    "sudo cat "*/.provisioned-version) echo 2.338.0 ;;
+    "sh -c "*npm*) case "\${NPM_RC:-0}" in 0) echo ok ;; 1) echo broken ;; *) return 2 ;; esac ;;
     "sh -c "*) echo "libpq-dev " ;;
   esac
 }
@@ -55,7 +56,7 @@ has() { case "$1" in *"$2"*) echo yes ;; *) echo no ;; esac; }
 # rest: the lines after the runner line, all of them or not.
 rest() {
   printf '%s/%s/%s/%s' "$(has "$out" 'service: running')" "$(has "$out" 'job: idle')" \
-    "$(has "$out" 'runner version: 2.337.0')" "$(has "$out" 'extra packages: libpq-dev')"
+    "$(has "$out" 'runner version: 2.338.0')" "$(has "$out" 'extra packages: libpq-dev')"
 }
 
 status SETTING_OUT='my-mac-homefield\nhttps://github.com/acme\n42\n'
@@ -114,7 +115,17 @@ status JOB_RC=0 SETTING_OUT='my-mac-homefield\nhttps://github.com/acme\n'
 record "a job is running: says so" "0/yes" "$rc/$(has "$out" 'job: running')"
 status JOB_RC=2 SETTING_OUT='my-mac-homefield\nhttps://github.com/acme\n'
 record "the job probe cannot ask: says unknown, not idle, and exits 1" "1/yes/no" "$rc/$(has "$out" 'job: unknown')/$(has "$out" 'job: idle')"
-record "...after the rest of the report" "yes/yes" "$(has "$out" 'service: running')/$(has "$out" 'runner version: 2.337.0')"
+record "...after the rest of the report" "yes/yes" "$(has "$out" 'service: running')/$(has "$out" 'runner version: 2.338.0')"
+
+# The runner's bundled npm (#110): ok, BROKEN when even the hook's repair did
+# not hold (the next jobs then fail at "Set up runner"), or unknown.
+echo "npm (#110):"
+status SETTING_OUT='my-mac-homefield\nhttps://github.com/acme\n42\n'
+record "npm runs: says ok, exit unchanged" "0/yes" "$rc/$(has "$out" 'npm: ok')"
+status NPM_RC=1 SETTING_OUT='my-mac-homefield\nhttps://github.com/acme\n42\n'
+record "npm broken: says so, with the way out, and exits 1" "1/yes/yes" "$rc/$(has "$out" 'npm: BROKEN')/$(has "$out" 'Runner updates')"
+status NPM_RC=2 SETTING_OUT='my-mac-homefield\nhttps://github.com/acme\n42\n'
+record "the npm probe cannot ask: says unknown and exits 1" "1/yes" "$rc/$(has "$out" 'npm: unknown')"
 
 status REG_RC=1
 record "not registered: exits 0 and says so" "0/yes/no" "$rc/$(has "$out" 'runner: not registered')/$(has "$out" 'service:')"
