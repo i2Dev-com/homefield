@@ -55,10 +55,13 @@ bash tests/adopt.sh                # bin/homefield adopt and tools/adopt.py, wit
 ## The routing expression is a versioned contract
 
 The canonical `runs-on` expression lives in copies that must change together:
-`routing-guard/routing_guard.py`, `vm/provision.sh`, `README.md` and
+`routing-guard/routing_guard.py`, `README.md` and
 `docs/adopting.md` (the runbook links to it instead of repeating it).
-`tests/label-rule.sh` exists to keep provision.sh and routing-guard in
-agreement — run it when touching either.
+`vm/provision.sh` registers the runner with a label list (`RUNNER_LABELS`,
+:102) that has to match the expression's `fromJSON` list; no test enforces
+that pair, so change them together. `tests/label-rule.sh` keeps the label
+rule in agreement — provision.sh and routing-guard must accept and reject
+the same labels — run it when touching either.
 
 - **Mandatory guards**, in every variant: the `vars.CI_RUNNER == 'local'`
   switch, a hosted fallback (`fallback` must be a bare GitHub-hosted image
