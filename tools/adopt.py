@@ -16,16 +16,16 @@ does not have.
   adopt.py guards DIR       one line per step that uses some routing guard:
                             file:line <TAB> status <TAB> label <TAB> blocking
                             <TAB> warnings <TAB> events
-                            <TAB> dependabot <TAB> fallback <TAB> job
+                            <TAB> dependabot <TAB> fallback <TAB> arch <TAB> job
                             entries (spaces). status is ok (a usable guard),
                             blocked (a recognized routing-guard step that
                             cannot run on pull requests) or source (not an
                             action adopt recognizes, or a step whose with:
                             adopt cannot read). blocking and warnings
                             are texts joined by ";", or "-" when there are
-                            none. events (spaces), dependabot and fallback
-                            are the step's `with:` values, or the defaults
-                            when it sets none; "-" is a value set to
+                            none. events (spaces), dependabot, fallback and
+                            arch are the step's `with:` values, or the
+                            defaults when it sets none; "-" is a value set to
                             nothing. The job entries
                             come last because they may be empty.
   adopt.py cache-keys DIR   one line per cache key that has runner.os and not
@@ -53,6 +53,10 @@ DEFAULT_LABEL = "homefield-ci"
 DEFAULT_EVENTS = "pull_request"
 DEFAULT_DEPENDABOT = "hosted"
 DEFAULT_FALLBACK = "ubuntu-latest"
+# The architecture the guard defaults to, which is the VM adopt sets up:
+# bin/homefield refuses a step whose arch is anything else, and checks with the
+# step's own value, so what it reports is what CI runs.
+DEFAULT_ARCH = "arm64"
 
 # A step or job `uses:`; group 3 is the raw value.
 USES = re.compile(r"^(\s*)(-\s+)?uses:\s*(.*?)\s*$")
@@ -431,7 +435,7 @@ def option(values, key, default):
 
 def guards(directory):
     """(file:line, status, label, blocking, warnings, events, dependabot,
-    fallback, job entries)
+    fallback, arch, job entries)
     for every step that uses some routing guard. The status is "source" for
     one that is not ACTION_PATH at RELEASE or a full commit SHA (another
     repository, another release, a branch, a major-only tag), "blocked" for one that
@@ -464,7 +468,7 @@ def guards(directory):
                 reason = f"the routing-guard step at {where} uses {value}, but adopt recognizes {ACTION}, the release this copy of homefield checks with, or a full commit SHA (docs/adopting.md, step 3)"
                 if path.lower() == ACTION_PATH.lower() and RELEASE_REF.fullmatch(ref):
                     reason += f". {ref} may have other rules: pin {RELEASE}, or install homefield {ref} (homefield version)"
-                found.append((where, "source", label, [reason], [], DEFAULT_EVENTS, DEFAULT_DEPENDABOT, DEFAULT_FALLBACK, jobs))
+                found.append((where, "source", label, [reason], [], DEFAULT_EVENTS, DEFAULT_DEPENDABOT, DEFAULT_FALLBACK, DEFAULT_ARCH, jobs))
                 continue
             unreadable = None
             if flow:
@@ -472,7 +476,7 @@ def guards(directory):
             elif not label:
                 unreadable = f"the routing-guard step at {where} sets label: to nothing, which the guard refuses. Remove the line to use {DEFAULT_LABEL}, or name the label (docs/adopting.md, step 3)"
             if unreadable:
-                found.append((where, "source", label or "-", [unreadable], [], DEFAULT_EVENTS, DEFAULT_DEPENDABOT, DEFAULT_FALLBACK, jobs))
+                found.append((where, "source", label or "-", [unreadable], [], DEFAULT_EVENTS, DEFAULT_DEPENDABOT, DEFAULT_FALLBACK, DEFAULT_ARCH, jobs))
                 continue
             blocks, warns = check_guard(name, at, files)
             if sha:
@@ -481,6 +485,7 @@ def guards(directory):
                 option(values, "events", DEFAULT_EVENTS),
                 option(values, "dependabot", DEFAULT_DEPENDABOT),
                 option(values, "fallback", DEFAULT_FALLBACK),
+                option(values, "arch", DEFAULT_ARCH),
             )
             found.append((where, "blocked" if blocks else "ok", label, blocks, warns, *opts, jobs))
     return found
@@ -553,9 +558,9 @@ def main():
     args = ap.parse_args()
 
     if args.cmd == "guards":
-        for where, status, label, blocks, warns, events, dependabot, fallback, jobs in guards(args.dir):
+        for where, status, label, blocks, warns, events, dependabot, fallback, arch, jobs in guards(args.dir):
             joined = [";".join(t.replace(";", ",") for t in texts) or "-" for texts in (blocks, warns)]
-            print("\t".join([where, status, label, *joined, events, dependabot, fallback, " ".join(jobs)]))
+            print("\t".join([where, status, label, *joined, events, dependabot, fallback, arch, " ".join(jobs)]))
     elif args.cmd == "cache-keys":
         for hit in cache_keys(args.dir):
             print(hit)

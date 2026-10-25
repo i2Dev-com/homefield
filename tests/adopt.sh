@@ -102,6 +102,7 @@ expr="$(python3 "$ROOT/routing-guard/routing_guard.py" --print-expression)"
 expr_acme="$(python3 "$ROOT/routing-guard/routing_guard.py" --print-expression --label acme-ci)"
 expr_push="$(python3 "$ROOT/routing-guard/routing_guard.py" --print-expression --events push)"
 expr_combo="$(python3 "$ROOT/routing-guard/routing_guard.py" --print-expression --events push,schedule --dependabot local --fallback ubuntu-24.04-arm)"
+expr_x64="$(python3 "$ROOT/routing-guard/routing_guard.py" --print-expression --arch x64)"
 
 # emit_job <id> <runs-on> [extra step lines...]
 emit_job() {
@@ -198,6 +199,11 @@ mkdir -p "$work/wf-push" "$work/wf-combo" "$work/wf-prt" "$work/wf-typo"
 } >"$work/wf-combo/ci.yml"
 { header; emit_job lint "$expr" "$(guard_opts ci.yml:lint 'events: pull_request_target')"; } >"$work/wf-prt/ci.yml"
 { header; emit_job lint "$expr_typo" "$(guard_opts ci.yml:lint 'fallback: ubuntu-lates')"; } >"$work/wf-typo/ci.yml"
+# The guard step's arch: adopt refuses anything but arm64, the VM it sets up.
+mkdir -p "$work/wf-arch-x64" "$work/wf-arch-arm64" "$work/wf-arch-amd64"
+{ header; emit_job lint "$expr_x64" "$(guard_opts ci.yml:lint 'arch: x64')"; } >"$work/wf-arch-x64/ci.yml"
+{ header; emit_job lint "$expr" "$(guard_opts ci.yml:lint 'arch: arm64')"; } >"$work/wf-arch-arm64/ci.yml"
+{ header; emit_job lint "$expr" "$(guard_opts ci.yml:lint 'arch: amd64')"; } >"$work/wf-arch-amd64/ci.yml"
 
 # Fixtures for what makes a step a guard: the action it uses, and whether its
 # workflow runs on pull requests. wf_guard <dir> <on-line> <uses> writes a
@@ -676,6 +682,10 @@ route_case "guard text inside a run: script is not a step: no guard" wf-heredoc 
 route_case "label: set to nothing: not ready, and the reason says so" wf-emptylabel not "sets label: to nothing, which the guard refuses"
 route_case "a with: on one line: not ready, and the reason says so" wf-flowwith not "has its with: on one line (line 9), which adopt does not read"
 route_case "a comment after with: does not make it a one-line with:" wf-withcomment ready "!on one line"
+route_case "arch: x64 on the step: refused, naming the VM" wf-arch-x64 not "uses arch x64, but adopt sets up an arm64 VM"
+route_case "...the step's own check passes, x64 being what CI runs" wf-arch-x64 not "!would fail"
+route_case "arch: arm64 on the step: ready like the default" wf-arch-arm64 ready "routing: ready"
+route_case "arch: amd64 on the step: refused, with the guard's own reason too" wf-arch-amd64 not "must be arm64 or x64"
 route_case "on: [push, pull_request]" wf-on-list ready "!$may_not_run"
 route_case "\"on\": quoted" wf-on-quoted ready "!$may_not_run"
 route_case "'on': quoted, as a list" wf-on-squoted ready "!$may_not_run"
@@ -811,10 +821,10 @@ printf 'on: [push, pull_request]\r\njobs:\r\n  j:\r\n    steps:\r\n      - uses:
 printf 'jobs:\n  j:\n    steps:\n      - uses: o/r/routing-guard@v0.3.0\n' >"$shapes/c.yml"
 echo "not a workflow" >"$shapes/d.txt"
 got="$(python3 -I "$ROOT/tools/adopt.py" guards "$shapes")"
-want="$(printf 'a.yml:6\tok\thomefield-ci\t-\t-\tpull_request\thosted\tubuntu-latest\ta.yml:one a.yml:two\na.yml:15\tok\tacme-ci\t-\t-\tpull_request\thosted\tubuntu-latest\ta.yml:one a.yml:two\na.yml:22\tok\thomefield-ci\t-\t-\tpull_request\thosted\tubuntu-latest\ta.yml:one\nb.yaml:5\tok\thomefield-ci\t-\t-\tpull_request\thosted\tubuntu-latest\tb.yml:j\nc.yml:4\tsource\thomefield-ci\tthe routing-guard step at c.yml:4 uses o/r/routing-guard@v0.3.0, but adopt recognizes i2Dev-com/homefield/routing-guard@v0.3.0, the release this copy of homefield checks with, or a full commit SHA (docs/adopting.md, step 3)\t-\tpull_request\thosted\tubuntu-latest\t')"
+want="$(printf 'a.yml:6\tok\thomefield-ci\t-\t-\tpull_request\thosted\tubuntu-latest\tarm64\ta.yml:one a.yml:two\na.yml:15\tok\tacme-ci\t-\t-\tpull_request\thosted\tubuntu-latest\tarm64\ta.yml:one a.yml:two\na.yml:22\tok\thomefield-ci\t-\t-\tpull_request\thosted\tubuntu-latest\tarm64\ta.yml:one\nb.yaml:5\tok\thomefield-ci\t-\t-\tpull_request\thosted\tubuntu-latest\tarm64\tb.yml:j\nc.yml:4\tsource\thomefield-ci\tthe routing-guard step at c.yml:4 uses o/r/routing-guard@v0.3.0, but adopt recognizes i2Dev-com/homefield/routing-guard@v0.3.0, the release this copy of homefield checks with, or a full commit SHA (docs/adopting.md, step 3)\t-\tpull_request\thosted\tubuntu-latest\tarm64\t')"
 record "guards: shapes of the step (block, inline, quoted, uses after with, CRLF, none, another action)" "$want" "$got"
 got="$(python3 -I "$ROOT/tools/adopt.py" guards "$work/wf-i2dev")"
-want="$(printf 'ci-checks.yml:9\tok\thomefield-ci\t-\tci.yml:5: the pull_request trigger has branches, paths-ignore filters;ci.yml:19: job checks, which calls ci-checks.yml, has an if: condition\tpull_request\thosted\tubuntu-latest\tci-checks.yml:lint ci-checks.yml:test')"
+want="$(printf 'ci-checks.yml:9\tok\thomefield-ci\t-\tci.yml:5: the pull_request trigger has branches, paths-ignore filters;ci.yml:19: job checks, which calls ci-checks.yml, has an if: condition\tpull_request\thosted\tubuntu-latest\tarm64\tci-checks.yml:lint ci-checks.yml:test')"
 record "guards: the columns of a guard behind a caller (status, blocking, warnings joined by ;)" "$want" "$got"
 mkdir -p "$work/opts-shape"
 cat >"$work/opts-shape/ci.yml" <<'EOF'
@@ -840,8 +850,33 @@ jobs:
           events: ''
 EOF
 got="$(python3 -I "$ROOT/tools/adopt.py" guards "$work/opts-shape" | cut -f1,2,6-)"
-want="$(printf 'ci.yml:5\tok\tpush schedule\tlocal\tubuntu-24.04-arm\tci.yml:j\nci.yml:13\tok\tpush workflow_dispatch\thosted\tubuntu-latest\tci.yml:j\nci.yml:17\tok\t-\thosted\tubuntu-latest\tci.yml:j')"
+want="$(printf 'ci.yml:5\tok\tpush schedule\tlocal\tubuntu-24.04-arm\tarm64\tci.yml:j\nci.yml:13\tok\tpush workflow_dispatch\thosted\tubuntu-latest\tarm64\tci.yml:j\nci.yml:17\tok\t-\thosted\tubuntu-latest\tarm64\tci.yml:j')"
 record "guards: events, dependabot and fallback columns (block, inline, empty)" "$want" "$got"
+mkdir -p "$work/arch-shape"
+cat >"$work/arch-shape/ci.yml" <<'EOF'
+on: pull_request
+jobs:
+  j:
+    steps:
+      - uses: i2Dev-com/homefield/routing-guard@v0.3.0
+        with:
+          jobs: ci.yml:j
+          arch: x64
+      - uses: i2Dev-com/homefield/routing-guard@v0.3.0
+        with:
+          jobs: ci.yml:j
+          arch: "arm64" # the VM
+      - uses: i2Dev-com/homefield/routing-guard@v0.3.0
+        with:
+          jobs: ci.yml:j
+          arch: ''
+      - uses: i2Dev-com/homefield/routing-guard@v0.3.0
+        with:
+          jobs: ci.yml:j
+EOF
+got="$(python3 -I "$ROOT/tools/adopt.py" guards "$work/arch-shape" | cut -f1,9)"
+want="$(printf 'ci.yml:5\tx64\nci.yml:9\tarm64\nci.yml:13\t-\nci.yml:17\tarm64')"
+record "guards: the arch column (set, quoted with a comment, empty, absent)" "$want" "$got"
 mkdir -p "$work/no-on"
 printf 'jobs:\n  j:\n    steps:\n      - uses: i2Dev-com/homefield/routing-guard@v0.3.0\n' >"$work/no-on/ci.yml"
 record "guards: a workflow whose on: cannot be read is blocked, not trusted" "blocked/yes" \
