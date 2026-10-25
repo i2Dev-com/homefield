@@ -162,7 +162,12 @@ step:
    `runner.os` and no `runner.arch` ([step 4](#4-fix-cache-keys)), in the
    workflow files that contain a routed job (all of them while none is
    routed). It matches text, so check what each one is the key of.
-4. **Runner group access.** For an organization's custom group (`homefield-ci` by
+4. **Fallback image.** Checks the guard step's `fallback` against GitHub's
+   standard hosted labels: a typo such as `ubuntu-lates` passes the guard,
+   and the jobs then wait for a runner that does not exist whenever
+   `CI_RUNNER` is not `local`. A label this version does not know (a larger
+   runner, an image newer than its list) only gets a warning.
+5. **Runner group access.** For an organization's custom group (`homefield-ci` by
    default, `--group` for another), adds the repository to the group, but only
    when the routing is ready: group access is what lets the repository's jobs
    reach the runner, so it comes after the routing that keeps them to its own
@@ -179,7 +184,7 @@ step:
    repositories*, [Runner group](runbook.md#runner-group)). The Default group
    is not looked at (it is open to every repository in the organization), and
    neither is a group whose list could not be read.
-5. **Switch.** When the routing is ready, sets `CI_RUNNER` to `local` (the same
+6. **Switch.** When the routing is ready, sets `CI_RUNNER` to `local` (the same
    as `homefield route local`). If it is already `local`, it says so.
 
 It is safe to run again: what is done is reported, not repeated. `--dry-run`

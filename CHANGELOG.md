@@ -1,7 +1,7 @@
 # Changelog
 
 Releases are exact semver tags, such as `v0.1.0`, and a tag is never moved.
-Consumers pin an exact tag (`routing-guard@v0.1.0`) or a full commit SHA; see
+Consumers pin an exact tag (`routing-guard@v0.3.0`) or a full commit SHA; see
 [Versioning](README.md#versioning).
 
 While the version is 0.x, a change that makes a previously passing workflow
@@ -66,9 +66,11 @@ provisioning fixes below. Bump `routing-guard@v0.2.1` pins to `@v0.3.0`:
   every VM, and that GitHub removes a runner offline for more than 14 days
   (the recovery is under Fixed, #76).
 - The docs are shorter. The runbook's Setup leads with the one-liner and keeps
-  the manual steps under *What `install` does, by hand*; the routing
-  expression, the guard rules, the runner-group commands and the test list each
-  live in one place and the other documents link to it. Nothing about
+  the manual steps under *What `install` does, by hand*; the guard rules, the
+  runner-group commands and the test list each live in one place and the other
+  documents link to them. The routing expression is a full copy in README and
+  in the adopting guide — consumers read each standalone — and
+  `tests/adopt.sh` keeps the two copies equal. Nothing about
   behaviour changed.
 
 ### Fixed
