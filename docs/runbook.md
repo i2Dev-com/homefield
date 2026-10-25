@@ -279,6 +279,7 @@ gh run rerun <run-id> --repo <owner>/<repo>
 | Job fails only on the local runner | Toolchain or arch gap between the VM and `ubuntu-latest` (arm64 vs x86-64) | Red check | Re-run hosted to confirm. Then add the tool ("Adding tools") or keep that job hosted |
 | `No space left on device` in the VM | Docker images and old workspaces | Red check | `limactl shell homefield sudo /usr/local/sbin/homefield-cleanup` |
 | Checkout fails with `EACCES: permission denied` deleting files in `_work` | A `container:` job ran as root and left root-owned files, and the runner predates the job-started hook that gives them back (#54) | Red check, on every later job in that repository's workspace | `bin/homefield upgrade` installs the hook, which also fixes the files left so far |
+| `pnpm/action-setup` (or another JS action) fails with `Cannot find module '../lib/cli.js'` from `externals.*<version>/node*/bin/npm` | A runner self-update extracted its externals with symlinks followed ([actions/runner#2094](https://github.com/actions/runner/issues/2094), #110), leaving npm, npx and corepack as flattened regular files | With the repairing hook installed, never: the next job's hook relinks them first. On a runner without it, red check on every PR job within ~15 s | `bin/homefield upgrade` installs the repairing hook and verifies npm. Until then, by hand inside the VM, from `/opt/actions-runner`: for each `externals.*/node*/bin`, `ln -sf ../lib/node_modules/npm/bin/npm-cli.js npm`, `ln -sf ../lib/node_modules/npm/bin/npx-cli.js npx`, `ln -sf ../lib/node_modules/corepack/dist/corepack.js corepack` |
 | Cancelled job still "in progress" for ~40 s | The runner gives the running step a grace period before killing it | Ends `cancelled`, and service containers are removed | Wait. Only investigate if it lasts minutes |
 
 **Inspecting the guest.** The Lima login user is not in the `docker` group, so
@@ -293,6 +294,16 @@ nothing, which is easy to misread as "no containers".
   `gh api repos/actions/runner/releases/latest`). Re-running it after a bump
   replaces the binary, which stops the service and cancels a running job, so do
   it while the runner is idle.
+  - The update itself has a defect that outlives any version
+    ([actions/runner#2094](https://github.com/actions/runner/issues/2094), #110):
+    the new `externals.<version>/` tree is extracted with symlinks followed, so
+    npm, npx and corepack arrive as regular files and every JS action that
+    shells out to npm fails. The job-started hook (below) relinks the flattened
+    files before the next job runs and verifies npm works, so the runner heals
+    itself. Keeping the runner updated *is* still the right move: the pinned
+    version tracks what the runners self-update to, and `--disableupdate` is
+    not used, because GitHub stops queueing jobs to a runner more than 30 days
+    behind the latest release.
 - **Guest OS updates.** Automatic. Ubuntu's own `unattended-upgrades` is
   switched off, because it restarts the runner, containerd and Docker at
   06:00–07:00 whether or not a job is running, and has failed jobs that way
@@ -315,7 +326,9 @@ nothing, which is easy to misread as "no containers".
     homefield sudo systemctl reboot`; the VM keeps running under `vz`.
 - **Checking health after an update** (a runner bump, a guest upgrade or a
   reboot): `bin/homefield status` should show the VM running, the service
-  running and the job state. It shows the runner version `provision.sh`
+  running, the job state, and `npm: ok` — the bundled npm the JS actions use,
+  which the hook repairs if a self-update flattened it (#110). It shows the
+  runner version `provision.sh`
   installed, which stays put; the runner's own version, which moves when it
   updates itself, is
   `limactl shell homefield sudo -u runner /opt/actions-runner/bin/Runner.Listener --version`
@@ -337,8 +350,12 @@ nothing, which is easy to misread as "no containers".
   job-started hook (`ACTIONS_RUNNER_HOOK_JOB_STARTED` in
   `/opt/actions-runner/.env`) runs `/usr/local/sbin/homefield-workspace-owner`
   through sudo, which gives anything in `_work` not owned by `runner` back to
-  it; sudo allows that one script, with no arguments, and nothing else. The
-  hook's output is in the job log, under "Set up runner".
+  it, and also repairs the runner's npm when a self-update has flattened the
+  externals symlinks (#110, "Runner updates" above); sudo allows that one
+  script, with no arguments, and nothing else.
+  The hook's output is in the job log, under "Set up runner". A job whose npm
+  the hook could not repair fails right there, with the reason, instead of
+  deeper in the job.
 - **Host memory.** The VM process on the Mac ("Virtual Machine Service") sits
   at roughly the configured `memory` even while idle. The guest fills spare RAM
   with page cache, and Virtualization.framework does not return pages to the

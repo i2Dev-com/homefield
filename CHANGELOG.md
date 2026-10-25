@@ -11,6 +11,27 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ## Unreleased
 
+### Added
+
+- The job-started hook also repairs the runner's own npm (#110). A runner
+  self-update extracts its new `externals.<version>/` tree with symlinks
+  followed (upstream actions/runner#2094, open since 2022): npm, npx and
+  corepack arrive as regular files — copies of what the link should point at —
+  and every JS action that shells out to npm, such as `pnpm/action-setup`,
+  dies with `Cannot find module '../lib/cli.js'`. Before every job, the hook
+  relinks a file that is byte for byte the flattened artifact back into the
+  link, so a job never sees the flatten; anything else is left alone. It then
+  runs `npm --version` under both bundled nodes: if npm is broken in some
+  other way the job fails at *Set up runner* with that message instead of a
+  cryptic error in its first step. `homefield status` reports an `npm:` line.
+
+### Changed
+
+- The pinned runner version is 2.338.0 (from 2.337.0), the version the
+  runners self-updated to on 2026-10-23. Re-provisioning no longer replaces
+  the live 2.338.0 tree with 2.337.0 and waits for the runner to self-update
+  again.
+
 ## v0.3.0 (2026-10-21)
 
 Not a drop-in for v0.2.1, by the rule above: the routing guard now refuses an

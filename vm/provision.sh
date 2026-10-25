@@ -67,8 +67,8 @@
 # uninstall copies this script in and runs that when deregistering fails.
 set -euo pipefail
 
-RUNNER_VERSION="2.337.0"
-RUNNER_SHA256="9b1dc70626422526e3c94767cf024896beb15da5342a3f4819bf2feac13e0393"
+RUNNER_VERSION="2.338.0"
+RUNNER_SHA256="628b4a7258487b80c1d3c221095a7ded349f5ae0175fd3dfab708d07428f041b"
 RUNNER_URL="${RUNNER_URL:-}"
 RUNNER_NAME="${RUNNER_NAME:-$(hostname)}"
 RUNNER_LABEL="${RUNNER_LABEL:-homefield-ci}"
@@ -416,20 +416,87 @@ if [ ! -x "$RUNNER_HOME/config.sh" ] || ! grep -qx "$RUNNER_VERSION" "$RUNNER_HO
 fi
 chown -R "$RUNNER_USER:$RUNNER_USER" "$RUNNER_HOME"
 
-# ── Workspace ownership ─────────────────────────────────────────────────────
-# A `container:` job runs as root in its container, with _work mounted in it,
-# so whatever its steps write there is owned by root. The next job's checkout
-# runs as runner and fails to delete it (EACCES; #54, actions/runner#434). A
-# job-started hook hands _work back to runner before every job, which also
-# covers a container job that was cancelled. That takes root, so runner may run
-# this one script, with no arguments, through sudo. It grants nothing new: the
-# docker group already makes runner root-equivalent in the guest. None of it
-# needs the registration, so it runs before it: a failure here must not leave
-# a newly registered runner with no service (#83).
+# ── Runner npm + workspace ownership ────────────────────────────────────────
+# Two repairs the runner cannot make itself, run before every job through the
+# job-started hook (ACTIONS_RUNNER_HOOK_JOB_STARTED, set in .env below):
+#
+# npm (#110): the runner updates itself, and the update extracts its new
+# externals.<version>/ tree with symlinks followed (actions/runner#2094, open
+# since 2022): npm, npx and corepack arrive as regular files holding a copy of
+# what the link should point at, and the copy's relative require() then breaks.
+# Every JS action that shells out to npm (pnpm/action-setup, ...) dies with
+# "Cannot find module '../lib/cli.js'". The official tarball is fine — only
+# the self-update flattens — so the repair is to put the three links back. It
+# is safe to do narrowly: a regular file that is byte for byte the file the
+# link should point at is replaced by the link; anything else is left for a
+# human. Then npm itself must run: if it still does not, the hook exits 1,
+# which fails the job at "Set up runner" with that message, instead of a
+# cryptic error in the job's first step. The runner defers a self-update
+# until the running job is done, so the next job's hook always runs after the
+# flatten and the job never sees it.
+#
+# Workspace ownership (#54, actions/runner#434): a `container:` job runs as
+# root in its container, with _work mounted in it, so whatever its steps write
+# there is owned by root. The next job's checkout runs as runner and fails to
+# delete it (EACCES). The hook hands _work back to runner before every job,
+# which also covers a container job that was cancelled. That takes root, so
+# runner may run this one script, with no arguments, through sudo. It grants
+# nothing new: the docker group already makes runner root-equivalent in the
+# guest. None of it needs the registration, so it runs before it: a failure
+# here must not leave a newly registered runner with no service (#83).
 cat > /usr/local/sbin/homefield-workspace-owner <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-work=/opt/actions-runner/_work
+# HOMEFIELD_RUNNER_HOME exists for tests/workspace-owner.sh; the hook sets none.
+runner_home="${HOMEFIELD_RUNNER_HOME:-/opt/actions-runner}"
+work="$runner_home/_work"
+
+relink() { # relink <bin dir> <name> <link target>
+  local dest="$1/$2"
+  # Only the artifact: a regular file, never a proper link or a missing name.
+  [ -f "$dest" ] && [ ! -L "$dest" ] || return 0
+  if cmp -s "$dest" "$1/$3"; then
+    ln -sf "$3" "$dest"
+    echo "homefield-workspace-owner: relinked $2 in $1 (the runner self-update flattened it, actions/runner#2094)"
+  else
+    echo "homefield-workspace-owner: $dest is a regular file, but not the flattened artifact; leaving it alone" >&2
+  fi
+}
+
+# externals is a real directory on a fresh install; the first self-update
+# turns it into a symlink to the versioned externals.<version> beside it.
+# Both spellings are swept, but never the same directory twice through the
+# symlink. node20 and node24 are today's copies; the glob takes any others.
+shopt -s nullglob
+for bin in "$runner_home"/externals*/node*/bin; do
+  case "$bin" in
+    "$runner_home"/externals/*) [ -L "$runner_home/externals" ] && continue ;;
+  esac
+  relink "$bin" npm ../lib/node_modules/npm/bin/npm-cli.js
+  relink "$bin" npx ../lib/node_modules/npm/bin/npx-cli.js
+  relink "$bin" corepack ../lib/node_modules/corepack/dist/corepack.js
+done
+
+# npm must not merely look right but run, so any other form of the breakage
+# is caught here rather than in a job's first step. Only the active tree (the
+# `externals` name, real directory or symlink) is checked: the older
+# externals.<version> directories are not used by jobs. Only node20 and
+# node24 are checked, deliberately not every node* directory: a musl-linked
+# alpine build, if a version ships one, can never run on this glibc guest and
+# would fail every job here. `cd /` keeps a project .npmrc out of the check.
+for n in node20 node24; do
+  d="$runner_home/externals/$n/bin"
+  [ -x "$d/node" ] && [ -e "$d/npm" ] || continue
+  if ! out="$(cd / && "$d/node" "$d/npm" --version 2>&1)"; then
+    echo "homefield-workspace-owner: npm for $n under $runner_home/externals is broken and the repair did not hold:" >&2
+    printf '%s\n' "$out" >&2
+    echo "homefield-workspace-owner: failing this job here; see docs/runbook.md, \"Runner updates\"" >&2
+    exit 1
+  fi
+done
+
+# A missing _work (before the first job) ends here, after the npm repair,
+# which must run whether or not a workspace exists yet.
 [ -d "$work" ] || exit 0
 # find does not follow symlinks and chown -h changes the link itself, so a
 # job's symlink to a file outside _work never hands that file to runner.
@@ -450,7 +517,10 @@ visudo -cqf "$sudoers"
 install -m 440 "$sudoers" /etc/sudoers.d/homefield-workspace-owner
 rm -f "$sudoers"
 # Run it once now, as the hook will: this proves the sudo rule works before
-# any job depends on it, and fixes what earlier container jobs left.
+# any job depends on it, fixes what earlier container jobs left, and repairs
+# and verifies the runner's npm (#110) — including in a tree the runner
+# self-updated in place, which the tar block above only replaces on a version
+# bump. A tree it cannot repair fails the provision here, not the first job.
 sudo -u "$RUNNER_USER" /usr/local/sbin/homefield-job-started.sh
 
 # ── Registration + service ──────────────────────────────────────────────────
