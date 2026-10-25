@@ -88,6 +88,21 @@ record "no id read: not checked, saying why, gh not called" "0/yes/0" "$rc/$(has
 status GH_FAIL=0 GH_IDS='' JOB_RC=2 SETTING_OUT='my-mac-homefield\nhttps://github.com/acme\n42\n'
 record "not listed and the job probe cannot ask: exits 1" "1/yes" "$rc/$(has "$out" 'job: unknown')"
 
+# The npm probe's guest command is answered by a stub above, so a malformed
+# command would pass every assertion and only fail on a real VM. Parse the
+# command npm_state would actually send (the #111 review found exactly that
+# break: an unmatched quote every stubbed run missed).
+echo "the npm probe's guest command parses:"
+cat >"$work/npm-harness.sh" <<EOF
+HOMEFIELD_SOURCE_ONLY=1
+. "$ROOT/bin/homefield"
+guest() { printf '%s' "\$3" >"$work/npm-guest-cmd"; echo ok; }
+npm_state >/dev/null
+EOF
+bash "$work/npm-harness.sh"
+sh -n "$work/npm-guest-cmd"
+record "sh -n accepts it" "0" "$?"
+
 # runner_setting itself, on a .runner without one of the keys: the others
 # still come back, the missing one as an empty line.
 printf '\xef\xbb\xbf{"agentName": "my-mac-homefield", "gitHubUrl": "https://github.com/acme"}' >"$work/.runner"

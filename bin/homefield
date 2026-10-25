@@ -367,7 +367,7 @@ is_job_running() {
 npm_state() {
   local answer
   # shellcheck disable=SC2016  # the guest's shell expands these, not this one
-  answer="$(guest sh -c 'for n in node20 node24; do d="/opt/actions-runner/externals/$n/bin"; [ -e "$d/npm" ] || continue; (cd / && "$d/node" "$d/npm" --version" >/dev/null 2>&1) || { echo broken; exit 0; }; done; echo ok')" || return 2
+  answer="$(guest sh -c 'for n in node20 node24; do d="/opt/actions-runner/externals/$n/bin"; [ -e "$d/npm" ] || continue; (cd / && "$d/node" "$d/npm" --version >/dev/null 2>&1) || { echo broken; exit 0; }; done; echo ok')" || return 2
   case "$answer" in
     ok) return 0 ;;
     broken) return 1 ;;
