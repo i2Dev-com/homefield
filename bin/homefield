@@ -1045,7 +1045,7 @@ cmd_status() {
   case "$npm" in
     0) echo "npm: ok" ;;
     1)
-      echo "npm: BROKEN (the next job's hook relinks a flattened externals; docs/runbook.md, \"Runner updates\")"
+      echo "npm: BROKEN (a runner self-update can flatten the externals symlinks; docs/runbook.md, \"Runner updates\")"
       unknown=1
       ;;
     *) echo "npm: unknown (could not ask the VM)"; unknown=1 ;;

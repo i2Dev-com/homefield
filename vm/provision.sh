@@ -480,8 +480,10 @@ done
 # npm must not merely look right but run, so any other form of the breakage
 # is caught here rather than in a job's first step. Only the active tree (the
 # `externals` name, real directory or symlink) is checked: the older
-# externals.<version> directories are not used by jobs. `cd /` keeps a
-# project .npmrc out of the check.
+# externals.<version> directories are not used by jobs. Only node20 and
+# node24 are checked, deliberately not every node* directory: a musl-linked
+# alpine build, if a version ships one, can never run on this glibc guest and
+# would fail every job here. `cd /` keeps a project .npmrc out of the check.
 for n in node20 node24; do
   d="$runner_home/externals/$n/bin"
   [ -x "$d/node" ] && [ -e "$d/npm" ] || continue
