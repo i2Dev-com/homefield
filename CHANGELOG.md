@@ -25,6 +25,16 @@ fail, such as a new guard in the routing expression, bumps the minor version
   other way the job fails at *Set up runner* with that message instead of a
   cryptic error in its first step. `homefield status` reports an `npm:` line.
 
+### Fixed
+
+- `homefield adopt` reads the routing-guard step's `arch` and refuses one
+  whose `arch:` is anything but `arm64`, the VM it sets up. Before, it checked
+  every workflow against `arm64` whatever the step said: an `x64` guard step
+  with matching `x64` expressions was reported as failing with nothing routed
+  although CI passed, and an `amd64` one as ready although the guard refuses
+  that value in CI. The guard check now runs with the step's own `arch`, so
+  what adopt reports is what CI runs (#105).
+
 ### Changed
 
 - The pinned runner version is 2.338.0 (from 2.337.0), the version the

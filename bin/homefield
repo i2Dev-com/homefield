@@ -1416,13 +1416,16 @@ adopt_events_key() {
 # ADOPT_FALLBACK and ADOPT_ROUTED. The workflows' own guard says which label,
 # options and jobs to expect; --events, --dependabot and --fallback arrive as
 # ADOPT_FLAG_EVENTS, ADOPT_FLAG_DEPENDABOT and ADOPT_FLAG_FALLBACK (empty when
-# not given) and are held to the guard the way --label is. The checks are routing_guard.py,
-# the same script the guard runs in CI. A usable step is the action pinned to
+# not given) and are held to the guard the way --label is. The guard's arch is
+# read too, and refused unless arm64: adopt sets up the arm64 VM, and there is
+# no flag to change that (#21 is the x86-64 future). The checks are routing_guard.py,
+# the same script the guard runs in CI, with the step's own arch, so what they
+# report is what CI runs. A usable step is the action pinned to
 # this copy's release or a commit, in a workflow that runs on pull requests
 # (tools/adopt.py says which are).
 adopt_routing_check() {
   local dir="$1" label="$2" label_given="$3" rows where gstatus glabel gblocks gwarns gjobs out rc lines
-  local gevents gdependabot gfallback gmatch opts
+  local gevents gdependabot gfallback garch gmatch opts
   local candidates=0 deferred="" routed routedjob
   ADOPT_READY=1
   ADOPT_REASONS=""
@@ -1435,7 +1438,7 @@ adopt_routing_check() {
   ADOPT_GUARDS=0
   ADOPT_ROUTED=""
   rows="$(python3 -I "$ROOT/tools/adopt.py" guards "$dir")" || die "adopt: could not read the downloaded workflows"
-  while IFS=$'\t' read -r where gstatus glabel gblocks gwarns gevents gdependabot gfallback gjobs; do
+  while IFS=$'\t' read -r where gstatus glabel gblocks gwarns gevents gdependabot gfallback garch gjobs; do
     [ -n "$where" ] || continue
     candidates=$((candidates + 1))
     case "$gstatus" in
@@ -1475,7 +1478,11 @@ adopt_routing_check() {
       gmatch=0
       adopt_reason "the routing-guard step at ${where} uses fallback ${gfallback}, but --fallback is ${ADOPT_FLAG_FALLBACK}"
     fi
-    opts=(--label "$glabel" --events "$gevents" --dependabot "$gdependabot" --fallback "$gfallback")
+    if [ "$garch" != arm64 ]; then
+      gmatch=0
+      adopt_reason "the routing-guard step at ${where} uses arch ${garch}, but adopt sets up an arm64 VM; a guard step for another architecture routes its jobs to a runner this Mac does not have (docs/adopting.md, step 3)"
+    fi
+    opts=(--label "$glabel" --events "$gevents" --dependabot "$gdependabot" --fallback "$gfallback" --arch "$garch")
     # Collect the jobs routed under this guard's label and options. A
     # repository can carry several routing-guard steps; jobs routed under any
     # of them count, not only the first guard's — unless a flag picked a

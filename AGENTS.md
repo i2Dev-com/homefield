@@ -73,6 +73,10 @@ the same labels — run it when touching either.
   `tools/adopt.py` under the same names; the defaults must keep producing the
   original expression byte for byte (`routing-guard/tests/run.sh` hard-codes
   it). `pull_request_target` is never allowed in `events`.
+  `arch` is the fourth option: it exists on the action and `routing_guard.py`,
+  `tools/adopt.py` reads it from the step, and `homefield adopt` refuses
+  anything but `arm64` — the VM it sets up — instead of taking a flag (#21 is
+  the x86-64 future).
   A new option value or a new option whose default changes the expression is
   a breaking change, as below.
 

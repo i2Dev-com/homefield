@@ -84,7 +84,9 @@ The expression above is the default. Three options of `routing-guard` change
 it; each also exists as a flag of `homefield adopt` with the same name
 (`--events`, `--dependabot`, `--fallback`). Whatever you choose, the
 expression in step 2 and the guard in step 3 have to agree, and `homefield
-adopt` refuses a guard whose options differ from the flags you pass it.
+adopt` refuses a guard whose options differ from the flags you pass it. Adopt
+also reads the step's `arch` (below) and refuses a step whose `arch:` is not
+`arm64`: it sets up the arm64 VM, and there is no flag to change that.
 
 ```yaml
       - uses: i2Dev-com/homefield/routing-guard@v0.3.0
@@ -105,7 +107,10 @@ adopt` refuses a guard whose options differ from the flags you pass it.
 The guard also takes `arch`, the runner's architecture label (default
 `arm64`, the VM's). It is not a routing choice: leave it unless the runner
 is an x86-64 Linux host ([Moving to dedicated hardware](runbook.md#moving-to-dedicated-hardware)), which takes
-`x64`. Any other value is refused, `ARM64` and `amd64` included.
+`x64`. Any other value is refused, `ARM64` and `amd64` included. `homefield
+adopt` reads it too, and refuses a guard step whose `arch:` is anything but
+`arm64`, whatever its workflows say: it sets up the arm64 VM, which an `x64`
+guard step routes nothing to.
 
 The expression changes with the options, and the guard checks it. For
 example, `events: push` gives:
