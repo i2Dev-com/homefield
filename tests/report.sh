@@ -154,6 +154,8 @@ bad_fixture "a fixture job with a null created_at is refused, not a traceback" \
   'without created_at'
 bad_fixture "a fixture that is not keyed by repository is refused" \
   '[]' 'not an object keyed by repository'
+bad_fixture "a fixture that is not UTF-8 text is refused, not a traceback" \
+  $'\xff\xfe{}' 'not UTF-8 text'
 out="$(HOMEFIELD_REPORT_FIXTURE="$work/no-such-fixture.json" python3 "$ROOT/tools/report.py" \
   --repo acme/app --since 2026-10-01 --until 2026-10-02 2>&1)"
 record "a missing fixture file is refused, not a traceback" "yes/no" \

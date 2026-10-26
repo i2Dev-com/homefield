@@ -85,6 +85,8 @@ def fixture_runs(repo, fixture):
             data = json.load(handle)
     except OSError as err:
         die(f"could not read the fixture {fixture}: {err.strerror or err}")
+    except UnicodeDecodeError as err:
+        die(f"the fixture {fixture} is not UTF-8 text: {err}")
     except json.JSONDecodeError as err:
         die(f"the fixture {fixture} is not valid JSON: {err}")
     if not isinstance(data, dict):
