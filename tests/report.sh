@@ -117,6 +117,8 @@ record "PRs counted from pull_request runs only" "2" "$(total local pull_request
 record "local minutes per PR" "2.0" "$(total local minutes_per_pr)"
 record "hosted total minutes" "13" "$(total hosted minutes)"
 record "hosted minutes per PR" "6.5" "$(total hosted minutes_per_pr)"
+record "local total waits use the rows' definition" "30/360/360/1" \
+  "$(total local wait_p50)/$(total local wait_p95)/$(total local wait_max)/$(total local wait_over_5m)"
 
 text="$(report)"
 record "table names the repository and workflow" "yes" "$(echo "$text" | grep -q 'app .*ci.yml / checks .*local' && echo yes || echo no)"
@@ -131,5 +133,30 @@ out="$(HOMEFIELD_REPORT_FIXTURE="$work/fixture.json" python3 "$ROOT/tools/report
   --repo acme/other --since 2026-10-01 --until 2026-10-02 2>&1)"
 record "a fixture without the repository is refused, not a traceback" \
   "yes" "$(echo "$out" | grep -q 'has no entry for acme/other' && echo yes || echo no)"
+
+# Incomplete fixture input fails with a message, not a traceback (the live API
+# always supplies a name and a created_at).
+bad_fixture() { # <description> <json> <needle in the message>
+  printf '%s' "$2" >"$work/bad.json"
+  out="$(HOMEFIELD_REPORT_FIXTURE="$work/bad.json" python3 "$ROOT/tools/report.py" \
+    --repo acme/app --since 2026-10-01 --until 2026-10-02 2>&1)"
+  record "$1" "yes/no" \
+    "$(echo "$out" | grep -q "$3" && echo yes || echo no)/$(echo "$out" | grep -q Traceback && echo yes || echo no)"
+}
+bad_fixture "a fixture job without a name is refused, not a traceback" \
+  '{"acme/app": [{"id": 1, "jobs": [{"id": 11, "status": "completed", "conclusion": "success", "created_at": "2026-10-01T10:00:00Z", "started_at": "2026-10-01T10:00:30Z", "completed_at": "2026-10-01T10:02:10Z"}]}]}' \
+  'without name'
+bad_fixture "a fixture job without created_at is refused, not a traceback" \
+  '{"acme/app": [{"id": 1, "jobs": [{"id": 11, "name": "checks", "status": "completed", "conclusion": "success", "started_at": "2026-10-01T10:00:30Z", "completed_at": "2026-10-01T10:02:10Z"}]}]}' \
+  'without created_at'
+bad_fixture "a fixture job with a null created_at is refused, not a traceback" \
+  '{"acme/app": [{"id": 1, "jobs": [{"id": 11, "name": "checks", "created_at": null, "status": "completed", "conclusion": "success", "started_at": "2026-10-01T10:00:30Z", "completed_at": "2026-10-01T10:02:10Z"}]}]}' \
+  'without created_at'
+bad_fixture "a fixture that is not keyed by repository is refused" \
+  '[]' 'not an object keyed by repository'
+out="$(HOMEFIELD_REPORT_FIXTURE="$work/no-such-fixture.json" python3 "$ROOT/tools/report.py" \
+  --repo acme/app --since 2026-10-01 --until 2026-10-02 2>&1)"
+record "a missing fixture file is refused, not a traceback" "yes/no" \
+  "$(echo "$out" | grep -q 'could not read the fixture' && echo yes || echo no)/$(echo "$out" | grep -q Traceback && echo yes || echo no)"
 
 summary

@@ -557,6 +557,10 @@ def main():
     sub.add_parser("quote").add_argument("text")
     args = ap.parse_args()
 
+    if args.cmd in ("guards", "cache-keys") and not os.path.isdir(args.dir):
+        print(f"adopt.py: not a directory: {args.dir}", file=sys.stderr)
+        return 1
+
     if args.cmd == "guards":
         for where, status, label, blocks, warns, events, dependabot, fallback, arch, jobs in guards(args.dir):
             joined = [";".join(t.replace(";", ",") for t in texts) or "-" for texts in (blocks, warns)]
