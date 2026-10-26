@@ -945,6 +945,9 @@ snippet="$(python3 -I "$ROOT/tools/adopt.py" guard-snippet --events pull_request
 record "guard-snippet: ...and none of them when they are" "no/no/no" \
   "$(has "$snippet" 'events:')/$(has "$snippet" 'dependabot:')/$(has "$snippet" 'fallback:')"
 record "quote: spaces and slashes are encoded" "a%20b%2Fc.yml" "$(python3 -I "$ROOT/tools/adopt.py" quote 'a b/c.yml')"
+out="$(python3 -I "$ROOT/tools/adopt.py" guards "$work/not-there" 2>&1)"; rc=$?
+record "guards: a missing directory is refused, not a traceback" "nonzero/yes/no" \
+  "$(nonzero "$rc")/$(has "$out" 'not a directory')/$(has "$out" Traceback)"
 
 # ── The docs say what the tool prints ──────────────────────────────────────
 echo "docs"

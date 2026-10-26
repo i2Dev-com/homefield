@@ -20,7 +20,10 @@ the billed figure (a rough one: larger runners have their own rates). For
 local jobs it is what they would have cost.
 
 HOMEFIELD_REPORT_FIXTURE=<file.json> reads {"owner/repo": [run, ...]} instead
-of calling GitHub; tests/report.sh uses it.
+of calling GitHub; tests/report.sh uses it. The fixture carries the fields the
+API gives: runs are objects with their jobs under "jobs", and every job has a
+name and a created_at. Anything else is refused with a message, not a
+traceback.
 """
 
 import argparse
@@ -72,16 +75,45 @@ def days(first, last):
         day += dt.timedelta(days=1)
 
 
+def fixture_runs(repo, fixture):
+    """The fixture's runs for repo, in the shape the live API guarantees:
+    runs are objects with their jobs in a list, and every job carries a name
+    and a created_at. Anything else is refused with a message, not a
+    traceback."""
+    try:
+        with open(fixture, encoding="utf-8") as handle:
+            data = json.load(handle)
+    except OSError as err:
+        die(f"could not read the fixture {fixture}: {err.strerror or err}")
+    except UnicodeDecodeError as err:
+        die(f"the fixture {fixture} is not UTF-8 text: {err}")
+    except json.JSONDecodeError as err:
+        die(f"the fixture {fixture} is not valid JSON: {err}")
+    if not isinstance(data, dict):
+        die(f"the fixture {fixture} is not an object keyed by repository")
+    if repo not in data:
+        die(f"the fixture {fixture} has no entry for {repo}")
+    for run in data[repo]:
+        if not isinstance(run, dict):
+            die(f"the fixture {fixture} has a run in {repo} that is not an object")
+        jobs = run.get("jobs") or []
+        if not isinstance(jobs, list):
+            die(f"the fixture {fixture} has a jobs value that is not a list in {repo} (run {run.get('id')})")
+        for job in jobs:
+            if not isinstance(job, dict):
+                die(f"the fixture {fixture} has a job that is not an object in {repo} (run {run.get('id')})")
+            for field in ("name", "created_at"):
+                if not job.get(field):
+                    die(f"the fixture {fixture} has a job without {field} in {repo} (run {run.get('id')})")
+    return data[repo]
+
+
 def fetch_repo(repo, first, last):
     """Runs of the repository created from `first` to `last` (dates,
     inclusive), each with its jobs under "jobs"."""
     fixture = os.environ.get("HOMEFIELD_REPORT_FIXTURE")
     if fixture:
-        with open(fixture, encoding="utf-8") as handle:
-            data = json.load(handle)
-        if repo not in data:
-            die(f"the fixture {fixture} has no entry for {repo}")
-        return data[repo]
+        return fixture_runs(repo, fixture)
 
     def runs_of(day):
         span = f"{day}T00:00:00Z..{day}T23:59:59Z"
@@ -113,6 +145,17 @@ def percentile(sorted_values, fraction):
         return None
     rank = max(1, math.ceil(fraction * len(sorted_values)))
     return sorted_values[rank - 1]
+
+
+def wait_stats(sorted_waits):
+    """The queue-wait figures shared by rows and totals, from an ascending
+    list — one definition, so a total can never disagree with its rows."""
+    return {
+        "wait_p50": percentile(sorted_waits, 0.5),
+        "wait_p95": percentile(sorted_waits, 0.95),
+        "wait_max": sorted_waits[-1] if sorted_waits else None,
+        "wait_over_5m": sum(1 for wait in sorted_waits if wait > SLOW_QUEUE_SECONDS),
+    }
 
 
 # Labels of GitHub's standard hosted images (ubuntu-latest, macos-15, windows-2025, ...).
@@ -209,15 +252,11 @@ def duration(seconds):
 
 
 def summarise(row):
-    waits = row["waits"]
     return {
         "jobs": row["jobs"],
         "unstarted": row["unstarted"],
         "pending": row["pending"],
-        "wait_p50": percentile(waits, 0.5),
-        "wait_p95": percentile(waits, 0.95),
-        "wait_max": waits[-1] if waits else None,
-        "wait_over_5m": sum(1 for wait in waits if wait > SLOW_QUEUE_SECONDS),
+        **wait_stats(row["waits"]),
         "avg_seconds": row["seconds"] / row["jobs"] if row["jobs"] else None,
         "minutes": row["minutes"],
         "failed": row["failed"],
@@ -242,7 +281,6 @@ def as_data(rows, prs):
         total["failed"] += row["failed"]
         total["cancelled"] += row["cancelled"]
     for (repo, where), total in sorted(totals.items()):
-        waits = sorted(total["waits"])
         count = prs.get(repo, 0)
         out["totals"].append({
             "repo": repo, "where": where, "jobs": total["jobs"],
@@ -251,9 +289,7 @@ def as_data(rows, prs):
             "failed": total["failed"], "cancelled": total["cancelled"],
             "pull_requests": count,
             "minutes_per_pr": round(total["minutes"] / count, 1) if count else None,
-            "wait_p50": percentile(waits, 0.5), "wait_p95": percentile(waits, 0.95),
-            "wait_max": waits[-1] if waits else None,
-            "wait_over_5m": sum(1 for wait in waits if wait > SLOW_QUEUE_SECONDS),
+            **wait_stats(sorted(total["waits"])),
         })
     return out
 

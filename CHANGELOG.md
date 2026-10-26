@@ -34,6 +34,12 @@ fail, such as a new guard in the routing expression, bumps the minor version
   although CI passed, and an `amd64` one as ready although the guard refuses
   that value in CI. The guard check now runs with the step's own `arch`, so
   what adopt reports is what CI runs (#105).
+- `homefield report` refuses incomplete fixture input with a message instead
+  of a traceback: a fixture file that is missing, not JSON, or not keyed by
+  repository, and jobs without a name or a created_at — fields the live API
+  always supplies. Rows and totals share one queue-wait computation, so a
+  total can no longer disagree with the sum of its rows. `tools/adopt.py`
+  names a missing workflow directory the same way (#90).
 
 ### Changed
 
