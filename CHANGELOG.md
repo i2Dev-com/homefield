@@ -27,6 +27,17 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ### Fixed
 
+- `homefield memory` counts the out-of-memory kills a young VM's first log
+  row already holds, which it silently reported as zero (#91). The sampler
+  writes a ninth CSV column, the epoch of the current boot (`btime`; `0`
+  means unknown). The whole counter counts — first retained row, or a boot
+  that changed between rows even when its value did not fall — only when
+  that boot is known and began inside the window; the window's epoch is
+  derived from the rows' own timestamps (the VM's timezone), not the host's;
+  kills under a boot that predates the window span its start and stay
+  uncounted rather than guessed; same boot, the difference as before. Old
+  8-column logs keep the counter rule, first row uncounted; a mid-upgrade
+  day mixes both widths safely.
 - `homefield status` no longer stalls on a dead network while asking GitHub
   whether it still lists the runner (#103). `gh` has no timeout flag and a
   black-holed connect can take ~75 s on macOS, and `status` is what the

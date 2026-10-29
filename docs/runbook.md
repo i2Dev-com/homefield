@@ -391,7 +391,16 @@ nothing, which is easy to misread as "no containers".
     any out-of-memory kills. "Used" is total minus available memory. Read the
     peak before lowering `memory`: with no swap, a job that outgrows the VM is
     killed. A runner provisioned before the sampler existed needs
-    `bin/homefield upgrade` first.
+    `bin/homefield upgrade` first. Kills are counted from the kernel's
+    cumulative counter, per row against the previous one, and each row also
+    records when its boot began. The whole counter counts — at a boot
+    change between rows, or at the very first sample of a log — only when
+    that boot is known and began inside the window, which is measured in
+    the VM's own days, the same ones that select the rows. Kills under an
+    older boot cannot be placed and are not counted, and an unreadable boot
+    reads as unknown (#91); same boot, the difference decides. Logs from
+    before the boot column work as before, except that their first row is
+    never counted.
   - `bin/homefield report --repo <owner>/<repo> [--repo ...] [--since DATE]`
     lists, per repository, workflow and job, how many jobs ran locally and
     on GitHub's runners, how long they queued and ran, and how many minutes

@@ -794,8 +794,11 @@ EOF
 # this keeps the per-minute *peak*. "Used" is MemTotal - MemAvailable: what
 # cannot be reclaimed, and so what an out-of-memory kill is about. `job` is 1
 # if a job ran at any time in the minute; `oom_kills` is the kernel's
-# cumulative counter (it restarts at 0 after a reboot). Files older than 90
-# days are deleted. Read it with `bin/homefield memory`.
+# cumulative counter (it restarts at 0 after a reboot); `boot` is the epoch of
+# that boot (btime in /proc/stat, 0 when unreadable), which says when the
+# counter began and lets `bin/homefield memory` tell a first row that holds
+# only in-window kills from one that also holds earlier ones (#91). Files
+# older than 90 days are deleted. Read it with `bin/homefield memory`.
 cat > /usr/local/sbin/homefield-memwatch <<'EOF'
 #!/usr/bin/env bash
 # The MEMWATCH_* variables exist for tests/memwatch.sh; the service sets none.
@@ -805,6 +808,7 @@ interval="${MEMWATCH_INTERVAL:-2}"
 period="${MEMWATCH_PERIOD:-60}"
 meminfo="${MEMWATCH_MEMINFO:-/proc/meminfo}"
 vmstat="${MEMWATCH_VMSTAT:-/proc/vmstat}"
+stat="${MEMWATCH_STAT:-/proc/stat}"
 job_file="${MEMWATCH_JOB_FILE:-}"
 mkdir -p "$dir"
 chmod 755 "$dir"
@@ -831,6 +835,20 @@ oom_kills() {
   echo 0
 }
 
+# The epoch of this boot; 0 when /proc/stat cannot be read, which the
+# summary then treats as "boot unknown", the pre-#91 case.
+boot_time() {
+  local key value
+  [ -r "$stat" ] || { echo 0; return; }
+  while read -r key value; do
+    if [ "$key" = btime ]; then
+      echo "$value"
+      return
+    fi
+  done <"$stat"
+  echo 0
+}
+
 now=0
 printf -v now '%(%s)T' -1
 slot=$((now / period))
@@ -842,11 +860,13 @@ emit() {
   printf -v stamp '%(%Y-%m-%dT%H:%M:%S%z)T' $((slot * period))
   file="$dir/memwatch-${day}.csv"
   if [ ! -e "$file" ]; then
-    echo "ts,samples,total_mib,used_avg_mib,used_max_mib,avail_min_mib,oom_kills,job" >"$file"
+    echo "ts,samples,total_mib,used_avg_mib,used_max_mib,avail_min_mib,oom_kills,job,boot" >"$file"
     chmod 644 "$file"
     find "$dir" -name 'memwatch-*.csv' -mtime +90 -delete
   fi
-  echo "${stamp},${n},$((total / 1024)),$((sum / n / 1024)),$((max / 1024)),$((min_avail / 1024)),$(oom_kills),${job}" >>"$file"
+  # A day's file created before the boot column keeps its 8-column header
+  # when an upgrade appends 9-column rows mid-day; the summary reads NF 8/9.
+  echo "${stamp},${n},$((total / 1024)),$((sum / n / 1024)),$((max / 1024)),$((min_avail / 1024)),$(oom_kills),${job},$(boot_time)" >>"$file"
 }
 
 while :; do

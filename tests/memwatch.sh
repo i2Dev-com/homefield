@@ -54,6 +54,9 @@ fake_meminfo() { # <available kB>
 }
 fake_meminfo 7000000
 printf 'nr_free_pages 1\noom_kill 3\npgfault 9\n' >"$work/vmstat"
+# A fixed boot epoch for the boot column (#91).
+boot_epoch=1790000000
+printf 'cpu 1 2 3\nbtime %s\nprocess 4\n' "$boot_epoch" >"$work/stat"
 
 # One row a second, a sample every 0.2 s. Halfway through, free memory drops
 # by 1,000,000 kB, which must show up as the peak.
@@ -64,16 +67,17 @@ printf 'nr_free_pages 1\noom_kill 3\npgfault 9\n' >"$work/vmstat"
 ) &
 MEMWATCH_DIR="$work/log" MEMWATCH_INTERVAL=0.2 MEMWATCH_PERIOD=1 \
   MEMWATCH_MEMINFO="$work/meminfo" MEMWATCH_VMSTAT="$work/vmstat" \
+  MEMWATCH_STAT="$work/stat" \
   MEMWATCH_JOB_FILE="$work/job" \
   timeout 5 "$new_bash" "$script" >/dev/null 2>&1
 wait
 
 csv="$(cat "$work"/log/memwatch-*.csv 2>/dev/null)"
-header="ts,samples,total_mib,used_avg_mib,used_max_mib,avail_min_mib,oom_kills,job"
+header="ts,samples,total_mib,used_avg_mib,used_max_mib,avail_min_mib,oom_kills,job,boot"
 record "header" "$header" "$(echo "$csv" | head -1)"
 rows="$(echo "$csv" | tail -n +2)"
 record "wrote at least 3 rows" "yes" "$([ "$(echo "$rows" | grep -c .)" -ge 3 ] && echo yes || echo no)"
-record "every row has 8 columns" "0" "$(echo "$rows" | awk -F, 'NF != 8' | grep -c .)"
+record "every row has 9 columns" "0" "$(echo "$rows" | awk -F, 'NF != 9' | grep -c .)"
 # 8000000 kB total is 7812 MiB; 1,000,000 kB used is 976, 2,000,000 kB is 1953.
 record "total_mib" "7812" "$(echo "$rows" | head -1 | cut -d, -f3)"
 record "first row peak is the lower level" "976" "$(echo "$rows" | head -1 | cut -d, -f5)"
@@ -85,5 +89,6 @@ record "oom_kills read from vmstat" "3" "$(echo "$rows" | head -1 | cut -d, -f7)
 # be a runner itself, so the sampler's own process check is not used.
 record "no job in the first row" "0" "$(echo "$rows" | head -1 | cut -d, -f8)"
 record "a job seen in a later row" "1" "$(echo "$rows" | cut -d, -f8 | sort -n | tail -1)"
+record "boot column carries btime from the stat file (#91)" "$boot_epoch" "$(echo "$rows" | cut -d, -f9 | sort -u)"
 
 summary
