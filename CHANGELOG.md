@@ -43,6 +43,13 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ### Changed
 
+- The personal-account limits in the docs are split into what GitHub enforces
+  and what this project does (#117). README, runbook *Runner group* and
+  adopting step 5 now say plainly that GitHub scopes runners to a repository,
+  organization or enterprise and jobs never cross scopes — so an
+  organization-registered runner can never serve a personal-account
+  repository, and each such repository registers on its own — while
+  one-VM-per-registration is ours, until #14 puts several runners in one VM.
 - The pinned runner version is 2.338.0 (from 2.337.0), the version the
   runners self-updated to on 2026-10-23. Re-provisioning no longer replaces
   the live 2.338.0 tree with 2.337.0 and waits for the runner to self-update

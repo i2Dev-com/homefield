@@ -104,7 +104,16 @@ repositories** off, and register with `--group Default` (`RUNNER_GROUP=Default`
 by hand). `install` cannot create `homefield-ci` on that plan: it prints what
 GitHub said and stops. The alternative is a repository-scoped runner, which
 only that repository can use. A personal account has no account-wide runners
-at all: register per repository, one VM per repository.
+at all — that part is GitHub's: runners are scoped to a repository, an
+organization or an enterprise, and a job never crosses scopes, so a runner
+registered to an organization can never serve a repository in a personal
+account, and every personal repository registers on its own
+(`--url https://github.com/<you>/<repo>`). The one-VM-per-registration part
+is ours, not GitHub's: GitHub sets no limit on registrations per machine, but
+today one VM runs one runner, so each repository-scoped runner on one Mac is
+its own `--instance` VM ([More runners](#more-runners)) until
+[#14](https://github.com/i2Dev-com/homefield/issues/14) puts several runners
+in one VM.
 
 **The `admin:org` scope.** Looking up and creating groups needs it. If `gh`
 lacks it, `install` on a terminal offers to run `gh auth refresh -h github.com
