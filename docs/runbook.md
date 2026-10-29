@@ -104,7 +104,16 @@ repositories** off, and register with `--group Default` (`RUNNER_GROUP=Default`
 by hand). `install` cannot create `homefield-ci` on that plan: it prints what
 GitHub said and stops. The alternative is a repository-scoped runner, which
 only that repository can use. A personal account has no account-wide runners
-at all: register per repository, one VM per repository.
+at all — that part is GitHub's: runners are scoped to a repository, an
+organization or an enterprise, and a job never crosses scopes, so a runner
+registered to an organization can never serve a repository in a personal
+account, and every personal repository registers on its own
+(`--url https://github.com/<you>/<repo>`). The one-VM-per-registration part
+is ours, not GitHub's: GitHub sets no limit on registrations per machine, but
+today one VM runs one runner, so each repository-scoped runner on one Mac is
+its own `--instance` VM ([More runners](#more-runners)) until
+[#14](https://github.com/i2Dev-com/homefield/issues/14) puts several runners
+in one VM.
 
 **The `admin:org` scope.** Looking up and creating groups needs it. If `gh`
 lacks it, `install` on a terminal offers to run `gh auth refresh -h github.com
@@ -481,7 +490,10 @@ the VM still has its registration, but the runner fails with "The runner
 registration has been deleted from the server" and its service stops. A runner
 missing from this list is the sign, and `bin/homefield status` says
 `github: NOT listed` (and exits 1) when gh can read the list; otherwise it
-says `github: not checked` and the VM's copy is all it can see. `upgrade`, and
+says `github: not checked` and the VM's copy is all it can see. The GitHub
+ask waits at most 15 s (`HOMEFIELD_GH_TIMEOUT` to change it): on a dead
+network `status` says `github: not checked (timed out ...)` and still prints
+everything it can answer from the VM. `upgrade`, and
 `install` on that VM, refuse before anything is stopped; without gh, the
 upgrade runs and fails at the end, when the service does not reach "Listening
 for Jobs", and says why. Register it again (#76):

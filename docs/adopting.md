@@ -188,7 +188,12 @@ step:
    repository in the group is a setting for you to turn off (*Allow public
    repositories*, [Runner group](runbook.md#runner-group)). The Default group
    is not looked at (it is open to every repository in the organization), and
-   neither is a group whose list could not be read.
+   neither is a group whose list could not be read. A **personal-account**
+   repository always adopts on its own, with its own repository-scoped
+   registration and no group step: GitHub gives a personal account no
+   account-wide runners or groups (one VM per repository for now,
+   [#14](https://github.com/i2Dev-com/homefield/issues/14);
+   [Runner group](runbook.md#runner-group)).
 6. **Switch.** When the routing is ready, sets `CI_RUNNER` to `local` (the same
    as `homefield route local`). If it is already `local`, it says so.
 

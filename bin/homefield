@@ -29,6 +29,11 @@ PROVISION="$ROOT/vm/provision.sh"
 GUEST_PROVISION="/tmp/provision.sh"
 INSTANCE="${HOMEFIELD_INSTANCE:-homefield}"
 RUNNER_HOME="/opt/actions-runner"
+# Seconds runner_on_github waits for gh before calling the answer "not
+# checked" (#103): gh has no timeout flag, and on a black-holed network a
+# connect can take ~75 s on macOS. Tests drive it low through the env.
+GH_TIMEOUT="${HOMEFIELD_GH_TIMEOUT:-15}"
+case "$GH_TIMEOUT" in ''|*[!0-9]*) GH_TIMEOUT=15 ;; esac
 
 usage() {
   cat <<'EOF'
@@ -316,15 +321,36 @@ is_registered() {
 
 # runner_on_github <url> <id>: 0 if GitHub lists a runner with the id at <url>,
 # 1 if it lists the scope's runners and that id is not among them, 2 if it
-# could not be asked (no gh, no admin access, no network). GitHub removes a
+# could not be asked (no gh, no admin access, no network), 3 if the call was
+# killed after GH_TIMEOUT seconds (a black-holed network stalls the connect
+# for ~75 s on macOS, and status owes its other lines no such wait, #103).
+# GitHub removes a
 # runner that has not connected for more than 14 days, and the VM's .runner
 # stays (#76). Matched by id: another Mac can register the name again. Never
 # prompts, status calls it.
 runner_on_github() {
-  local scope ids id
+  local scope ids id rc=0
   [ -n "$2" ] && command -v gh >/dev/null || return 2
   scope="$(api_scope "$1" 2>/dev/null)" || return 2
-  ids="$(gh api --hostname github.com --paginate "${scope}/actions/runners?per_page=100" --jq '.runners[].id' 2>/dev/null)" || return 2
+  # The killed-by-signal case is told from a plain failure by the exit code
+  # (128 + TERM): the timer below is the only thing that kills this gh. The
+  # timer's own kill can race gh finishing a heartbeat earlier; both answers
+  # mean "not checked", and only the status wording differs.
+  local tmp pid timer
+  tmp="$(mktemp)" || return 2
+  gh api --hostname github.com --paginate "${scope}/actions/runners?per_page=100" --jq '.runners[].id' </dev/null >"$tmp" 2>/dev/null &
+  pid=$!
+  # >/dev/null on the timer matters: sleep inherits stdout, and a caller
+  # that runs status inside $(...) would wait for the whole timeout before
+  # substitution closes.
+  ( sleep "$GH_TIMEOUT"; kill -TERM "$pid" 2>/dev/null ) </dev/null >/dev/null 2>&1 & timer=$!
+  wait "$pid" || rc=$?
+  kill "$timer" 2>/dev/null || true
+  wait "$timer" 2>/dev/null || true
+  ids="$(cat "$tmp")"
+  rm -f "$tmp"
+  [ "$rc" -le 128 ] || return 3
+  [ "$rc" = 0 ] || return 2
   while read -r id; do
     [ "$id" != "$2" ] || return 0
   done <<<"$ids"
@@ -1014,6 +1040,9 @@ cmd_status() {
         echo "github: NOT listed: GitHub removes runners that have not connected for more than 14 days."
         echo "  Register it again: $(removed_recovery "$url" "$name")"
         removed=1
+        ;;
+      3)
+        echo "github: not checked (timed out after ${GH_TIMEOUT}s; the network may be down)"
         ;;
       *)
         if [ -n "$id" ]; then
