@@ -48,7 +48,7 @@ case "$*" in
 esac
 EOF
 chmod +x "$work/gh"
-for t in awk cat dirname git grep sh sleep tr; do ln -s "$(command -v "$t")" "$stubs/$t"; done
+for t in awk cat dirname git grep mktemp sh sleep tr; do ln -s "$(command -v "$t")" "$stubs/$t"; done
 cp "$work/gh" "$stubs/gh"
 # For the install ordering test: a Mac, and a Lima with no VM.
 cat >"$stubs/uname" <<'EOF'

@@ -27,6 +27,13 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ### Fixed
 
+- `homefield status` no longer stalls on a dead network while asking GitHub
+  whether it still lists the runner (#103). `gh` has no timeout flag and a
+  black-holed connect can take ~75 s on macOS, and `status` is what the
+  runbook says to run when a runner looks offline. The ask now runs in the
+  background and is killed after 15 s (`HOMEFIELD_GH_TIMEOUT`), reported as
+  `github: not checked (timed out ...)`; the service, job and version lines
+  still come from the VM. `upgrade` and `uninstall` bound the same ask.
 - `homefield adopt` reads the routing-guard step's `arch` and refuses one
   whose `arch:` is anything but `arm64`, the VM it sets up. Before, it checked
   every workflow against `arm64` whatever the step said: an `x64` guard step
