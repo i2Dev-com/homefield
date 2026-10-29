@@ -9,12 +9,14 @@
 # host.lima.internal (192.168.5.2) to the host's loopback, so services on the
 # host, even 127.0.0.1-only ones, are reachable from the guest (homefield#18).
 #
-# Requires Lima >= 1.1 (for `base:`). Create with --mount-none as well, so a
+# Requires Lima >= 2.0: `base:` is older (1.1), but the `template:` locator
+# below (the `template://` form is deprecated since Lima 2.0 and 1.x may not
+# accept the new one). Create with --mount-none as well, so a
 # future change to Lima's defaults cannot quietly bring the home mount back.
 
 # Image list only. The `ubuntu-24.04` template would also pull in
 # `_default/mounts`, which mounts $HOME into the guest.
-base: template://_images/ubuntu-24.04
+base: template:_images/ubuntu-24.04
 
 vmType: vz
 arch: aarch64

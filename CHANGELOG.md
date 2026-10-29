@@ -50,6 +50,12 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ### Changed
 
+- **The minimum Lima is 2.0 (from 1.1)**, and `vm/lima.yaml` now uses the
+  `template:` locator (`base: template:_images/ubuntu-24.04`) instead of the
+  `template://` form Lima 2.0 deprecated (its warning fired on every VM
+  creation). The new form is documented for 2.0 and later, so the
+  requirement was raised instead of version-gated; a 1.x host is refused by
+  `install`/`check_host` with a `brew upgrade lima` nudge (#100).
 - The personal-account limits in the docs are split into what GitHub enforces
   and what this project does (#117). README, runbook *Runner group* and
   adopting step 5 now say plainly that GitHub scopes runners to a repository,

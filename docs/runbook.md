@@ -130,7 +130,7 @@ fails if the group is missing).
 Run the [README's one-liner](../README.md#quick-start), or, from a checkout,
 `bin/homefield install --url https://github.com/<org>` (or
 `https://github.com/<owner>/<repo>`; options: `bin/homefield help`). It needs
-Lima ≥ 1.1 (verified on 2.2.0), which the one-liner installs. It does every
+Lima ≥ 2.0 (verified on 2.2.0), which the one-liner installs. It does every
 step below: it asks for the URL if it was not given, creates the VM and checks
 its isolation, provisions it, creates the runner group, registers the runner,
 waits until it is online and enables autostart.

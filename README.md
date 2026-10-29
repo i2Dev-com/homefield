@@ -8,7 +8,7 @@
   <a href="https://github.com/i2Dev-com/homefield/actions/workflows/ci.yml"><img src="https://github.com/i2Dev-com/homefield/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License: MIT"></a>
   <a href="#requirements-and-limitations"><img src="https://img.shields.io/badge/platform-macOS%20Apple%20Silicon-lightgrey?logo=apple" alt="Platform: macOS on Apple Silicon"></a>
-  <a href="https://lima-vm.io"><img src="https://img.shields.io/badge/VM-Lima%20%E2%89%A5%201.1-4e9a06" alt="VM: Lima 1.1 or later"></a>
+  <a href="https://lima-vm.io"><img src="https://img.shields.io/badge/VM-Lima%20%E2%89%A5%202.0-4e9a06" alt="VM: Lima 2.0 or later"></a>
   <a href="https://docs.github.com/en/actions"><img src="https://img.shields.io/badge/GitHub%20Actions-self--hosted%20runner-2088FF?logo=githubactions&amp;logoColor=white" alt="GitHub Actions self-hosted runner"></a>
 </p>
 
@@ -40,7 +40,7 @@ curl -fsSL https://raw.githubusercontent.com/i2Dev-com/homefield/v0.3.0/install.
 ```
 
 This installs [Lima](https://lima-vm.io) with Homebrew if it is missing or older
-than 1.1 (it asks first), puts the tool in `~/.local/share/homefield` with a
+than 2.0 (it asks first), puts the tool in `~/.local/share/homefield` with a
 `homefield` command on your PATH, and runs `homefield install`. That asks for
 your organization or repository URL, creates the VM, checks its isolation,
 provisions it, creates the `homefield-ci` runner group for an organization
@@ -52,7 +52,7 @@ the URL up front, or any other option, append it:
 ... | bash -s -- --url https://github.com/<org>      # or https://github.com/<owner>/<repo>
 ```
 
-From a checkout, with Lima ≥ 1.1, run `bin/homefield install --url
+From a checkout, with Lima ≥ 2.0, run `bin/homefield install --url
 https://github.com/<org>` instead. Running the one-liner again upgrades the
 tool and leaves an existing VM alone; `homefield upgrade` updates the VM,
 `homefield version` says when a newer release exists, and `homefield status`
