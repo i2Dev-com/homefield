@@ -46,7 +46,7 @@ record "no rows since the cutoff exits 3" "3" "$?"
 # The boot column (#91): the 9th field is the epoch of the boot the row's
 # oom counter started at. cutoff_epoch is midnight of the cutoff day.
 echo "the boot column (#91):"
-cutoff_epoch="$(date -j -f %F -v0H -v0M -v0S 2026-10-02 +%s)"   # what cmd_memory passes
+cutoff_epoch="$(date -j -f %F -v0H -v0M -v0S 2026-10-02 +%s 2>/dev/null || date -d '2026-10-02 00:00:00' +%s)"   # what cmd_memory passes (BSD date; CI's GNU date takes -d)
 H9='ts,samples,total_mib,used_avg_mib,used_max_mib,avail_min_mib,oom_kills,job,boot'
 # run9 <boot-or-empty args> <rows...>: awk with the cutoff pair, fresh $out.
 run9() {
