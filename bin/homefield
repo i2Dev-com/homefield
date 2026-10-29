@@ -166,14 +166,16 @@ log() { echo "homefield: $*"; }
 check_host() {
   [ "$(uname -s)" = "Darwin" ] || die "needs macOS (Lima with Apple's Virtualization.framework)"
   [ "$(uname -m)" = "arm64" ] || die "needs an Apple Silicon Mac: the VM is arm64"
-  command -v limactl >/dev/null || die "needs Lima >= 1.1: brew install lima"
+  command -v limactl >/dev/null || die "needs Lima >= 2.0: brew install lima"
   local version major minor
   version="$(limactl --version | awk '{print $NF}')"
   major="${version%%.*}"
   minor="${version#*.}"
   minor="${minor%%.*}"
-  if ! [[ "$major" =~ ^[0-9]+$ && "$minor" =~ ^[0-9]+$ ]] || [ "$major" -lt 1 ] || { [ "$major" -eq 1 ] && [ "$minor" -lt 1 ]; }; then
-    die "needs Lima >= 1.1, found ${version}"
+  # 2.0 is the first release documented to accept the `template:` locator in
+  # vm/lima.yaml; it deprecated `template://` (Lima 2.0.0 release notes).
+  if ! [[ "$major" =~ ^[0-9]+$ && "$minor" =~ ^[0-9]+$ ]] || [ "$major" -lt 2 ]; then
+    die "needs Lima >= 2.0, found ${version}"
   fi
 }
 

@@ -274,13 +274,16 @@ run_install
 record "no Lima and no brew: stops, pointing at Lima's install page" "nonzero/yes" "$(nonzero "$rc")/$(has "$out" 'lima-vm.io')"
 new_env gh curl limactl brew
 run_install
-record "Lima 1.1 or later present: nothing is installed or upgraded" "0/0/0" "$rc/$(called '^brew install')/$(called '^brew upgrade')"
+record "Lima 2.0 or later present: nothing is installed or upgraded" "0/0/0" "$rc/$(called '^brew install')/$(called '^brew upgrade')"
 new_env gh curl limactl brew
 run_install FAKE_LIMA_VERSION=0.23.2
-record "Lima older than 1.1, no terminal: stops, naming brew upgrade" "nonzero/yes/0" "$(nonzero "$rc")/$(has "$out" 'brew upgrade lima')/$(called '^brew upgrade')"
+record "Lima older than 2.0, no terminal: stops, naming brew upgrade" "nonzero/yes/0" "$(nonzero "$rc")/$(has "$out" 'brew upgrade lima')/$(called '^brew upgrade')"
 new_env gh curl limactl brew
-run_install FAKE_LIMA_VERSION=1.0.7 HOMEFIELD_YES=1
-record "Lima 1.0 with HOMEFIELD_YES=1: upgraded" "0/1" "$rc/$(called '^brew upgrade lima$')"
+run_install FAKE_LIMA_VERSION=1.9.9 HOMEFIELD_YES=1
+record "Lima 1.x with HOMEFIELD_YES=1: upgraded (the template: locator needs 2.0)" "0/1" "$rc/$(called '^brew upgrade lima$')"
+new_env gh curl limactl brew
+run_install FAKE_LIMA_VERSION=2.0.0
+record "Lima exactly 2.0.0: accepted" "0/0/0" "$rc/$(called '^brew install')/$(called '^brew upgrade')"
 
 # ── Running it again ───────────────────────────────────────────────────────
 echo "running it again"

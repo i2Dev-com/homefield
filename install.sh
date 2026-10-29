@@ -179,7 +179,7 @@ path_hint() {
   echo "  export PATH=\"$shown:\$PATH\""
 }
 
-# lima_new_enough: limactl reports 1.1 or later, the minimum bin/homefield's
+# lima_new_enough: limactl reports 2.0 or later, the minimum bin/homefield's
 # check_host asks for (same parsing).
 lima_new_enough() {
   local version major minor
@@ -188,7 +188,7 @@ lima_new_enough() {
   minor="${version#*.}"
   minor="${minor%%.*}"
   [[ "$major" =~ ^[0-9]+$ && "$minor" =~ ^[0-9]+$ ]] || return 1
-  [ "$major" -gt 1 ] || { [ "$major" -eq 1 ] && [ "$minor" -ge 1 ]; }
+  [ "$major" -ge 2 ]
 }
 
 ensure_lima() {
@@ -196,10 +196,10 @@ ensure_lima() {
   if command -v limactl >/dev/null 2>&1; then
     lima_new_enough && return 0
     verb=upgrade
-    what="is older than 1.1"
+    what="is older than 2.0"
   fi
   command -v brew >/dev/null 2>&1 ||
-    die "Lima ${what}. Install 1.1 or later (https://lima-vm.io/docs/installation/, or install Homebrew from https://brew.sh and run: brew install lima), then run this again"
+    die "Lima ${what}. Install 2.0 or later (https://lima-vm.io/docs/installation/, or install Homebrew from https://brew.sh and run: brew install lima), then run this again"
   if [ "${HOMEFIELD_YES:-}" != 1 ]; then
     have_tty || die "Lima ${what} and there is no terminal to ask on. Run: brew ${verb} lima   (or run this again with HOMEFIELD_YES=1 to have it done)"
     local answer
@@ -207,7 +207,7 @@ ensure_lima() {
     read -r answer <"$TTY" || answer=""
     case "$answer" in
       "" | [Yy]*) ;;
-      *) die "Lima 1.1 or later is required. Run: brew ${verb} lima" ;;
+      *) die "Lima 2.0 or later is required. Run: brew ${verb} lima" ;;
     esac
   fi
   brew "$verb" lima || die "brew ${verb} lima failed"

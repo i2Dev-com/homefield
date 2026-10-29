@@ -43,6 +43,12 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ### Changed
 
+- **The minimum Lima is 2.0 (from 1.1)**, and `vm/lima.yaml` now uses the
+  `template:` locator (`base: template:_images/ubuntu-24.04`) instead of the
+  `template://` form Lima 2.0 deprecated (its warning fired on every VM
+  creation). The new form is documented for 2.0 and later, so the
+  requirement was raised instead of version-gated; a 1.x host is refused by
+  `install`/`check_host` with a `brew upgrade lima` nudge (#100).
 - The pinned runner version is 2.338.0 (from 2.337.0), the version the
   runners self-updated to on 2026-10-23. Re-provisioning no longer replaces
   the live 2.338.0 tree with 2.337.0 and waits for the runner to self-update
