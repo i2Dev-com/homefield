@@ -72,5 +72,37 @@ run9 "$cutoff_epoch" "$H9" \
   "2026-10-01T23:00:00-0400,30,8000,300,500,7000,5,0,$((cutoff_epoch - 100))" \
   "2026-10-02T11:20:00-0400,30,8000,500,1300,6000,9,1,$((cutoff_epoch - 100))"
 record "same boot: the difference, with the column present" "1 500 1300 1300 6000 4" "$(row 2026-10-02)"
+# Review round 2. A boot change whose NEW boot predates the window: the
+# counter reaches across the boundary and nothing can be attributed.
+run9 "$cutoff_epoch" "$H9" \
+  "2026-10-01T23:00:00-0400,30,8000,300,500,7000,2,0,$((cutoff_epoch - 100))" \
+  "2026-10-02T11:20:00-0400,30,8000,500,1300,6000,4,1,$((cutoff_epoch - 50))"
+record "boot changed but predates the window: uncountable, counts as 0 (was: 4)" "1 500 1300 1300 6000 0" "$(row 2026-10-02)"
+# The sampler's 0 sentinel (unreadable btime) is unknown, not a boot at the
+# epoch: an unchanged counter of 3 flanked by real boots and a 0 is no
+# reboots, so the answer is 3 — the reviewed code reported 9.
+run9 500 "$H9" \
+  "2026-10-02T00:01:00-0400,30,8000,500,500,6000,3,0,1000" \
+  "2026-10-02T00:02:00-0400,30,8000,500,500,6000,3,0,0" \
+  "2026-10-02T00:03:00-0400,30,8000,500,500,6000,3,0,1000"
+record "a 0 boot is unknown, not a reboot: 3, not 9" "3 500 500 - 6000 3" "$(row 2026-10-02)"
+
+# The epoch cmd_memory passes comes from the rows themselves (#91 review):
+# midnight of the cutoff day in the timezone the first included row carries,
+# never the host's. Called through the real function.
+echo "memory_cutoff_epoch (the row-side window boundary):"
+mce() {
+  HOMEFIELD_SOURCE_ONLY=1 bash -c '. "$1"; shift; memory_cutoff_epoch "$@"' _ "$ROOT/bin/homefield" "$@"
+}
+rows_x_tz="ts,samples,total_mib,used_avg_mib,used_max_mib,avail_min_mib,oom_kills,job,boot
+2026-10-01T23:30:00+0100,30,8000,500,500,6000,0,0,100
+2026-10-02T00:30:00+0530,30,8000,500,500,6000,1,0,100"
+record "midnight at the FIRST INCLUDED rows offset (+0530)" "1790879400" "$(mce 2026-10-02 "$rows_x_tz")"
+record "...whatever the host timezone is" "yes" \
+  "$([ "$(TZ=UTC mce 2026-10-02 "$rows_x_tz")" = "$(TZ=Pacific/Kiritimati mce 2026-10-02 "$rows_x_tz")" ] && echo yes || echo no)"
+record "...and -0400 is its own instant" "1790913600" \
+  "$(mce 2026-10-02 "2026-10-02T08:00:00-0400,30,8000,500,500,6000,1,0,100")"
+record "nothing at/after the cutoff is empty, cannot decide" "" \
+  "$(mce 2026-12-01 "2026-10-02T08:00:00-0400,30,8000,500,500,6000,1,0,100")"
 
 summary
