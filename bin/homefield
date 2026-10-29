@@ -1735,25 +1735,41 @@ cmd_adopt() {
 
 # Per-day summary of the guest's memwatch rows (vm/provision.sh,
 # homefield-memwatch): ts,samples,total_mib,used_avg_mib,used_max_mib,
-# avail_min_mib,oom_kills,job. Files sort by date, so rows arrive in time
-# order and the cumulative oom counter can be diffed row to row; a smaller
-# value than before means the guest rebooted and the counter restarted from
-# 0, so the new value is itself the kills since boot.
+# avail_min_mib,oom_kills,job[,boot]. Files sort by date, so rows arrive in
+# time order and the cumulative oom counter can be diffed row to row. The
+# counter restarts at a reboot, so: a boot change between two rows (column 9,
+# added for #91) means the whole value is kills since that boot, all in the
+# window; same boot, take the difference. The first retained row has no
+# previous row: its counter reaches back to its boot, which may predate the
+# window, so its kills count only when its own boot is inside the window
+# (cutoff_epoch, compared as epochs) — a young VM's log then counts them, a
+# log whose first sample caught up with an older boot does not (#91). Rows
+# from before column 9 (8 fields) fall back to the counter rule: a smaller
+# value than before means a reboot; nothing can be decided for their first
+# row, which stays uncounted.
 # shellcheck disable=SC2016  # awk, not shell, expands the $n fields
 MEMORY_AWK='
-BEGIN { FS = ","; prev = -1 }
-$1 == "ts" || NF != 8 { next }
+BEGIN { FS = ","; prev = -1; prev_boot = -1 }
+$1 == "ts" || (NF != 8 && NF != 9) { next }
 {
   day = substr($1, 1, 10)
-  if (day < cutoff) { prev = $7; next }
+  boot = (NF >= 9 ? $9 + 0 : -1)
+  if (day < cutoff) { prev = $7; prev_boot = boot; next }
   if (!(day in n)) { order[++days] = day; mn[day] = -1 }
   n[day]++
   sum[day] += $4
   if ($5 > peak[day]) { peak[day] = $5; at[day] = substr($1, 12, 5) }
   if (mn[day] < 0 || $6 < mn[day]) mn[day] = $6
   if ($8 == 1) { busy[day]++; if ($5 > bpeak[day]) bpeak[day] = $5 }
-  if (prev >= 0) oom[day] += ($7 >= prev ? $7 - prev : $7)
+  if (prev < 0) {
+    if (boot >= 0 && cutoff_epoch != "" && boot >= cutoff_epoch + 0) oom[day] += $7
+  } else if (boot >= 0 && prev_boot >= 0 && boot != prev_boot) {
+    oom[day] += $7
+  } else {
+    oom[day] += ($7 >= prev ? $7 - prev : $7)
+  }
   prev = $7
+  prev_boot = boot
   total = $3
   tn++
   tsum += $4
@@ -1786,10 +1802,14 @@ cmd_memory() {
   [ "$VM_STATUS" = "Running" ] || die "memory: VM ${INSTANCE} is not running"
   # BSD date, as on macOS: today minus (days - 1), so --days 1 is today.
   cutoff="$(date -v-"$((days - 1))"d +%F)"
+  # The same instant as an epoch, for comparing the CSV's boot column
+  # (#91): midnight at the start of the cutoff day. Empty on failure,
+  # which awk reads as "cannot decide", the conservative answer.
+  cutoff_epoch="$(date -j -v-"$((days - 1))"d -v0H -v0M -v0S +%s 2>/dev/null || true)"
   rows="$(guest sh -c 'cat /var/log/homefield/memwatch-*.csv 2>/dev/null; true')" || exit 1
   [ -n "$rows" ] || die "memory: no samples in ${INSTANCE} yet; the sampler is installed by bin/homefield upgrade"
   rc=0
-  printf '%s\n' "$rows" | awk -v cutoff="$cutoff" "$MEMORY_AWK" || rc=$?
+  printf '%s\n' "$rows" | awk -v cutoff="$cutoff" -v cutoff_epoch="$cutoff_epoch" "$MEMORY_AWK" || rc=$?
   [ "$rc" -ne 3 ] || die "memory: no samples since ${cutoff}"
   [ "$rc" -eq 0 ] || exit "$rc"
 }
