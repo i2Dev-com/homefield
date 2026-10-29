@@ -105,9 +105,16 @@ refuses a public repository. `--dry-run` shows what it would do.
   repositories can use the runner, needs the GitHub Team plan or Enterprise. On
   the Free plan there is only the Default group, which every repository in the
   organization can use: register there only if you trust all of them, with
-  `--group Default`. A **personal account** cannot have an account-wide
-  runner: register per repository (`--url https://github.com/<you>/<repo>`),
-  one VM per repository ([runbook: Runner group](docs/runbook.md#runner-group)).
+  `--group Default`. A **personal account** hits two separate limits.
+  GitHub's: runners register at repository, organization or enterprise scope
+  and jobs never cross scopes, so a personal account has no account-wide
+  runner — a runner registered to an organization can never serve a personal
+  repository, and each personal repository needs its own repository-scoped
+  registration (`--url https://github.com/<you>/<repo>`). And ours: one VM
+  runs one runner, so until
+  [#14](https://github.com/i2Dev-com/homefield/issues/14) lands, each of
+  those registrations is its own VM
+  ([runbook: Runner group](docs/runbook.md#runner-group)).
 - **Less software than `ubuntu-latest`.** The VM starts small. Add what your
   jobs need with `--packages` or a hook
   ([runbook: Adding tools](docs/runbook.md#adding-tools)).
