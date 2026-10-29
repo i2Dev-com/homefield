@@ -3,7 +3,8 @@
 # report goes on to the service, the job and the version, as the comment on
 # that branch promises, instead of ending at the first failed `read` under
 # `set -e`. And whether GitHub still lists the runner (#76): it removes one
-# that has not connected for more than 14 days, and the VM cannot tell.
+# that has not connected for more than 14 days, and the VM cannot tell — with
+# the check bounded so a dead network cannot stall status (#103).
 #
 # The real cmd_status runs; the VM helpers and gh are functions that answer
 # from the environment. Nothing reaches a VM or GitHub.
@@ -29,8 +30,11 @@ runner_setting() {
   printf '%b' "\$SETTING_OUT"
 }
 # The runner ids GitHub lists (GH_IDS), or a gh that fails unless GH_FAIL=0.
+# GH_SLEEP=1 black-holes the call: it answers after the test's timeout, so
+# the timer must kill it.
 gh() {
   echo "gh \$*" >>"$work/gh-calls"
+  if [ "\${GH_SLEEP:-}" = 1 ]; then sleep 3; fi
   [ "\${GH_FAIL:-1}" = 0 ] || return 1
   printf '%b' "\${GH_IDS:-}"
 }
@@ -83,6 +87,9 @@ record "an empty list is not listed either" "1/yes" "$rc/$(has "$out" 'github: N
 status GH_FAIL=1 SETTING_OUT='my-mac-homefield\nhttps://github.com/acme\n42\n'
 record "gh fails: not checked, exit unchanged" "0/yes/no" "$rc/$(has "$out" 'github: not checked')/$(has "$out" 'NOT listed')"
 record "...and no scope refresh is offered" "0" "$(gh_calls offer_scope_refresh)"
+status GH_FAIL=0 GH_IDS='42\n' GH_SLEEP=1 HOMEFIELD_GH_TIMEOUT=1 SETTING_OUT='my-mac-homefield\nhttps://github.com/acme\n42\n'
+record "gh stalls past the timeout: killed, not checked, exit unchanged (#103)" "0/yes/no" "$rc/$(has "$out" 'github: not checked (timed out after 1s')/$(has "$out" 'github: listed')"
+record "...and the rest is still answered from the VM" "yes/yes/yes/yes" "$(rest)"
 status GH_FAIL=0 GH_IDS='42\n' SETTING_OUT='my-mac-homefield\nhttps://github.com/acme\n'
 record "no id read: not checked, saying why, gh not called" "0/yes/0" "$rc/$(has "$out" "github: not checked (no runner id in the VM's settings)")/$(gh_calls 'gh ')"
 status GH_FAIL=0 GH_IDS='' JOB_RC=2 SETTING_OUT='my-mac-homefield\nhttps://github.com/acme\n42\n'

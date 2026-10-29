@@ -490,7 +490,10 @@ the VM still has its registration, but the runner fails with "The runner
 registration has been deleted from the server" and its service stops. A runner
 missing from this list is the sign, and `bin/homefield status` says
 `github: NOT listed` (and exits 1) when gh can read the list; otherwise it
-says `github: not checked` and the VM's copy is all it can see. `upgrade`, and
+says `github: not checked` and the VM's copy is all it can see. The GitHub
+ask waits at most 15 s (`HOMEFIELD_GH_TIMEOUT` to change it): on a dead
+network `status` says `github: not checked (timed out ...)` and still prints
+everything it can answer from the VM. `upgrade`, and
 `install` on that VM, refuse before anything is stopped; without gh, the
 upgrade runs and fails at the end, when the service does not reach "Listening
 for Jobs", and says why. Register it again (#76):
