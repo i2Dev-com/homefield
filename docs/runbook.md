@@ -127,6 +127,16 @@ fails if the group is missing).
 
 ## Setup (once per machine)
 
+Run `homefield preflight` before installing to verify the prerequisites (macOS,
+Apple Silicon, Lima ≥ 2.0, gh, python3, Homebrew) are in place. It exits 0 when
+all pass, 1 otherwise, with messages pointing to the exact fix command
+(`brew install lima`, `gh auth login`, and so on). The `install` command runs it
+first:
+
+```bash
+homefield preflight
+```
+
 Run the [README's one-liner](../README.md#quick-start), or, from a checkout,
 `bin/homefield install --url https://github.com/<org>` (or
 `https://github.com/<owner>/<repo>`; options: `bin/homefield help`). It needs

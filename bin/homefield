@@ -53,6 +53,10 @@ Commands:
   route      Switch repositories' routed jobs to hosted or local
              (the CI_RUNNER variable). Switching to hosted also cancels and
              re-runs runs whose jobs are stuck waiting for the local runner.
+  preflight  Check prerequisites for a fresh install: macOS, Apple Silicon,
+              Lima, gh, python3, brew. Exits 0 when all pass, 1
+              otherwise (with messages pointing to the exact fix command).
+              Designed to be run before install; install calls it first.
   adopt      Prepare a repository to use the runner: check that its routing is
              merged, and only then give it access to the runner group and
              switch it to local. Refuses a public repository.
@@ -188,6 +192,93 @@ check_host() {
 # on; 1.1 checks the same characters and length, not the .yml/.yaml ending),
 # the same check as install.sh's. Anything else would reach limactl as an
 # option (--help) or a path.
+
+# ── Preflight checks ────────────────────────────────────────────────────────
+cmd_preflight() {
+  local failed=0 total=0
+  # Lima
+  total=$((total + 1))
+  if ! command -v limactl >/dev/null 2>&1; then
+    echo "  FAIL  Lima not found: run 'brew install lima'"
+    failed=$((failed + 1))
+  else
+    local version major minor
+    version="$(limactl --version 2>/dev/null | awk '{print $NF}')"
+    major="${version%%.*}"
+    minor="${version#*.}"
+    minor="${minor%%.*}"
+    if ! [[ "$major" =~ ^[0-9]+$ && "$minor" =~ ^[0-9]+$ ]] || [ "$major" -lt 2 ]; then
+      echo "  FAIL  Lima $version >= 2.0 required: run 'brew install lima'"
+      failed=$((failed + 1))
+    else
+      echo "  OK    Lima $version"
+    fi
+  fi
+  # gh
+  total=$((total + 1))
+  if ! command -v gh >/dev/null 2>&1; then
+    echo "  FAIL  gh (GitHub CLI) not found: run 'brew install gh'"
+    failed=$((failed + 1))
+  else
+    # Check login
+    local whoami
+    whoami="$(gh auth status 2>&1)" || true
+    if echo "$whoami" | grep -q "Token scopes:.*admin:org"; then
+      echo "  OK    gh authenticated (admin:org scope)"
+    elif echo "$whoami" | grep -q "Token scopes"; then
+      echo "  WARN  gh authenticated, but no admin:org scope (some install features will ask for paste of a token)"
+      # Still counts as pass - just a warning
+    else
+      echo "  FAIL  gh not logged in: run 'gh auth login'"
+      failed=$((failed + 1))
+    fi
+  fi
+  # python3
+  total=$((total + 1))
+  if command -v python3 >/dev/null 2>&1; then
+    local pyver
+    pyver="$(python3 --version 2>&1)"
+    echo "  OK    python3 ($pyver)"
+  else
+    echo "  FAIL  python3 not found: run 'brew install python'"
+    failed=$((failed + 1))
+  fi
+  # brew
+  total=$((total + 1))
+  if command -v brew >/dev/null 2>&1; then
+    echo "  OK    brew available"
+  else
+    echo "  FAIL  brew not found: run 'brew install'"
+    failed=$((failed + 1))
+  fi
+  # macOS (Darwin)
+  total=$((total + 1))
+  if [ "$(uname -s)" = "Darwin" ]; then
+    echo "  OK    macOS ($(uname -r))"
+  else
+    echo "  FAIL  needs macOS (Darwin): found $(uname -s)"
+    failed=$((failed + 1))
+  fi
+  # Apple Silicon
+  total=$((total + 1))
+  if [ "$(uname -m)" = "arm64" ]; then
+    echo "  OK    arm64 (Apple Silicon)"
+  else
+    echo "  FAIL  needs Apple Silicon (arm64): found $(uname -m)"
+    failed=$((failed + 1))
+  fi
+  # Summary
+  echo ""
+  if [ "$failed" -eq 0 ]; then
+    echo "All checks passed (${total}/${total})."
+    return 0
+  else
+    echo "FAILED ${failed}/${total} check(s). Fix the above and retry."
+    return 1
+  fi
+}
+
+
 check_instance() {
   local re='^[A-Za-z0-9]+([._-][A-Za-z0-9]+)*$'
   [[ "$INSTANCE" =~ $re && ${#INSTANCE} -le 76 && ! "$INSTANCE" =~ [.][Yy][Aa]?[Mm][Ll]$ ]] ||
@@ -896,6 +987,7 @@ cmd_install() {
       *) die "install: unknown option $1 (see bin/homefield help)" ;;
     esac
   done
+  cmd_preflight || return
   check_host
   # Everything that can be checked is checked before anything is created: the
   # URL (asked for if it was not given), the organization, the runner group.
@@ -1997,9 +2089,10 @@ main() {
   [ -n "$cmd" ] || { usage >&2; exit 1; }
   # Only the commands that act on the VM: route, adopt, report and version
   # never use it, so a stale HOMEFIELD_INSTANCE does not stop them.
-  case "$cmd" in install | upgrade | status | uninstall | memory) check_instance ;; esac
+  case "$cmd" in preflight | install | upgrade | status | uninstall | memory) check_instance ;; esac
   set -- "${rest[@]+"${rest[@]}"}"
   case "$cmd" in
+    preflight) cmd_preflight "$@" ;;
     install) cmd_install "$@" ;;
     upgrade) cmd_upgrade "$@" ;;
     status) cmd_status "$@" ;;

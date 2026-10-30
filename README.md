@@ -58,6 +58,11 @@ tool and leaves an existing VM alone; `homefield upgrade` updates the VM,
 `homefield version` says when a newer release exists, and `homefield status`
 shows the runner and whether GitHub still lists it.
 
+Run `homefield preflight` before installing to verify the prerequisites (macOS,
+Apple Silicon, Lima ≥ 2.0, gh, python3, Homebrew) are in place — `install` runs
+it first — and it exits 1 when something is missing, with the exact command to
+fix it: `brew install lima`, `gh auth login`, and so on.
+
 Registration needs a one-hour token, and the group needs the `admin:org`
 scope. `gh` fetches the token if you are an org owner or a repository admin
 (and offers to add the scope); otherwise you paste a token from the runners
