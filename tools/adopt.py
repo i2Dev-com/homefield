@@ -45,7 +45,7 @@ import urllib.parse
 # The release the snippet adopt prints pins, and that docs/adopting.md and the
 # README tell consumers to pin; tests/adopt.sh checks that the docs still say
 # it. Bump it when a release is cut.
-RELEASE = "v0.3.0"
+RELEASE = "v0.3.1"
 ACTION_PATH = "i2Dev-com/homefield/routing-guard"
 ACTION = f"{ACTION_PATH}@{RELEASE}"
 DEFAULT_LABEL = "homefield-ci"

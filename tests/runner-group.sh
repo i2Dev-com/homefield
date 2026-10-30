@@ -517,11 +517,11 @@ record "...the VM note comes once" "1" "$(printf '%s\n' "$out" | grep -c 'homefi
 dflt="$work/h/.local/share/homefield"
 mkdir -p "$dflt/bin"
 cp "$ROOT/bin/homefield" "$dflt/bin/homefield"
-printf 'repo=i2Dev-com/homefield\nref=v0.3.0\ncommit=%s\n' "$old" >"$dflt/.homefield-ref"
+printf 'repo=i2Dev-com/homefield\nref=v0.3.1\ncommit=%s\n' "$old" >"$dflt/.homefield-ref"
 : >"$calls"
 out="$(env -i HOME="$work/h" PATH="$work/vgh" CALLS="$calls" V_TAGS="$tags_rel" V_COMMIT="$new" "$BASH" "$dflt/bin/homefield" version 2>&1 </dev/null)"
 record "default repo, ref and place: the README's one-liner" "yes" "$(has "$out" "
-  curl -fsSL https://raw.githubusercontent.com/i2Dev-com/homefield/v0.3.0/install.sh | bash
+  curl -fsSL https://raw.githubusercontent.com/i2Dev-com/homefield/v0.3.1/install.sh | bash
 ")"
 
 printf 'repo=acme/tool\nref=release/1\ncommit=%s\n' "$old" >"$work/inst/.homefield-ref"

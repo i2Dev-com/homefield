@@ -27,7 +27,7 @@ Keep hosted:
 ## 2. Route them
 
 Replace each chosen job's `runs-on` with the canonical expression, verbatim.
-It must match the `routing-guard` version used in step 3 (`@v0.3.0` below); see
+It must match the `routing-guard` version used in step 3 (`@v0.3.1` below); see
 [`CHANGELOG.md`](../CHANGELOG.md) when upgrading:
 
 ```yaml
@@ -47,7 +47,7 @@ In a job that runs on every PR, after `actions/checkout`:
 
 ```yaml
       - name: Routing guard
-        uses: i2Dev-com/homefield/routing-guard@v0.3.0
+        uses: i2Dev-com/homefield/routing-guard@v0.3.1
         with:
           jobs: |
             ci.yml:lint
@@ -62,7 +62,7 @@ a deliberate, reviewed change.
 
 `homefield adopt` counts a step as the guard only if:
 
-- it uses `i2Dev-com/homefield/routing-guard@v0.3.0`, the release your
+- it uses `i2Dev-com/homefield/routing-guard@v0.3.1`, the release your
   installed `homefield` checks with (`homefield version` shows it), or a full
   commit SHA. Another release, `@v0` or `@main` do not count;
 - it is in a workflow that runs on `pull_request` (not `pull_request_target`,
@@ -89,7 +89,7 @@ also reads the step's `arch` (below) and refuses a step whose `arch:` is not
 `arm64`: it sets up the arm64 VM, and there is no flag to change that.
 
 ```yaml
-      - uses: i2Dev-com/homefield/routing-guard@v0.3.0
+      - uses: i2Dev-com/homefield/routing-guard@v0.3.1
         with:
           jobs: |
             ci.yml:lint
