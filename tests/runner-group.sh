@@ -130,8 +130,8 @@ run_fn() {
   shift
   : >"$calls"
   # shellcheck disable=SC2016  # the -c script is expanded by the inner bash
-  out="$(env -i HOME="$work" PATH="$stubs" CALLS="$calls" HOMEFIELD_SOURCE_ONLY=1 "${envs[@]+"${envs[@]}"}" \
-    "$BASH" -c '. "$1"; shift; ONLINE_WAIT_INTERVAL=0; ONLINE_WAIT_TRIES=3; "$@"' _ "$ROOT/bin/homefield" "$@" 2>&1 </dev/null)"
+  out="$(env -i HOME="$work" PATH="$stubs" CALLS="$calls" HOMEFIELD_SOURCE_ONLY=1 ONLINE_WAIT_INTERVAL=0 ONLINE_WAIT_TRIES=3 "${envs[@]+"${envs[@]}"}" \
+    "$BASH" -c '. "$1"; shift; "$@"' _ "$ROOT/bin/homefield" "$@" 2>&1 </dev/null)"
   rc=$?
 }
 called() { grep -c -e "$1" "$calls" || true; }
@@ -400,6 +400,39 @@ record "gh cannot read the list: the page to check by hand, no failure" "0/yes/1
 
 run_fn GH_RUNNERS="$work/runners-online" -- wait_online https://github.com/acme "" homefield-ci
 record "no runner name: the page to check by hand" "0/yes/0" "$rc/$(has "$out" 'check that the runner is online at')/$(called 'actions/runners')"
+
+# ── wait_online progress ────────────────────────────────────────────────────
+echo "wait_online progress"
+# The nonzero interval exercises the progress formatting: stub sleep so no
+# real delay passes (the suite stubs every outside effect, and the interval is
+# not what the assertions check), and restore the real one after.
+rm -f "$stubs/sleep"
+printf '#!/bin/sh\n' >"$stubs/sleep"
+chmod +x "$stubs/sleep"
+# 9 tries at 5 s each = 45 s of wait, progress at 15 s and 30 s.
+run_fn GH_RUNNERS="$work/runners-offline" ONLINE_WAIT_TRIES=9 ONLINE_WAIT_INTERVAL=5 -- wait_online https://github.com/acme lima-homefield homefield-ci
+record "progress every 15 seconds: 15 s and 30 s for a 45 s wait" \
+  "0/yes/yes/no" "$rc/$(has "$out" 'waiting for lima-homefield (up to 45 s, waited 15 s)')/$(has "$out" 'waiting for lima-homefield (up to 45 s, waited 30 s)')/$(has "$out" 'waiting for lima-homefield (up to 45 s, waited 45 s)')"
+record "no fourth report at the end of the wait" "9/no" "$(called 'actions/runners')/$(has "$out" 'waiting for lima-homefield (up to 45 s, waited 45 s)')"
+
+run_fn GH_RUNNERS="$work/runners-online" ONLINE_WAIT_TRIES=9 ONLINE_WAIT_INTERVAL=5 -- wait_online https://github.com/acme lima-homefield homefield-ci
+record "online on the first poll: no progress output at all" \
+  "0/no/no/1" "$rc/$(has "$out" 'waiting for lima-homefield (up to 45 s, waited 15 s)')/$(has "$out" 'waiting for lima-homefield (up to 45 s, waited 30 s)')/$(called 'actions/runners')"
+
+# The default cadence (3 polls) is what the two cases above pin; prove the
+# override is honoured, since a hardwired 3 would silently ignore it.
+run_fn GH_RUNNERS="$work/runners-offline" ONLINE_WAIT_TRIES=9 ONLINE_WAIT_INTERVAL=5 ONLINE_PROGRESS_CYCLES=1 -- wait_online https://github.com/acme lima-homefield homefield-ci
+record "ONLINE_PROGRESS_CYCLES=1: a report after the first poll (5 s)" \
+  "0/yes" "$rc/$(has "$out" 'waiting for lima-homefield (up to 45 s, waited 5 s)')"
+
+# A zero cadence would divide by zero in the progress check; the guard falls
+# back to the default, so the wait still reports at 15 s and never errors.
+run_fn GH_RUNNERS="$work/runners-offline" ONLINE_WAIT_TRIES=9 ONLINE_WAIT_INTERVAL=5 ONLINE_PROGRESS_CYCLES=0 -- wait_online https://github.com/acme lima-homefield homefield-ci
+record "ONLINE_PROGRESS_CYCLES=0 falls back to the default, no divide error" \
+  "0/yes/no" "$rc/$(has "$out" 'waiting for lima-homefield (up to 45 s, waited 15 s)')/$(has "$out" 'division by')"
+# restore the real sleep for the cases above and below
+rm -f "$stubs/sleep"
+ln -sfn "$(command -v sleep)" "$stubs/sleep"
 
 # ── verify_isolation ───────────────────────────────────────────────────────
 echo "verify_isolation"
