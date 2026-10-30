@@ -20,6 +20,13 @@ fail, such as a new guard in the routing expression, bumps the minor version
   gates on its own subset — macOS, Apple Silicon, Lima. See `homefield help` and
   [`docs/runbook.md`](docs/runbook.md).
 
+### Changed
+
+- `homefield install` reports progress while waiting for the runner to show
+  online on GitHub: a line every 15 seconds (`waiting for <name> (up to 90 s,
+  15 s)`), so the ~90 second poll is never silent. No line is emitted when the
+  runner appears online before the first report (#130).
+
 ## v0.3.1 (2026-10-29)
 
 Compatible with v0.3.0 (workflows unchanged; a host on Lima 1.x first needs
@@ -380,3 +387,4 @@ First public release.
 - **`homefield memory` and `homefield report`.** Per-day memory use and
   out-of-memory kills from the guest's per-minute log, and queue wait,
   duration and minutes of local against hosted jobs from the GitHub API.
+# test

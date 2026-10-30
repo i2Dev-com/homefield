@@ -901,8 +901,15 @@ ensure_group() {
 }
 
 # ── Waiting for the runner ──────────────────────────────────────────────────
-ONLINE_WAIT_TRIES=18
-ONLINE_WAIT_INTERVAL=5
+# ONLINE_WAIT_TRIES / ONLINE_WAIT_INTERVAL can be overridden by environment
+# variables (tests run the wait with 3 tries and no interval); below defaults
+# are for real runs.
+ONLINE_WAIT_TRIES=${ONLINE_WAIT_TRIES:-18}
+ONLINE_WAIT_INTERVAL=${ONLINE_WAIT_INTERVAL:-5}
+# Progress reports during the wait: one every 3 poll cycles (every 15
+# seconds), so a long wait is never silent and never looks hung. If the runner
+# comes online sooner, no progress output is needed.
+ONLINE_PROGRESS_CYCLES=3
 
 # wait_online <url> <name> <group>: until the runner shows as online on
 # GitHub, up to about 90 seconds. Never fails: it only reports, because the
@@ -920,6 +927,11 @@ wait_online() {
   scope="$(api_scope "$url")" || exit 1
   log "waiting for ${name} to show as online (up to $((ONLINE_WAIT_TRIES * ONLINE_WAIT_INTERVAL)) s)"
   while [ "$tries" -lt "$ONLINE_WAIT_TRIES" ]; do
+    # Progress: the first 15 seconds give no feedback, then a message every
+    # 15 seconds while the wait continues.
+    if [ $((tries % ONLINE_PROGRESS_CYCLES)) -eq 0 ] && [ "$tries" -gt 0 ]; then
+      log "waiting for ${name} (up to $((ONLINE_WAIT_TRIES * ONLINE_WAIT_INTERVAL)) s, $((tries * ONLINE_WAIT_INTERVAL)) s)"
+    fi
     if ! rows="$(gh api --paginate "${scope}/actions/runners?per_page=100" \
       --jq '.runners[] | [.name, .status, (.labels | map(.name) | join(",")), .runner_group_id] | @tsv' 2>/dev/null)"; then
       log "could not read the runners list with gh; check that the runner is online at ${page}"
