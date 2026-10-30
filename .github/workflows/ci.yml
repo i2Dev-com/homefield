@@ -79,6 +79,9 @@ jobs:
       - name: bin/homefield adopt
         run: bash tests/adopt.sh
 
+      - name: bin/homefield preflight
+        run: bash tests/preflight.sh
+
       # The action as consumers call it, not just the script behind it: inputs
       # through env, $GITHUB_ACTION_PATH resolution, composite wiring.
       - name: Action against the clean fixture
