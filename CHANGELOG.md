@@ -11,9 +11,11 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ## v0.3.1 (2026-10-29)
 
-Compatible with v0.3.0. To upgrade, run the README's one-liner again, then
-`homefield upgrade` on each runner. Bump `routing-guard@v0.3.0` pins to
-`@v0.3.1`: `homefield adopt` counts only its own release.
+Compatible with v0.3.0 (workflows unchanged; a host on Lima 1.x first needs
+`brew upgrade lima` — the minimum is now 2.0, below). To upgrade, run the
+README's one-liner again, then `homefield upgrade` on each runner. Bump
+`routing-guard@v0.3.0` pins to `@v0.3.1`: `homefield adopt` counts only its
+own release.
 
 ### Added
 
