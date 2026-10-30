@@ -53,6 +53,10 @@ Commands:
   route      Switch repositories' routed jobs to hosted or local
              (the CI_RUNNER variable). Switching to hosted also cancels and
              re-runs runs whose jobs are stuck waiting for the local runner.
+  preflight  Check prerequisites for a fresh install: macOS, Apple Silicon,
+              Lima, gh, python3, brew. Exits 0 when all pass, 1
+              otherwise (with messages pointing to the exact fix command).
+              Designed to be run before install; install calls it first.
   adopt      Prepare a repository to use the runner: check that its routing is
              merged, and only then give it access to the runner group and
              switch it to local. Refuses a public repository.
@@ -184,10 +188,106 @@ check_host() {
   fi
 }
 
+# cmd_preflight: everything an install needs, reported one line per check
+# instead of stopping at the first failure like check_host, each failure with
+# the command that fixes it. Exits 0 when every check passes, 1 otherwise.
+# gh is not strictly needed: without it, install asks for a pasted token, so
+# gh missing is a failure to fix, gh logged out is a failure too, and a token
+# without admin:org only warns (an organization URL is what needs that scope,
+# a repository URL is registered with repo; `gh auth refresh -s admin:org`).
+# Lima >= 2.0 is the same check as check_host's.
+cmd_preflight() {
+  local failed=0 total=0 version major minor login scopes whoami py_version
+  # Lima
+  total=$((total + 1))
+  if ! command -v limactl >/dev/null 2>&1; then
+    echo "  FAIL  Lima not found: run 'brew install lima'"
+    failed=$((failed + 1))
+  else
+    version="$(limactl --version 2>/dev/null | awk '{print $NF}')"
+    major="${version%%.*}"
+    minor="${version#*.}"
+    minor="${minor%%.*}"
+    if ! [[ "$major" =~ ^[0-9]+$ && "$minor" =~ ^[0-9]+$ ]] || [ "$major" -lt 2 ]; then
+      echo "  FAIL  Lima >= 2.0 required, found ${version:-unknown}: run 'brew install lima'"
+      failed=$((failed + 1))
+    else
+      echo "  OK    Lima $version"
+    fi
+  fi
+  # gh: the active account, by login and scopes. App-installed tokens report no
+  # scopes; the `Token scopes` line of `gh auth status` is absent for them, and
+  # `gh auth status` also lists accounts that are not active.
+  total=$((total + 1))
+  if ! command -v gh >/dev/null 2>&1; then
+    echo "  FAIL  gh (GitHub CLI) not found: run 'brew install gh'"
+    failed=$((failed + 1))
+  else
+    whoami="$(gh auth status --json hosts --jq '.hosts["github.com"] // [] | map(select(.active)) | (.[0] // {}) | "\(.login // "")|\(.scopes // "")"' 2>/dev/null)" || whoami="|"
+    login="${whoami%%|*}"
+    scopes="${whoami#*|}"
+    if [ -z "$login" ]; then
+      echo "  FAIL  gh not logged in: run 'gh auth login'"
+      failed=$((failed + 1))
+    elif [ -z "$scopes" ]; then
+      echo "  OK    gh authenticated as $login (no scope reported; an organization URL needs admin:org)"
+    elif case ",$scopes," in *,admin:org,*) true ;; *) false ;; esac; then
+      echo "  OK    gh authenticated as $login (admin:org scope)"
+    else
+      echo "  WARN  gh authenticated as $login, no admin:org scope (an organization URL needs it: gh auth refresh -s admin:org)"
+    fi
+  fi
+  # python3: resolving on PATH is not enough — a broken shim prints but exits
+  # non-zero, so the version command's own status decides.
+  total=$((total + 1))
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "  FAIL  python3 not found: run 'brew install python'"
+    failed=$((failed + 1))
+  elif py_version="$(python3 --version 2>&1)"; then
+    echo "  OK    python3 ($py_version)"
+  else
+    echo "  FAIL  python3 cannot run (${py_version:-no output}): reinstall it, e.g. run 'brew install python'"
+    failed=$((failed + 1))
+  fi
+  # brew
+  total=$((total + 1))
+  if command -v brew >/dev/null 2>&1; then
+    echo "  OK    brew available"
+  else
+    echo "  FAIL  brew not found: install Homebrew from https://brew.sh"
+    failed=$((failed + 1))
+  fi
+  # macOS (Darwin), by product version rather than kernel release
+  total=$((total + 1))
+  if [ "$(uname -s)" = "Darwin" ]; then
+    echo "  OK    macOS $(sw_vers -productVersion)"
+  else
+    echo "  FAIL  needs macOS (Darwin): found $(uname -s)"
+    failed=$((failed + 1))
+  fi
+  # Apple Silicon
+  total=$((total + 1))
+  if [ "$(uname -m)" = "arm64" ]; then
+    echo "  OK    arm64 (Apple Silicon)"
+  else
+    echo "  FAIL  needs Apple Silicon (arm64): found $(uname -m)"
+    failed=$((failed + 1))
+  fi
+  # Summary
+  echo ""
+  if [ "$failed" -eq 0 ]; then
+    echo "All checks passed (${total}/${total})."
+    return 0
+  fi
+  echo "FAILED ${failed}/${total} check(s). Fix the above and retry."
+  return 1
+}
+
 # check_instance: INSTANCE is a name Lima accepts (ValidateInstName, Lima 1.2
 # on; 1.1 checks the same characters and length, not the .yml/.yaml ending),
 # the same check as install.sh's. Anything else would reach limactl as an
 # option (--help) or a path.
+
 check_instance() {
   local re='^[A-Za-z0-9]+([._-][A-Za-z0-9]+)*$'
   [[ "$INSTANCE" =~ $re && ${#INSTANCE} -le 76 && ! "$INSTANCE" =~ [.][Yy][Aa]?[Mm][Ll]$ ]] ||
@@ -896,6 +996,11 @@ cmd_install() {
       *) die "install: unknown option $1 (see bin/homefield help)" ;;
     esac
   done
+  # The readiness report comes first, before anything is created, and install
+  # then gates on its own subset of it — macOS, arm64, Lima — which check_host
+  # is: gh, python3 and brew are what the tool needs elsewhere (adopt, report,
+  # the one-liner), and install itself can proceed without them.
+  cmd_preflight || true
   check_host
   # Everything that can be checked is checked before anything is created: the
   # URL (asked for if it was not given), the organization, the runner group.
@@ -1995,11 +2100,12 @@ main() {
     esac
   done
   [ -n "$cmd" ] || { usage >&2; exit 1; }
-  # Only the commands that act on the VM: route, adopt, report and version
-  # never use it, so a stale HOMEFIELD_INSTANCE does not stop them.
+  # Only the commands that act on the VM: preflight, route, adopt, report and
+  # version never use it, so a stale HOMEFIELD_INSTANCE does not stop them.
   case "$cmd" in install | upgrade | status | uninstall | memory) check_instance ;; esac
   set -- "${rest[@]+"${rest[@]}"}"
   case "$cmd" in
+    preflight) [ $# -eq 0 ] || die "preflight takes no options (see bin/homefield help)"; cmd_preflight ;;
     install) cmd_install "$@" ;;
     upgrade) cmd_upgrade "$@" ;;
     status) cmd_status "$@" ;;

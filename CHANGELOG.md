@@ -9,6 +9,17 @@ fail, such as a new guard in the routing expression, bumps the minor version
 (0.1 to 0.2). Compatible changes bump the patch. Merged changes wait on
 `main`, under *Unreleased*, until a release is cut.
 
+## Unreleased
+
+### Added
+
+- `homefield preflight` — a pre-install readiness check. Verifies macOS,
+  Apple Silicon, Lima ≥ 2.0, gh (the active account, by login and scope; an App
+  token reports no scope, which is fine), python3 and Homebrew; exits 0 when all
+  pass, 1 otherwise (with exact fix commands). `install` prints it first and
+  gates on its own subset — macOS, Apple Silicon, Lima. See `homefield help` and
+  [`docs/runbook.md`](docs/runbook.md).
+
 ## v0.3.1 (2026-10-29)
 
 Compatible with v0.3.0 (workflows unchanged; a host on Lima 1.x first needs
