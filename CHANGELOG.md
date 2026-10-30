@@ -25,7 +25,10 @@ fail, such as a new guard in the routing expression, bumps the minor version
 - `homefield install` reports progress while waiting for the runner to show
   online on GitHub: a line every 15 seconds (`waiting for <name> (up to 90 s,
   15 s)`), so the ~90 second poll is never silent. No line is emitted when the
-  runner appears online before the first report (#130).
+  runner appears online before the first report (#130). The wait and its
+  progress lines are configurable through `ONLINE_WAIT_TRIES` (default 18),
+  `ONLINE_WAIT_INTERVAL` (default 5) and `ONLINE_PROGRESS_CYCLES` (default 3)
+  in the environment.
 
 ## v0.3.1 (2026-10-29)
 

@@ -403,6 +403,12 @@ record "no runner name: the page to check by hand" "0/yes/0" "$rc/$(has "$out" '
 
 # ── wait_online progress ────────────────────────────────────────────────────
 echo "wait_online progress"
+# The nonzero interval exercises the progress formatting: stub sleep so no
+# real delay passes (the suite stubs every outside effect, and the interval is
+# not what the assertions check), and restore the real one after.
+rm -f "$stubs/sleep"
+printf '#!/bin/sh\n' >"$stubs/sleep"
+chmod +x "$stubs/sleep"
 # 9 tries at 5 s each = 45 s of wait, progress at 15 s and 30 s.
 run_fn GH_RUNNERS="$work/runners-offline" ONLINE_WAIT_TRIES=9 ONLINE_WAIT_INTERVAL=5 -- wait_online https://github.com/acme lima-homefield homefield-ci
 record "progress every 15 seconds: 15 s and 30 s for a 45 s wait" \
@@ -412,6 +418,9 @@ record "no fourth report at the end of the wait" "9/no" "$(called 'actions/runne
 run_fn GH_RUNNERS="$work/runners-online" ONLINE_WAIT_TRIES=9 ONLINE_WAIT_INTERVAL=5 -- wait_online https://github.com/acme lima-homefield homefield-ci
 record "online on the first poll: no progress output at all" \
   "0/no/no/1" "$rc/$(has "$out" 'waiting for lima-homefield (up to 45 s, 15 s)')/$(has "$out" 'waiting for lima-homefield (up to 45 s, 30 s)')/$(called 'actions/runners')"
+# restore the real sleep for the cases above and below
+rm -f "$stubs/sleep"
+ln -sfn "$(command -v sleep)" "$stubs/sleep"
 
 # ── verify_isolation ───────────────────────────────────────────────────────
 echo "verify_isolation"
