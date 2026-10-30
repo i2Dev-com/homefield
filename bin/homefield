@@ -197,7 +197,7 @@ check_host() {
 # a repository URL is registered with repo; `gh auth refresh -s admin:org`).
 # Lima >= 2.0 is the same check as check_host's.
 cmd_preflight() {
-  local failed=0 total=0 version major minor login scopes whoami
+  local failed=0 total=0 version major minor login scopes whoami py_version
   # Lima
   total=$((total + 1))
   if ! command -v limactl >/dev/null 2>&1; then
@@ -237,12 +237,16 @@ cmd_preflight() {
       echo "  WARN  gh authenticated as $login, no admin:org scope (an organization URL needs it: gh auth refresh -s admin:org)"
     fi
   fi
-  # python3
+  # python3: resolving on PATH is not enough — a broken shim prints but exits
+  # non-zero, so the version command's own status decides.
   total=$((total + 1))
-  if command -v python3 >/dev/null 2>&1; then
-    echo "  OK    python3 ($(python3 --version 2>&1))"
-  else
+  if ! command -v python3 >/dev/null 2>&1; then
     echo "  FAIL  python3 not found: run 'brew install python'"
+    failed=$((failed + 1))
+  elif py_version="$(python3 --version 2>&1)"; then
+    echo "  OK    python3 ($py_version)"
+  else
+    echo "  FAIL  python3 cannot run (${py_version:-no output}): reinstall it, e.g. run 'brew install python'"
     failed=$((failed + 1))
   fi
   # brew
@@ -250,7 +254,7 @@ cmd_preflight() {
   if command -v brew >/dev/null 2>&1; then
     echo "  OK    brew available"
   else
-    echo "  FAIL  brew not found: run 'brew install'"
+    echo "  FAIL  brew not found: install Homebrew from https://brew.sh"
     failed=$((failed + 1))
   fi
   # macOS (Darwin), by product version rather than kernel release

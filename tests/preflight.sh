@@ -57,6 +57,12 @@ EOF
       python3)
         cat >"$dir/python3" <<'EOF'
 #!/bin/sh
+# PY_BROKEN=1 emulates a shim that resolves on PATH but cannot run: it prints
+# an error and exits non-zero.
+if [ "${PY_BROKEN:-}" = "1" ]; then
+  echo "python3: interpreter unavailable"
+  exit 1
+fi
 echo "Python ${PY_VERSION:-3.12.0}"
 EOF
         ;;
@@ -258,6 +264,19 @@ case_macos_version() {
   fi
 }
 
+# case_broken_python: python3 resolves but cannot run (prints an error, exits
+# 1) → the version status makes it a FAIL, not an OK, and exit 1.
+case_broken_python() {
+  local d="$work/python-broken"; ok_stub "$d"
+  preflight "$d" PY_BROKEN=1
+  if [ "$pf_rc" -eq 1 ] && has "$pf_out" "FAIL  python3 cannot run (python3: interpreter unavailable)" &&
+    has "$pf_out" "FAILED 1/6 check(s)." && ! has "$pf_out" "OK    python3"; then
+    record "python3 cannot run: FAIL, exit 1" "$pf_rc" "1"
+  else
+    record "python3 cannot run: FAIL, exit 1" "$pf_rc" "1 (got: $pf_out)"
+  fi
+}
+
 case_all_pass
 case_missing "limactl missing" limactl "FAIL  Lima not found: run 'brew install lima'"
 case_lima_old
@@ -266,7 +285,8 @@ case_gh_logged_out
 case_gh_app_token
 case_gh_scope_warn
 case_missing "python3 missing" python3 "FAIL  python3 not found: run 'brew install python'"
-case_missing "brew missing" brew "FAIL  brew not found: run 'brew install'"
+case_broken_python
+case_missing "brew missing" brew "FAIL  brew not found: install Homebrew from https://brew.sh"
 case_mixed
 case_not_macos
 case_not_arm64

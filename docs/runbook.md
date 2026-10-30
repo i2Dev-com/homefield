@@ -128,9 +128,10 @@ fails if the group is missing).
 ## Setup (once per machine)
 
 Run `homefield preflight` before installing to verify the prerequisites (macOS,
-Apple Silicon, Lima ≥ 2.0, gh, python3, Homebrew) are in place. It exits 0 when
-all pass, 1 otherwise, with messages pointing to the exact fix command
-(`brew install lima`, `gh auth login`, and so on). For gh it reads the active
+Apple Silicon, Lima ≥ 2.0, gh, a python3 that actually runs, Homebrew) are in
+place. It exits 0 when all pass, 1 otherwise, with messages pointing to the
+exact fix command (`brew install lima`, `gh auth login`, and so on; a missing
+Homebrew points at <https://brew.sh>). For gh it reads the active
 account from `gh auth status --json hosts`, so an App-installed token (which
 reports no scopes) is accepted; a token without `admin:org` only warns, because
 an organization URL needs that scope while a repository URL does not. The
