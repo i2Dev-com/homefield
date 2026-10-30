@@ -150,7 +150,7 @@ step below: it asks for the URL if it was not given, creates the VM and checks
 its isolation, provisions it, creates the runner group, registers the runner,
 waits until it is online and enables autostart.
 
-The wait polls for the runner to show online on GitHub, up to about 90 seconds (18 tries at 5 seconds each). It reports progress every 15 seconds — `waiting for <name> (up to 90 s, 15 s)` — and says nothing when the runner appears online before the first report. Those three settings are read from the environment where `install` runs: `ONLINE_WAIT_TRIES` (default 18), `ONLINE_WAIT_INTERVAL` (default 5) and `ONLINE_PROGRESS_CYCLES` (default 3, the polls per progress line).
+The wait polls for the runner to show online on GitHub, up to about 90 seconds (18 tries at 5 seconds each). It reports progress every 15 seconds — `waiting for <name> (up to 90 s, waited 15 s)` — and says nothing when the runner appears online before the first report. Those three settings are read from the environment where `install` runs: `ONLINE_WAIT_TRIES` (default 18), `ONLINE_WAIT_INTERVAL` (default 5) and `ONLINE_PROGRESS_CYCLES` (default 3, the polls per progress line; a value below 1 falls back to 3).
 
 The runner is named after the Mac and the instance (`<local hostname>-homefield`,
 from `scutil --get LocalHostName`; `--name` picks another), and `install`
