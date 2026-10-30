@@ -36,7 +36,7 @@ It has three parts:
 On an Apple Silicon Mac, in a terminal:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/i2Dev-com/homefield/v0.3.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/i2Dev-com/homefield/v0.3.1/install.sh | bash
 ```
 
 This installs [Lima](https://lima-vm.io) with Homebrew if it is missing or older
@@ -170,7 +170,7 @@ image are options of the action, and the expression changes with them
 `routing-guard` keeps every copy identical and every guard in place:
 
 ```yaml
-      - uses: i2Dev-com/homefield/routing-guard@v0.3.0
+      - uses: i2Dev-com/homefield/routing-guard@v0.3.1
         with:
           jobs: |
             ci.yml:lint
