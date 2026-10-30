@@ -14,9 +14,10 @@ fail, such as a new guard in the routing expression, bumps the minor version
 ### Added
 
 - `homefield preflight` — a pre-install readiness check. Verifies macOS,
-  Apple Silicon, Lima ≥ 2.0, gh (with scope detection), python3 and Homebrew;
-  exits 0 when all pass, 1 otherwise (with exact fix commands). The `install`
-  command runs it first. See `homefield help preflight` and
+  Apple Silicon, Lima ≥ 2.0, gh (the active account, by login and scope; an App
+  token reports no scope, which is fine), python3 and Homebrew; exits 0 when all
+  pass, 1 otherwise (with exact fix commands). `install` prints it first and
+  gates on its own subset — macOS, Apple Silicon, Lima. See `homefield help` and
   [`docs/runbook.md`](docs/runbook.md).
 
 ## v0.3.1 (2026-10-29)
