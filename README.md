@@ -52,6 +52,15 @@ the URL up front, or any other option, append it:
 ... | bash -s -- --url https://github.com/<org>      # or https://github.com/<owner>/<repo>
 ```
 
+`install` looks the URL's owner up first (with `gh`, else the public API) and
+says whether it found an organization or a personal account. A personal
+account cannot have an account-wide runner or a runner group, so it is
+registered for one repository (`--url https://github.com/<you>/<repo>`); given
+only its owner URL, `install` asks for the repository on a terminal and stops
+without one. If the lookup cannot run (the API is unreachable, or your token
+cannot see the account), `--personal` or `--org` says which it is and skips the
+lookup; they cannot be combined.
+
 From a checkout, with Lima ≥ 2.0, run `bin/homefield install --url
 https://github.com/<org>` instead. Running the one-liner again upgrades the
 tool and leaves an existing VM alone; `homefield upgrade` updates the VM,
@@ -131,7 +140,8 @@ it, then run `homefield adopt` to switch the repository on.
   and jobs never cross scopes, so a personal account has no account-wide
   runner — a runner registered to an organization can never serve a personal
   repository, and each personal repository needs its own repository-scoped
-  registration (`--url https://github.com/<you>/<repo>`). And ours: one VM
+  registration (`--url https://github.com/<you>/<repo>`; `install` detects a
+  personal account, or `--personal` says so). And ours: one VM
   runs one runner, so until
   [#14](https://github.com/i2Dev-com/homefield/issues/14) lands, each of
   those registrations is its own VM

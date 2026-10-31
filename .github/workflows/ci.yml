@@ -82,6 +82,9 @@ jobs:
       - name: Runner group, wait for online, version
         run: bash tests/runner-group.sh
 
+      - name: Personal account or organization (install)
+        run: bash tests/account-type.sh
+
       - name: bin/homefield adopt
         run: bash tests/adopt.sh
 

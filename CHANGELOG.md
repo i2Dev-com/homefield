@@ -27,6 +27,25 @@ fail, such as a new guard in the routing expression, bumps the minor version
   GitHub; the checks inside a stopped VM are skipped and said to be.
   `preflight` and `status` output is unchanged.
   [#126](https://github.com/i2Dev-com/homefield/issues/126)
+- `homefield install` finds out whether the URL's owner is a personal account
+  or an organization before the token, group and name steps, for an owner URL
+  and now also a repository URL (with `gh`, else the public API), and says
+  which it found. A personal account skips the runner group entirely
+  (`GROUP_STATE=personal`), prints GitHub's limit (no account-wide runners, so
+  each repository registers on its own) and HomeField's (one VM per
+  registration until
+  [#14](https://github.com/i2Dev-com/homefield/issues/14), so each repository
+  needs its own `--instance`), and ends with advice that the runner serves
+  only that repository. Given only a personal account's owner URL, it asks
+  for the repository on a terminal, and without one stops naming
+  `--url https://github.com/<you>/<repo>`. `--personal` and `--org` force the
+  mode and skip the lookup (the API unreachable, or a token that cannot see the
+  account); both together is an error. A repository URL whose owner cannot be
+  looked up still works, with a note; an owner URL that cannot is still
+  refused, now naming the two flags. `--group` on a personal account is
+  ignored with a message, as it already was for a repository URL. A
+  compatible change.
+  [#125](https://github.com/i2Dev-com/homefield/issues/125)
 - `homefield adopt --setup --repo <owner>/<repo>` opens a pull request that
   writes steps 1–4 of `docs/adopting.md` instead of waiting for them: every
   job of a workflow that runs on `pull_request` and asks for a GitHub-hosted

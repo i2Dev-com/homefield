@@ -122,6 +122,7 @@ record "the ref and commit are recorded" "repo=i2Dev-com/homefield ref=v0.3.1 co
 record "no staging directory is left behind" "0" "$(find "$home" -name '.homefield-install*' | wc -l | tr -d ' ')"
 record "no arguments and no terminal: install is not run" "no" "$(has "$out" 'homefield stub')"
 record "...and the next command is printed" "yes" "$(has "$out" 'homefield install --url https://github.com/<org>')"
+record "...saying a personal account uses a repository URL" "yes" "$(has "$out" 'a personal account needs a repository')"
 record "the summary names the ref and commit" "yes" "$(has "$out" 'installed homefield v0.3.1 (abc1234)')"
 
 new_env curl limactl
@@ -183,6 +184,10 @@ echo "installed copy and wrapper"
 new_env gh curl limactl
 run_install -- --url https://github.com/acme --packages "x y"
 record "arguments are passed to the installed homefield install" "homefield stub: install --url https://github.com/acme --packages x y" "$(echo "$out" | grep 'homefield stub' || true)"
+run_install -- --personal --url https://github.com/acme/app
+record "--personal passes through to install" "homefield stub: install --personal --url https://github.com/acme/app" "$(echo "$out" | grep 'homefield stub' || true)"
+run_install -- --org --url https://github.com/acme
+record "--org passes through to install" "homefield stub: install --org --url https://github.com/acme" "$(echo "$out" | grep 'homefield stub' || true)"
 record "the wrapper runs the installed homefield by its real path, with arguments" "homefield stub: status --instance x" "$(env -i "$home/bin/homefield" status --instance x)"
 record "the wrapper is a script, not a symlink" "yes" "$([ -f "$home/bin/homefield" ] && [ ! -L "$home/bin/homefield" ] && echo yes || echo no)"
 record "the wrapper is two lines" "2" "$(wc -l <"$home/bin/homefield" | tr -d ' ')"

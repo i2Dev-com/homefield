@@ -80,7 +80,18 @@ Options:
 
 install:
   --url URL          https://github.com/<org> or https://github.com/<owner>/<repo>
-                     (asked for on a terminal when a new registration has none)
+                     (asked for on a terminal when a new registration has none).
+                     Whether the owner is an organization or a personal account
+                     is looked up first (gh, else the public API). A personal
+                     account has no account-wide runners and no runner groups,
+                     so it needs a repository URL; with only its owner URL,
+                     a terminal is asked for the repository, and without one
+                     install stops, naming --url https://github.com/<you>/<repo>
+  --personal         treat the owner as a personal account without looking it
+                     up (the lookup needs the API, and a token that can see the
+                     account). Cannot be combined with --org
+  --org              treat the owner as an organization without looking it up.
+                     Cannot be combined with --personal
   --label LABEL      routing label (default homefield-ci)
   --name NAME        runner name (default: this Mac's local hostname and the
                      instance, e.g. my-mac-homefield). Must be free in the
@@ -88,7 +99,8 @@ install:
   --replace          if the name is taken, remove that registration (a stale
                      one of this Mac's, say) right before registering. If it
                      is another machine's runner, that runner stops working
-  --group GROUP      org runner group (default homefield-ci; ignored for a repo).
+  --group GROUP      org runner group (default homefield-ci; ignored for a repo
+                     or a personal account).
                      Created if missing: selected repositories, no public ones.
                      On the GitHub Free plan, use Default: custom groups
                      need Team or Enterprise
@@ -892,27 +904,64 @@ get_token() {
   printf '%s' "$token"
 }
 
-# Personal accounts have no account-level runners: a user URL would fail at
-# registration with a confusing error, so say so up front.
-check_scope_owner() {
-  local url="${1%/}" owner out type=""
-  [[ "$url" =~ ^https://github\.com/([A-Za-z0-9_.-]+)$ ]] || return 0
-  owner="${BASH_REMATCH[1]}"
+# Whether the URL's owner is a personal account or an organization decides the
+# registration: an organization can have an account-wide runner and runner
+# groups, a personal account only repository-scoped runners (GitHub's limit).
+# --personal and --org set ACCOUNT_FORCE, which skips the lookup.
+ACCOUNT_FORCE=""
+# What check_scope_owner decided: "personal", "org", or "" when it could not
+# tell (a repository URL whose owner could not be looked up).
+ACCOUNT_MODE=""
+
+# owner_type <owner>: prints GitHub's type for the account (User or
+# Organization), or nothing when it cannot be told.
+owner_type() {
+  local out type=""
   # gh when it works, else the public API with curl (no python3 needed: a
   # stock Mac only has the stub that offers to install it).
-  if command -v gh >/dev/null && out="$(gh api "users/${owner}" -q .type 2>/dev/null)"; then
+  if command -v gh >/dev/null && out="$(gh api "users/${1}" -q .type 2>/dev/null </dev/null)"; then
     type="$out"
-  elif out="$(curl -fsS "https://api.github.com/users/${owner}" 2>/dev/null)"; then
+  elif out="$(curl -fsS "https://api.github.com/users/${1}" 2>/dev/null </dev/null)"; then
     type="$(printf '%s\n' "$out" | sed -n 's/^ *"type": *"\([A-Za-z]*\)".*/\1/p' | head -1)"
   fi
-  case "$type" in
-    Organization) ;;
-    User) die "${owner} is a personal account, which cannot have account-wide runners; use a repository URL (https://github.com/${owner}/<repo>)" ;;
-    *) die "could not find ${owner} on GitHub (or reach api.github.com) to check that it is an organization" ;;
-  esac
+  printf '%s' "$type"
 }
 
-# validate_scope <url>: the URL's shape, and that an organization URL is one.
+# have_terminal: stdin is a terminal to ask on (a seam for the tests).
+have_terminal() { [ -t 0 ]; }
+
+# check_scope_owner <url>: sets ACCOUNT_MODE for an owner or repository URL.
+# An owner URL needs an organization: a personal account's is refused when
+# there is no terminal to ask for a repository on, and an owner that cannot be
+# looked up is refused. A repository URL worked without any lookup before, so
+# one that fails is not fatal.
+check_scope_owner() {
+  local url="${1%/}" owner repo="" type=""
+  ACCOUNT_MODE=""
+  if [[ "$url" =~ ^https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)$ ]]; then
+    owner="${BASH_REMATCH[1]}"
+    repo="${BASH_REMATCH[2]}"
+  elif [[ "$url" =~ ^https://github\.com/([A-Za-z0-9_.-]+)$ ]]; then
+    owner="${BASH_REMATCH[1]}"
+  else
+    return 0
+  fi
+  if [ -n "$ACCOUNT_FORCE" ]; then
+    ACCOUNT_MODE="$ACCOUNT_FORCE"
+  else
+    type="$(owner_type "$owner")"
+    case "$type" in
+      Organization) ACCOUNT_MODE=org ;;
+      User) ACCOUNT_MODE=personal ;;
+      *) [ -n "$repo" ] || die "could not find ${owner} on GitHub (or reach api.github.com) to check that it is an organization; if it is one, pass --org to skip the check (--personal for a personal account)" ;;
+    esac
+  fi
+  if [ "$ACCOUNT_MODE" = personal ] && [ -z "$repo" ] && ! have_terminal; then
+    die "${owner} is a personal account, which cannot have account-wide runners; register a repository instead: --url https://github.com/${owner}/<repo>"
+  fi
+}
+
+# validate_scope <url>: the URL's shape, and what kind of account owns it.
 validate_scope() {
   api_scope "$1" >/dev/null
   check_scope_owner "$1"
@@ -928,12 +977,56 @@ ask_url() {
   printf '%s' "$url"
 }
 
+# ask_personal_repo <owner url>: prints the URL of the repository, in that
+# personal account, that the typed answer names (a name, or a full URL).
+# Needs a terminal; check_scope_owner has already refused without one.
+ask_personal_repo() {
+  local owner="${1%/}" answer url
+  owner="${owner##*/}"
+  echo "homefield: ${owner} is a personal account, which cannot have account-wide runners: a runner is registered for one repository." >&2
+  read -rp "Repository of ${owner} to register for (name, or full URL): " answer
+  [ -n "$answer" ] || die "install: no repository given"
+  case "$answer" in
+    https://*) url="${answer%/}" ;;
+    *) url="https://github.com/${owner}/${answer}" ;;
+  esac
+  [[ "$url" =~ ^https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)$ && "$(lower "${BASH_REMATCH[1]}")" = "$(lower "$owner")" ]] ||
+    die "install: not a repository of ${owner}: ${answer}"
+  printf '%s' "$url"
+}
+
+# announce_account <url> <group>: says which kind of account the registration
+# is for and, for a personal one, the two separate limits. The caller's --group
+# is passed in so that it can say a personal account ignores it.
+announce_account() {
+  local slug="${1%/}" group="$2" how="detected"
+  slug="${slug#https://github.com/}"
+  [ -z "$ACCOUNT_FORCE" ] || how="forced by --${ACCOUNT_FORCE}"
+  case "$ACCOUNT_MODE" in
+    personal)
+      log "personal account (${slug%%/*}), ${how}. Two separate limits apply:"
+      log "  - GitHub: no account-wide runners and no runner groups, so each repository registers on its own."
+      log "  - HomeField: one VM runs one runner (until #14), so each personal repository needs its own --instance."
+      log "Registering this runner for the repository ${slug} only."
+      [ -z "$group" ] || log "--group ${group} is ignored: a personal account has no runner groups."
+      ;;
+    org) log "organization (${slug%%/*}), ${how}." ;;
+    *) log "could not check whether ${slug%%/*} is a personal account or an organization (neither gh nor api.github.com answered); going on without it. --personal or --org skips the check." ;;
+  esac
+}
+
 # prepare_registration: for cmd_install, whose url, group, name and replace
 # it reads and sets (bash functions see their caller's locals). Asks for the
-# URL if there is none, validates it, sorts out the runner group and the name.
+# URL if there is none, validates it, says which kind of account it is (a
+# personal one is asked for a repository if the URL is only its owner), sorts
+# out the runner group and the name.
 prepare_registration() {
   [ -n "$url" ] || url="$(ask_url)" || exit 1
   validate_scope "$url"
+  if [ "$ACCOUNT_MODE" = personal ] && [[ "${url%/}" =~ ^https://github\.com/[A-Za-z0-9_.-]+$ ]]; then
+    url="$(ask_personal_repo "$url")" || exit 1
+  fi
+  announce_account "$url" "$group"
   ensure_group "$url" "${group:-homefield-ci}"
   [ -n "$name" ] || name="$(default_name)" || exit 1
   check_name_free "$url" "$name" "$replace"
@@ -1083,18 +1176,23 @@ token_hint() {
 # lower <text>: in lower case (bash 3.2 has no ${var,,}).
 lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 
-# What ensure_group found, for the closing message: "repo" (no groups),
-# "default" (every repository in the org), "wide" (warned about), "narrow",
-# "created" or "unchecked".
+# What ensure_group found, for the closing message: "personal" (a personal
+# account has no groups), "repo" (no groups), "default" (every repository in
+# the org), "wide" (warned about), "narrow", "created" or "unchecked".
 GROUP_STATE=""
 
 # ensure_group <url> <group>: for an organization URL, finds the group by name
 # and warns when it is wider than it should be, or creates it. A repository
 # URL has no groups, and Default always exists. GitHub treats group names
-# case-insensitively, so they are compared that way.
+# case-insensitively, so they are compared that way. A personal account
+# (ACCOUNT_MODE) has no groups at all: nothing is asked of GitHub.
 ensure_group() {
   local url="$1" group="${2:-homefield-ci}" scope org groups="" name vis pub found=0 why="" out
   scope="$(api_scope "$url")" || exit 1
+  if [ "$ACCOUNT_MODE" = personal ]; then
+    GROUP_STATE=personal
+    return 0
+  fi
   if [[ "$scope" != orgs/* ]]; then
     GROUP_STATE=repo
     return 0
@@ -1266,6 +1364,43 @@ enable_autostart() {
 }
 
 # ── Commands ────────────────────────────────────────────────────────────────
+# registered_next_steps <group> <url>: install's closing advice, by what
+# ensure_group found (GROUP_STATE).
+registered_next_steps() {
+  local group="$1" slug="${2%/}"
+  slug="${slug#https://github.com/}"
+  echo
+  echo "Registered. Next:"
+  case "$GROUP_STATE" in
+    narrow | created)
+      echo "  - It is in the runner group ${group:-homefield-ci}, which admits only the"
+      echo "    repositories added to it: homefield adopt --repo <owner>/<repo> adds one."
+      ;;
+    default)
+      echo "  - It is in the Default group: every repository in the organization can"
+      echo "    use it (docs/runbook.md, \"Runner group\")."
+      ;;
+    wide)
+      echo "  - Narrow the runner group ${group:-homefield-ci} as warned above, then add"
+      echo "    the repositories that should use it (docs/runbook.md, \"Runner group\")."
+      ;;
+    unchecked)
+      echo "  - Check the runner group ${group:-homefield-ci} by hand: selected repositories,"
+      echo "    public ones off (docs/runbook.md, \"Runner group\")."
+      ;;
+    personal)
+      echo "  - It serves only ${slug}: a personal account has no account-wide runners or"
+      echo "    runner groups. Another repository needs its own registration and its own VM:"
+      echo "    homefield install --instance <name> --url https://github.com/<owner>/<repo>."
+      ;;
+  esac
+  cat <<EOF
+  - Route jobs from a repository: docs/adopting.md, then
+    homefield adopt --repo <owner>/<repo> (group access and the switch).
+  - bin/homefield status   shows the runner at any time.
+EOF
+}
+
 cmd_install() {
   local url="" label="" name="" group="" packages="" packages_set=0 cpus="" memory="" autostart=1 replace=0
   while [ $# -gt 0 ]; do
@@ -1280,6 +1415,12 @@ cmd_install() {
       --no-autostart) autostart=0; shift ;;
       --group-exists) GROUP_EXISTS=1; shift ;;
       --replace) replace=1; shift ;;
+      --personal)
+        [ "$ACCOUNT_FORCE" != org ] || die "install: --personal and --org cannot be used together"
+        ACCOUNT_FORCE=personal; shift ;;
+      --org)
+        [ "$ACCOUNT_FORCE" != personal ] || die "install: --personal and --org cannot be used together"
+        ACCOUNT_FORCE=org; shift ;;
       *) die "install: unknown option $1 (see bin/homefield help)" ;;
     esac
   done
@@ -1332,31 +1473,7 @@ cmd_install() {
   local registered_name=""
   registered_name="$(runner_setting agentName)" || registered_name=""
   wait_online "$url" "$registered_name" "${group:-homefield-ci}"
-  echo
-  echo "Registered. Next:"
-  case "$GROUP_STATE" in
-    narrow | created)
-      echo "  - It is in the runner group ${group:-homefield-ci}, which admits only the"
-      echo "    repositories added to it: homefield adopt --repo <owner>/<repo> adds one."
-      ;;
-    default)
-      echo "  - It is in the Default group: every repository in the organization can"
-      echo "    use it (docs/runbook.md, \"Runner group\")."
-      ;;
-    wide)
-      echo "  - Narrow the runner group ${group:-homefield-ci} as warned above, then add"
-      echo "    the repositories that should use it (docs/runbook.md, \"Runner group\")."
-      ;;
-    unchecked)
-      echo "  - Check the runner group ${group:-homefield-ci} by hand: selected repositories,"
-      echo "    public ones off (docs/runbook.md, \"Runner group\")."
-      ;;
-  esac
-  cat <<EOF
-  - Route jobs from a repository: docs/adopting.md, then
-    homefield adopt --repo <owner>/<repo> (group access and the switch).
-  - bin/homefield status   shows the runner at any time.
-EOF
+  registered_next_steps "${group:-homefield-ci}" "$url"
 }
 
 cmd_upgrade() {

@@ -230,8 +230,10 @@ step:
    is not looked at (it is open to every repository in the organization), and
    neither is a group whose list could not be read. A **personal-account**
    repository always adopts on its own, with its own repository-scoped
-   registration and no group step: GitHub gives a personal account no
-   account-wide runners or groups (one VM per repository for now,
+   registration and no group step (`homefield install` detects a personal
+   account, or `--personal` says so, and registers one repository):
+   GitHub gives a personal account no account-wide runners or groups (one VM
+   per repository for now,
    [#14](https://github.com/i2Dev-com/homefield/issues/14);
    [Runner group](runbook.md#runner-group)).
 6. **Switch.** When the routing is ready, sets `CI_RUNNER` to `local` (the same
