@@ -40,6 +40,12 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ### Changed
 
+- When the directory the `homefield` command goes into is not on the PATH,
+  `install.sh` now leads with the `export PATH=...` line to copy-paste into
+  the current terminal ("add it now"), and only then the same line for
+  `~/.zshrc` ("to make it permanent"). The old hint only described the
+  `~/.zshrc` edit, which does nothing until a new terminal opens
+  (#128). A bin dir already on the PATH still gets no hint.
 - `homefield install` reports progress while waiting for the runner to show
   online on GitHub: a line every 15 seconds (`waiting for <name> (up to 90 s,
   waited 15 s)`), so the ~90 second poll is never silent. No line is emitted when the
