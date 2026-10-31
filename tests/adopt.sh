@@ -1074,6 +1074,51 @@ rc_setup=$?
 record "setup: a guard routed on x64 is refused, the VM is arm64" "nonzero/yes/no" \
   "$(nonzero "$rc_setup")/$(has "$got" 'arch x64')/$([ -d "$work/setup-out4" ] && echo yes || echo no)"
 
+# A locally-routed nightly (schedule-only, already on the expression) must
+# stay in the guard's list — routing_guard's list is exact across all files —
+# even though setup adds no run-on change to it.
+mkdir -p "$work/setup-nightly"
+{ header; emit_job lint ubuntu-latest "$(guard ci.yml:lint)"; } >"$work/setup-nightly/ci.yml"
+{ printf 'name: Nightly\non:\n  schedule:\n    - cron: "0 5 * * *"\njobs:\n'; emit_job e2e "$expr" "$(cache_step "${os_key}-pw-${hash_key}")"; } >"$work/setup-nightly/nightly.yml"
+got="$(python3 -I "$ROOT/tools/adopt.py" setup "$work/setup-nightly" "$work/setup-out5" --expression "$expr" 2>&1)"
+rc_setup=$?
+record "setup: an opted-in job on a schedule-only workflow stays listed" "0/yes/1/no" \
+  "$rc_setup/$(has "$got" 'ROUTED	nightly.yml:e2e')/$(grep -c 'nightly.yml:e2e' "$work/setup-out5/ci.yml")/$([ -f "$work/setup-out5/homefield-routing.yml" ] && echo yes || echo no)"
+record "...and the schedule-only file's cache key gains runner.arch too" "yes/1" \
+  "$(has "$got" 'FILE	nightly.yml')/$(grep -cF "$arch_key" "$work/setup-out5/nightly.yml")"
+# --jobs is an addition on top of what is already routed, not a replacement:
+# lint and test carry the expression and stay listed although --jobs omits
+# them; stderr (the spaced-file note) is kept out of the exact compare.
+got="$(python3 -I "$ROOT/tools/adopt.py" setup "$work/wf-ready" "$work/setup-out6" --expression "$expr" --jobs ci.yml:build 2>"$work/err6")"
+rc_setup=$?
+want="$(printf 'ROUTED\tci.yml:build\nROUTED\tci.yml:lint\nROUTED\tci.yml:test\nFILE\tci.yml')"
+record "setup --jobs: already-routed lint and test stay listed, only build is added" \
+  "0/$want" \
+  "$rc_setup/$got"
+mkdir -p "$work/setup-source"
+{ header; emit_job lint ubuntu-latest "$(printf '      - name: Routing guard\n        uses: i2Dev-com/homefield/routing-guard@v0.3.0\n        with:\n          jobs: |\n            ci.yml:lint')"; } >"$work/setup-source/ci.yml"
+got="$(python3 -I "$ROOT/tools/adopt.py" setup "$work/setup-source" "$work/setup-out7" --expression "$expr" 2>&1)"
+rc_setup=$?
+record "setup: a guard pinned to another release stops the run before staging" "nonzero/yes/no" \
+  "$(nonzero "$rc_setup")/$(has "$got" 'cannot recognize')/$([ -d "$work/setup-out7" ] && echo yes || echo no)"
+mkdir -p "$work/setup-inline"
+{ header; emit_job j ubuntu-latest "$(printf '      - name: Routing guard\n        uses: i2Dev-com/homefield/routing-guard@v0.3.1\n        with:\n          jobs: ci.yml:j')"; emit_job k ubuntu-latest; } >"$work/setup-inline/ci.yml"
+got="$(python3 -I "$ROOT/tools/adopt.py" setup "$work/setup-inline" "$work/setup-out8" --expression "$expr" 2>&1)"
+rc_setup=$?
+record "setup: an inline jobs: value becomes the block form listing the routed job" "0/yes/1/0" \
+  "$rc_setup/$(has "$got" 'ROUTED	ci.yml:k')/$(grep -c 'jobs: |' "$work/setup-out8/ci.yml")/$(grep -cF 'jobs: ci.yml:j' "$work/setup-out8/ci.yml")"
+got="$(python3 -I "$ROOT/tools/adopt.py" setup "$work/wf-twoguards" "$work/setup-out9" --expression "$expr_acme" 2>&1)"
+rc_setup=$?
+record "setup: two passing guards refuse the run rather than pick one" "nonzero/yes/no" \
+  "$(nonzero "$rc_setup")/$(has "$got" 'more than one routing-guard step')/$([ -d "$work/setup-out9" ] && echo yes || echo no)"
+# An edited file is written with LF endings even when the original had CRLF.
+mkdir -p "$work/setup-crlf"
+{ header; emit_job lint ubuntu-latest; } | sed 's/$/\r/' >"$work/setup-crlf/ci.yml"
+got="$(python3 -I "$ROOT/tools/adopt.py" setup "$work/setup-crlf" "$work/setup-out10" --expression "$expr" 2>&1)"
+rc_setup=$?
+record "setup: a CRLF workflow is staged with LF endings" "0/yes/0" \
+  "$rc_setup/$(has "$got" 'ROUTED	ci.yml:lint')/$(grep -c $'\r' "$work/setup-out10/ci.yml")"
+
 # The shell path over the fake gh. wf-ready routes lint and test already;
 # --setup adds the hosted build job. "my flow.yaml" is not routed: a space
 # in the file name is one the guard's jobs: list cannot hold.

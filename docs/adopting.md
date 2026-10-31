@@ -162,11 +162,14 @@ limit is why `--jobs` refuses such names.
 
 The staged files are checked with the very `routing_guard.py` the guard step
 runs, so the pull request cannot open something its own guard would fail.
-`--jobs "ci.yml:lint,..."` routes exactly that list instead of every hosted
-job, and `--label`, `--events`, `--dependabot` and `--fallback` shape the
+Jobs that already carry the expression always stay in the guard's list (it is
+exact, wherever they run), whatever `--jobs` says; `--jobs "ci.yml:lint,..."`
+adds exactly that list of hosted jobs on top, and `--label`, `--events`,
+`--dependabot` and `--fallback` shape the
 expression and the guard as they do for a plain adopt (an existing guard must
 already use them, or the run stops and says so; a guard set to `arch: x64` is
-refused too, the VM being arm64). It exits 1 with "nothing to
+refused too, the VM being arm64). An edited file is written with LF line
+endings even if it had CRLF ones. It exits 1 with "nothing to
 route" when no job qualifies, and with the branch's name when
 `homefield/route-to-local` already exists — merge or delete that pull request
 first.

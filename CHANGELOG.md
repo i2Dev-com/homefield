@@ -23,7 +23,10 @@ fail, such as a new guard in the routing expression, bumps the minor version
   `runner.os` without `runner.arch` in those files gains
   `${{ runner.arch }}`. `--jobs` routes only the listed jobs; a workflow
   whose file name holds a space or a comma is never routed (a guard's
-  `jobs:` list cannot hold it). The staged files are checked with
+  `jobs:` list cannot hold it). Jobs already carrying the expression stay in
+  the guard's list whatever `--jobs` says; a guard this copy does not
+  recognize, or one set to `arch: x64`, is refused before anything is staged.
+  The staged files are checked with
   `routing_guard.py` before anything is sent, the run
   exits 1 with "nothing to route" when no job qualifies, a guard set to
   `arch: x64` is refused (the VM is arm64), and neither the

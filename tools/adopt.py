@@ -129,11 +129,14 @@ def in_block(line, base):
     return not line.strip() or indent_of(line) > base
 
 
-def block_scalar_lines(lines):
+def block_scalar_lines(lines, keys=None):
     """The indexes of the lines that are the text of a block scalar (a
     `run: |` script, a `with: jobs: |` list): not YAML structure, so a `uses:`
     in one is not a step. Same rule as routing_guard.py: blank, or indented
-    deeper than the key that opened it."""
+    deeper than the key that opened it. `keys`, when given, limits this to
+    blocks whose opening key is one of them (`run`), leaving other blocks —
+    such as a cache step's `restore-keys: |` — out, so their lines stay
+    editable."""
     inside = set()
     col = None
     for i, line in enumerate(lines):
@@ -144,7 +147,9 @@ def block_scalar_lines(lines):
                 continue
             col = None
         start = BLOCK_START.match(code)
-        if start:
+        if start and (
+            keys is None or (start.group(3) or "").strip().rstrip(":").strip("'\"") in keys
+        ):
             col = len(start.group(1)) + (len(start.group(2)) if start.group(2) and start.group(3) else 0)
     return inside
 
@@ -592,7 +597,13 @@ def write_lines(path, lines):
 
 def apply_edits(lines, spans):
     """The file text after every (start, end, replacement) span, applied from
-    the bottom up so the spans' line indexes stay valid."""
+    the bottom up so the spans' line indexes stay valid. Refuses overlapping
+    spans rather than splicing them: two kinds of edit reaching for the same
+    line is a planner bug, not something to merge."""
+    by_start = sorted(spans)
+    for first, second in zip(by_start, by_start[1:]):
+        if first[1] > second[0]:
+            raise SetupError(f"the planner produced overlapping edits at lines {first[1]} and {second[0] + 1}")
     out = list(lines)
     for start, end, repl in sorted(spans, key=lambda s: s[0], reverse=True):
         out[start:end] = repl
@@ -619,19 +630,7 @@ def run_script_lines(lines):
     script text rather than a cache step's option, so setup leaves it alone;
     the block under `restore-keys: |` is the option itself and stays editable.
     """
-    inside = set()
-    col = None
-    for i, line in enumerate(lines):
-        code = line.split("#", 1)[0]
-        if col is not None:
-            if not line.strip() or indent_of(line) > col:
-                inside.add(i)
-                continue
-            col = None
-        start = BLOCK_START.match(code)
-        if start and (start.group(3) or "").strip().rstrip(":").strip("'\"") == "run":
-            col = len(start.group(1)) + (len(start.group(2)) if start.group(2) and start.group(3) else 0)
-    return inside
+    return block_scalar_lines(lines, ("run",))
 
 
 def guard_jobs_edit(lines, at, entries):
@@ -730,6 +729,26 @@ def check_guard_options(row, label, events, dependabot, fallback):
             )
 
 
+def routable_jobs(info, expression):
+    """The jobs of one workflow that setup would route: not a reusable
+    workflow call, no always-false `if:`, and a runs-on that already carries
+    the canonical expression or asks for a single GitHub-hosted image today —
+    except a job that runs the guard, which keeps the runner it was given."""
+    out = []
+    for job in info["jobs"]:
+        if job["uses"] or (job["if"] and condition(job["if"][1]) == "false") or not job["runs_on"]:
+            continue
+        value = scalar(job["runs_on"][1])
+        if value == expression:
+            out.append(job)
+            continue
+        if any(job["start"] < g < job["end"] for g in info["guards"]):
+            continue
+        if HOSTED_RUNS.match(value):
+            out.append(job)
+    return out
+
+
 def setup_plan(directory, out, expression, label, events, dependabot, fallback, only):
     """Stage the `homefield adopt --setup` rewrite of the workflows in DIR into
     OUT: every job of a workflow that runs on pull requests that today asks
@@ -752,9 +771,19 @@ def setup_plan(directory, out, expression, label, events, dependabot, fallback, 
             "guards": guard_step_lines(lines),
             "scripts": run_script_lines(lines),
         }
-    usable = [row for row in guards(directory) if row[1] == "ok"]
+    rows = list(guards(directory))
+    usable = [row for row in rows if row[1] == "ok"]
+    sources = [row for row in rows if row[1] == "source"]
     if len(usable) > 1:
         raise SetupError("there is more than one routing-guard step that runs on pull requests; route the jobs by hand (docs/adopting.md, step 3)")
+    if sources:
+        # A guard this copy does not recognize would make plain adopt refuse
+        # the merged tree, so setup refuses here instead of adding a second
+        # guard next to it.
+        raise SetupError(
+            "; ".join(reason for row in sources for reason in row[3])
+            + " setup does not change a guard step it cannot recognize; pin or remove that step, then run again"
+        )
     if usable:
         check_guard_options(usable[0], label, events, dependabot, fallback)
 
@@ -766,43 +795,30 @@ def setup_plan(directory, out, expression, label, events, dependabot, fallback, 
 
     for name in sorted(files):
         info = files[name]
-        if "pull_request" not in info["events"]:
-            continue
         if re.search(r"[\s,]", name):
             # The guard lists jobs as file:job in a text list split on spaces
             # and commas, so a job of such a file can never be listed — it
             # must stay hosted (that is also why adopt --jobs refuses it).
-            hosted = [
-                j
-                for j in info["jobs"]
-                if j["runs_on"]
-                and not j["uses"]
-                and (scalar(j["runs_on"][1]) == expression or HOSTED_RUNS.match(scalar(j["runs_on"][1])))
-            ]
-            if hosted:
+            if routable_jobs(info, expression):
                 print(
                     f"setup: {name}: its jobs are not routed: the file name has a space or comma, which a guard jobs: list cannot hold (docs/adopting.md, step 1)",
                     file=sys.stderr,
                 )
             continue
-        for job in info["jobs"]:
+        pr_file = "pull_request" in info["events"]
+        for job in routable_jobs(info, expression):
             key = f"{name}:{job['id']}"
-            if only and key not in only:
-                continue
-            if job["uses"] or (job["if"] and condition(job["if"][1]) == "false"):
-                continue
-            if not job["runs_on"]:
-                continue
-            line, raw = job["runs_on"]
-            value = scalar(raw)
+            value = scalar(job["runs_on"][1])
             if value == expression:
+                # Already opted in: the guard's list is exact, so this job
+                # stays listed whatever --jobs asks for and whichever events
+                # its workflow runs on.
                 routed.append(key)
                 continue
-            if any(job["start"] < g < job["end"] for g in info["guards"]):
-                continue  # a job that runs the guard keeps the runner it was given
-            if not HOSTED_RUNS.match(value):
+            if not pr_file or (only and key not in only):
                 continue
             routed.append(key)
+            line = job["runs_on"][0]
             indent = " " * indent_of(info["lines"][line - 1])
             edit(name, (line - 1, line, [
                 f"{indent}# Routed to the local HomeField runner (docs/adopting.md)",
@@ -814,7 +830,8 @@ def setup_plan(directory, out, expression, label, events, dependabot, fallback, 
         if missing:
             raise SetupError(
                 "nothing to route: " + ", ".join(missing)
-                + " is not a job with a GitHub-hosted runs-on in a workflow that runs on pull requests"
+                + " cannot be routed — it is not a job of a workflow that runs on pull requests carrying"
+                " a GitHub-hosted runs-on, or already carrying the expression; no pull request was generated"
             )
     if not routed:
         raise SetupError("nothing to route: no job in a workflow that runs on pull requests carries a GitHub-hosted runs-on (docs/adopting.md, step 1)")
