@@ -4,7 +4,9 @@ A checklist for routing a repository's pull-request CI to the local runner,
 once it is installed ([README: Quick start](../README.md#quick-start)).
 Steps 1–4 are edits to the repository's workflows; `homefield adopt` (step 5)
 does the rest of the setup and refuses to switch the repository on until
-those edits are merged.
+those edits are merged. You can write steps 1–4 by hand, or have
+[`homefield adopt --setup`](#let-adopt-write-steps-1-to-4) open a pull request
+that writes them for you.
 
 The repository must be **private** (see the trust boundary in
 [`runbook.md`](runbook.md#trust-boundary)).
@@ -138,6 +140,44 @@ removed by the runner, but anything a step starts itself (`docker run -d`,
 port, so the next job that needs that port fails. Remove such containers in an
 `if: always()` step. If they were started in the background, wait for the
 starting process to exit first.
+
+## Let adopt write steps 1 to 4
+
+`homefield adopt --setup --repo <owner>/<repo>` reads the same workflows a
+plain adopt checks and opens a pull request against the default branch that
+writes steps 2–4 for you:
+
+- every job of a workflow that runs on `pull_request` and asks for a
+  GitHub-hosted image today gets the canonical expression, with a comment
+  pointing here;
+- the routing guard lists exactly those jobs — its `jobs:` block is updated
+  where a guard step already runs on pull requests, otherwise a new
+  `.github/workflows/homefield-routing.yml` holds the checkout and the guard;
+- every `key:`/`restore-keys:` line in those files that uses `runner.os`
+  without `runner.arch` gains `${{ runner.arch }}`.
+
+A workflow whose file name holds a space or a comma is never routed — a
+guard's `jobs:` list cannot hold its jobs — and the run says so; the same
+limit is why `--jobs` refuses such names.
+
+The staged files are checked with the very `routing_guard.py` the guard step
+runs, so the pull request cannot open something its own guard would fail.
+Jobs that already carry the expression always stay in the guard's list (it is
+exact, wherever they run), whatever `--jobs` says; `--jobs "ci.yml:lint,..."`
+adds exactly that list of hosted jobs on top, and `--label`, `--events`,
+`--dependabot` and `--fallback` shape the
+expression and the guard as they do for a plain adopt (an existing guard must
+already use them, or the run stops and says so; a guard set to `arch: x64` is
+refused too, the VM being arm64). An edited file is written with LF line
+endings even if it had CRLF ones. It exits 1 with "nothing to
+route" when no job qualifies, and with the branch's name when
+`homefield/route-to-local` already exists — merge or delete that pull request
+first.
+
+That branch is the whole output: `--setup` adds nothing to the runner group
+and does not set `CI_RUNNER`, so merging it changes how *future* pull requests
+are routed while everything still runs hosted. Review the job list — step 1
+says what to keep hosted — then merge and run step 5.
 
 ## 5. Merge, then run `homefield adopt`
 

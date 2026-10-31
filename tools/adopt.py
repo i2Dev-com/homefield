@@ -34,11 +34,29 @@ does not have.
                             [--fallback F] [--jobs a.yml:x,b.yml:y]
                             the guard step to add to a workflow; an option
                             appears only when it is not the default
+  adopt.py setup DIR OUT --expression EXPR [--label L] [--events E]
+                            [--dependabot D] [--fallback F] [--jobs a.yml:x,...]
+                            stage the `homefield adopt --setup` rewrite (route
+                            every pull-request job on a GitHub-hosted image,
+                            add runner.arch to those files' cache keys, and
+                            make the guard list exactly the routed jobs): DIR
+                            is read, OUT gets every workflow with the changes
+                            applied, and one TAB-separated line is printed per
+                            routed job (`ROUTED<TAB>file:job`) and per written
+                            file (`FILE<TAB>name`). Exit 1 with the reason on
+                            stderr when there is nothing to route.
+  adopt.py contents-payload FILE SHA MESSAGE BRANCH
+                            the JSON body of a Contents API PUT writing FILE
+                            to BRANCH with MESSAGE; SHA is "none" for a new
+                            file
   adopt.py quote TEXT       TEXT percent-encoded for a URL path
 """
 import argparse
+import base64
+import json
 import os
 import re
+import shutil
 import sys
 import urllib.parse
 
@@ -66,6 +84,15 @@ SHA_REF = re.compile(r"[0-9a-fA-F]{40}")
 # What a step that uses some routing guard (any owner, any ref) has in `uses:`.
 STEP_MARKER = "/routing-guard@"
 ACTION_DIR = "./.github/workflows/"
+# The workflow `homefield adopt --setup` writes the guard step into when the
+# repository has none yet.
+SETUP_FILE = "homefield-routing.yml"
+# A GitHub-hosted image name as routing_guard.py's HOSTED reads it (keep the
+# two in step): what a job must ask for today to be routable by setup.
+HOSTED_RUNS = re.compile(
+    r"""^(\[\s*)?(['"]?)(ubuntu|windows|macos)-[a-z0-9._-]+\2(?(1)\s*\])$""",
+    re.IGNORECASE,
+)
 # The trigger options after which a pull request may not run the workflow.
 FILTERS = ("branches", "branches-ignore", "paths", "paths-ignore")
 ON_KEY = re.compile(r"^([\"']?)on\1:\s*(.*?)\s*$")
@@ -102,11 +129,14 @@ def in_block(line, base):
     return not line.strip() or indent_of(line) > base
 
 
-def block_scalar_lines(lines):
+def block_scalar_lines(lines, keys=None):
     """The indexes of the lines that are the text of a block scalar (a
     `run: |` script, a `with: jobs: |` list): not YAML structure, so a `uses:`
     in one is not a step. Same rule as routing_guard.py: blank, or indented
-    deeper than the key that opened it."""
+    deeper than the key that opened it. `keys`, when given, limits this to
+    blocks whose opening key is one of them (`run`), leaving other blocks —
+    such as a cache step's `restore-keys: |` — out, so their lines stay
+    editable."""
     inside = set()
     col = None
     for i, line in enumerate(lines):
@@ -117,7 +147,9 @@ def block_scalar_lines(lines):
                 continue
             col = None
         start = BLOCK_START.match(code)
-        if start:
+        if start and (
+            keys is None or (start.group(3) or "").strip().rstrip(":").strip("'\"") in keys
+        ):
             col = len(start.group(1)) + (len(start.group(2)) if start.group(2) and start.group(3) else 0)
     return inside
 
@@ -288,9 +320,10 @@ def flag(value):
 
 def parse_jobs(lines):
     """The jobs of the workflow: id, line (1-based), first and one-past-last
-    line index, the job-level `if:` and `continue-on-error:` as (line,
-    value), and a job-level `uses:` (a reusable workflow it calls). A job-level key sits at the
-    indent of the job's first child; a step's keys are deeper."""
+    line index, the job-level `if:`, `continue-on-error:` and `runs-on:` as
+    (line, value), and a job-level `uses:` (a reusable workflow it calls). A
+    job-level key sits at the indent of the job's first child; a step's keys
+    are deeper."""
     jobs = []
     top = next((i for i, line in enumerate(lines) if re.match(r"^jobs:\s*(#.*)?$", line)), None)
     if top is None:
@@ -311,7 +344,7 @@ def parse_jobs(lines):
             end = i + 1
             while end < len(lines) and (is_blank(lines[end]) or indent_of(lines[end]) > base):
                 end += 1
-            job = {"id": m.group(1), "line": i + 1, "start": i, "end": end, "if": None, "coe": None, "uses": None}
+            job = {"id": m.group(1), "line": i + 1, "start": i, "end": end, "if": None, "coe": None, "uses": None, "runs_on": None}
             child = next((indent_of(lines[k]) for k in range(i + 1, end) if not is_blank(lines[k])), None)
             for k in range(i + 1, end):
                 km = KEY.match(lines[k])
@@ -322,6 +355,8 @@ def parse_jobs(lines):
                         job["coe"] = (k + 1, km.group(4))
                     elif km.group(3) == "uses":
                         job["uses"] = scalar(km.group(4))
+                    elif km.group(3) == "runs-on" and job["runs_on"] is None:
+                        job["runs_on"] = (k + 1, km.group(4))
             jobs.append(job)
             i = end
             continue
@@ -431,6 +466,13 @@ def option(values, key, default):
     if key not in values:
         return default
     return " ".join(re.split(r"[\s,]+", values[key].strip())) or "-"
+
+
+def opt_words(text):
+    """An option value as a set of words in a fixed order, so `events: push,
+    schedule` and `events: schedule push` compare equal the way the guard
+    reads them."""
+    return " ".join(sorted(t for t in re.split(r"[\s,]+", text or "") if t))
 
 
 def guards(directory):
@@ -543,6 +585,301 @@ def guard_snippet(label, jobs, events=DEFAULT_EVENTS, dependabot=DEFAULT_DEPENDA
     return "\n".join(out)
 
 
+class SetupError(Exception):
+    """Why `homefield adopt --setup` cannot generate a routing pull request;
+    its text is what the user sees."""
+
+
+def write_lines(path, lines):
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lines) + "\n")
+
+
+def apply_edits(lines, spans):
+    """The file text after every (start, end, replacement) span, applied from
+    the bottom up so the spans' line indexes stay valid. Refuses overlapping
+    spans rather than splicing them: two kinds of edit reaching for the same
+    line is a planner bug, not something to merge."""
+    by_start = sorted(spans)
+    for first, second in zip(by_start, by_start[1:]):
+        if first[1] > second[0]:
+            raise SetupError(f"the planner produced overlapping edits at lines {first[1]} and {second[0] + 1}")
+    out = list(lines)
+    for start, end, repl in sorted(spans, key=lambda s: s[0], reverse=True):
+        out[start:end] = repl
+    return out
+
+
+def guard_step_lines(lines):
+    """Indexes of the `uses:` lines of any routing-guard step (any owner, any
+    ref), skipping block-scalar text and comments: the same lines guards()
+    looks at."""
+    text = block_scalar_lines(lines)
+    found = set()
+    for at, line in enumerate(lines):
+        if at in text or line.lstrip().startswith("#"):
+            continue
+        m = USES.match(line)
+        if m and STEP_MARKER in scalar(m.group(3)):
+            found.add(at)
+    return found
+
+
+def run_script_lines(lines):
+    """Indexes of the text of `run: |` scripts. A `key:` line inside one is
+    script text rather than a cache step's option, so setup leaves it alone;
+    the block under `restore-keys: |` is the option itself and stays editable.
+    """
+    return block_scalar_lines(lines, ("run",))
+
+
+def guard_jobs_edit(lines, at, entries):
+    """(start, end, replacement) that makes the `jobs:` list of the
+    routing-guard step whose `uses:` is on line index `at` hold exactly
+    `entries`, or None when the step has no `with:` or `jobs:` this rewrite
+    can keep. A `jobs: |` block keeps its own entry indentation; an inline
+    `jobs: a.yml:x` becomes the block form, which is what adopt reads."""
+    start, end = step_bounds(lines, at)
+    m = USES.match(lines[at])
+    key_indent = len(m.group(1)) + (len(m.group(2)) if m.group(2) else 0)
+    i, at_with = start, None
+    while i < end:
+        km = KEY.match(lines[i])
+        here = len(km.group(1)) + (len(km.group(2)) if km.group(2) else 0) if km else -1
+        if km and km.group(3) == "with" and here == key_indent:
+            at_with = i
+            break
+        i += 1
+    if at_with is None or scalar(lines[at_with].split(":", 1)[1]):
+        return None  # no with:, or `with: {…}` on one line
+    child = jobs_at = rest = None
+    i = at_with + 1
+    while i < end:
+        if is_blank(lines[i]):
+            i += 1
+            continue
+        ind = indent_of(lines[i])
+        if ind <= key_indent:
+            break
+        if child is None:
+            child = ind
+        km = KEY.match(lines[i])
+        if ind == child and km and km.group(3) == "jobs":
+            jobs_at, rest = i, km.group(4)
+            break
+        i += 1
+    if jobs_at is None:
+        return None
+    if re.match(r"^[|>][+-]?\d*\s*(#.*)?$", rest):
+        entry_indent = next(
+            (indent_of(lines[k]) for k in range(jobs_at + 1, end) if not is_blank(lines[k]) and indent_of(lines[k]) > child),
+            child + 2,
+        )
+        last = k = jobs_at + 1
+        while k < end and (is_blank(lines[k]) or indent_of(lines[k]) > child):
+            if not is_blank(lines[k]):
+                last = k
+            k += 1
+        return (jobs_at, last + 1, [lines[jobs_at]] + [" " * entry_indent + e for e in entries])
+    if scalar(rest):
+        return (jobs_at, jobs_at + 1, [" " * child + "jobs: |"] + [" " * (child + 2) + e for e in entries])
+    return None  # a jobs: list continued on following lines in another form
+
+
+def routing_workflow(label, jobs, events, dependabot, fallback):
+    """The workflow `adopt --setup` creates when the repository has no guard:
+    one job, on every pull request, that checks out and runs the guard. The
+    job itself stays on a GitHub-hosted runner: it is the check, not a
+    routed job."""
+    return "\n".join(
+        [
+            "# Checks the routing to the local HomeField runner (docs/adopting.md).",
+            "# Created by `homefield adopt --setup`.",
+            "name: HomeField routing",
+            "on:",
+            "  pull_request:",
+            "",
+            "jobs:",
+            "  routing:",
+            "    runs-on: ubuntu-latest",
+            "    steps:",
+            "      - uses: actions/checkout@v5",
+            guard_snippet(label, jobs, events, dependabot, fallback),
+            "",
+        ]
+    )
+
+
+def check_guard_options(row, label, events, dependabot, fallback):
+    """Refuse a setup run whose flags disagree with the guard already in the
+    repository: setup only lists jobs, it does not re-route on another label
+    or with another fallback. A guard on another architecture is refused too,
+    as plain adopt refuses it: there is no flag for it, the VM is arm64."""
+    where, _status, glabel, _blocks, _warns, gevents, gdependabot, gfallback, garc, _jobs = row
+    if garc != DEFAULT_ARCH:
+        raise SetupError(
+            f"the routing-guard step at {where} uses arch {garc}, but this VM is {DEFAULT_ARCH}: "
+            "a guard for another architecture routes its jobs to a runner this Mac does not have (docs/adopting.md, step 3)"
+        )
+    for opt, got, want in (("label", glabel, label), ("events", gevents, events), ("dependabot", gdependabot, dependabot), ("fallback", gfallback, fallback)):
+        if opt_words(got) != opt_words(want):
+            raise SetupError(
+                f"the routing-guard step at {where} uses {opt} {got}, but this run asks for {want}: setup does not change a guard's options; "
+                f"pass --{opt} {got}, or edit the guard (docs/adopting.md, step 3)"
+            )
+
+
+def routable_jobs(info, expression):
+    """The jobs of one workflow that setup would route: not a reusable
+    workflow call, no always-false `if:`, and a runs-on that already carries
+    the canonical expression or asks for a single GitHub-hosted image today —
+    except a job that runs the guard, which keeps the runner it was given."""
+    out = []
+    for job in info["jobs"]:
+        if job["uses"] or (job["if"] and condition(job["if"][1]) == "false") or not job["runs_on"]:
+            continue
+        value = scalar(job["runs_on"][1])
+        if value == expression:
+            out.append(job)
+            continue
+        if any(job["start"] < g < job["end"] for g in info["guards"]):
+            continue
+        if HOSTED_RUNS.match(value):
+            out.append(job)
+    return out
+
+
+def setup_plan(directory, out, expression, label, events, dependabot, fallback, only):
+    """Stage the `homefield adopt --setup` rewrite of the workflows in DIR into
+    OUT: every job of a workflow that runs on pull requests that today asks
+    for a GitHub-hosted image gets the canonical expression (with a comment
+    pointing at docs/adopting.md), the `runner.os`-only cache keys of the
+    routed files get `${{ runner.arch }}`, and the routing guard lists exactly
+    the routed jobs — its `jobs:` block updated where a usable guard exists,
+    otherwise `.github/workflows/homefield-routing.yml` created. OUT keeps
+    every file, changed or not, so routing_guard.py can check the result
+    before anything is sent. `only`, when not empty, is the set of file:job
+    entries to route instead of all of them. Returns (routed, written), where
+    written names the files that differ or are new."""
+    files = {}
+    for name in workflow_files(directory):
+        lines = read_lines(os.path.join(directory, name))
+        files[name] = {
+            "lines": lines,
+            "events": parse_triggers(lines),
+            "jobs": parse_jobs(lines),
+            "guards": guard_step_lines(lines),
+            "scripts": run_script_lines(lines),
+        }
+    rows = list(guards(directory))
+    usable = [row for row in rows if row[1] == "ok"]
+    sources = [row for row in rows if row[1] == "source"]
+    if len(usable) > 1:
+        raise SetupError("there is more than one routing-guard step that runs on pull requests; route the jobs by hand (docs/adopting.md, step 3)")
+    if sources:
+        # A guard this copy does not recognize would make plain adopt refuse
+        # the merged tree, so setup refuses here instead of adding a second
+        # guard next to it.
+        raise SetupError(
+            "; ".join(reason for row in sources for reason in row[3])
+            + " setup does not change a guard step it cannot recognize; pin or remove that step, then run again"
+        )
+    if usable:
+        check_guard_options(usable[0], label, events, dependabot, fallback)
+
+    routed = []
+    edits = {}
+
+    def edit(name, span):
+        edits.setdefault(name, []).append(span)
+
+    for name in sorted(files):
+        info = files[name]
+        if re.search(r"[\s,]", name):
+            # The guard lists jobs as file:job in a text list split on spaces
+            # and commas, so a job of such a file can never be listed — it
+            # must stay hosted (that is also why adopt --jobs refuses it).
+            if routable_jobs(info, expression):
+                print(
+                    f"setup: {name}: its jobs are not routed: the file name has a space or comma, which a guard jobs: list cannot hold (docs/adopting.md, step 1)",
+                    file=sys.stderr,
+                )
+            continue
+        pr_file = "pull_request" in info["events"]
+        for job in routable_jobs(info, expression):
+            key = f"{name}:{job['id']}"
+            value = scalar(job["runs_on"][1])
+            if value == expression:
+                # Already opted in: the guard's list is exact, so this job
+                # stays listed whatever --jobs asks for and whichever events
+                # its workflow runs on.
+                routed.append(key)
+                continue
+            if not pr_file or (only and key not in only):
+                continue
+            routed.append(key)
+            line = job["runs_on"][0]
+            indent = " " * indent_of(info["lines"][line - 1])
+            edit(name, (line - 1, line, [
+                f"{indent}# Routed to the local HomeField runner (docs/adopting.md)",
+                f"{indent}runs-on: {expression}",
+            ]))
+    routed = sorted(dict.fromkeys(routed))
+    if only:
+        missing = sorted(set(only) - set(routed))
+        if missing:
+            raise SetupError(
+                "nothing to route: " + ", ".join(missing)
+                + " cannot be routed — it is not a job of a workflow that runs on pull requests carrying"
+                " a GitHub-hosted runs-on, or already carrying the expression; no pull request was generated"
+            )
+    if not routed:
+        raise SetupError("nothing to route: no job in a workflow that runs on pull requests carries a GitHub-hosted runs-on (docs/adopting.md, step 1)")
+
+    routed_files = {key.split(":", 1)[0] for key in routed}
+    for hit in cache_keys(directory):
+        name, _, rest = hit.partition(":")
+        if name not in routed_files:
+            continue
+        at = int(rest.split(":", 1)[0]) - 1
+        info = files[name]
+        if at in info["scripts"]:
+            continue  # key-like text inside a run: script is not a cache step
+        old = info["lines"][at]
+        new = re.sub(r"\$\{\{\s*runner\.os\s*\}\}", "${{ runner.os }}-${{ runner.arch }}", old, count=1)
+        if new != old:
+            edit(name, (at, at + 1, [new]))
+
+    guard_new = None
+    if usable:
+        where = usable[0][0]
+        gfile, _, gline = where.rpartition(":")
+        span = guard_jobs_edit(files[gfile]["lines"], int(gline) - 1, routed)
+        if span is None:
+            raise SetupError(f"the routing-guard step at {where} does not have a jobs: list setup can rewrite; edit its jobs: list by hand (docs/adopting.md, step 3)")
+        if files[gfile]["lines"][span[0]:span[1]] != list(span[2]):
+            edit(gfile, span)
+    else:
+        guard_new = SETUP_FILE
+        if guard_new in files:
+            raise SetupError(f".github/workflows/{guard_new} exists but has no routing-guard step; route by hand (docs/adopting.md, step 3)")
+
+    if not edits and guard_new is None:
+        raise SetupError("nothing to route: every job that could route already carries the expression, and the guard already lists it")
+
+    os.makedirs(out, exist_ok=True)
+    for name in sorted(files):
+        if name in edits:
+            write_lines(os.path.join(out, name), apply_edits(files[name]["lines"], edits[name]))
+        else:
+            shutil.copyfile(os.path.join(directory, name), os.path.join(out, name))
+    written = sorted(edits)
+    if guard_new:
+        write_lines(os.path.join(out, guard_new), routing_workflow(label, routed, events, dependabot, fallback).splitlines())
+        written.append(guard_new)
+    return routed, written
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -554,10 +891,24 @@ def main():
     p.add_argument("--dependabot", default=DEFAULT_DEPENDABOT)
     p.add_argument("--fallback", default=DEFAULT_FALLBACK)
     p.add_argument("--jobs", default="")
+    s = sub.add_parser("setup")
+    s.add_argument("dir")
+    s.add_argument("out")
+    s.add_argument("--expression", required=True)
+    s.add_argument("--label", default=DEFAULT_LABEL)
+    s.add_argument("--events", default=DEFAULT_EVENTS)
+    s.add_argument("--dependabot", default=DEFAULT_DEPENDABOT)
+    s.add_argument("--fallback", default=DEFAULT_FALLBACK)
+    s.add_argument("--jobs", default="")
+    c = sub.add_parser("contents-payload")
+    c.add_argument("file")
+    c.add_argument("sha")
+    c.add_argument("message")
+    c.add_argument("branch")
     sub.add_parser("quote").add_argument("text")
     args = ap.parse_args()
 
-    if args.cmd in ("guards", "cache-keys") and not os.path.isdir(args.dir):
+    if args.cmd in ("guards", "cache-keys", "setup") and not os.path.isdir(args.dir):
         print(f"adopt.py: not a directory: {args.dir}", file=sys.stderr)
         return 1
 
@@ -570,6 +921,35 @@ def main():
             print(hit)
     elif args.cmd == "guard-snippet":
         print(guard_snippet(args.label, [j for j in re.split(r"[\s,]+", args.jobs) if j], args.events, args.dependabot, args.fallback))
+    elif args.cmd == "setup":
+        try:
+            routed, written = setup_plan(
+                args.dir,
+                args.out,
+                args.expression,
+                args.label,
+                args.events,
+                args.dependabot,
+                args.fallback,
+                {j for j in re.split(r"[\s,]+", args.jobs) if j},
+            )
+        except SetupError as err:
+            print(err, file=sys.stderr)
+            return 1
+        for key in routed:
+            print(f"ROUTED\t{key}")
+        for name in written:
+            print(f"FILE\t{name}")
+    elif args.cmd == "contents-payload":
+        with open(args.file, "rb") as fh:
+            body = {
+                "message": args.message,
+                "content": base64.b64encode(fh.read()).decode("ascii"),
+                "branch": args.branch,
+            }
+        if args.sha != "none":
+            body["sha"] = args.sha
+        print(json.dumps(body))
     else:
         print(urllib.parse.quote(args.text, safe=""))
     return 0

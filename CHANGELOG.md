@@ -13,6 +13,27 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ### Added
 
+- `homefield adopt --setup --repo <owner>/<repo>` opens a pull request that
+  writes steps 1–4 of `docs/adopting.md` instead of waiting for them: every
+  job of a workflow that runs on `pull_request` and asks for a GitHub-hosted
+  image gets the canonical `runs-on` expression (with a comment pointing at
+  the guide), the routing guard lists exactly those jobs — its `jobs:` block
+  where a guard already runs on pull requests, otherwise a new
+  `.github/workflows/homefield-routing.yml` — and every cache key built from
+  `runner.os` without `runner.arch` in those files gains
+  `${{ runner.arch }}`. `--jobs` routes only the listed jobs; a workflow
+  whose file name holds a space or a comma is never routed (a guard's
+  `jobs:` list cannot hold it). Jobs already carrying the expression stay in
+  the guard's list whatever `--jobs` says; a guard this copy does not
+  recognize, or one set to `arch: x64`, is refused before anything is staged.
+  The staged files are checked with
+  `routing_guard.py` before anything is sent, the run
+  exits 1 with "nothing to route" when no job qualifies, a guard set to
+  `arch: x64` is refused (the VM is arm64), and neither the
+  runner group nor `CI_RUNNER` is touched: after merging, plain
+  `homefield adopt` (step 5) switches the repository on. Needs `gh`,
+  `python3` and write access to the repository; needs no VM.
+  [#124](https://github.com/i2Dev-com/homefield/issues/124)
 - The VM now asks Lima to stop mapping the Mac's loopback into the guest
   (`networkOpts.hostLoopback: false` in `vm/lima.yaml`, from
   [lima-vm/lima#5581](https://github.com/lima-vm/lima/pull/5581)). Only
