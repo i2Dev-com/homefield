@@ -90,7 +90,12 @@ effect only once the VM has been stopped and started again. This is issue
 `install` and `upgrade` do not take the config's word for it. They stand a
 throwaway listener on the Mac's `127.0.0.1` and connect to it from inside the
 guest (`nc` on the Mac does this; without it the probe reports itself
-skipped):
+skipped). The listener answers with a token the probe's own first connect
+must read back, so what answers is provably the probe's listener and not
+some service that already held the port; and inside the guest only a refused
+connect counts as closed — a name that does not resolve, a silent timeout
+and anything else that is not "Connection refused" are treated as unproven,
+never as isolation:
 
 | Probe says | Meaning | What to do |
 |---|---|---|

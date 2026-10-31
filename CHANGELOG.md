@@ -19,7 +19,11 @@ fail, such as a new guard in the routing expression, bumps the minor version
   Lima ≥ 2.3.0 honours it — not a stable release yet; Lima 2.0–2.2 warn
   "unknown field" and ignore the line — so `install` and `upgrade` prove the
   state from inside the guest instead of trusting the config: a throwaway
-  listener on the Mac's `127.0.0.1`, a connect from the guest. Closed is
+  listener on the Mac's `127.0.0.1` serving a token its own connect must
+  read back (so what answers is provably the probe's listener), a connect
+  from the guest, and only bash's own "Connection refused" counted as
+  closed (an unresolved name shares the exit status and is treated as
+  unproven). Closed is
   logged, open warns with the way to close it (and stops the run only when
   the VM's own config asked for the block and the Lima is new enough to
   honour it), and an unprovable probe never reads as closed. Existing VMs
