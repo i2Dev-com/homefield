@@ -68,6 +68,9 @@ portForwards:
 # with 2.2.0's `limactl create`), which is why `bin/homefield` verifies the
 # block from inside the guest instead of trusting this line, and refuses to
 # continue when a VM whose own config asks for it is reachable anyway
-# (docs/runbook.md, "Host loopback exposure").
+# (docs/runbook.md, "Host loopback exposure"). Lima >= 2.3 refuses the ask
+# outright (rather than ignoring it) on a vmType other than vz or on a
+# user-v2 network; this file is vz with the default network, and #21
+# revisits this if that ever changes.
 networkOpts:
   hostLoopback: false

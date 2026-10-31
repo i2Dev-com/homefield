@@ -139,17 +139,19 @@ forwarded to the Mac's `localhost`. Inside the guest, jobs are
 root-equivalent (the `docker` group), which is why the VM and not a user
 account is the boundary.
 
-**The network is partly isolated.** Jobs can reach the internet and your LAN.
-Through `host.lima.internal` they also reach services on the Mac bound to
-`*`; services bound **only to `127.0.0.1`** (local databases, development
-servers, local AI or tool APIs) are blocked on VMs created with Lima ≥ 2.3.0,
-which maps the gateway somewhere harmless instead of onto your loopback
-(`vm/lima.yaml` asks for that with `networkOpts.hostLoopback: false`;
-Lima 2.0–2.2 ignore the ask, and 2.3.0 is not yet a stable release —
-[#18](https://github.com/i2Dev-com/homefield/issues/18)). Install and
-upgrade prove the answer from inside the guest rather than trusting the
-config, and say which state the VM is in. Until Lima 2.3.0 is stable, don't
-run anything on the Mac hosting the runner that the repositories using it
+**The network is partly isolated.** Jobs can reach the internet and your
+LAN. `vm/lima.yaml` asks Lima to stop mapping `host.lima.internal` onto
+your loopback (`networkOpts.hostLoopback: false`): on VMs created with
+Lima ≥ 2.3.0 (not yet a stable release —
+[#18](https://github.com/i2Dev-com/homefield/issues/18)) that gateway
+answers for itself, and nothing bound to the Mac's loopback is reachable
+through it — not the `127.0.0.1`-only services (local databases, development
+servers, local AI or tool APIs) and not `*`-bound ones either; `*`-bound
+services stay reachable through the Mac's LAN address. Lima 2.0–2.2 ignore
+the ask, and on them everything the Mac listens on is still reachable.
+Install and upgrade prove which state a VM is in from inside the guest
+rather than trusting the config. Until Lima 2.3.0 is stable, don't run
+anything on the Mac hosting the runner that the repositories using it
 shouldn't be able to reach.
 
 By default the routing expression keeps pushes, Dependabot and pull requests

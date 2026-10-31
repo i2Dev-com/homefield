@@ -462,15 +462,19 @@ verify_loopback() {
       asks_closed=0
       [ -f "$config" ] && grep -Eq '^[[:space:]]*hostLoopback:[[:space:]]*false' "$config" && asks_closed=1
       if [ "$asks_closed" = 1 ] && lima_at_least 2 3; then
-        die "VM ${INSTANCE} reaches the Mac's loopback through host.lima.internal although its config sets networkOpts.hostLoopback: false; refusing to continue (docs/runbook.md, Host loopback exposure)"
+        # The gate is the limactl binary; a VM still running from before a
+        # Lima upgrade keeps its old gateway, so the message makes the first
+        # step a restart, and only what survives a restart is a broken
+        # boundary.
+        die "VM ${INSTANCE} reaches the Mac's loopback through host.lima.internal although its config sets networkOpts.hostLoopback: false. If the VM has been running since before Lima was upgraded, its gateway is the old one: stop it, start it, and run this again (the mapping is applied at VM start). If it still reaches the loopback after that the boundary is broken — nothing was registered, but a fresh install leaves the VM (and possibly the runner group) behind: docs/runbook.md, Host loopback exposure"
       fi
       if lima_at_least 2 3; then
-        echo "homefield: warning: #18: jobs in VM ${INSTANCE} can reach the Mac's loopback; its config does not ask Lima to block it: recreate the VM, or stop it and set networkOpts.hostLoopback: false with limactl edit (docs/runbook.md, Host loopback exposure)" >&2
+        echo "homefield: warning: #18: jobs in VM ${INSTANCE} can reach the Mac's loopback; its stored config does not show networkOpts.hostLoopback: false (absent, or unreadable): recreate the VM, or stop it and add the setting with limactl edit (docs/runbook.md, Host loopback exposure)" >&2
       else
         echo "homefield: warning: #18: jobs in VM ${INSTANCE} can reach the Mac's loopback; Lima $(limactl --version 2>/dev/null | awk '{print $NF}') ignores networkOpts.hostLoopback — it closes for VMs created on Lima >= 2.3.0 (docs/runbook.md, Host loopback exposure)" >&2
       fi
       ;;
-    closed-1|closed-113|closed-124)
+    closed-1|closed-124)
       log "loopback probe: closed (the guest cannot reach the Mac's 127.0.0.1)"
       ;;
     *)

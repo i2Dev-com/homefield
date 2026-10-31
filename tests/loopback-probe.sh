@@ -119,7 +119,8 @@ echo "loopback probe"
 run_probe PROBE_ANSWER=closed-1 --
 record "refused -> closed, and it passes" "0/yes" "$rc/$(has "$out" 'loopback probe: closed')"
 run_probe PROBE_ANSWER=closed-113 --
-record "host unreachable -> closed too" "0/yes" "$rc/$(has "$out" 'loopback probe: closed')"
+record "an unexpected status: no clear answer, never a false closed" "0/yes/no" \
+  "$rc/$(has "$out" 'no clear answer from VM homefield (answer: closed-113)')/$(has "$out" 'probe: closed')"
 run_probe PROBE_ANSWER=closed-124 --
 record "a timeout -> closed (unreachable is unreachable)" "0/yes" "$rc/$(has "$out" 'loopback probe: closed')"
 
@@ -135,11 +136,11 @@ record "open although the config asks for the block, on a Lima that honours it: 
 set_config "$work/config-plain.yaml" homefield
 run_probe PROBE_ANSWER=open LIMA_VER=2.3.0 --
 record "open on a new Lima with a config that never asked: warned, not fatal" "0/yes" \
-  "$rc/$(has "$out" 'does not ask Lima to block it')"
+  "$rc/$(has "$out" 'does not show networkOpts.hostLoopback: false')"
 set_config "$work/config-allows.yaml" homefield
 run_probe PROBE_ANSWER=open LIMA_VER=2.3.0 --
 record "...an explicit hostLoopback: true is the same" "0/yes" \
-  "$rc/$(has "$out" 'does not ask Lima to block it')"
+  "$rc/$(has "$out" 'does not show networkOpts.hostLoopback: false')"
 set_config "$work/config-blocks.yaml" homefield
 
 NO_NC=1 run_probe --
@@ -170,10 +171,10 @@ record "a garbled answer: no clear answer, quoting it" "0/yes" \
 set_config "$work/config-plain.yaml" other
 run_probe PROBE_ANSWER=open LIMA_VER=2.3.0 HOMEFIELD_INSTANCE=other --
 record "the instance's own config decides, not homefield's" "0/yes" \
-  "$rc/$(has "$out" 'does not ask Lima to block it')"
+  "$rc/$(has "$out" 'does not show networkOpts.hostLoopback: false')"
 run_probe PROBE_ANSWER=open LIMA_VER=2.3.0 HOMEFIELD_INSTANCE=missing-vm --
 record "an instance whose config cannot be read: warned, never fatal" "0/yes" \
-  "$rc/$(has "$out" 'does not ask Lima to block it')"
+  "$rc/$(has "$out" 'does not show networkOpts.hostLoopback: false')"
 
 echo "lima_at_least"
 version_case() {

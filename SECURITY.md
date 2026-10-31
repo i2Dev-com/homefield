@@ -32,11 +32,13 @@ they'd rather not be.
 These are documented and not treated as vulnerabilities; see the
 [trust boundary](docs/runbook.md#trust-boundary):
 
-- **Network:** jobs can reach the internet and the LAN. Through
-  `host.lima.internal` they can reach host services bound to `*`; ones bound
-  to `127.0.0.1` only are blocked for VMs created on Lima ≥ 2.3.0 (not yet a
-  stable release; `networkOpts.hostLoopback: false` in `vm/lima.yaml`) and
-  reachable on older Lima, which ignores that line — `install` and `upgrade`
+- **Network:** jobs can reach the internet and the LAN. On VMs created on
+  Lima ≥ 2.3.0 (not yet a stable release; `networkOpts.hostLoopback: false`
+  in `vm/lima.yaml`) `host.lima.internal` answers from the gateway itself
+  and nothing bound to the host's loopback is reachable through it —
+  `*`-bound services included, though they stay reachable through the
+  host's LAN address. On Lima 2.0–2.2, which ignores that line, even
+  services bound to `127.0.0.1` only are reachable. `install` and `upgrade`
   probe the truth from inside the guest and warn or refuse accordingly
   ([#18](https://github.com/i2Dev-com/homefield/issues/18)).
 - **Public repositories are not supported.** A pull request runs its own
