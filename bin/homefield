@@ -1141,6 +1141,31 @@ group_runner_ids() {
     --jq '.runners[].id' </dev/null 2>/dev/null
 }
 
+# find_runner_group <org> <runner id>: the runner-groups row (name, visibility,
+# allows_public_repositories, id; tab separated) of the group the runner is in,
+# found by asking each group which runners it holds. Status: 0 found (the row
+# on stdout), 1 in none of the groups, 2 in none of the groups that answered
+# (another group's list failed), 3 the groups cannot be listed.
+find_runner_group() {
+  local rows name vis pub gid ids unasked=0
+  rows="$(list_groups_ids "$1" </dev/null)" || return 3
+  while IFS=$'\t' read -r name vis pub gid; do
+    [ -n "$gid" ] || continue
+    if ids="$(group_runner_ids "$1" "$gid")"; then
+      case $'\n'"$ids"$'\n' in
+        *$'\n'"$2"$'\n'*)
+          printf '%s\t%s\t%s\t%s\n' "$name" "$vis" "$pub" "$gid"
+          return 0
+          ;;
+      esac
+    else
+      unasked=1
+    fi
+  done <<<"$rows"
+  [ "$unasked" = 0 ] || return 2
+  return 1
+}
+
 # group_unchecked <group> <why>: the group could not be checked or created.
 # Registering anyway would put the runner in a group nobody has looked at, or
 # fail at the end, so ask first (default no); without a terminal, stop.
@@ -1287,11 +1312,12 @@ ONLINE_PROGRESS_CYCLES=${ONLINE_PROGRESS_CYCLES:-3}
 # wait_online <url> <name> <group>: until the runner shows as online on
 # GitHub, up to about 90 seconds. Never fails: it only reports, because the
 # registration has already happened and GitHub can be slow to list it. The
-# runners list carries the group's id but not its name, so the name is
-# resolved against the runner-groups list; when that cannot be done, the
-# report says what was observed instead of assuming the expected group.
+# runners list does not say which group a runner is in, so once the runner is
+# online an organization's groups are asked for it (find_runner_group); when
+# that cannot be done, the report says what was observed instead of assuming
+# the expected group.
 wait_online() {
-  local url="$1" name="$2" group="$3" scope rows="" n status labels grpid grp="" groups gid gname tries=0 page seen=""
+  local url="$1" name="$2" group="$3" scope org rows="" n status rid labels grp row rc tries=0 page seen=""
   page="$(runners_page "$url")" || exit 1
   if [ -z "$name" ] || ! command -v gh >/dev/null; then
     log "check that the runner is online at ${page}"
@@ -1306,32 +1332,31 @@ wait_online() {
       log "waiting for ${name} (up to $((ONLINE_WAIT_TRIES * ONLINE_WAIT_INTERVAL)) s, waited $((tries * ONLINE_WAIT_INTERVAL)) s)"
     fi
     if ! rows="$(gh api --paginate "${scope}/actions/runners?per_page=100" \
-      --jq '.runners[] | [.name, .status, (.labels | map(.name) | join(",")), .runner_group_id] | @tsv' 2>/dev/null)"; then
+      --jq '.runners[] | [.name, .status, (.id | tostring), (.labels | map(.name) | join(","))] | @tsv' 2>/dev/null)"; then
       log "could not read the runners list with gh; check that the runner is online at ${page}"
       return 0
     fi
-    while IFS=$'\t' read -r n status labels grpid; do
+    while IFS=$'\t' read -r n status rid labels; do
       [ "$n" = "$name" ] || continue
       seen="$status"
       if [ "$status" = online ]; then
         if [[ "$scope" == orgs/* ]]; then
-          if groups="$(gh api --paginate "${scope}/actions/runner-groups?per_page=100" \
-            --jq '.runner_groups[] | [.id, .name] | @tsv' 2>/dev/null)"; then
-            while IFS=$'\t' read -r gid gname; do
-              [ "$gid" = "$grpid" ] && grp="$gname"
-            done <<<"$groups"
-          fi
-          if [ -n "$grp" ]; then
-            if [ "$grp" = "$group" ]; then
-              log "${name} is online: labels ${labels}, group ${grp}"
-            else
-              log "${name} is online: labels ${labels}, group ${grp} (expected ${group})"
-            fi
-          elif [ -n "$grpid" ]; then
-            log "${name} is online: labels ${labels}, group id ${grpid}"
-          else
-            log "${name} is online: labels ${labels}"
-          fi
+          org="${scope#orgs/}"
+          rc=0
+          row="$(find_runner_group "$org" "$rid")" || rc=$?
+          case $rc in
+            0)
+              IFS=$'\t' read -r grp _ <<<"$row"
+              if [ "$grp" = "$group" ]; then
+                log "${name} is online: labels ${labels}, group ${grp}"
+              else
+                log "${name} is online: labels ${labels}, group ${grp} (expected ${group})"
+              fi
+              ;;
+            1) log "${name} is online: labels ${labels}, in none of the runner groups gh listed for ${org}" ;;
+            2) log "${name} is online: labels ${labels}, group not found (gh could not list the runners of every runner group in ${org})" ;;
+            *) log "${name} is online: labels ${labels}, group not checked (gh could not list the runner groups of ${org})" ;;
+          esac
         else
           log "${name} is online: labels ${labels}"
         fi
@@ -1843,7 +1868,7 @@ dg_collect_vm() {
 # organization's runner has one; a repository's (and so a personal account's)
 # registration has none, which is not an error.
 dg_collect_group() {
-  local scope org rows="" name vis pub gid found=0 unasked=0 ids wide="" repos
+  local scope org row name vis pub gid rc wide="" repos
   if [ -z "$DG_URL" ]; then
     DG_GROUP_WHY="$DG_SKIP_WHY"
     [ -n "$DG_GROUP_WHY" ] || DG_GROUP_WHY="the runner's registration was not read"
@@ -1867,27 +1892,19 @@ dg_collect_group() {
     return 0
   fi
   # Reached only after GitHub answered the runner list in time (see above).
-  if ! rows="$(list_groups_ids "$org" </dev/null)"; then
+  # The runner list names no group, so find_runner_group asks each group which
+  # runners it holds.
+  rc=0
+  row="$(find_runner_group "$org" "$DG_ID")" || rc=$?
+  if [ "$rc" = 3 ]; then
     DG_GROUP="not-checked"
     DG_GROUP_WHY="gh could not list the runner groups of ${org} (needs an organization owner with the admin:org scope)"
     dg_warn "runner group not checked: ${DG_GROUP_WHY}; gh auth refresh -h github.com -s admin:org"
     return 0
   fi
-  # The runner list names no group, so ask each group which runners it holds.
-  # A group whose list fails leaves the answer open if the runner is not found.
-  while IFS=$'\t' read -r name vis pub gid; do
-    [ -n "$gid" ] || continue
-    if ids="$(group_runner_ids "$org" "$gid")"; then
-      case $'\n'"$ids"$'\n' in
-        *$'\n'"$DG_ID"$'\n'*) found=1; break ;;
-      esac
-    else
-      unasked=1
-    fi
-  done <<<"$rows"
-  if [ "$found" = 0 ]; then
+  if [ "$rc" != 0 ]; then
     DG_GROUP="not-checked"
-    if [ "$unasked" = 1 ]; then
+    if [ "$rc" = 2 ]; then
       DG_GROUP_WHY="gh could not list the runners of every runner group in ${org}, and the runner is in none of the others"
     else
       DG_GROUP_WHY="the runner (id ${DG_ID}) is in none of the runner groups gh listed for ${org}"
@@ -1895,6 +1912,7 @@ dg_collect_group() {
     dg_warn "runner group not checked: ${DG_GROUP_WHY}"
     return 0
   fi
+  IFS=$'\t' read -r name vis pub gid <<<"$row"
   DG_GROUP="checked"
   DG_GROUP_NAME="$name" DG_GROUP_ID="$gid" DG_GROUP_VIS="$vis" DG_GROUP_PUB="$pub"
   # The same test as ensure_group's. The Default group is open to the whole
