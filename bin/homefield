@@ -2553,8 +2553,13 @@ cmd_reset() {
   R_ON=2
   reset_load_group
   # A running VM can be asked now; a stopped one is started only after the
-  # answer, which makes the plan say so.
-  [ "$vm" != Running ] || reset_inspect
+  # answer, which makes the plan say so. asked_early: the answer is from before
+  # the confirmation, so it is checked again after it.
+  local asked_early=0
+  if [ "$vm" = Running ]; then
+    asked_early=1
+    reset_inspect
+  fi
   if [ "$remove_tool" = 1 ]; then
     wrappers="$(tool_wrappers)"
     dir="$(tool_dir)"
@@ -2596,6 +2601,11 @@ cmd_reset() {
       reset_inspect
     fi
     if [ "$R_REG" = 1 ]; then
+      # The runner stayed online while the plan was read and confirmed, and may
+      # have taken a job since; nothing has been changed yet.
+      if [ "$asked_early" = 1 ] && is_job_running; then
+        die "a job started on ${INSTANCE} while you were deciding; reset when it is idle (no runner was touched)"
+      fi
       # Plain command, not a condition: a failure here ends reset with the VM
       # kept and the runner's service back, and nothing after it is done.
       deregister_runner "$R_URL" "$R_ID" "$R_ON"

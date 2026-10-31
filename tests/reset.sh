@@ -39,7 +39,11 @@ esac'
 stub chown 'exit 0'
 stub id 'case "$1" in -u) echo 0 ;; *) exec /usr/bin/id "$@" ;; esac'
 stub pgrep 'case "$*" in *"[R]unner.Worker"*) ;; *) exit 0 ;; esac
-case "${JOB:-idle}" in running) exit 0 ;; *) exit 1 ;; esac'
+case "${JOB:-idle}" in
+  running) exit 0 ;;
+  later) n="$(cat "$WORK/pgrep-n" 2>/dev/null || echo 0)"; echo $((n + 1)) >"$WORK/pgrep-n"; [ "$n" -ge 1 ] ;;
+  *) exit 1 ;;
+esac'
 stub systemctl 'echo "systemctl $*" >>"$LOG"
 case "$1" in
   stop) [ -e "$UNITS/$2" ] || exit 5; rm -f "$HOME_DIR/active" ;;
@@ -80,7 +84,7 @@ printf 'Default\tall\tfalse\t1\nHomeField-CI\tselected\tfalse\t7\n' >"$work/grou
 # What a runner directory has: the scripts the runner ships, with the service
 # installed and the runner registered (as tests/uninstall.sh).
 fresh() {
-  rm -rf "${work:?}/runner" "$units" "$state" "$work/log"
+  rm -rf "${work:?}/runner" "$units" "$state" "$work/log" "$work/pgrep-n"
   mkdir -p "$home" "$units"
   : >"$home/.runner"
   echo "$unit" >"$home/.service"
@@ -324,6 +328,17 @@ record "reset refuses and changes nothing" "1/yes/0/0/0/0/registered/unit/.servi
 fresh
 run JOB=running TTY=1 ANSWER=y HOMEFIELD_YES= --
 record "...before asking anything" "1/no" "$rc/$(has "$out" 'Remove all of the above')"
+
+echo "a job starts while the plan is being confirmed:"
+fresh
+set_state acme/homefield-ci/7
+run JOB=later --
+record "reset stops after the confirmation, before touching the runner" "1/yes/0/0/0/0/registered/unit/.service/active/state" "$rc/$(has "$out" 'a job started on resettest while you were deciding')/$(nothing_changed)/$(has_state)"
+record "...it asked twice: before the plan and after the confirmation" "2" "$(cat "$work/pgrep-n")"
+fresh
+set_state acme/homefield-ci/7
+run JOB=later VM=Stopped --
+record "a stopped VM is inspected once, after it starts: no second check" "0/1" "$rc/$(cat "$work/pgrep-n")"
 
 echo "the answer to the question:"
 fresh

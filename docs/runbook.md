@@ -731,7 +731,9 @@ It prints a plan and asks `y/N` before changing anything; without a terminal
 and without `HOMEFIELD_YES=1` (exactly `1`) it stops and changes nothing. When
 there is nothing to undo (no VM, no runner group recorded as created by
 install) it says so, exits 0 and asks nothing. A job running on the runner
-makes it stop first, as `uninstall` does, before anything is asked or changed.
+makes it stop first, as `uninstall` does, before anything is asked or changed;
+it asks again after you confirm, because the runner stays online while you
+read the plan, and stops (nothing changed) if a job started in the meantime.
 A VM Lima cannot describe, or a guest that cannot be asked whether the runner
 is registered, stops it too (nothing changed); for a VM that will not start,
 the message names `limactl delete --force <name>`, after removing its runner

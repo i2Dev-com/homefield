@@ -18,7 +18,8 @@ fail, such as a new guard in the routing expression, bumps the minor version
   `uninstall` that stopped partway, a VM deleted by hand), and is a no-op that
   exits 0 when there is nothing to undo. It lists what it will do and asks
   `y/N` (`HOMEFIELD_YES=1` answers yes; without a terminal and without it, it
-  stops and changes nothing), refuses while a job is running, deregisters the
+  stops and changes nothing), refuses while a job is running (checked again
+after the confirmation, as the runner stays online meanwhile), deregisters the
   runner (only the VM's copy of the registration when GitHub no longer lists
   it), deletes the VM, and deletes the runner group when this install created
   it, ending with a report of what was removed, kept or failed. The group is
