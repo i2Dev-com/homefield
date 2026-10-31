@@ -648,17 +648,15 @@ is_registered() {
 # runner that has not connected for more than 14 days, and the VM's .runner
 # stays (#76). Matched by id: another Mac can register the name again. Never
 # prompts, status calls it. On 0 it also leaves what GitHub says about that
-# runner in RUNNER_GH_STATUS (online/offline), RUNNER_GH_BUSY (true/false) and
-# RUNNER_GH_GROUP (its runner group's id; empty for a repository's runner),
-# which diagnose reports; status ignores them.
+# runner in RUNNER_GH_STATUS (online/offline) and RUNNER_GH_BUSY (true/false),
+# which diagnose reports; status ignores them. (The list does not say which
+# runner group a runner is in; group_of_runner asks the groups.)
 RUNNER_GH_STATUS=""
 RUNNER_GH_BUSY=""
-RUNNER_GH_GROUP=""
 runner_on_github() {
-  local scope ids id st busy grp rc=0
+  local scope ids id st busy rc=0
   RUNNER_GH_STATUS=""
   RUNNER_GH_BUSY=""
-  RUNNER_GH_GROUP=""
   [ -n "$2" ] && command -v gh >/dev/null || return 2
   scope="$(api_scope "$1" 2>/dev/null)" || return 2
   # The killed-by-signal case is told from a plain failure by the exit code
@@ -667,7 +665,7 @@ runner_on_github() {
   # mean "not checked", and only the status wording differs.
   local tmp pid timer
   tmp="$(mktemp)" || return 2
-  gh api --hostname github.com --paginate "${scope}/actions/runners?per_page=100" --jq '.runners[] | [.id, .status, .busy, .runner_group_id] | @tsv' </dev/null >"$tmp" 2>/dev/null &
+  gh api --hostname github.com --paginate "${scope}/actions/runners?per_page=100" --jq '.runners[] | [.id, .status, .busy] | @tsv' </dev/null >"$tmp" 2>/dev/null &
   pid=$!
   # >/dev/null on the timer matters: sleep inherits stdout, and a caller
   # that runs status inside $(...) would wait for the whole timeout before
@@ -680,11 +678,10 @@ runner_on_github() {
   rm -f "$tmp"
   [ "$rc" -le 128 ] || return 3
   [ "$rc" = 0 ] || return 2
-  while IFS=$'\t' read -r id st busy grp; do
+  while IFS=$'\t' read -r id st busy; do
     if [ "$id" = "$2" ]; then
       RUNNER_GH_STATUS="$st"
       RUNNER_GH_BUSY="$busy"
-      RUNNER_GH_GROUP="$grp"
       return 0
     fi
   done <<<"$ids"
@@ -1041,6 +1038,14 @@ list_groups_ids() {
 group_repositories() {
   gh api --paginate "orgs/${1}/actions/runner-groups/${2}/repositories?per_page=100" \
     --jq '.repositories[].full_name' </dev/null 2>/dev/null
+}
+
+# group_runner_ids <org> <group id>: the ids of the runners in a runner group,
+# one per line. GitHub's runner list does not say which group a runner is in,
+# so the groups are asked instead.
+group_runner_ids() {
+  gh api --paginate "orgs/${1}/actions/runner-groups/${2}/runners?per_page=100" \
+    --jq '.runners[].id' </dev/null 2>/dev/null
 }
 
 # group_unchecked <group> <why>: the group could not be checked or created.
@@ -1721,7 +1726,7 @@ dg_collect_vm() {
 # organization's runner has one; a repository's (and so a personal account's)
 # registration has none, which is not an error.
 dg_collect_group() {
-  local scope org rows="" name vis pub gid found=0 wide="" repos
+  local scope org rows="" name vis pub gid found=0 unasked=0 ids wide="" repos
   if [ -z "$DG_URL" ]; then
     DG_GROUP_WHY="$DG_SKIP_WHY"
     [ -n "$DG_GROUP_WHY" ] || DG_GROUP_WHY="the runner's registration was not read"
@@ -1744,12 +1749,6 @@ dg_collect_group() {
     DG_GROUP_WHY="GitHub did not list the runner, so its group is unknown"
     return 0
   fi
-  if [ -z "$RUNNER_GH_GROUP" ]; then
-    DG_GROUP="not-checked"
-    DG_GROUP_WHY="GitHub did not say which group the runner is in"
-    dg_warn "runner group not checked: ${DG_GROUP_WHY}"
-    return 0
-  fi
   # Reached only after GitHub answered the runner list in time (see above).
   if ! rows="$(list_groups_ids "$org" </dev/null)"; then
     DG_GROUP="not-checked"
@@ -1757,14 +1756,25 @@ dg_collect_group() {
     dg_warn "runner group not checked: ${DG_GROUP_WHY}; gh auth refresh -h github.com -s admin:org"
     return 0
   fi
+  # The runner list names no group, so ask each group which runners it holds.
+  # A group whose list fails leaves the answer open if the runner is not found.
   while IFS=$'\t' read -r name vis pub gid; do
-    [ "$gid" = "$RUNNER_GH_GROUP" ] || continue
-    found=1
-    break
+    [ -n "$gid" ] || continue
+    if ids="$(group_runner_ids "$org" "$gid")"; then
+      case $'\n'"$ids"$'\n' in
+        *$'\n'"$DG_ID"$'\n'*) found=1; break ;;
+      esac
+    else
+      unasked=1
+    fi
   done <<<"$rows"
   if [ "$found" = 0 ]; then
     DG_GROUP="not-checked"
-    DG_GROUP_WHY="the runner's group (id ${RUNNER_GH_GROUP}) is not among the groups gh listed"
+    if [ "$unasked" = 1 ]; then
+      DG_GROUP_WHY="gh could not list the runners of every runner group in ${org}, and the runner is in none of the others"
+    else
+      DG_GROUP_WHY="the runner (id ${DG_ID}) is in none of the runner groups gh listed for ${org}"
+    fi
     dg_warn "runner group not checked: ${DG_GROUP_WHY}"
     return 0
   fi

@@ -74,8 +74,8 @@ case "$1" in
 esac
 EOF
 # gh answers the rows the code's --jq filters would produce: the runners GitHub
-# lists (GH_RUNNERS), the groups (GH_GROUPS) and a group's repositories
-# (GH_REPOS), each failing on its own switch. GH_SLEEP=1 black-holes the call.
+# lists (GH_RUNNERS: id, status, busy), the groups (GH_GROUPS), the runners of
+# a group (GH_GRP_<id>) and a group's repositories (GH_REPOS), each failing on its own switch. GH_SLEEP=1 black-holes the call.
 cat >"$stubs/gh" <<'EOF'
 #!/bin/sh
 echo "gh $*" >>"$CALLS"
@@ -90,6 +90,16 @@ case "$*" in
   *"/runner-groups?"*)
     [ -z "${GH_GROUPS_FAIL:-}" ] || exit 1
     printf '%b' "${GH_GROUPS-}"
+    ;;
+  *"/runner-groups/"*"/runners?"*)
+    # The ids of the runners in one group: GH_GRP_<group id>, or a failure.
+    # (the stub-only PATH has no sed: plain parameter expansion)
+    all="$*"
+    rest="${all#*/runner-groups/}"
+    gid="${rest%%/*}"
+    [ -z "${GH_GRP_FAIL:-}" ] || exit 1
+    eval "ids=\${GH_GRP_$gid-}"
+    printf '%b' "$ids"
     ;;
   *"/repositories?"*)
     [ -z "${GH_REPOS_FAIL:-}" ] || exit 1
@@ -163,7 +173,7 @@ called() { grep -c -e "$1" "$calls" || true; }
 # A healthy organization runner in the group homefield-ci, which admits two
 # repositories.
 org_groups='Default\tall\tfalse\t1\nhomefield-ci\tselected\tfalse\t7\n'
-healthy=(GH_RUNNERS='41\tonline\ttrue\t7\n42\tonline\tfalse\t7\n' GH_GROUPS="$org_groups"
+healthy=(GH_RUNNERS='41\tonline\ttrue\n42\tonline\tfalse\n' GH_GROUPS="$org_groups" GH_GRP_1='' GH_GRP_7='41\n42\n'
   GH_REPOS='acme/app\nacme/web\n' GUEST_PKGS='libpq-dev ')
 
 echo "healthy:"
@@ -180,13 +190,13 @@ record "...and the repositories in it" "yes" "$(has "$out" '  - Repositories in 
 record "...the prerequisites, from preflight's checks" "yes/yes/yes" "$(has "$out" 'Prerequisites:')/$(has "$out" '  - OK    Lima 2.2.0')/$(has "$out" '  - OK    gh authenticated as stub-user (admin:org scope)')"
 record "...no problems and no notes" "no/no" "$(has "$out" 'problem')/$(has "$out" 'Note:')"
 record "...Summary is the last line" "Summary: healthy." "$(printf '%s\n' "$out" | tail -n 1)"
-record "...asked GitHub for the runner, then the groups, then the group's repositories" "1/1/1" "$(called 'orgs/acme/actions/runners?')/$(called 'orgs/acme/actions/runner-groups?')/$(called 'orgs/acme/actions/runner-groups/7/repositories')"
+record "...asked GitHub for the runner, the groups, who is in the runner's group, then its repositories" "1/1/1/1" "$(called 'orgs/acme/actions/runners?')/$(called 'orgs/acme/actions/runner-groups?')/$(called 'orgs/acme/actions/runner-groups/7/runners?')/$(called 'orgs/acme/actions/runner-groups/7/repositories')"
 record "...nothing on stderr" "" "$err"
 
-diag "${healthy[@]}" GH_RUNNERS='42\tonline\ttrue\t7\n' --
+diag "${healthy[@]}" GH_RUNNERS='42\tonline\ttrue\n' --
 record "a runner running a job: listed busy, still healthy" "0/yes" "$rc/$(has "$out" '  - On GitHub: listed (online, busy)')"
 
-diag GH_RUNNERS='42\tonline\tfalse\t7\n' GH_GROUPS="$org_groups" GH_REPOS='' --
+diag GH_RUNNERS='42\tonline\tfalse\n' GH_GRP_7='42\n' GH_GROUPS="$org_groups" GH_REPOS='' --
 record "the group admits no repository yet: still healthy, with the next step" "0/yes/yes/yes" \
   "$rc/$(has "$out" '  - Repositories in group: none (run '"'"'bin/homefield adopt --repo <owner>/<repo>'"'"')')/$(has "$out" 'Summary: healthy.')/$(has "$out" '  Next: no repository is in runner group homefield-ci yet: bin/homefield adopt --repo <owner>/<repo>')"
 
@@ -259,11 +269,11 @@ record "settings that cannot be read: a problem, the rest still reported" "1/yes
 
 echo "GitHub (#76, #103):"
 guest_fs
-diag "${healthy[@]}" GH_RUNNERS='41\tonline\tfalse\t7\n420\tonline\tfalse\t7\n4\tonline\tfalse\t7\n' --
+diag "${healthy[@]}" GH_RUNNERS='41\tonline\tfalse\n420\tonline\tfalse\n4\tonline\tfalse\n' --
 record "registered but GitHub does not list it: exits 1, matching the id whole" "1/yes/no" "$rc/$(has "$out" '  - On GitHub: NOT listed')/$(has "$out" 'listed (online')"
 record "...with the way to register it again, under its old name" "yes" "$(has "$out" 'Fix: bin/homefield uninstall --instance homefield --keep-vm, then bin/homefield install --instance homefield --url https://github.com/acme --name my-mac-homefield')"
 record "...the group is not looked up for a runner GitHub does not list" "yes/0" "$(has "$out" '  - Group: skipped (GitHub did not list the runner, so its group is unknown)')/$(called 'runner-groups')"
-diag "${healthy[@]}" GH_RUNNERS='42\toffline\tfalse\t7\n' --
+diag "${healthy[@]}" GH_RUNNERS='42\toffline\tfalse\n' --
 record "listed but offline: exits 1" "1/yes/yes" "$rc/$(has "$out" '  - On GitHub: listed (offline, idle)')/$(has "$out" 'GitHub lists the runner my-mac-homefield as offline')"
 diag "${healthy[@]}" GH_SLEEP=1 HOMEFIELD_GH_TIMEOUT=1 --
 record "gh stalls past the timeout: not checked, not a problem" "0/yes/yes" "$rc/$(has "$out" '  - On GitHub: not checked (timed out after 1s; the network may be down)')/$(has "$out" 'Summary: healthy as far as it could be checked.')"
@@ -283,19 +293,21 @@ record "a group open to every private repository: exits 1" "1/yes" "$rc/$(has "$
 diag "${healthy[@]}" GH_GROUPS='homefield-ci\tselected\ttrue\t7\n' --
 record "selected repositories but public ones allowed: exits 1, public ON" "1/yes/yes" "$rc/$(has "$out" 'wider than it should be: public repositories can use it')/$(has "$out" '  - Group: homefield-ci (selected repositories, public on)')"
 record "...the repositories are still listed" "yes" "$(has "$out" '  - Repositories in group: acme/app, acme/web')"
-diag "${healthy[@]}" GH_RUNNERS='42\tonline\tfalse\t1\n' --
+diag "${healthy[@]}" GH_RUNNERS='42\tonline\tfalse\n' GH_GRP_1='42\n' GH_GRP_7='' --
 record "the Default group: a note, not a problem (the Free plan has nothing else)" "0/yes/no" "$rc/$(has "$out" '  Note: runner group Default: every repository in acme can use it; right only if you trust every repository')/$(has "$out" 'Summary: 1 problem')"
-diag "${healthy[@]}" GH_RUNNERS='42\tonline\tfalse\t1\n' GH_GROUPS='Default\tall\ttrue\t1\n' --
+diag "${healthy[@]}" GH_RUNNERS='42\tonline\tfalse\n' GH_GRP_1='42\n' GH_GRP_7='' GH_GROUPS='Default\tall\ttrue\t1\n' --
 record "...unless it allows public repositories: then it is a problem" "1/yes" "$rc/$(has "$out" 'runner group Default is wider than it should be: every repository in acme can use it, and public repositories can use it')"
 diag "${healthy[@]}" GH_GROUPS_FAIL=1 --
 record "gh cannot list the groups: a note with the scope to add, not a problem" "0/yes/yes" "$rc/$(has "$out" '  - Group: not checked (gh could not list the runner groups of acme')/$(has "$out" 'gh auth refresh -h github.com -s admin:org')"
-diag "${healthy[@]}" GH_GROUPS='Default\tall\tfalse\t1\n' --
-record "the runner's group is not among those listed: not checked" "0/yes" "$rc/$(has "$out" "the runner's group (id 7) is not among the groups gh listed")"
+diag "${healthy[@]}" GH_GRP_7='41\n' --
+record "the runner is in none of the groups listed: not checked, a note" "0/yes/yes/0" "$rc/$(has "$out" "the runner (id 42) is in none of the runner groups gh listed for acme")/$(has "$out" '  Note: runner group not checked')/$(called '/repositories?')"
+diag "${healthy[@]}" GH_GRP_FAIL=1 --
+record "gh cannot list any group's runners: not checked, a note naming that" "0/yes/0" "$rc/$(has "$out" 'gh could not list the runners of every runner group in acme')/$(called '/repositories?')"
 diag "${healthy[@]}" GH_REPOS_FAIL=1 --
 record "gh cannot list the group's repositories: the group is shown, the list not checked" "0/yes/yes" "$rc/$(has "$out" '  - Group: homefield-ci (selected repositories, public off)')/$(has "$out" '  - Repositories in group: not checked (gh could not list the repositories of runner group homefield-ci)')"
 
 echo "a repository-scoped registration:"
-repo_rows=(GH_RUNNERS='42\tonline\tfalse\t\n' SETTING_OUT='my-mac-homefield\nhttps://github.com/acme/app\n42\n')
+repo_rows=(GH_RUNNERS='42\tonline\tfalse\n' SETTING_OUT='my-mac-homefield\nhttps://github.com/acme/app\n42\n')
 diag "${repo_rows[@]}" --
 record "no runner groups: n/a, not an error, exits 0" "0/yes/yes" "$rc/$(has "$out" '  - Group: n/a (repository-scoped registration)')/$(has "$out" 'Summary: healthy.')"
 record "...GitHub asked for the repository's runners, and for no group" "1/0" "$(called 'repos/acme/app/actions/runners?')/$(called 'runner-groups')"
@@ -380,7 +392,7 @@ else
     "$(parse 'import json,sys; g=json.load(sys.stdin)["github"]; print(g["scope"], g["group"]["state"], g["group"]["name"], g["group"]["visibility"], g["group"]["allows_public"], g["group"]["repositories"], sep="/")')"
   record "...the six prerequisites, all ok" "6/ok" "$(parse 'import json,sys; p=json.load(sys.stdin)["prerequisites"]; print(len(p), "/".join(sorted({x["status"] for x in p})), sep="/")')"
 
-  diag "${healthy[@]}" GH_RUNNERS='42\tonline\tfalse\t7\n' GH_REPOS='' -- --json
+  diag "${healthy[@]}" GH_RUNNERS='42\tonline\tfalse\n' GH_REPOS='' -- --json
   record "an empty group: healthy, an empty list, the hint" "True/[]/1" "$(parse 'import json,sys; d=json.load(sys.stdin); print(d["healthy"], d["github"]["group"]["repositories"], len(d["hints"]), sep="/")')"
 
   diag LIMA_STATUS=Stopped "${healthy[@]}" -- --json
@@ -406,13 +418,13 @@ else
   weird_name=$'ru"nn\\er\001'
   weird_group=$'gr"oup\\'
   guest_fs
-  diag GH_RUNNERS='41\tonline\tfalse\t7\n' SETTING_OUT='ru"nn\\er\001\nhttps://github.com/acme\n42\n' -- --json
+  diag GH_RUNNERS='41\tonline\tfalse\n' SETTING_OUT='ru"nn\\er\001\nhttps://github.com/acme\n42\n' -- --json
   record "awkward runner name: still valid JSON, and the name round-trips" "0/$weird_name" \
     "$(parse 'import json,sys; json.load(sys.stdin)' >/dev/null 2>&1; echo $?)/$(parse 'import json,sys; print(json.load(sys.stdin)["vm"]["runner"]["name"], end="")')"
   record "...in a problem's text too (the NOT listed fix carries the name)" "True" \
     "$(parse 'import json,sys; d=json.load(sys.stdin); print(any("ru\"nn\\er\x01" in p["fix"] for p in d["problems"]))')"
   guest_fs
-  diag GH_RUNNERS='42\tonline\tfalse\t7\n' GH_GROUPS="Default\tall\tfalse\t1\ngr\"oup\\\\\tselected\tfalse\t7\n" GH_REPOS='acme/a"pp\nacme/b\\c\n' -- --json
+  diag GH_RUNNERS='42\tonline\tfalse\n' GH_GRP_7='42\n' GH_GROUPS="Default\tall\tfalse\t1\ngr\"oup\\\\\tselected\tfalse\t7\n" GH_REPOS='acme/a"pp\nacme/b\\c\n' -- --json
   record "awkward group and repository names: valid JSON, round-tripping" "0/$weird_group/['acme/a\"pp', 'acme/b\\\\c']" \
     "$(parse 'import json,sys; json.load(sys.stdin)' >/dev/null 2>&1; echo $?)/$(parse 'import json,sys; g=json.load(sys.stdin)["github"]["group"]; print(g["name"], g["repositories"], sep="/", end="")')"
 fi
@@ -429,9 +441,13 @@ else
   diag "${healthy[@]}" --
   runners_filter="$(grep -e 'actions/runners?' "$calls" | head -n 1 | sed 's/.* --jq //')"
   repos_filter="$(grep -e '/repositories?' "$calls" | head -n 1 | sed 's/.* --jq //')"
-  runners_json='{"runners":[{"id":41,"name":"other","status":"online","busy":true,"runner_group_id":7,"labels":[]},{"id":42,"name":"mine","status":"offline","busy":false,"runner_group_id":7,"labels":[]}]}'
-  record "runner filter: id, status, busy and group per runner" $'41\tonline\ttrue\t7|42\toffline\tfalse\t7' \
+  # The shape GitHub returns for an organization's runners: no runner_group_id.
+  runners_json='{"runners":[{"id":41,"name":"other","os":"Linux","status":"online","busy":true,"labels":[]},{"id":42,"name":"mine","os":"Linux","status":"offline","busy":false,"labels":[]}]}'
+  record "runner filter: id, status and busy per runner" $'41\tonline\ttrue|42\toffline\tfalse' \
     "$(printf '%s' "$runners_json" | jq -r "$runners_filter" | tr '\n' '|' | sed 's/|$//')"
+  group_runners_filter="$(grep -e 'runner-groups/.*/runners?' "$calls" | head -n 1 | sed 's/.* --jq //')"
+  record "group runners filter: the ids" "41|42" \
+    "$(printf '%s' '{"total_count":2,"runners":[{"id":41,"name":"other","status":"online","busy":true},{"id":42,"name":"mine","status":"offline","busy":false}]}' | jq -r "$group_runners_filter" | tr '\n' '|' | sed 's/|$//')"
   record "repository filter: full names" "acme/app|acme/web" \
     "$(printf '%s' '{"total_count":2,"repositories":[{"id":1,"full_name":"acme/app"},{"id":2,"full_name":"acme/web"}]}' | jq -r "$repos_filter" | tr '\n' '|' | sed 's/|$//')"
 fi
