@@ -16,6 +16,7 @@ bash tests/loopback-probe.sh       # the #18 host-loopback probe: closed, open a
 bash tests/provision-recovery.sh   # provision.sh restarts a runner it stopped, when it fails
 bash tests/uninstall.sh            # `bin/homefield uninstall` gives the service back when removal fails
 bash tests/status.sh               # `bin/homefield status` reports on when the runner's settings can't be read, and whether GitHub lists the runner
+bash tests/diagnose.sh             # `bin/homefield diagnose [--json]`: the read-only report, its problems and fixes
 bash tests/memory-summary.sh       # `bin/homefield memory` summary
 bash tests/report.sh               # `bin/homefield report`
 bash tests/install-sh.sh           # install.sh

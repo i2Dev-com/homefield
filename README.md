@@ -25,7 +25,7 @@ It has three parts:
   credentials. It does have network access, including to the Mac's own
   services ([Security model](#security-model)).
 - **A one-command setup** ([`install.sh`](install.sh), then
-  [`bin/homefield`](bin/homefield)): install, upgrade, status, uninstall.
+  [`bin/homefield`](bin/homefield)): install, upgrade, status, diagnose, uninstall.
 - **A routing guard** ([`routing-guard`](routing-guard/action.yml)): a
   GitHub Action that fails CI unless every job that can reach the runner uses
   the one reviewed `runs-on` expression, with its safety guards, and the set of
@@ -65,7 +65,11 @@ From a checkout, with Lima ≥ 2.0, run `bin/homefield install --url
 https://github.com/<org>` instead. Running the one-liner again upgrades the
 tool and leaves an existing VM alone; `homefield upgrade` updates the VM,
 `homefield version` says when a newer release exists, and `homefield status`
-shows the runner and whether GitHub still lists it.
+shows the runner and whether GitHub still lists it. When something is wrong,
+`homefield diagnose` (`--json` for scripts) reads everything in one report: the
+VM, the runner and whether GitHub lists it, the runner group, and the
+prerequisites. It names each problem with its fix command, exits 1 on any
+problem, and only reads: it never starts, stops or changes anything.
 
 Before a checkout install, `homefield preflight` reports on everything the tool
 needs: macOS, Apple Silicon, Lima ≥ 2.0, gh (logged in; the `admin:org` scope is

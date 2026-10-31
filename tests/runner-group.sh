@@ -36,8 +36,10 @@ case "$*" in
     if [ -n "${GH_LIST_FAIL:-}" ]; then echo '{"message":"Must have admin rights"}'; echo "gh: HTTP 403" >&2; exit 1; fi
     cat "$GH_GROUPS"
     ;;
-  *'.runners[].id'*)
-    # runner_on_github: the ids GitHub lists (GH_IDS), or a failed list.
+  *'.runners[] | [.id, .status, .busy'*)
+    # runner_on_github: the ids GitHub lists (GH_IDS; its filter also asks for
+    # each runner's status and busy flag, which these rows leave out), or
+    # a failed list.
     if [ -n "${GH_RUNNERS_FAIL:-}" ]; then echo '{"message":"Not Found"}'; exit 1; fi
     printf '%b' "${GH_IDS:-}"
     ;;

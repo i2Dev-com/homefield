@@ -352,6 +352,16 @@ gh run rerun <run-id> --repo <owner>/<repo>
 
 ## Failure modes
 
+Not sure which row applies? `bin/homefield diagnose` checks the VM, the runner
+(including whether GitHub lists it, online or offline, busy or idle), the
+runner group and the prerequisites in one read-only pass, and ends with
+"Summary:": either healthy, or each problem with the command that fixes it. It
+never starts the VM or changes anything, and it skips the checks inside a
+stopped VM (saying so). It exits 0 when healthy and 1 on any problem;
+`bin/homefield diagnose --json` prints only JSON on stdout, with a `healthy`
+boolean and a `problems` array, for scripts. Add `--instance <name>` for a
+non-default VM.
+
 | Symptom | Cause | What happens | Recovery |
 |---|---|---|---|
 | PR job "Waiting for a runner to pick up this job" | VM stopped, Mac asleep or offline, runner service down | The PR's check waits in the queue, and after 24 h GitHub fails it. By default merges and deploys are unaffected, because pushes run hosted; with `push` (or `workflow_dispatch`, `schedule`) in `events`, those jobs wait too. | Start the VM (`limactl start homefield`), or `bin/homefield route hosted --repo <owner>/<repo>`. |

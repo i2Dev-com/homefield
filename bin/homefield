@@ -7,6 +7,7 @@
 #   bin/homefield install [--url https://github.com/<org>[/<repo>]] [options]
 #   bin/homefield upgrade [--packages "..."] [--force]
 #   bin/homefield status
+#   bin/homefield diagnose [--json]
 #   bin/homefield uninstall [--keep-vm]
 #   bin/homefield route <hosted|local> --repo <owner>/<repo> [--repo ...]
 #   bin/homefield adopt --repo <owner>/<repo> [--jobs "ci.yml:lint,..."] [--setup] [--events E] [--dependabot hosted|local] [--fallback IMAGE] [--no-switch] [--dry-run]
@@ -49,6 +50,13 @@ Commands:
              Also refuses when the VM cannot be asked whether one is.
   status     Show the VM, the registration (and whether GitHub still lists
              it) and whether a job is running.
+  diagnose   One read-only report for when something went wrong: the VM
+             (created, isolated, registered, listed on GitHub, service,
+             version, npm), the runner group on GitHub's side (its access and
+             which repositories are in it) and the prerequisites, ending in a
+             summary that names the command fixing each problem. Exits 0 when
+             healthy, 1 when it found a problem. Starts and changes nothing:
+             a VM that is not running is reported, not started.
   uninstall  Deregister the runner and delete the VM.
   route      Switch repositories' routed jobs to hosted or local
              (the CI_RUNNER variable). Switching to hosted also cancels and
@@ -108,6 +116,12 @@ install:
 upgrade:
   --packages "A B"   replace the saved extra packages
   --force            upgrade even while a job is running (the job is cancelled)
+
+diagnose:
+  --json             machine-readable output: the same facts, a top-level
+                     healthy boolean and a problems array; nothing else on
+                     stdout. Needs neither jq nor python3. A check that needs
+                     GitHub waits at most HOMEFIELD_GH_TIMEOUT seconds (15).
 
 uninstall:
   --keep-vm          only deregister; keep the VM
@@ -219,91 +233,106 @@ check_host() {
   fi
 }
 
-# cmd_preflight: everything an install needs, reported one line per check
-# instead of stopping at the first failure like check_host, each failure with
-# the command that fixes it. Exits 0 when every check passes, 1 otherwise.
+# preflight_collect: everything an install needs, checked one by one instead of
+# stopping at the first failure like check_host, into PF_NAME / PF_LEVEL /
+# PF_MSG (parallel arrays, in the order preflight prints them). PF_LEVEL is ok,
+# warn or fail, and a failure's message carries the command that fixes it.
+# cmd_preflight prints the arrays; diagnose reads them, so the two cannot
+# disagree about what a prerequisite is.
 # gh is not strictly needed: without it, install asks for a pasted token, so
 # gh missing is a failure to fix, gh logged out is a failure too, and a token
 # without admin:org only warns (an organization URL is what needs that scope,
 # a repository URL is registered with repo; `gh auth refresh -s admin:org`).
 # Lima >= 2.0 is the same check as check_host's.
-cmd_preflight() {
-  local failed=0 total=0 version major minor login scopes whoami py_version
+PF_NAME=()
+PF_LEVEL=()
+PF_MSG=()
+pf_add() {
+  PF_NAME+=("$1")
+  PF_LEVEL+=("$2")
+  PF_MSG+=("$3")
+}
+preflight_collect() {
+  local version major minor login scopes whoami py_version
+  PF_NAME=()
+  PF_LEVEL=()
+  PF_MSG=()
   # Lima
-  total=$((total + 1))
   if ! command -v limactl >/dev/null 2>&1; then
-    echo "  FAIL  Lima not found: run 'brew install lima'"
-    failed=$((failed + 1))
+    pf_add lima fail "Lima not found: run 'brew install lima'"
   else
     version="$(limactl --version 2>/dev/null | awk '{print $NF}')"
     major="${version%%.*}"
     minor="${version#*.}"
     minor="${minor%%.*}"
     if ! [[ "$major" =~ ^[0-9]+$ && "$minor" =~ ^[0-9]+$ ]] || [ "$major" -lt 2 ]; then
-      echo "  FAIL  Lima >= 2.0 required, found ${version:-unknown}: run 'brew install lima'"
-      failed=$((failed + 1))
+      pf_add lima fail "Lima >= 2.0 required, found ${version:-unknown}: run 'brew install lima'"
     else
-      echo "  OK    Lima $version"
+      pf_add lima ok "Lima $version"
     fi
   fi
   # gh: the active account, by login and scopes. App-installed tokens report no
   # scopes; the `Token scopes` line of `gh auth status` is absent for them, and
   # `gh auth status` also lists accounts that are not active.
-  total=$((total + 1))
   if ! command -v gh >/dev/null 2>&1; then
-    echo "  FAIL  gh (GitHub CLI) not found: run 'brew install gh'"
-    failed=$((failed + 1))
+    pf_add gh fail "gh (GitHub CLI) not found: run 'brew install gh'"
   else
     whoami="$(gh auth status --json hosts --jq '.hosts["github.com"] // [] | map(select(.active)) | (.[0] // {}) | "\(.login // "")|\(.scopes // "")"' 2>/dev/null)" || whoami="|"
     login="${whoami%%|*}"
     scopes="${whoami#*|}"
     if [ -z "$login" ]; then
-      echo "  FAIL  gh not logged in: run 'gh auth login'"
-      failed=$((failed + 1))
+      pf_add gh fail "gh not logged in: run 'gh auth login'"
     elif [ -z "$scopes" ]; then
-      echo "  OK    gh authenticated as $login (no scope reported; an organization URL needs admin:org)"
+      pf_add gh ok "gh authenticated as $login (no scope reported; an organization URL needs admin:org)"
     elif case ",$scopes," in *,admin:org,*) true ;; *) false ;; esac; then
-      echo "  OK    gh authenticated as $login (admin:org scope)"
+      pf_add gh ok "gh authenticated as $login (admin:org scope)"
     else
-      echo "  WARN  gh authenticated as $login, no admin:org scope (an organization URL needs it: gh auth refresh -s admin:org)"
+      pf_add gh warn "gh authenticated as $login, no admin:org scope (an organization URL needs it: gh auth refresh -s admin:org)"
     fi
   fi
   # python3: resolving on PATH is not enough — a broken shim prints but exits
   # non-zero, so the version command's own status decides.
-  total=$((total + 1))
   if ! command -v python3 >/dev/null 2>&1; then
-    echo "  FAIL  python3 not found: run 'brew install python'"
-    failed=$((failed + 1))
+    pf_add python3 fail "python3 not found: run 'brew install python'"
   elif py_version="$(python3 --version 2>&1)"; then
-    echo "  OK    python3 ($py_version)"
+    pf_add python3 ok "python3 ($py_version)"
   else
-    echo "  FAIL  python3 cannot run (${py_version:-no output}): reinstall it, e.g. run 'brew install python'"
-    failed=$((failed + 1))
+    pf_add python3 fail "python3 cannot run (${py_version:-no output}): reinstall it, e.g. run 'brew install python'"
   fi
   # brew
-  total=$((total + 1))
   if command -v brew >/dev/null 2>&1; then
-    echo "  OK    brew available"
+    pf_add brew ok "brew available"
   else
-    echo "  FAIL  brew not found: install Homebrew from https://brew.sh"
-    failed=$((failed + 1))
+    pf_add brew fail "brew not found: install Homebrew from https://brew.sh"
   fi
   # macOS (Darwin), by product version rather than kernel release
-  total=$((total + 1))
   if [ "$(uname -s)" = "Darwin" ]; then
-    echo "  OK    macOS $(sw_vers -productVersion)"
+    pf_add macos ok "macOS $(sw_vers -productVersion)"
   else
-    echo "  FAIL  needs macOS (Darwin): found $(uname -s)"
-    failed=$((failed + 1))
+    pf_add macos fail "needs macOS (Darwin): found $(uname -s)"
   fi
   # Apple Silicon
-  total=$((total + 1))
   if [ "$(uname -m)" = "arm64" ]; then
-    echo "  OK    arm64 (Apple Silicon)"
+    pf_add arm64 ok "arm64 (Apple Silicon)"
   else
-    echo "  FAIL  needs Apple Silicon (arm64): found $(uname -m)"
-    failed=$((failed + 1))
+    pf_add arm64 fail "needs Apple Silicon (arm64): found $(uname -m)"
   fi
+}
+
+# cmd_preflight: preflight_collect's checks, one line each, each failure with
+# the command that fixes it. Exits 0 when every check passes, 1 otherwise.
+cmd_preflight() {
+  local failed=0 total i level
+  preflight_collect
+  total=${#PF_NAME[@]}
+  for ((i = 0; i < total; i++)); do
+    case "${PF_LEVEL[i]}" in
+      ok) level=OK ;;
+      warn) level=WARN ;;
+      *) level=FAIL; failed=$((failed + 1)) ;;
+    esac
+    printf '  %-6s%s\n' "$level" "${PF_MSG[i]}"
+  done
   # Summary
   echo ""
   if [ "$failed" -eq 0 ]; then
@@ -383,26 +412,45 @@ ensure_vm() {
 # have no host mounts and no view of the Mac's home directories. A guest
 # command that cannot run at all is reported as such: treating its empty
 # output as "no mounts found" would misread a broken VM as a safe one.
-verify_isolation() {
-  local mounts
+#
+# isolation_probe is the check itself, for the callers that report instead of
+# stopping (diagnose): 0 verified, 1 broken (host mounts, or /Users visible),
+# 2 the guest could not be asked. It prints nothing; ISOLATION_WHY says what it
+# found, and ISOLATION_SUFFIX is what verify_isolation adds to that in its die.
+ISOLATION_WHY=""
+ISOLATION_SUFFIX=""
+isolation_fail() {
+  ISOLATION_WHY="$2"
+  ISOLATION_SUFFIX="$3"
+  return "$1"
+}
+isolation_probe() {
+  local mounts users=0
+  ISOLATION_WHY=""
+  ISOLATION_SUFFIX=""
   # mount is run on its own: in a pipe its failure would be hidden, and grep
   # would count nothing in its empty output. grep -c exits 1 for a count of 0,
   # which is an answer; a status above 1 is not.
   # shellcheck disable=SC2016  # the guest's shell expands these, not this one
   if ! mounts="$(guest sh -c 'out="$(mount)" || exit 3; printf "%s\n" "$out" | grep -Ec "virtiofs|9p|sshfs|reverse-sshfs"; test $? -le 1')"; then
-    die "could not run the isolation check in VM ${INSTANCE}; is it running? (see docs/runbook.md, Setup)"
+    isolation_fail 2 "could not run the isolation check in VM ${INSTANCE}" "; is it running? (see docs/runbook.md, Setup)" || return
   fi
   case "$mounts" in
-    ''|*[!0-9]*) die "could not read the mount count from VM ${INSTANCE}; refusing to continue (see docs/runbook.md, Setup)" ;;
+    ''|*[!0-9]*) isolation_fail 2 "could not read the mount count from VM ${INSTANCE}" "; refusing to continue (see docs/runbook.md, Setup)" || return ;;
   esac
-  [ "$mounts" = "0" ] || die "VM ${INSTANCE} has host mounts; refusing to continue (see docs/runbook.md, Setup)"
-  local users=0
+  [ "$mounts" = "0" ] || { isolation_fail 1 "VM ${INSTANCE} has host mounts" "; refusing to continue (see docs/runbook.md, Setup)" || return; }
   guest_sees /Users || users=$?
   case "$users" in
-    0) die "VM ${INSTANCE} can see /Users; refusing to continue" ;;
+    0) isolation_fail 1 "VM ${INSTANCE} can see /Users" "; refusing to continue" || return ;;
     1) ;;
-    *) die "could not run the /Users check in VM ${INSTANCE}; refusing to continue (see docs/runbook.md, Setup)" ;;
+    *) isolation_fail 2 "could not run the /Users check in VM ${INSTANCE}" "; refusing to continue (see docs/runbook.md, Setup)" || return ;;
   esac
+  return 0
+}
+verify_isolation() {
+  local rc=0
+  isolation_probe || rc=$?
+  [ "$rc" -eq 0 ] || die "${ISOLATION_WHY}${ISOLATION_SUFFIX}"
   log "isolation verified: no host mounts"
   verify_loopback
 }
@@ -611,9 +659,16 @@ is_registered() {
 # GitHub removes a
 # runner that has not connected for more than 14 days, and the VM's .runner
 # stays (#76). Matched by id: another Mac can register the name again. Never
-# prompts, status calls it.
+# prompts, status calls it. On 0 it also leaves what GitHub says about that
+# runner in RUNNER_GH_STATUS (online/offline) and RUNNER_GH_BUSY (true/false),
+# which diagnose reports; status ignores them. (The list does not say which
+# runner group a runner is in; group_of_runner asks the groups.)
+RUNNER_GH_STATUS=""
+RUNNER_GH_BUSY=""
 runner_on_github() {
-  local scope ids id rc=0
+  local scope ids id st busy rc=0
+  RUNNER_GH_STATUS=""
+  RUNNER_GH_BUSY=""
   [ -n "$2" ] && command -v gh >/dev/null || return 2
   scope="$(api_scope "$1" 2>/dev/null)" || return 2
   # The killed-by-signal case is told from a plain failure by the exit code
@@ -622,7 +677,7 @@ runner_on_github() {
   # mean "not checked", and only the status wording differs.
   local tmp pid timer
   tmp="$(mktemp)" || return 2
-  gh api --hostname github.com --paginate "${scope}/actions/runners?per_page=100" --jq '.runners[].id' </dev/null >"$tmp" 2>/dev/null &
+  gh api --hostname github.com --paginate "${scope}/actions/runners?per_page=100" --jq '.runners[] | [.id, .status, .busy] | @tsv' </dev/null >"$tmp" 2>/dev/null &
   pid=$!
   # >/dev/null on the timer matters: sleep inherits stdout, and a caller
   # that runs status inside $(...) would wait for the whole timeout before
@@ -635,8 +690,12 @@ runner_on_github() {
   rm -f "$tmp"
   [ "$rc" -le 128 ] || return 3
   [ "$rc" = 0 ] || return 2
-  while read -r id; do
-    [ "$id" != "$2" ] || return 0
+  while IFS=$'\t' read -r id st busy; do
+    if [ "$id" = "$2" ]; then
+      RUNNER_GH_STATUS="$st"
+      RUNNER_GH_BUSY="$busy"
+      return 0
+    fi
   done <<<"$ids"
   return 1
 }
@@ -744,6 +803,32 @@ runner_setting() {
   guest sudo python3 -c 'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8-sig")); print(*(d.get(k, "") for k in sys.argv[2:]), sep="\n")' \
     "$RUNNER_HOME/.runner" "$@"
 }
+
+# What status and diagnose both say about a registered runner, from the VM.
+# load_runner_settings: the runner's name, URL and id into RS_NAME / RS_URL /
+# RS_ID (each empty when the settings could not be read).
+RS_NAME=""
+RS_URL=""
+RS_ID=""
+load_runner_settings() {
+  RS_NAME=""
+  RS_URL=""
+  RS_ID=""
+  # A read at end of input fails, and under `set -e` that ends the command:
+  # fewer than three lines must reach the caller's check, not stop here.
+  { read -r RS_NAME || true; read -r RS_URL || true; read -r RS_ID || true; } < <(runner_setting agentName gitHubUrl agentId)
+}
+# runner_service_state: 0 if the runner's service is running, 1 if not (or none
+# is installed). SERVICE_UNIT is its name, empty when there is none.
+SERVICE_UNIT=""
+runner_service_state() {
+  SERVICE_UNIT="$(guest sudo cat "$RUNNER_HOME/.service" 2>/dev/null)" || SERVICE_UNIT=""
+  [ -n "$SERVICE_UNIT" ] && guest systemctl is-active --quiet "$SERVICE_UNIT"
+}
+# runner_version: the runner version provision.sh installed, or "unknown".
+runner_version() { guest sudo cat "$RUNNER_HOME/.provisioned-version" 2>/dev/null || echo unknown; }
+# runner_extra_packages: the saved extra apt packages, on one line.
+runner_extra_packages() { guest sh -c 'cat /etc/homefield/extra-packages 2>/dev/null | tr "\n" " "'; }
 
 # ── Tokens ──────────────────────────────────────────────────────────────────
 # api_scope <url>: the REST path of the registration scope.
@@ -1038,6 +1123,22 @@ list_groups() {
 list_groups_ids() {
   gh api --paginate "orgs/${1}/actions/runner-groups?per_page=100" \
     --jq '.runner_groups[] | [.name, .visibility, (.allows_public_repositories | tostring), (.id | tostring)] | @tsv' 2>/dev/null
+}
+
+# group_repositories <org> <group id>: the full names of the repositories a
+# runner group admits, one per line. Meaningful for a group whose visibility is
+# "selected"; the others admit repositories by their kind, not by a list.
+group_repositories() {
+  gh api --paginate "orgs/${1}/actions/runner-groups/${2}/repositories?per_page=100" \
+    --jq '.repositories[].full_name' </dev/null 2>/dev/null
+}
+
+# group_runner_ids <org> <group id>: the ids of the runners in a runner group,
+# one per line. GitHub's runner list does not say which group a runner is in,
+# so the groups are asked instead.
+group_runner_ids() {
+  gh api --paginate "orgs/${1}/actions/runner-groups/${2}/runners?per_page=100" \
+    --jq '.runners[].id' </dev/null 2>/dev/null
 }
 
 # group_unchecked <group> <why>: the group could not be checked or created.
@@ -1435,10 +1536,10 @@ cmd_status() {
     echo "runner: not registered"
     return
   fi
-  # A read at end of input fails, and under `set -e` that ends the command:
-  # fewer than three lines must reach the check below, not stop here.
-  local name url id svc removed=0 on=0
-  { read -r name || true; read -r url || true; read -r id || true; } < <(runner_setting agentName gitHubUrl agentId)
+  local name url id removed=0 on=0
+  # Fewer than three lines read must reach the check below, not stop here.
+  load_runner_settings
+  name="$RS_NAME" url="$RS_URL" id="$RS_ID"
   if [ -n "$name" ] && [ -n "$url" ]; then
     echo "runner: ${name}, registered at ${url}"
     runner_on_github "$url" "$id" || on=$?
@@ -1465,11 +1566,10 @@ cmd_status() {
     # read just now; the rest of the report still stands on its own.
     echo "runner: registered, but its details could not be read"
   fi
-  svc="$(guest sudo cat "$RUNNER_HOME/.service" 2>/dev/null || true)"
-  if [ -n "$svc" ] && guest systemctl is-active --quiet "$svc"; then
+  if runner_service_state; then
     echo "service: running"
   else
-    echo "service: NOT running (${svc:-no service installed})"
+    echo "service: NOT running (${SERVICE_UNIT:-no service installed})"
   fi
   local job=0 unknown=0
   job_running || job=$?
@@ -1478,7 +1578,7 @@ cmd_status() {
     1) echo "job: idle" ;;
     *) echo "job: unknown (could not ask the VM)"; unknown=1 ;;
   esac
-  echo "runner version: $(guest sudo cat "$RUNNER_HOME/.provisioned-version" 2>/dev/null || echo unknown)"
+  echo "runner version: $(runner_version)"
   local npm=0
   npm_state || npm=$?
   case "$npm" in
@@ -1489,10 +1589,582 @@ cmd_status() {
       ;;
     *) echo "npm: unknown (could not ask the VM)"; unknown=1 ;;
   esac
-  echo "extra packages: $(guest sh -c 'cat /etc/homefield/extra-packages 2>/dev/null | tr "\n" " "')"
+  echo "extra packages: $(runner_extra_packages)"
   [ -n "$url" ] && echo "labels: see $(runners_page "$url") (not stored in the VM)"
   [ "$removed" = 0 ] || return 1
   return "$unknown"
+}
+
+# ── diagnose ────────────────────────────────────────────────────────────────
+# One read-only report over state the other commands already look at, for the
+# moment an install, upgrade or adopt has gone wrong: the VM (status's checks,
+# plus isolation), the runner group on GitHub's side, and preflight's
+# prerequisites. It collects everything into DG_* first and prints afterwards,
+# so the human and the --json form say the same thing, and --json prints
+# nothing but the JSON on stdout.
+#
+# Read-only is a property to keep: nothing here starts or stops the VM or the
+# runner, registers, or writes. `limactl shell` starts a stopped instance, so
+# the guest is only asked about a VM that lists as Running. Unlike the
+# loopback probe of install, nothing opens a listener on the Mac.
+#
+# Every gh call is bounded by runner_on_github's GH_TIMEOUT, which comes first
+# and decides whether the later ones are made at all: the runner group and its
+# repositories are only read once GitHub has answered it.
+
+# json_str <text>: <text> as a JSON string literal. Plain bash: a stock Mac has
+# no jq, and its python3 may be only a stub. Escapes the quote, the backslash
+# and every control character; the rest, UTF-8 included, passes through.
+json_str() {
+  local s="$1" out="" c i n code
+  case "$s" in
+    *[\"\\[:cntrl:]]*) ;;
+    *) printf '"%s"' "$s"; return 0 ;;
+  esac
+  n=${#s}
+  for ((i = 0; i < n; i++)); do
+    c="${s:i:1}"
+    case "$c" in
+      '"') out="$out\\\"" ;;
+      \\) out="$out\\\\" ;;
+      $'\n') out="$out\\n" ;;
+      $'\r') out="$out\\r" ;;
+      $'\t') out="$out\\t" ;;
+      [[:cntrl:]]) printf -v code '\\u%04x' "'$c"; out="$out$code" ;;
+      *) out="$out$c" ;;
+    esac
+  done
+  printf '"%s"' "$out"
+}
+# json_nstr <text>: json_str, or null for an empty text.
+json_nstr() { if [ -n "$1" ]; then json_str "$1"; else printf null; fi; }
+# json_bool <yes|no|true|false>: true or false; null for anything else.
+json_bool() {
+  case "$1" in
+    yes | true) printf true ;;
+    no | false) printf false ;;
+    *) printf null ;;
+  esac
+}
+# json_words <text>: the words of <text> as a JSON array of strings.
+json_words() {
+  local words=() i first=1
+  read -ra words <<<"$1"
+  printf '['
+  for ((i = 0; i < ${#words[@]}; i++)); do
+    [ "$first" = 1 ] || printf ', '
+    first=0
+    json_str "${words[i]}"
+  done
+  printf ']'
+}
+# json_lines <text>: the lines of <text> as a JSON array of strings.
+json_lines() {
+  local line first=1
+  printf '['
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    [ "$first" = 1 ] || printf ', '
+    first=0
+    json_str "$line"
+  done <<<"$1"
+  printf ']'
+}
+
+# What diagnose found. A state is a short word; "skipped" says the question was
+# not asked, and DG_SKIP_WHY why (the first reason the guest checks stopped).
+DG_CREATED="" DG_VM_STATUS="" DG_GUEST="" DG_SKIP_WHY=""
+DG_ISO="" DG_ISO_WHY="" DG_REG="" DG_NAME="" DG_URL="" DG_ID=""
+DG_GH="" DG_GH_WHY="" DG_GH_STATUS="" DG_GH_BUSY=""
+DG_SVC="" DG_UNIT="" DG_VER="" DG_PKGS_STATE="" DG_PKGS="" DG_NPM=""
+DG_SCOPE="" DG_GROUP="" DG_GROUP_WHY="" DG_GROUP_NAME="" DG_GROUP_ID=""
+DG_GROUP_VIS="" DG_GROUP_PUB="" DG_REPOS=""
+DG_P_CHECK=() DG_P_MSG=() DG_P_FIX=() DG_WARN=() DG_HINT=()
+
+dg_reset() {
+  DG_CREATED="unknown" DG_VM_STATUS="" DG_GUEST="skipped" DG_SKIP_WHY=""
+  DG_ISO="skipped" DG_ISO_WHY="" DG_REG="skipped" DG_NAME="" DG_URL="" DG_ID=""
+  DG_GH="skipped" DG_GH_WHY="" DG_GH_STATUS="" DG_GH_BUSY=""
+  DG_SVC="skipped" DG_UNIT="" DG_VER="" DG_PKGS_STATE="skipped" DG_PKGS="" DG_NPM="skipped"
+  DG_SCOPE="" DG_GROUP="skipped" DG_GROUP_WHY="" DG_GROUP_NAME="" DG_GROUP_ID=""
+  DG_GROUP_VIS="" DG_GROUP_PUB="" DG_REPOS=""
+  DG_P_CHECK=() DG_P_MSG=() DG_P_FIX=() DG_WARN=() DG_HINT=()
+}
+# dg_problem <check> <what is wrong> <what fixes it>: makes the run exit 1.
+dg_problem() {
+  DG_P_CHECK+=("$1")
+  DG_P_MSG+=("$2")
+  DG_P_FIX+=("$3")
+}
+# dg_warn <text>: something that could not be checked; not a problem found.
+dg_warn() { DG_WARN+=("$1"); }
+# dg_hint <text>: a next step, for a runner that is otherwise healthy.
+dg_hint() { DG_HINT+=("$1"); }
+
+# dg_collect_guest: the checks that ask the VM, for one that is Running. They
+# stop at the first answer that makes the rest meaningless (the guest cannot be
+# asked, no runner is registered), saying so in DG_SKIP_WHY.
+dg_collect_guest() {
+  local rc=0 on=0 raw words=() i
+  DG_GUEST="checked"
+  isolation_probe || rc=$?
+  case "$rc" in
+    0) DG_ISO="verified" ;;
+    1)
+      DG_ISO="failed"
+      DG_ISO_WHY="$ISOLATION_WHY"
+      dg_problem isolation "$ISOLATION_WHY" "recreate the VM without host mounts: bin/homefield uninstall --instance ${INSTANCE}, then install again (docs/runbook.md, \"Setup\")"
+      ;;
+    *)
+      DG_ISO="unknown"
+      DG_ISO_WHY="$ISOLATION_WHY"
+      DG_SKIP_WHY="the VM could not be asked"
+      dg_problem isolation "$ISOLATION_WHY" "limactl shell ${INSTANCE} true shows why the VM does not answer"
+      return 0
+      ;;
+  esac
+  rc=0
+  registered || rc=$?
+  case "$rc" in
+    0) DG_REG="yes" ;;
+    1)
+      DG_REG="no"
+      DG_SKIP_WHY="no runner is registered"
+      dg_problem registration "no runner is registered in VM ${INSTANCE}" "bin/homefield install --instance ${INSTANCE} --url https://github.com/<org>[/<repo>]"
+      return 0
+      ;;
+    *)
+      DG_REG="unknown"
+      DG_SKIP_WHY="the VM could not be asked"
+      dg_problem registration "could not ask VM ${INSTANCE} whether its runner is registered" "limactl shell ${INSTANCE} true shows why the VM does not answer"
+      return 0
+      ;;
+  esac
+  load_runner_settings
+  DG_NAME="$RS_NAME" DG_URL="$RS_URL" DG_ID="$RS_ID"
+  if [ -z "$DG_NAME" ] || [ -z "$DG_URL" ]; then
+    DG_GH_WHY="the runner's settings could not be read"
+    dg_problem registration "the runner is registered, but its settings (${RUNNER_HOME}/.runner) could not be read" "see docs/runbook.md, \"Failure modes\""
+  else
+    runner_on_github "$DG_URL" "$DG_ID" || on=$?
+    case "$on" in
+      0)
+        DG_GH="listed"
+        DG_GH_STATUS="$RUNNER_GH_STATUS"
+        DG_GH_BUSY="$RUNNER_GH_BUSY"
+        if [ "$DG_GH_STATUS" = offline ]; then
+          dg_problem github "GitHub lists the runner ${DG_NAME} as offline" "see docs/runbook.md, \"Failure modes\" (the service below, and the VM's network)"
+        fi
+        ;;
+      1)
+        DG_GH="not-listed"
+        dg_problem github "GitHub does not list the runner ${DG_NAME}: it removes runners that have not connected for more than 14 days" "$(removed_recovery "$DG_URL" "$DG_NAME")"
+        ;;
+      3)
+        DG_GH="timed-out"
+        DG_GH_WHY="timed out after ${GH_TIMEOUT}s; the network may be down"
+        dg_warn "GitHub was not asked: ${DG_GH_WHY}"
+        ;;
+      *)
+        DG_GH="not-checked"
+        if [ -n "$DG_ID" ]; then
+          DG_GH_WHY="needs gh with admin access to ${DG_URL}"
+        else
+          DG_GH_WHY="no runner id in the VM's settings"
+        fi
+        dg_warn "GitHub was not asked: ${DG_GH_WHY}"
+        ;;
+    esac
+  fi
+  if runner_service_state; then
+    DG_SVC="running"
+    DG_UNIT="$SERVICE_UNIT"
+  else
+    DG_SVC="stopped"
+    DG_UNIT="$SERVICE_UNIT"
+    if [ -n "$SERVICE_UNIT" ]; then
+      dg_problem service "the runner's service ${SERVICE_UNIT} is not running" "limactl shell ${INSTANCE} sudo systemctl start ${SERVICE_UNIT}"
+    else
+      dg_problem service "the runner has no service installed" "bin/homefield install --instance ${INSTANCE} (on a registered runner this re-provisions it)"
+    fi
+  fi
+  DG_VER="$(runner_version)"
+  raw="$(runner_extra_packages)"
+  read -ra words <<<"$raw"
+  for ((i = 0; i < ${#words[@]}; i++)); do
+    DG_PKGS="${DG_PKGS:+$DG_PKGS }${words[i]}"
+  done
+  DG_PKGS_STATE="listed"
+  rc=0
+  npm_state || rc=$?
+  case "$rc" in
+    0) DG_NPM="ok" ;;
+    1)
+      DG_NPM="broken"
+      dg_problem npm "the runner's bundled npm is broken: JS actions fail at \"Set up runner\"" "bin/homefield upgrade --instance ${INSTANCE} (docs/runbook.md, \"Runner updates\")"
+      ;;
+    *)
+      DG_NPM="unknown"
+      dg_problem npm "could not ask VM ${INSTANCE} whether the runner's npm works" "limactl shell ${INSTANCE} true shows why the VM does not answer"
+      ;;
+  esac
+}
+
+# dg_collect_vm: whether the VM is there, and for a Running one the guest
+# checks. Anything else is reported and the guest is left alone.
+dg_collect_vm() {
+  if ! command -v limactl >/dev/null 2>&1; then
+    # The prerequisites already carry this as a problem.
+    DG_SKIP_WHY="Lima is not installed"
+    return 0
+  fi
+  if ! DG_VM_STATUS="$(vm_status)"; then
+    DG_VM_STATUS=""
+    DG_SKIP_WHY="Lima could not be asked"
+    dg_problem vm "could not ask Lima about VM ${INSTANCE} (limactl list failed, or lists it without a status)" "limactl list"
+    return 0
+  fi
+  if [ -z "$DG_VM_STATUS" ]; then
+    DG_CREATED="no"
+    DG_SKIP_WHY="the VM does not exist"
+    dg_problem vm "VM ${INSTANCE} is not created" "bin/homefield install --instance ${INSTANCE} --url https://github.com/<org>[/<repo>]"
+    return 0
+  fi
+  DG_CREATED="yes"
+  if [ "$DG_VM_STATUS" != "Running" ]; then
+    DG_SKIP_WHY="the VM is ${DG_VM_STATUS}, and diagnose never starts it"
+    dg_problem vm "VM ${INSTANCE} is ${DG_VM_STATUS}, not Running: the runner takes no jobs" "limactl start ${INSTANCE}"
+    return 0
+  fi
+  dg_collect_guest
+}
+
+# dg_collect_group: the runner group the runner is in, from GitHub. Only an
+# organization's runner has one; a repository's (and so a personal account's)
+# registration has none, which is not an error.
+dg_collect_group() {
+  local scope org rows="" name vis pub gid found=0 unasked=0 ids wide="" repos
+  if [ -z "$DG_URL" ]; then
+    DG_GROUP_WHY="$DG_SKIP_WHY"
+    [ -n "$DG_GROUP_WHY" ] || DG_GROUP_WHY="the runner's registration was not read"
+    return 0
+  fi
+  if ! scope="$(api_scope "$DG_URL" 2>/dev/null)"; then
+    DG_GROUP_WHY="the runner's URL (${DG_URL}) is not an organization or repository"
+    return 0
+  fi
+  case "$scope" in
+    repos/*)
+      DG_SCOPE="repository"
+      DG_GROUP="n/a"
+      return 0
+      ;;
+  esac
+  DG_SCOPE="organization"
+  org="${scope#orgs/}"
+  if [ "$DG_GH" != "listed" ]; then
+    DG_GROUP_WHY="GitHub did not list the runner, so its group is unknown"
+    return 0
+  fi
+  # Reached only after GitHub answered the runner list in time (see above).
+  if ! rows="$(list_groups_ids "$org" </dev/null)"; then
+    DG_GROUP="not-checked"
+    DG_GROUP_WHY="gh could not list the runner groups of ${org} (needs an organization owner with the admin:org scope)"
+    dg_warn "runner group not checked: ${DG_GROUP_WHY}; gh auth refresh -h github.com -s admin:org"
+    return 0
+  fi
+  # The runner list names no group, so ask each group which runners it holds.
+  # A group whose list fails leaves the answer open if the runner is not found.
+  while IFS=$'\t' read -r name vis pub gid; do
+    [ -n "$gid" ] || continue
+    if ids="$(group_runner_ids "$org" "$gid")"; then
+      case $'\n'"$ids"$'\n' in
+        *$'\n'"$DG_ID"$'\n'*) found=1; break ;;
+      esac
+    else
+      unasked=1
+    fi
+  done <<<"$rows"
+  if [ "$found" = 0 ]; then
+    DG_GROUP="not-checked"
+    if [ "$unasked" = 1 ]; then
+      DG_GROUP_WHY="gh could not list the runners of every runner group in ${org}, and the runner is in none of the others"
+    else
+      DG_GROUP_WHY="the runner (id ${DG_ID}) is in none of the runner groups gh listed for ${org}"
+    fi
+    dg_warn "runner group not checked: ${DG_GROUP_WHY}"
+    return 0
+  fi
+  DG_GROUP="checked"
+  DG_GROUP_NAME="$name" DG_GROUP_ID="$gid" DG_GROUP_VIS="$vis" DG_GROUP_PUB="$pub"
+  # The same test as ensure_group's. The Default group is open to the whole
+  # organization on purpose on a plan without custom groups (docs/runbook.md,
+  # "Plans"), so that alone is a note; public repositories are never fine.
+  case "$vis" in
+    all) wide="every repository in ${org} can use it" ;;
+    private) wide="every private repository in ${org} can use it" ;;
+  esac
+  [ "$pub" != true ] || wide="${wide:+${wide}, and }public repositories can use it"
+  if [ -n "$wide" ]; then
+    if [ "$(lower "$name")" = default ] && [ "$pub" != true ]; then
+      dg_warn "runner group ${name}: ${wide}; right only if you trust every repository in ${org} (docs/runbook.md, \"Runner group\")"
+    else
+      dg_problem group "runner group ${name} is wider than it should be: ${wide}" "narrow it to selected repositories with public ones off in ${org}'s Actions settings, Runner groups (docs/runbook.md, \"Runner group\")"
+    fi
+  fi
+  if [ "$vis" = selected ]; then
+    if repos="$(group_repositories "$org" "$gid")"; then
+      DG_REPOS="$repos"
+      if [ -z "$repos" ]; then
+        dg_hint "no repository is in runner group ${name} yet: bin/homefield adopt --repo <owner>/<repo>"
+      fi
+    else
+      DG_GROUP="not-checked"
+      DG_GROUP_WHY="gh could not list the repositories of runner group ${name}"
+      dg_warn "runner group ${name}: ${DG_GROUP_WHY}"
+    fi
+  fi
+}
+
+# dg_collect_prerequisites: preflight's checks, from the same code. A failed
+# check is a problem (its message names the fix); a warning is shown with the
+# checks and is not a problem, as in preflight.
+dg_collect_prerequisites() {
+  local i
+  preflight_collect
+  for ((i = 0; i < ${#PF_NAME[@]}; i++)); do
+    [ "${PF_LEVEL[i]}" != fail ] || dg_problem "prerequisite:${PF_NAME[i]}" "${PF_MSG[i]}" ""
+  done
+}
+
+# dg_gh_text: the "On GitHub" line.
+dg_gh_text() {
+  case "$DG_GH" in
+    listed)
+      if [ -n "$DG_GH_STATUS" ]; then
+        local busy=""
+        if [ "$DG_GH_BUSY" = true ]; then busy=", busy"; elif [ "$DG_GH_BUSY" = false ]; then busy=", idle"; fi
+        echo "listed (${DG_GH_STATUS}${busy})"
+      else
+        echo "listed"
+      fi
+      ;;
+    not-listed) echo "NOT listed (GitHub removes runners that have not connected for more than 14 days)" ;;
+    timed-out | not-checked) echo "not checked (${DG_GH_WHY})" ;;
+    *) echo "skipped (${DG_SKIP_WHY:-${DG_GH_WHY}})" ;;
+  esac
+}
+
+dg_render_human() {
+  local i n why repo list
+  why="${DG_SKIP_WHY:-nothing to ask}"
+  echo "VM ${INSTANCE}:"
+  case "$DG_CREATED" in
+    yes) echo "  - Created: yes (${DG_VM_STATUS})" ;;
+    no) echo "  - Created: no" ;;
+    *) echo "  - Created: unknown" ;;
+  esac
+  if [ "$DG_GUEST" != "checked" ]; then
+    echo "  - Guest checks: skipped (${why})"
+  else
+    case "$DG_ISO" in
+      verified) echo "  - Isolation: verified (no host mounts, /Users hidden)" ;;
+      failed) echo "  - Isolation: BROKEN (${DG_ISO_WHY})" ;;
+      *) echo "  - Isolation: unknown (${DG_ISO_WHY})" ;;
+    esac
+    case "$DG_REG" in
+      yes)
+        if [ -n "$DG_NAME" ] && [ -n "$DG_URL" ]; then
+          echo "  - Registered: yes (${DG_NAME}${DG_ID:+, id ${DG_ID}}, at ${DG_URL})"
+        else
+          echo "  - Registered: yes (its details could not be read)"
+        fi
+        ;;
+      no) echo "  - Registered: no" ;;
+      unknown) echo "  - Registered: unknown (could not ask the VM)" ;;
+      *) echo "  - Registered: skipped (${why})" ;;
+    esac
+    if [ "$DG_REG" = yes ]; then
+      echo "  - On GitHub: $(dg_gh_text)"
+      case "$DG_SVC" in
+        running) echo "  - Service: running (${DG_UNIT})" ;;
+        *) echo "  - Service: NOT running (${DG_UNIT:-no service installed})" ;;
+      esac
+      echo "  - Version: ${DG_VER}"
+      echo "  - Extra packages: ${DG_PKGS:-none}"
+      case "$DG_NPM" in
+        ok) echo "  - npm: ok" ;;
+        broken) echo "  - npm: BROKEN (a runner self-update can flatten the externals symlinks; docs/runbook.md, \"Runner updates\")" ;;
+        *) echo "  - npm: unknown (could not ask the VM)" ;;
+      esac
+    else
+      echo "  - On GitHub: skipped (${why})"
+      echo "  - Service: skipped (${why})"
+      echo "  - Version: skipped (${why})"
+      echo "  - Extra packages: skipped (${why})"
+      echo "  - npm: skipped (${why})"
+    fi
+  fi
+  echo ""
+  echo "GitHub:"
+  case "$DG_GROUP" in
+    n/a)
+      echo "  - Group: n/a (repository-scoped registration)"
+      echo "  - Repositories in group: n/a (a repository-scoped runner serves only ${DG_URL#https://github.com/})"
+      ;;
+    checked | not-checked)
+      if [ -n "$DG_GROUP_NAME" ]; then
+        list="${DG_GROUP_VIS} repositories"
+        [ "$DG_GROUP_VIS" != selected ] || list="selected repositories"
+        echo "  - Group: ${DG_GROUP_NAME} (${list}, public $([ "$DG_GROUP_PUB" = true ] && echo on || echo off))"
+        case "$DG_GROUP_VIS" in
+          selected)
+            if [ "$DG_GROUP" = "not-checked" ]; then
+              echo "  - Repositories in group: not checked (${DG_GROUP_WHY})"
+            elif [ -z "$DG_REPOS" ]; then
+              echo "  - Repositories in group: none (run 'bin/homefield adopt --repo <owner>/<repo>')"
+            else
+              list=""
+              while IFS= read -r repo; do
+                [ -n "$repo" ] || continue
+                list="${list:+${list}, }${repo}"
+              done <<<"$DG_REPOS"
+              echo "  - Repositories in group: ${list}"
+            fi
+            ;;
+          private) echo "  - Repositories in group: every private repository in the organization" ;;
+          *) echo "  - Repositories in group: every repository in the organization" ;;
+        esac
+      else
+        echo "  - Group: not checked (${DG_GROUP_WHY})"
+      fi
+      ;;
+    *) echo "  - Group: skipped (${DG_GROUP_WHY:-${why}})" ;;
+  esac
+  echo ""
+  echo "Prerequisites:"
+  n=${#PF_NAME[@]}
+  for ((i = 0; i < n; i++)); do
+    case "${PF_LEVEL[i]}" in
+      ok) printf '  - %-6s%s\n' OK "${PF_MSG[i]}" ;;
+      warn) printf '  - %-6s%s\n' WARN "${PF_MSG[i]}" ;;
+      *) printf '  - %-6s%s\n' FAIL "${PF_MSG[i]}" ;;
+    esac
+  done
+  echo ""
+  n=${#DG_P_MSG[@]}
+  if [ "$n" -eq 0 ]; then
+    if [ "${#DG_WARN[@]}" -eq 0 ]; then
+      echo "Summary: healthy."
+    else
+      echo "Summary: healthy as far as it could be checked."
+    fi
+  else
+    if [ "$n" -eq 1 ]; then echo "Summary: 1 problem found."; else echo "Summary: ${n} problems found."; fi
+    for ((i = 0; i < n; i++)); do
+      echo "  $((i + 1)). ${DG_P_MSG[i]}"
+      [ -z "${DG_P_FIX[i]}" ] || echo "     Fix: ${DG_P_FIX[i]}"
+    done
+  fi
+  for ((i = 0; i < ${#DG_WARN[@]}; i++)); do
+    echo "  Note: ${DG_WARN[i]}"
+  done
+  if [ "$n" -eq 0 ]; then
+    for ((i = 0; i < ${#DG_HINT[@]}; i++)); do
+      echo "  Next: ${DG_HINT[i]}"
+    done
+  else
+    echo "  The other failure modes: docs/runbook.md, \"Failure modes\"."
+  fi
+}
+
+dg_render_json() {
+  local i n first
+  printf '{\n'
+  printf '  "instance": %s,\n' "$(json_str "$INSTANCE")"
+  if [ "${#DG_P_MSG[@]}" -eq 0 ]; then printf '  "healthy": true,\n'; else printf '  "healthy": false,\n'; fi
+  printf '  "vm": {\n'
+  printf '    "created": %s,\n' "$(json_bool "$DG_CREATED")"
+  printf '    "status": %s,\n' "$(json_nstr "$DG_VM_STATUS")"
+  printf '    "guest_checked": %s,\n' "$([ "$DG_GUEST" = checked ] && echo true || echo false)"
+  printf '    "skipped_reason": %s,\n' "$(json_nstr "$DG_SKIP_WHY")"
+  printf '    "isolation": {"state": %s, "detail": %s},\n' "$(json_str "$DG_ISO")" "$(json_nstr "$DG_ISO_WHY")"
+  printf '    "registered": %s,\n' "$(json_bool "$DG_REG")"
+  if [ "$DG_REG" = yes ]; then
+    printf '    "runner": {"name": %s, "id": %s, "url": %s},\n' "$(json_nstr "$DG_NAME")" "$(json_nstr "$DG_ID")" "$(json_nstr "$DG_URL")"
+  else
+    printf '    "runner": null,\n'
+  fi
+  printf '    "on_github": {"state": %s, "status": %s, "busy": %s, "detail": %s},\n' \
+    "$(json_str "$DG_GH")" "$(json_nstr "$DG_GH_STATUS")" "$(json_bool "$DG_GH_BUSY")" "$(json_nstr "$DG_GH_WHY")"
+  printf '    "service": {"state": %s, "unit": %s},\n' "$(json_str "$DG_SVC")" "$(json_nstr "$DG_UNIT")"
+  printf '    "version": %s,\n' "$(json_nstr "$DG_VER")"
+  if [ "$DG_PKGS_STATE" = listed ]; then
+    printf '    "extra_packages": %s,\n' "$(json_words "$DG_PKGS")"
+  else
+    printf '    "extra_packages": null,\n'
+  fi
+  printf '    "npm": %s\n' "$(json_str "$DG_NPM")"
+  printf '  },\n'
+  printf '  "github": {\n'
+  printf '    "scope": %s,\n' "$(json_nstr "$DG_SCOPE")"
+  printf '    "group": {"state": %s, "name": %s, "id": %s, "visibility": %s, "allows_public": %s, "repositories": ' \
+    "$(json_str "$DG_GROUP")" "$(json_nstr "$DG_GROUP_NAME")" "$(json_nstr "$DG_GROUP_ID")" "$(json_nstr "$DG_GROUP_VIS")" "$(json_bool "$DG_GROUP_PUB")"
+  if [ "$DG_GROUP_VIS" = selected ] && [ "$DG_GROUP" = checked ]; then json_lines "$DG_REPOS"; else printf null; fi
+  printf ', "detail": %s}\n' "$(json_nstr "$DG_GROUP_WHY")"
+  printf '  },\n'
+  printf '  "prerequisites": ['
+  n=${#PF_NAME[@]}
+  first=1
+  for ((i = 0; i < n; i++)); do
+    [ "$first" = 1 ] || printf ','
+    first=0
+    printf '\n    {"name": %s, "status": %s, "message": %s}' "$(json_str "${PF_NAME[i]}")" "$(json_str "${PF_LEVEL[i]}")" "$(json_str "${PF_MSG[i]}")"
+  done
+  printf '\n  ],\n'
+  printf '  "problems": ['
+  n=${#DG_P_MSG[@]}
+  first=1
+  for ((i = 0; i < n; i++)); do
+    [ "$first" = 1 ] || printf ','
+    first=0
+    printf '\n    {"check": %s, "message": %s, "fix": %s}' "$(json_str "${DG_P_CHECK[i]}")" "$(json_str "${DG_P_MSG[i]}")" "$(json_nstr "${DG_P_FIX[i]}")"
+  done
+  if [ "$n" -eq 0 ]; then printf '],\n'; else printf '\n  ],\n'; fi
+  printf '  "warnings": ['
+  n=${#DG_WARN[@]}
+  first=1
+  for ((i = 0; i < n; i++)); do
+    [ "$first" = 1 ] || printf ', '
+    first=0
+    json_str "${DG_WARN[i]}"
+  done
+  printf '],\n'
+  printf '  "hints": ['
+  n=${#DG_HINT[@]}
+  first=1
+  for ((i = 0; i < n; i++)); do
+    [ "$first" = 1 ] || printf ', '
+    first=0
+    json_str "${DG_HINT[i]}"
+  done
+  printf ']\n}\n'
+}
+
+cmd_diagnose() {
+  local json=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --json) json=1; shift ;;
+      *) die "diagnose: unknown option $1 (see bin/homefield help)" ;;
+    esac
+  done
+  dg_reset
+  dg_collect_prerequisites
+  dg_collect_vm
+  dg_collect_group
+  if [ "$json" = 1 ]; then dg_render_json; else dg_render_human; fi
+  [ "${#DG_P_MSG[@]}" -eq 0 ]
 }
 
 # deregister_script: what uninstall runs in the guest, as root, with the remove
@@ -2514,13 +3186,14 @@ main() {
   [ -n "$cmd" ] || { usage >&2; exit 1; }
   # Only the commands that act on the VM: preflight, route, adopt, report and
   # version never use it, so a stale HOMEFIELD_INSTANCE does not stop them.
-  case "$cmd" in install | upgrade | status | uninstall | memory) check_instance ;; esac
+  case "$cmd" in install | upgrade | status | diagnose | uninstall | memory) check_instance ;; esac
   set -- "${rest[@]+"${rest[@]}"}"
   case "$cmd" in
     preflight) [ $# -eq 0 ] || die "preflight takes no options (see bin/homefield help)"; cmd_preflight ;;
     install) cmd_install "$@" ;;
     upgrade) cmd_upgrade "$@" ;;
     status) cmd_status "$@" ;;
+    diagnose) cmd_diagnose "$@" ;;
     uninstall) cmd_uninstall "$@" ;;
     route) cmd_route "$@" ;;
     adopt) cmd_adopt "$@" ;;
