@@ -32,9 +32,13 @@ they'd rather not be.
 These are documented and not treated as vulnerabilities; see the
 [trust boundary](docs/runbook.md#trust-boundary):
 
-- **Network:** jobs can reach the internet, the LAN, and every service
-  listening on the host, including ones bound to `127.0.0.1` only, through
-  `host.lima.internal` ([#18](https://github.com/i2Dev-com/homefield/issues/18)).
+- **Network:** jobs can reach the internet and the LAN. Through
+  `host.lima.internal` they can reach host services bound to `*`; ones bound
+  to `127.0.0.1` only are blocked for VMs created on Lima ≥ 2.3.0 (not yet a
+  stable release; `networkOpts.hostLoopback: false` in `vm/lima.yaml`) and
+  reachable on older Lima, which ignores that line — `install` and `upgrade`
+  probe the truth from inside the guest and warn or refuse accordingly
+  ([#18](https://github.com/i2Dev-com/homefield/issues/18)).
 - **Public repositories are not supported.** A pull request runs its own
   workflow files, so anyone who can open one can change `runs-on`. Only
   private repositories may reach the runner.

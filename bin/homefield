@@ -373,6 +373,95 @@ verify_isolation() {
     *) die "could not run the /Users check in VM ${INSTANCE}; refusing to continue (see docs/runbook.md, Setup)" ;;
   esac
   log "isolation verified: no host mounts"
+  verify_loopback
+}
+
+# lima_at_least MAJOR MINOR: is the installed limactl at least that release?
+# The same version parsing as check_host's; an unreadable version answers no.
+lima_at_least() {
+  local version major minor
+  version="$(limactl --version 2>/dev/null | awk '{print $NF}')"
+  major="${version%%.*}"
+  minor="${version#*.}"
+  minor="${minor%%.*}"
+  [[ "$major" =~ ^[0-9]+$ && "$minor" =~ ^[0-9]+$ ]] || return 1
+  if [ "$major" -gt "$1" ]; then return 0; fi
+  [ "$major" -eq "$1" ] && [ "$minor" -ge "$2" ]
+}
+
+# verify_loopback: the #18 probe. vm/lima.yaml asks Lima to stop mapping the
+# host's loopback to host.lima.internal (networkOpts.hostLoopback: false);
+# Lima >= 2.3.0 (lima-vm/lima#5581) honours that, Lima 2.0-2.2 warn about the
+# unknown field and ignore it. The isolation claim is tested, not inferred: a
+# throwaway listener on the Mac's 127.0.0.1 answers whether the guest can
+# really reach it, and open, closed and unknown stay three different answers
+# (an unknown is never read as closed).
+#   closed  - logged; loopback-only services are out of PR code's reach.
+#   open    - fatal only when the VM's own config asks for the block AND the
+#             Lima is new enough to honour it: the boundary is claimed but
+#             broken. Otherwise a warning naming the way to close it, because
+#             this is the documented state until Lima 2.3.0 is released.
+#   unknown - a warning that nothing was proven; the run goes on.
+verify_loopback() {
+  local port listener answer config asks_closed i ok
+  if ! command -v nc >/dev/null 2>&1; then
+    echo "homefield: warning: #18 probe skipped (no nc on PATH); assume the guest can still reach the Mac's loopback (docs/runbook.md, Host loopback exposure)" >&2
+    return 0
+  fi
+  port=$((20000 + RANDOM % 20000))
+  nc -k -l 127.0.0.1 "$port" >/dev/null 2>&1 &
+  listener=$!
+  # The guest's answer means nothing unless the listener answers locally
+  # first: a port already in use, or a nc that died, would read as "closed"
+  # from the guest. One loopback connect proves both, and gives the bind a
+  # moment to happen.
+  i=0 ok=0
+  while [ "$i" -lt 6 ]; do
+    if printf '' | nc -w 2 127.0.0.1 "$port" 2>/dev/null; then ok=1; break; fi
+    i=$((i + 1))
+    sleep 0.5
+  done
+  if [ "$ok" != 1 ]; then
+    kill "$listener" 2>/dev/null || true
+    wait "$listener" 2>/dev/null || true
+    echo "homefield: warning: #18 probe skipped (nothing answered on 127.0.0.1:${port}; is the port in use?); assume the guest can still reach the Mac's loopback (docs/runbook.md, Host loopback exposure)" >&2
+    return 0
+  fi
+  # The guest's side: a TCP connect to the same port. Refused or unreachable
+  # prints closed-<status> (the block works), a connect prints open, missing
+  # guest tools print tools, and no answer at all is the limactl call having
+  # failed. The tools check comes first so a guest without bash cannot print
+  # a closed out of a 127.
+  # shellcheck disable=SC2016  # the guest's shell expands these, not this one
+  answer="$(guest sh -c 'if ! command -v timeout >/dev/null 2>&1 || ! command -v bash >/dev/null 2>&1; then echo tools; elif timeout 3 bash -c "exec 3<>/dev/tcp/host.lima.internal/$1" 2>/dev/null; then echo open; else echo closed-$?; fi' sh "$port")" || answer=""
+  kill "$listener" 2>/dev/null || true
+  wait "$listener" 2>/dev/null || true
+  case "$answer" in
+    open)
+      # Was this VM asked to block the loopback? Its own stored config says
+      # (the file limactl create wrote; a custom LIMA_HOME is honoured). A
+      # config that cannot be read is not evidence of a block, so it takes
+      # the warning path, never the fatal one.
+      config="${LIMA_HOME:-$HOME/.lima}/${INSTANCE}/lima.yaml"
+      asks_closed=0
+      [ -f "$config" ] && grep -Eq '^[[:space:]]*hostLoopback:[[:space:]]*false' "$config" && asks_closed=1
+      if [ "$asks_closed" = 1 ] && lima_at_least 2 3; then
+        die "VM ${INSTANCE} reaches the Mac's loopback through host.lima.internal although its config sets networkOpts.hostLoopback: false; refusing to continue (docs/runbook.md, Host loopback exposure)"
+      fi
+      if lima_at_least 2 3; then
+        echo "homefield: warning: #18: jobs in VM ${INSTANCE} can reach the Mac's loopback; its config does not ask Lima to block it: recreate the VM, or stop it and set networkOpts.hostLoopback: false with limactl edit (docs/runbook.md, Host loopback exposure)" >&2
+      else
+        echo "homefield: warning: #18: jobs in VM ${INSTANCE} can reach the Mac's loopback; Lima $(limactl --version 2>/dev/null | awk '{print $NF}') ignores networkOpts.hostLoopback — it closes for VMs created on Lima >= 2.3.0 (docs/runbook.md, Host loopback exposure)" >&2
+      fi
+      ;;
+    closed-1|closed-113|closed-124)
+      log "loopback probe: closed (the guest cannot reach the Mac's 127.0.0.1)"
+      ;;
+    *)
+      echo "homefield: warning: #18 probe got no clear answer from VM ${INSTANCE} (answer: ${answer:-none}); assume it can reach the Mac's loopback (docs/runbook.md, Host loopback exposure)" >&2
+      ;;
+  esac
+  return 0
 }
 
 # guest_sees PATH: like guest_has_file for any kind of path, without sudo:
