@@ -13,6 +13,20 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ### Added
 
+- `homefield diagnose [--json]` — one read-only report for "why is my CI not
+  running": the VM (created, Lima status, isolation), the runner (registered
+  name and id, whether GitHub lists it online or offline and busy or idle,
+  service, runner version, extra packages, npm state), the runner group
+  (exists, selected or all repositories, public repositories allowed, which
+  repositories; "n/a" for a repository-scoped registration) and the
+  prerequisites `preflight` checks, ending in a "Summary:" of healthy or each
+  problem with its fix command (see `docs/runbook.md`, "Failure modes"). Exits
+  0 when healthy and 1 on any problem. `--json` prints only JSON on stdout
+  (`healthy` and a `problems` array), built without jq or python3. It never
+  starts or stops the VM, registers or changes the runner, or writes to
+  GitHub; the checks inside a stopped VM are skipped and said to be.
+  `preflight` and `status` output is unchanged.
+  [#126](https://github.com/i2Dev-com/homefield/issues/126)
 - `homefield adopt --setup --repo <owner>/<repo>` opens a pull request that
   writes steps 1–4 of `docs/adopting.md` instead of waiting for them: every
   job of a workflow that runs on `pull_request` and asks for a GitHub-hosted

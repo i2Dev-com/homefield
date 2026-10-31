@@ -67,6 +67,9 @@ jobs:
       - name: homefield status without the runner's settings
         run: bash tests/status.sh
 
+      - name: homefield diagnose report
+        run: bash tests/diagnose.sh
+
       - name: bin/homefield memory summary
         run: bash tests/memory-summary.sh
 
