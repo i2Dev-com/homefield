@@ -95,7 +95,7 @@ skipped):
 | `loopback probe: closed` | The guest cannot reach the Mac's loopback | Nothing. |
 | `#18: jobs in VM ... can reach the Mac's loopback` | The documented state: below Lima 2.3.0 nothing can close it; on 2.3.0+ it is a VM whose config never asked | Wait for the Lima 2.3.0 stable release, `brew upgrade lima`, then close the VM (below). |
 | `... although its config sets networkOpts.hostLoopback: false` | The block was asked for, the Lima honours asks, yet the guest gets through: a broken boundary, not a documented one. Nothing was stopped or registered. | Check `limactl --version` and `~/.lima/<name>/lima.yaml`; if both are right, report it (SECURITY.md). |
-| `#18 probe skipped (...)` | Nothing proved (no `nc` on the Mac, port in use, guest unreachable) | The run goes on; treat the exposure as present until a probe answers. |
+| `#18 probe skipped (...)` or `no clear answer ...` | Nothing proved (no `nc` on the Mac, port in use, an `nc` without `-k`, guest unreachable, or an answer that is neither open nor closed) | The run goes on; treat the exposure as present until a probe answers. |
 
 To close an existing VM after upgrading Lima — no rebuild, the extra
 packages and hooks stay:
@@ -106,7 +106,7 @@ EDITOR=vi limactl edit <name>     # add these two lines at the top level:
                                   #   networkOpts:
                                   #     hostLoopback: false
 limactl start <name>
-bin/homefield install             # no arguments: probes and says "loopback probe: closed"
+bin/homefield upgrade             # probes before anything is stopped; it should say "loopback probe: closed"
 ```
 
 ## Runner group

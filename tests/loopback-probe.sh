@@ -34,16 +34,42 @@ esac
 EOF
 # nc: listener mode sleeps (the probe kills it); a connect answers what the
 # bind managed (NC_BIND_FAIL: nothing reaches the listener, so the self-test
-# fails and the probe must skip, not read the silence as closed).
+# fails and the probe must skip, not read the silence as closed). NC_NO_K:
+# the connect kills the listener, as an nc without -k dies with the
+# connection it served — the probe must notice before trusting a closed.
 cat >"$stubs/nc" <<'EOF'
 #!/bin/sh
 case " $* " in
-  *" -l "*) sleep 30 ;;
-  *) [ -z "${NC_BIND_FAIL:-}" ] && exit 0 || exit 1 ;;
+  *" -l "*)
+    # The stub IS the listener: its own pid in the file (atomically, so a
+    # reader never sees it half-written), then exec sleep to keep that pid
+    # alive as the process the killer must stop. No re-spawned sh: the
+    # probe's stub PATH is a chosen minimal set and may not contain one.
+    echo "$$" > "$NC_PIDFILE.tmp.$$"
+    mv -f "$NC_PIDFILE.tmp.$$" "$NC_PIDFILE"
+    exec sleep 30
+    ;;
+  *)
+    if [ -n "${NC_NO_K:-}" ]; then
+      # The first connect is served (and kills the listener); further ones
+      # find no pidfile and fail, as they do against a real dead port.
+      i=0
+      while [ ! -f "$NC_PIDFILE" ] && [ "$i" -lt 100 ]; do sleep 0.01; i=$((i + 1)); done
+      if [ -f "$NC_PIDFILE" ]; then
+        kill "$(cat "$NC_PIDFILE")" 2>/dev/null
+        rm -f "$NC_PIDFILE"
+        exit 0
+      fi
+      exit 1
+    fi
+    [ -z "${NC_BIND_FAIL:-}" ] && exit 0 || exit 1
+    ;;
 esac
 EOF
 chmod +x "$stubs/limactl" "$stubs/nc"
-for t in awk dirname grep sleep; do ln -s "$(command -v "$t")" "$stubs/$t"; done
+# cat/mv/rm are used by the nc stub itself, awk/dirname/grep/sleep by the
+# code under test; a missing tool there would hide as a silent failure.
+for t in awk cat dirname grep mv rm sleep; do ln -s "$(command -v "$t")" "$stubs/$t"; done
 
 # The VM's stored config, as limactl create writes it under ~/.lima/<name>/.
 cat >"$work/config-blocks.yaml" <<'EOF'
@@ -79,10 +105,11 @@ run_probe() {
   local path="$stubs"
   if [ -n "${NO_NC:-}" ]; then
     path="$work/no-nc"
-    [ -d "$path" ] || { mkdir -p "$path"; for t in awk dirname grep sleep limactl; do ln -s "$stubs/$t" "$path/$t"; done; }
+    [ -d "$path" ] || { mkdir -p "$path"; for t in awk cat dirname grep mv rm sleep limactl; do ln -s "$stubs/$t" "$path/$t"; done; }
   fi
+  rm -f "$work/nc.pid"
   # shellcheck disable=SC2016  # the -c script is expanded by the inner bash
-  out="$(env -i HOME="$work/home" PATH="$path" HOMEFIELD_SOURCE_ONLY=1 "${envs[@]+"${envs[@]}"}" \
+  out="$(env -i HOME="$work/home" PATH="$path" NC_PIDFILE="$work/nc.pid" HOMEFIELD_SOURCE_ONLY=1 "${envs[@]+"${envs[@]}"}" \
     "$BASH" -c '. "$1"; shift; "$@"' _ "$ROOT/bin/homefield" "${@:-verify_loopback}" 2>&1 </dev/null)"
   rc=$?
 }
@@ -122,6 +149,10 @@ record "no nc: the probe skips itself and says the exposure stands" "0/yes/no" \
 run_probe NC_BIND_FAIL=1 --
 record "a listener nobody reaches: skipped, never read as closed" "0/yes/no" \
   "$rc/$(has "$out" 'probe skipped (nothing answered')/$(has "$out" 'probe: closed')"
+
+run_probe NC_NO_K=1 PROBE_ANSWER=closed-1 --
+record "a listener that dies with the self-test: skipped, never a false closed" "0/yes/no" \
+  "$rc/$(has "$out" 'died after one connection')/$(has "$out" 'probe: closed')"
 
 run_probe PROBE_GUEST_FAIL=1 --
 record "the guest cannot be asked: no clear answer, never read as closed" "0/yes/no" \

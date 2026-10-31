@@ -427,6 +427,22 @@ verify_loopback() {
     echo "homefield: warning: #18 probe skipped (nothing answered on 127.0.0.1:${port}; is the port in use?); assume the guest can still reach the Mac's loopback (docs/runbook.md, Host loopback exposure)" >&2
     return 0
   fi
+  # Still accepting after the self-test's connect: an nc without -k dies with
+  # the connection it served, and its dead port would read as a false closed
+  # from the guest. A second local connect is the real test — liveness checks
+  # on processes would read a killed-but-unreaped one as alive.
+  i=0 ok=0
+  while [ "$i" -lt 3 ]; do
+    if printf '' | nc -w 2 127.0.0.1 "$port" 2>/dev/null; then ok=1; break; fi
+    i=$((i + 1))
+    sleep 0.2
+  done
+  if [ "$ok" != 1 ]; then
+    kill "$listener" 2>/dev/null || true
+    wait "$listener" 2>/dev/null || true
+    echo "homefield: warning: #18 probe skipped (the nc listener died after one connection; does it support -k?); assume the guest can still reach the Mac's loopback (docs/runbook.md, Host loopback exposure)" >&2
+    return 0
+  fi
   # The guest's side: a TCP connect to the same port. Refused or unreachable
   # prints closed-<status> (the block works), a connect prints open, missing
   # guest tools print tools, and no answer at all is the limactl call having
