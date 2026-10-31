@@ -373,6 +373,159 @@ verify_isolation() {
     *) die "could not run the /Users check in VM ${INSTANCE}; refusing to continue (see docs/runbook.md, Setup)" ;;
   esac
   log "isolation verified: no host mounts"
+  verify_loopback
+}
+
+# lima_at_least MAJOR MINOR: is the installed limactl at least that release?
+# The same version parsing as check_host's; an unreadable version answers no.
+lima_at_least() {
+  local version major minor
+  version="$(limactl --version 2>/dev/null | awk '{print $NF}')"
+  major="${version%%.*}"
+  minor="${version#*.}"
+  minor="${minor%%.*}"
+  [[ "$major" =~ ^[0-9]+$ && "$minor" =~ ^[0-9]+$ ]] || return 1
+  if [ "$major" -gt "$1" ]; then return 0; fi
+  [ "$major" -eq "$1" ] && [ "$minor" -ge "$2" ]
+}
+
+# verify_loopback: the #18 probe. vm/lima.yaml asks Lima to stop mapping the
+# host's loopback to host.lima.internal (networkOpts.hostLoopback: false);
+# Lima >= 2.3.0 (lima-vm/lima#5581) honours that, Lima 2.0-2.2 warn about the
+# unknown field and ignore it. The isolation claim is tested, not inferred: a
+# throwaway listener on the Mac's 127.0.0.1 answers whether the guest can
+# really reach it, and open, closed and unknown stay three different answers
+# (an unknown is never read as closed).
+#   closed  - logged; loopback-only services are out of PR code's reach.
+#   open    - fatal only when the VM's own config asks for the block AND the
+#             Lima is new enough to honour it: the boundary is claimed but
+#             broken. Otherwise a warning naming the way to close it, because
+#             this is the documented state until Lima 2.3.0 is released.
+#   unknown - a warning that nothing was proven; the run goes on.
+verify_loopback() {
+  local port listener answer config asks_closed i got token tokenfile ok
+  if ! command -v nc >/dev/null 2>&1; then
+    echo "homefield: warning: #18 probe skipped (no nc on PATH); assume the guest can still reach the Mac's loopback (docs/runbook.md, Host loopback exposure)" >&2
+    return 0
+  fi
+  port=$((20000 + RANDOM % 20000))
+  # What answers on the port must be provably this probe's listener: nc
+  # serves this token from its stdin, and a local connect that reads it
+  # back found our nc rather than some service that already held the port
+  # (whose answer would say nothing about the guest). HOMEFIELD_PROBE_TOKEN
+  # lets the test suite know the token in advance.
+  token="${HOMEFIELD_PROBE_TOKEN:-homefield-probe-$$-$port}"
+  tokenfile="$(mktemp)" || tokenfile=""
+  if [ -z "$tokenfile" ]; then
+    echo "homefield: warning: #18 probe skipped (no temp file for the port token); assume the guest can still reach the Mac's loopback (docs/runbook.md, Host loopback exposure)" >&2
+    return 0
+  fi
+  printf '%s' "$token" >"$tokenfile"
+  # stderr goes to a file, not to /dev/null: it is how the listener reports
+  # that it never bound the port (a foreign service holds it), which is a
+  # different story from a listener that bound and then died.
+  errfile="$(mktemp)" || errfile=""
+  if [ -z "$errfile" ]; then
+    rm -f "$tokenfile"
+    echo "homefield: warning: #18 probe skipped (no temp file for the listener's report); assume the guest can still reach the Mac's loopback (docs/runbook.md, Host loopback exposure)" >&2
+    return 0
+  fi
+  nc -k -l 127.0.0.1 "$port" <"$tokenfile" >"$errfile" 2>&1 &
+  listener=$!
+  # The guest's answer means nothing until the token comes back locally:
+  # the bind is asynchronous (retry a moment), and an answer that is not the
+  # token is some service that already held the port — attribution is lost
+  # and the probe skips rather than misread.
+  got=""
+  i=0
+  while [ "$i" -lt 6 ]; do
+    got="$(nc -w 2 127.0.0.1 "$port" 2>/dev/null || true)"
+    [ "$got" = "$token" ] && break
+    i=$((i + 1))
+    sleep 0.5
+  done
+  if [ "$got" != "$token" ]; then
+    kill "$listener" 2>/dev/null || true
+    wait "$listener" 2>/dev/null || true
+    # The wait reaps the listener, so what it left behind is final: its
+    # stderr naming a taken port is the surest sign the bind was lost — a
+    # liveness check cannot see this before the reap (an exited child is
+    # still kill -0-able as a zombie), and that is why no check lives in
+    # the loop above.
+    bind_lost=0
+    if [ -s "$errfile" ] && grep -qi "Address already in use" "$errfile"; then bind_lost=1; fi
+    rm -f "$tokenfile" "$errfile"
+    if [ -n "$got" ]; then
+      echo "homefield: warning: #18 probe skipped (127.0.0.1:${port} answered, but not with the token: another service holds the port); assume the guest can still reach the Mac's loopback (docs/runbook.md, Host loopback exposure)" >&2
+    elif [ "$bind_lost" = 1 ]; then
+      echo "homefield: warning: #18 probe skipped (127.0.0.1:${port} was already taken: the probe's listener could not bind it); assume the guest can still reach the Mac's loopback (docs/runbook.md, Host loopback exposure)" >&2
+    else
+      echo "homefield: warning: #18 probe skipped (nothing answered on 127.0.0.1:${port}; is the port in use?); assume the guest can still reach the Mac's loopback (docs/runbook.md, Host loopback exposure)" >&2
+    fi
+    return 0
+  fi
+  rm -f "$errfile"
+  # Still accepting after serving the token: an nc without -k dies with the
+  # connection it served, and its dead port would read as a false closed
+  # from the guest. A second local connect is the real test — liveness
+  # checks on processes would read a killed-but-unreaped one as alive. The
+  # token is gone from nc's stdin by now (one-shot file), so this connect
+  # only needs to succeed: the token above already proved the port is ours.
+  i=0 ok=0
+  while [ "$i" -lt 3 ]; do
+    if nc -w 2 127.0.0.1 "$port" >/dev/null 2>&1; then ok=1; break; fi
+    i=$((i + 1))
+    sleep 0.2
+  done
+  if [ "$ok" != 1 ]; then
+    kill "$listener" 2>/dev/null || true
+    wait "$listener" 2>/dev/null || true
+    rm -f "$tokenfile"
+    echo "homefield: warning: #18 probe skipped (the nc listener died after one connection; does it support -k?); assume the guest can still reach the Mac's loopback (docs/runbook.md, Host loopback exposure)" >&2
+    return 0
+  fi
+  # The guest's side: a TCP connect to the same port. bash's /dev/tcp exits
+  # 1 for a refused connect AND for a name that did not resolve, so status
+  # alone is not a boundary: only bash's own "Connection refused" message
+  # closes. The words are open, closed-1 (refused), closed-124 (the 3 s
+  # connect timeout), tools (a guest without timeout/bash/grep cannot be
+  # asked) and unknown-<status> (unresolved name, no route, anything
+  # else); an empty answer is the limactl call having failed.
+  # shellcheck disable=SC2016  # the guest's shell expands these, not this one
+  answer="$(guest sh -c 'if ! command -v timeout >/dev/null 2>&1 || ! command -v bash >/dev/null 2>&1 || ! command -v grep >/dev/null 2>&1; then echo tools; else out=$(timeout 3 bash -c "exec 3<>/dev/tcp/host.lima.internal/$1" 2>&1); rc=$?; if [ "$rc" = 0 ]; then echo open; elif [ "$rc" = 124 ]; then echo closed-124; elif [ "$rc" = 1 ] && printf %s "$out" | grep -q "Connection refused"; then echo closed-1; else echo "unknown-$rc"; fi; fi' sh "$port")" || answer=""
+  kill "$listener" 2>/dev/null || true
+  wait "$listener" 2>/dev/null || true
+  rm -f "$tokenfile"
+  case "$answer" in
+    open)
+      # Was this VM asked to block the loopback? Its own stored config says
+      # (the file limactl create wrote; a custom LIMA_HOME is honoured). A
+      # config that cannot be read is not evidence of a block, so it takes
+      # the warning path, never the fatal one.
+      config="${LIMA_HOME:-$HOME/.lima}/${INSTANCE}/lima.yaml"
+      asks_closed=0
+      [ -f "$config" ] && grep -Eq '^[[:space:]]*hostLoopback:[[:space:]]*false' "$config" && asks_closed=1
+      if [ "$asks_closed" = 1 ] && lima_at_least 2 3; then
+        # The gate is the limactl binary; a VM still running from before a
+        # Lima upgrade keeps its old gateway, so the message makes the first
+        # step a restart, and only what survives a restart is a broken
+        # boundary.
+        die "VM ${INSTANCE} reaches the Mac's loopback through host.lima.internal although its config sets networkOpts.hostLoopback: false. If the VM has been running since before Lima was upgraded, its gateway is the old one: stop it, start it, and run this again (the mapping is applied at VM start). If it still reaches the loopback after that the boundary is broken — nothing was registered, but a fresh install leaves the VM (and possibly the runner group) behind: docs/runbook.md, Host loopback exposure"
+      fi
+      if lima_at_least 2 3; then
+        echo "homefield: warning: #18: jobs in VM ${INSTANCE} can reach the Mac's loopback; its stored config does not show networkOpts.hostLoopback: false (absent, or unreadable): recreate the VM, or stop it and add the setting with limactl edit (docs/runbook.md, Host loopback exposure)" >&2
+      else
+        echo "homefield: warning: #18: jobs in VM ${INSTANCE} can reach the Mac's loopback; Lima $(limactl --version 2>/dev/null | awk '{print $NF}') ignores networkOpts.hostLoopback — it closes for VMs created on Lima >= 2.3.0 (docs/runbook.md, Host loopback exposure)" >&2
+      fi
+      ;;
+    closed-1|closed-124)
+      log "loopback probe: closed (the guest cannot reach the Mac's 127.0.0.1)"
+      ;;
+    *)
+      echo "homefield: warning: #18 probe got no clear answer from VM ${INSTANCE} (answer: ${answer:-none}); assume it can reach the Mac's loopback (docs/runbook.md, Host loopback exposure)" >&2
+      ;;
+  esac
+  return 0
 }
 
 # guest_sees PATH: like guest_has_file for any kind of path, without sudo:

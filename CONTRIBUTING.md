@@ -12,6 +12,7 @@ bash tests/extra-packages.sh       # RUNNER_EXTRA_PACKAGES validation
 bash tests/runner-url.sh           # RUNNER_URL validation
 bash tests/memwatch.sh             # memory sampler (needs bash >= 4.2 and GNU timeout to run)
 bash tests/workspace-owner.sh      # the job-started hook that gives `_work` back to `runner`
+bash tests/loopback-probe.sh       # the #18 host-loopback probe: closed, open and unknown verdicts
 bash tests/provision-recovery.sh   # provision.sh restarts a runner it stopped, when it fails
 bash tests/uninstall.sh            # `bin/homefield uninstall` gives the service back when removal fails
 bash tests/status.sh               # `bin/homefield status` reports on when the runner's settings can't be read, and whether GitHub lists the runner

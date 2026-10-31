@@ -13,6 +13,24 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ### Added
 
+- The VM now asks Lima to stop mapping the Mac's loopback into the guest
+  (`networkOpts.hostLoopback: false` in `vm/lima.yaml`, from
+  [lima-vm/lima#5581](https://github.com/lima-vm/lima/pull/5581)). Only
+  Lima ≥ 2.3.0 honours it — not a stable release yet; Lima 2.0–2.2 warn
+  "unknown field" and ignore the line — so `install` and `upgrade` prove the
+  state from inside the guest instead of trusting the config: a throwaway
+  listener on the Mac's `127.0.0.1` serving a token its own connect must
+  read back (so what answers is provably the probe's listener), a connect
+  from the guest, and only bash's own "Connection refused" counted as
+  closed (an unresolved name shares the exit status and is treated as
+  unproven). Closed is
+  logged, open warns with the way to close it (and stops the run only when
+  the VM's own config asked for the block and the Lima is new enough to
+  honour it), and an unprovable probe never reads as closed. Existing VMs
+  keep the documented exposure until 2.3.0 is stable and their config is
+  updated (`docs/runbook.md`, "Host loopback exposure").
+  [#18](https://github.com/i2Dev-com/homefield/issues/18) stays open until a
+  stable Lima closes it for everyone.
 - `homefield preflight` — a pre-install readiness check. Verifies macOS,
   Apple Silicon, Lima ≥ 2.0, gh (the active account, by login and scope; an App
   token reports no scope, which is fine), python3 and Homebrew; exits 0 when all

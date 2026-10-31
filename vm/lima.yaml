@@ -5,9 +5,13 @@
 # reachable from inside. Everything below that looks like a missing default is
 # deliberate. Setup and recovery: docs/runbook.md.
 #
-# Not yet covered: the guest's outbound network. Lima's user-mode network maps
-# host.lima.internal (192.168.5.2) to the host's loopback, so services on the
-# host, even 127.0.0.1-only ones, are reachable from the guest (homefield#18).
+# The guest's outbound network (homefield#18): the networkOpts block at the
+# end stops host.lima.internal (192.168.5.2) from mapping to the host's
+# loopback, but only on Lima >= 2.3.0 (lima-vm/lima#5581, not in a stable
+# release yet; 2.0-2.2 warn "unknown field" and ignore the line, so the
+# loopback stays reachable there). `bin/homefield` probes the truth from
+# inside the guest on install and upgrade. Services bound to `*` on the Mac
+# stay reachable through its LAN address whatever the Lima version.
 #
 # Requires Lima >= 2.0: `base:` is older (1.1), but the `template:` locator
 # below (the `template://` form is deprecated since Lima 2.0 and 1.x may not
@@ -55,3 +59,18 @@ portForwards:
     guestIPMustBeZero: false
     guestPortRange: [1, 65535]
     ignore: true
+
+# #18: do not map the host loopback into the guest (lima-vm/lima#5581). On
+# Lima >= 2.3.0 the gateway answers host.lima.internal itself, so a guest
+# connection to it is refused instead of reaching a service listening on the
+# Mac's 127.0.0.1; DNS keeps resolving from the gateway. Lima 2.0-2.2 do not
+# know the field: they warn "unknown field" and go on ignoring it (checked
+# with 2.2.0's `limactl create`), which is why `bin/homefield` verifies the
+# block from inside the guest instead of trusting this line, and refuses to
+# continue when a VM whose own config asks for it is reachable anyway
+# (docs/runbook.md, "Host loopback exposure"). Lima >= 2.3 refuses the ask
+# outright (rather than ignoring it) on a vmType other than vz or on a
+# user-v2 network; this file is vz with the default network, and #21
+# revisits this if that ever changes.
+networkOpts:
+  hostLoopback: false

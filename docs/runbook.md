@@ -50,7 +50,7 @@ every job holding cloud or production credentials.
 | Unreviewed dependency code | Dependabot PRs are routed hosted by default (see above). With `dependabot: local` their install scripts run on the VM. |
 | Host files and credentials | Lima VM with **no mounts** (`mounts: []` + `--mount-none`), no SSH-agent forwarding, and no host SSH keys. `~/.aws`, `gh` auth, `.env` files and working trees on the Mac are not reachable from the guest. |
 | Guest ports on the Mac | Guest→host port forwarding is disabled, so a job's service containers never appear on the Mac's `localhost`. |
-| **Mac and LAN services from the guest** | **Not isolated.** The guest reaches the Mac at `host.lima.internal` (192.168.5.2, also its gateway and DNS), which Lima maps to the Mac's loopback: every service listening on the Mac is reachable, including ones bound only to `127.0.0.1`, as is the LAN. A firewall inside the guest would not hold, since jobs are root-equivalent there. Until [#18](https://github.com/i2Dev-com/homefield/issues/18) is closed, keep sensitive services off the Mac that hosts the runner. |
+| **Mac and LAN services from the guest** | **Partly isolated.** The guest reaches the Mac at `host.lima.internal` (192.168.5.2, also its gateway and DNS). On VMs created on Lima ≥ 2.3.0, `networkOpts.hostLoopback: false` makes that gateway answer for itself, so **nothing** bound to the Mac's loopback is reachable through it — services bound only to `127.0.0.1` and `*`-bound ones alike; `*`-bound services and the wider LAN stay reachable through the Mac's LAN address. On Lima 2.0–2.2 (every supported version until 2.3.0 is a stable release) the line is ignored and even `127.0.0.1`-only services are reachable. `install` and `upgrade` prove the state from inside the guest ([Host loopback exposure](#host-loopback-exposure)). A firewall inside the guest would not hold, since jobs are root-equivalent there. Until [#18](https://github.com/i2Dev-com/homefield/issues/18) is closed, keep sensitive services off the Mac that hosts the runner. |
 | Production | The VM holds no cloud credentials and no AWS CLI. Deploy jobs stay hosted and get their credentials through OIDC. |
 | Secrets in jobs | Jobs on the runner receive the secrets their workflow passes, on same-repo PRs. Push-only secrets never reach it by default, because pushes run hosted; they do when `events` includes `push`, `workflow_dispatch` or `schedule`. |
 | Across repositories | Every allowed repository's PR jobs share one VM, one after another. Workspaces are per repository, but anything a job leaves in the guest (Docker images, `/tmp`) is visible to the next job from another repository. Allow only repositories you would trust with each other's PR code. |
@@ -73,6 +73,51 @@ need an organization owner (`admin:org`):
   network row above), and the Mac holds no credentials the VM could use.
 - People who can edit workflow files in an adopting repository are people you
   trust with the runner: a PR runs the workflow from its own branch.
+
+## Host loopback exposure
+
+`vm/lima.yaml` asks Lima to stop mapping `host.lima.internal` onto the Mac's
+loopback (`networkOpts.hostLoopback: false`, lima-vm/lima#5581). On Lima
+≥ 2.3.0 nothing bound to the Mac's loopback is then reachable through that
+address — `127.0.0.1`-only services and `*`-bound ones alike; `*`-bound
+services stay reachable through the Mac's LAN address, because the line
+closes the loopback, not the network. Until 2.3.0 is a stable release every
+supported Lima (≥ 2.0) ignores the line and the VM keeps the exposure. The
+block is applied when the VM starts, so after `brew upgrade lima` it takes
+effect only once the VM has been stopped and started again. This is issue
+[#18](https://github.com/i2Dev-com/homefield/issues/18).
+
+`install` and `upgrade` do not take the config's word for it. They stand a
+throwaway listener on the Mac's `127.0.0.1` and connect to it from inside the
+guest (`nc` on the Mac does this; without it the probe reports itself
+skipped). The listener answers with a token the probe's own first connect
+must read back, so what answers is provably the probe's listener and not
+some service that already held the port; and inside the guest only a refused
+connect counts as closed — a name that does not resolve, a silent timeout
+and anything else that is not "Connection refused" are treated as unproven,
+never as isolation:
+
+| Probe says | Meaning | What to do |
+|---|---|---|
+| `loopback probe: closed` | The guest cannot reach the Mac's loopback | Nothing. |
+| `#18: jobs in VM ... can reach the Mac's loopback` | The documented state: below Lima 2.3.0 nothing can close it; on 2.3.0+ it is a VM whose stored config does not show the block (absent, or unreadable) | Wait for the Lima 2.3.0 stable release, `brew upgrade lima`, then close the VM (below). |
+| `... although its config sets networkOpts.hostLoopback: false` | The block was asked for and the installed Lima honours asks, yet the guest gets through. Most likely the VM has been running since before the Lima upgrade and still has the old gateway. Nothing was stopped or registered. | Stop the VM, start it, and run this again. If it still gets through, check `limactl --version` and `~/.lima/<name>/lima.yaml`; if both are right, the boundary is broken — report it (SECURITY.md). A fresh install leaves the VM (and possibly the runner group) behind. |
+| `#18 probe skipped (...)` or `no clear answer ...` | Nothing proved (no `nc` on the Mac, port in use, an `nc` without `-k`, guest unreachable, or an answer that is neither open nor closed) | The run goes on; treat the exposure as present until a probe answers. |
+
+To close an existing VM after upgrading Lima: if it was created from this
+repository's `vm/lima.yaml`, its stored config already asks for the block
+and a restart is enough (`limactl stop <name> && limactl start <name>`);
+otherwise add the lines below first. No rebuild either way — the extra
+packages and hooks stay:
+
+```bash
+limactl stop <name>
+EDITOR=vi limactl edit <name>     # add these two lines at the top level:
+                                  #   networkOpts:
+                                  #     hostLoopback: false
+limactl start <name>
+bin/homefield upgrade             # probes before anything is stopped; it should say "loopback probe: closed"
+```
 
 ## Runner group
 
