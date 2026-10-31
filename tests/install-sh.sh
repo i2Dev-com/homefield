@@ -188,6 +188,8 @@ record "the wrapper is a script, not a symlink" "yes" "$([ -f "$home/bin/homefie
 record "the wrapper is two lines" "2" "$(wc -l <"$home/bin/homefield" | tr -d ' ')"
 record "the wrapper names the tool's directory" "exec \"$home/share/bin/homefield\" \"\$@\"" "$(sed -n 2p "$home/bin/homefield")"
 record "a bin dir off the PATH is reported with the line to add" "yes" "$(has "$out" "export PATH=\"$home/bin:\$PATH\"")"
+record "...the hint labels the paste-now line and the permanent one" "yes/yes" \
+  "$(has "$out" 'Copy-paste this line to add it now')/$(has "$out" 'To make it permanent')"
 
 # Piped, as the one-liner runs it: the script is on stdin.
 out="$(env -i HOME="$home" PATH="$stubs" CALLS="$calls" FIXTURE="$work/fixture.tgz" HOMEFIELD_TTY=/nonexistent \
@@ -247,6 +249,11 @@ else
   record "...and ~/.local/bin when Homebrew's bin is not writable" "yes" "$([ -x "$home/.local/bin/homefield" ] && echo yes || echo no)"
 fi
 chmod u+w "$work/env/brew/bin"
+
+# A bin dir that is already on the PATH needs no hint at all (#128).
+new_env gh curl limactl
+run_install "PATH=$stubs:$home/bin"
+record "a bin dir on the PATH gets no hint" "no/0" "$(has "$out" 'not on your PATH')/$rc"
 
 # ── Lima ───────────────────────────────────────────────────────────────────
 echo "lima"

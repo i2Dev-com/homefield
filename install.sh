@@ -170,12 +170,17 @@ write_wrapper() {
   mv -f "$tmp" "$wrapper"
 }
 
+# path_hint: the bin dir is often off the PATH. Editing ~/.zshrc only helps a
+# future terminal, so lead with the same line copy-pasted into this one: the
+# tool works now, and making it permanent is the second step, not the first.
 path_hint() {
   local dir="$1" shown="$1"
   case ":$PATH:" in *":$dir:"*) return 0 ;; esac
   [ "$dir" != "$HOME/.local/bin" ] || shown="\$HOME/.local/bin"
   echo
-  echo "$dir is not on your PATH. To add it, put this line in ~/.zshrc and open a new terminal:"
+  echo "$dir is not on your PATH. Copy-paste this line to add it now, in this terminal:"
+  echo "  export PATH=\"$shown:\$PATH\""
+  echo "To make it permanent, put the same line in ~/.zshrc:"
   echo "  export PATH=\"$shown:\$PATH\""
 }
 
