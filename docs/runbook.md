@@ -153,7 +153,16 @@ at all — that part is GitHub's: runners are scoped to a repository, an
 organization or an enterprise, and a job never crosses scopes, so a runner
 registered to an organization can never serve a repository in a personal
 account, and every personal repository registers on its own
-(`--url https://github.com/<you>/<repo>`). The one-VM-per-registration part
+(`--url https://github.com/<you>/<repo>`). `install` finds out which kind of
+account owns the URL before it asks for anything else and, for a personal
+one, skips the group step, prints both limits and ends with advice saying
+the runner serves only that repository; an owner URL alone gets a prompt for
+the repository on a terminal, and an error naming
+`--url https://github.com/<you>/<repo>` without one. `--personal` and `--org`
+force the answer and skip the lookup (for an unreachable API, or a token that
+cannot see the account); a repository URL whose owner cannot be looked up goes
+on with a note, an owner URL stops and names these two flags. `--group` is ignored on a personal account, as it
+already is for any repository URL. The one-VM-per-registration part
 is ours, not GitHub's: GitHub sets no limit on registrations per machine, but
 today one VM runs one runner, so each repository-scoped runner on one Mac is
 its own `--instance` VM ([More runners](#more-runners)) until
@@ -189,11 +198,14 @@ homefield preflight
 
 Run the [README's one-liner](../README.md#quick-start), or, from a checkout,
 `bin/homefield install --url https://github.com/<org>` (or
-`https://github.com/<owner>/<repo>`; options: `bin/homefield help`). It needs
+`https://github.com/<owner>/<repo>`, which is what a personal account needs;
+options: `bin/homefield help`). It needs
 Lima ≥ 2.0 (verified on 2.2.0), which the one-liner installs. It does every
 step below: it asks for the URL if it was not given, creates the VM and checks
 its isolation, provisions it, creates the runner group, registers the runner,
-waits until it is online and enables autostart.
+waits until it is online and enables autostart. Right after the URL it says
+whether the owner is an organization or a personal account (see *Plans* under
+[Runner group](#runner-group)).
 
 The wait polls for the runner to show online on GitHub, up to about 90 seconds (18 tries at 5 seconds each). It reports progress every 15 seconds — `waiting for <name> (up to 90 s, waited 15 s)` — and says nothing when the runner appears online before the first report. Those three settings are read from the environment where `install` runs: `ONLINE_WAIT_TRIES` (default 18), `ONLINE_WAIT_INTERVAL` (default 5) and `ONLINE_PROGRESS_CYCLES` (default 3, the polls per progress line; a value below 1 falls back to 3).
 
