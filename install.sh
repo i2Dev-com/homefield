@@ -4,6 +4,7 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/i2Dev-com/homefield/v0.3.1/install.sh | bash
 #   ... | bash -s -- --url https://github.com/<org>      # install options pass through
+#   ... | bash -s -- --url https://github.com/<you>/<repo>   # a personal account: a repository
 #
 # Settings, all optional:
 #   HOMEFIELD_REPO      owner/repo to download from (default i2Dev-com/homefield)
@@ -276,7 +277,7 @@ main() {
   fi
   echo
   echo "Next, set up the runner:"
-  echo "  homefield install${on} --url https://github.com/<org>      # or https://github.com/<owner>/<repo>"
+  echo "  homefield install${on} --url https://github.com/<org>      # or https://github.com/<owner>/<repo> (a personal account needs a repository)"
 }
 
 main "$@"
