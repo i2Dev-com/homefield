@@ -366,6 +366,7 @@ non-default VM.
 |---|---|---|---|
 | PR job "Waiting for a runner to pick up this job" | VM stopped, Mac asleep or offline, runner service down | The PR's check waits in the queue, and after 24 h GitHub fails it. By default merges and deploys are unaffected, because pushes run hosted; with `push` (or `workflow_dispatch`, `schedule`) in `events`, those jobs wait too. | Start the VM (`limactl start homefield`), or `bin/homefield route hosted --repo <owner>/<repo>`. |
 | `install` or `provision.sh` stops: "already registered" or "A runner exists with the same name" | Another runner in the scope has the name: another machine's, or this Mac's from before a VM was deleted without `uninstall` | Nothing is registered; the other runner is untouched | Another machine's: pick another name (`--name`, `RUNNER_NAME`). A stale one of this Mac's: `install --replace`, which removes it after token retrieval but before provisioning, or remove it on the runners page and run again. A provisioning failure after removal leaves the old registration gone; retry the install. Not `config.sh --replace`: it keeps the old registration's runner group ([actions/runner#4091](https://github.com/actions/runner/issues/4091)) |
+| `install` stopped partway: a VM that never registered, or a runner group left behind | Provisioning, registration or the network failed after the VM or the group was created | Whatever was created stays | `bin/homefield reset` ([Rolling back a failed install](#rolling-back-a-failed-install)), then install again |
 | Waiting forever although the runner is online and idle | The repository is not in the runner group | Same as above | `bin/homefield adopt --repo <owner>/<repo>` adds it (or add it in the organization settings), or switch the repository to hosted |
 | Waiting forever although the runner is online and idle, and the repository is in the group | The label in the expression is not one of the runner's labels. For example, an expression that uses the default label `homefield-ci` while the runner was registered with another label | Same as above | Add the label to the runner (*Settings → Actions → Runners →* the runner *→ Labels*), or pass the runner's label to `routing-guard` as `label:` and use it in the expression |
 | A PR job waits while another runs | One runner runs one job at a time, across all repositories | Serialised, not failed | Accept it, switch the less urgent repository to hosted, or add a runner ([More runners](#more-runners)) |
@@ -709,6 +710,89 @@ exits 1. The same holds when Lima itself cannot say whether the VM exists
 Check that the VM is running (`limactl list`) and run the command again.
 
 If the VM is already gone, delete the stale registration on the runners page.
+
+## Rolling back a failed install
+
+`install` can stop partway: the VM exists but provisioning failed, the runner
+never registered, or the runner group was created and nothing after it
+worked. `uninstall` needs a VM that exists, and never touches the runner
+group. `bin/homefield reset` rolls back whatever there is, complete or half
+finished (add `--instance <name>` for a non-default VM):
+
+```bash
+bin/homefield reset                  # asks first, after listing what it will do
+HOMEFIELD_YES=1 bin/homefield reset  # no terminal (a script, CI): answers yes
+bin/homefield reset --keep-vm        # only deregister the runner
+bin/homefield reset --keep-group     # leave the runner group alone
+bin/homefield reset --remove-tool    # also remove the command and the tool's files
+```
+
+It prints a plan and asks `y/N` before changing anything; without a terminal
+and without `HOMEFIELD_YES=1` (exactly `1`) it stops and changes nothing. When
+there is nothing to undo (no VM, no runner group recorded as created by
+install) it says so, exits 0 and asks nothing. A job running on the runner
+makes it stop first, as `uninstall` does, before anything is asked or changed.
+A VM Lima cannot describe, or a guest that cannot be asked whether the runner
+is registered, stops it too (nothing changed); for a VM that will not start,
+the message names `limactl delete --force <name>`, after removing its runner
+on the runners page if it registered. It ends with a report, one line per
+thing: kept, removed, or failed. It exits 1 when a step failed.
+
+In this order, what it **removes**:
+
+1. **The runner's registration**, if the VM has one: deregistered on GitHub
+   with a remove token (`gh`, or pasted), or, when GitHub no longer lists the
+   runner (#76), only the VM's copy of the registration (`config.sh remove
+   --local`). A VM that never registered has nothing to deregister. A stopped
+   VM is started for this, after the answer. If deregistering fails, the
+   runner's service is given back, the VM and everything after are kept, and
+   `reset` fails; run it again once the cause is fixed.
+2. **The VM** (autostart off, stop, delete), with everything in it: extra
+   packages, hooks, Docker images. Not with `--keep-vm`. If the delete fails,
+   the report names `limactl delete --force <name>`; the steps that do not
+   depend on it still run.
+3. **The runner group, only if this install created it.** Deleting a group
+   moves its runners to Default, so every one of these must hold, and a group
+   that cannot be checked is kept, with the page to delete it by hand: the
+   state file (below) says `install` created it; it is not the Default group;
+   GitHub still lists a group with the recorded id and name; no runner other
+   than this instance's own is in it; no `--keep-group`. Needs the same
+   `admin:org` scope as creating it. Failing to list or delete it fails
+   `reset`, but never stops the VM from being deleted.
+4. **The state file**, unless a group it records still exists (kept for
+   `--keep-group`, another runner in it, or a failed check or delete), so that
+   a later `reset` can still clean it up.
+5. **With `--remove-tool` only**, as the very last step and only if everything
+   above worked: the `homefield` command, if it is a regular file (not a
+   link) whose last line runs `<install dir>/bin/homefield`, in
+   `$HOMEFIELD_BIN_DIR` or, when that is unset, in Homebrew's bin or
+   `~/.local/bin`; and the install dir (`$HOMEFIELD_HOME`, default
+   `~/.local/share/homefield`) if `install.sh` put it there (it has a
+   `.homefield-ref`; a git checkout does not). Give `reset` the same
+   `HOMEFIELD_HOME` and `HOMEFIELD_BIN_DIR` that `install.sh` had. The command
+   and the install dir are shared by every instance on this Mac, which is why
+   this is opt-in; after it, `homefield` is gone until the one-liner is run
+   again.
+
+What it **does not** remove: a runner group that was already there (including
+Default), or one that `install` created but now holds other runners; the
+repositories' access to a group; `CI_RUNNER` variables and the routing in the
+workflows (switch repositories to hosted first, `route hosted`; `reset`
+reminds you when it deregisters); a runner registered on GitHub whose VM is
+gone (remove it on the runners page, `reset` cannot reach it without the VM);
+other instances; Lima, `gh`, Homebrew and your shell's `PATH`.
+
+**The state file.** `${HOMEFIELD_STATE_DIR:-~/.local/state/homefield}/<instance>.state`
+holds `key=value` lines. The only key is `group_created=<org>/<group
+name>/<group id>`, which `install` writes the moment it creates the runner
+group, before the VM exists, so a failed install still has it (the id is empty
+if it could not be read from GitHub's answer, and `reset` then finds the group
+by name). A group that already existed is never recorded. It lives outside the
+tool's install directory because `install.sh` replaces that directory on every
+update, and it is per instance. There are no secrets in it. Delete the line, or
+the file, to make `reset` leave the group alone; without it (a Mac that
+installed before this file existed) delete the group by hand in the
+organization's *Settings → Actions → Runner groups*.
 
 ## Moving to dedicated hardware
 

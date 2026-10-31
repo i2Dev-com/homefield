@@ -158,6 +158,8 @@ pick_bin_dir() {
 # write_wrapper <dir>: bin/homefield finds the rest of the tool from the path
 # it is run by, so the command is a script that runs it by its real path, not
 # a symlink. An existing file is only replaced if it is this wrapper.
+# `homefield reset --remove-tool` (tool_wrappers in bin/homefield) recognizes
+# the wrapper by its exec line below, so the two change together.
 write_wrapper() {
   local dir="$1" wrapper="$1/homefield" tmp
   mkdir -p "$dir"
