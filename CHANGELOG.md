@@ -92,6 +92,20 @@ fail, such as a new guard in the routing expression, bumps the minor version
   gates on its own subset — macOS, Apple Silicon, Lima. See `homefield help` and
   [`docs/runbook.md`](docs/runbook.md).
 
+### Fixed
+
+- `homefield install` now confirms the runner group an organization's runner
+  landed in. After the runner shows online it asked GitHub's runner list for
+  `runner_group_id`, a field that list never returns, so the check silently
+  fell back to the plain `is online: labels ...` line. It now asks each runner
+  group which runners it holds and matches the runner's id, printing
+  `group <name>`, or `group <name> (expected <group>)` when it landed
+  elsewhere; when the groups cannot be listed, or the runner is in none, it says
+  that instead of assuming the expected group. A repository's runner has no
+  group and is unchanged. `diagnose` shares the lookup. The tests no longer
+  fake a `runner_group_id`, and apply the code's real `--jq` filters to
+  API-shaped JSON (#141).
+
 ### Changed
 
 - When the directory the `homefield` command goes into is not on the PATH,

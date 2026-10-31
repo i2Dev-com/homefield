@@ -32,6 +32,18 @@ case "$*" in
     echo '{"id": 7}'
     ;;
   *users/*) echo "${GH_OWNER_TYPE:-Organization}" ;;
+  *runner-groups/*/runners*)
+    # A group's runners: the ids in $GH_GRPRUN/<group id>, one per line (the
+    # rows GitHub's runners[].id filter produces). GH_GRPRUN_FAIL lists the
+    # group ids whose call fails.
+    for a in "$@"; do
+      case "$a" in *runner-groups/*) gid="${a#*runner-groups/}"; gid="${gid%%/*}" ;; esac
+    done
+    case " ${GH_GRPRUN_FAIL:-} " in
+      *" $gid "*) echo '{"message":"Not Found"}'; echo "gh: HTTP 404" >&2; exit 1 ;;
+    esac
+    cat "$GH_GRPRUN/$gid"
+    ;;
   *runner-groups*)
     if [ -n "${GH_LIST_FAIL:-}" ]; then echo '{"message":"Must have admin rights"}'; echo "gh: HTTP 403" >&2; exit 1; fi
     cat "$GH_GROUPS"
@@ -366,31 +378,102 @@ record "provision.sh never registers with --replace" "0" "$(grep -c -e '^[^#]*--
 
 # ── wait_online ────────────────────────────────────────────────────────────
 echo "wait_online"
-printf 'other\tonline\tself-hosted\tDefault\nlima-homefield\toffline\tself-hosted,Linux\thomefield-ci\n' >"$work/runners-offline"
-printf 'lima-homefield\tonline\tself-hosted,Linux,ARM64,homefield-ci\t7\n' >"$work/runners-online"
-printf 'lima-homefield\tonline\tself-hosted,Linux,ARM64,homefield-ci\t\n' >"$work/runners-nogroup"
-# The runner-groups list as [id, name] rows; wait_online resolves the id to a name.
-printf '7\thomefield-ci\n' >"$work/groups-ids"
-printf '7\tDefault\n' >"$work/groups-ids-other"
+# The runners list as the code's --jq filter yields it: name, status, id, labels.
+# GitHub's list has no runner_group_id (nor any group): the group is found by
+# asking each group for its runners ($work/grpruns/<group id>).
+printf 'other\tonline\t41\tself-hosted\nlima-homefield\toffline\t42\tself-hosted,Linux\n' >"$work/runners-offline"
+printf 'lima-homefield\tonline\t42\tself-hosted,Linux,ARM64,homefield-ci\n' >"$work/runners-online"
+printf 'lima-homefield\tonline\t41\tself-hosted,Linux,ARM64,homefield-ci\n' >"$work/runners-in-default"
+printf 'lima-homefield\tonline\t99\tself-hosted,Linux,ARM64,homefield-ci\n' >"$work/runners-in-none"
+# The runner-groups list as list_groups_ids rows: name, visibility, public, id.
+printf 'Default\tall\tfalse\t1\nhomefield-ci\tselected\tfalse\t4\n' >"$work/groups-ids"
+mkdir -p "$work/grpruns"
+printf '41\n' >"$work/grpruns/1"
+printf '42\n43\n' >"$work/grpruns/4"
 
-run_fn GH_RUNNERS="$work/runners-online" GH_GROUPS="$work/groups-ids" -- wait_online https://github.com/acme lima-homefield homefield-ci
-record "online: reports labels and the resolved group" "0/yes" "$rc/$(has "$out" 'lima-homefield is online: labels self-hosted,Linux,ARM64,homefield-ci, group homefield-ci')"
-record "...from the organization's runners and groups, paginated" "1/2" "$(called 'orgs/acme/actions/runners')/$(called '--paginate')"
+run_fn GH_RUNNERS="$work/runners-online" GH_GROUPS="$work/groups-ids" GH_GRPRUN="$work/grpruns" -- wait_online https://github.com/acme lima-homefield homefield-ci
+record "online: reports labels and the group it is in" "0/yes" "$rc/$(has "$out" 'lima-homefield is online: labels self-hosted,Linux,ARM64,homefield-ci, group homefield-ci')"
+record "...asked once the runner is online: the runners, the groups, then each group's runners" "1/1/1/1" "$(called 'orgs/acme/actions/runners')/$(called 'orgs/acme/actions/runner-groups?')/$(called 'runner-groups/1/runners')/$(called 'runner-groups/4/runners')"
 
-run_fn GH_RUNNERS="$work/runners-online" GH_GROUPS="$work/groups-ids-other" -- wait_online https://github.com/acme lima-homefield homefield-ci
+run_fn GH_RUNNERS="$work/runners-in-default" GH_GROUPS="$work/groups-ids" GH_GRPRUN="$work/grpruns" -- wait_online https://github.com/acme lima-homefield homefield-ci
 record "the runner registered into another group: observed, with the expected one" \
   "0/yes/no" "$rc/$(has "$out" 'group Default (expected homefield-ci)')/$(has "$out" 'group homefield-ci')"
 
-run_fn GH_RUNNERS="$work/runners-online" GH_LIST_FAIL=1 -- wait_online https://github.com/acme lima-homefield homefield-ci
-record "the groups list cannot be read: the observed id, not the expected name" \
-  "0/yes/no" "$rc/$(has "$out" 'group id 7')/$(has "$out" 'group homefield-ci')"
+run_fn GH_RUNNERS="$work/runners-in-none" GH_GROUPS="$work/groups-ids" GH_GRPRUN="$work/grpruns" -- wait_online https://github.com/acme lima-homefield homefield-ci
+record "in none of the groups listed: said so, the expected group not assumed" \
+  "0/yes/no" "$rc/$(has "$out" 'is online: labels self-hosted,Linux,ARM64,homefield-ci, in none of the runner groups gh listed for acme')/$(has "$out" 'group homefield-ci')"
 
-run_fn GH_RUNNERS="$work/runners-nogroup" GH_GROUPS="$work/groups-ids" -- wait_online https://github.com/acme lima-homefield homefield-ci
-record "no group id from GitHub: only the labels are claimed" \
-  "0/yes/no" "$rc/$(has "$out" 'is online: labels self-hosted,Linux,ARM64,homefield-ci')/$(has "$out" 'group')"
+run_fn GH_RUNNERS="$work/runners-online" GH_LIST_FAIL=1 GH_GRPRUN="$work/grpruns" -- wait_online https://github.com/acme lima-homefield homefield-ci
+record "the groups list cannot be read: not checked, the expected group not assumed" \
+  "0/yes/no/0" "$rc/$(has "$out" 'is online: labels self-hosted,Linux,ARM64,homefield-ci, group not checked (gh could not list the runner groups of acme)')/$(has "$out" 'group homefield-ci')/$(called 'runner-groups/.*/runners')"
+
+run_fn GH_RUNNERS="$work/runners-online" GH_GROUPS="$work/groups-ids" GH_GRPRUN="$work/grpruns" GH_GRPRUN_FAIL=4 -- wait_online https://github.com/acme lima-homefield homefield-ci
+record "the runner's group cannot list its runners: not found, the expected group not assumed" \
+  "0/yes/no" "$rc/$(has "$out" 'group not found (gh could not list the runners of every runner group in acme)')/$(has "$out" 'group homefield-ci')"
+
+run_fn GH_RUNNERS="$work/runners-online" GH_GROUPS="$work/groups-ids" GH_GRPRUN="$work/grpruns" GH_GRPRUN_FAIL=1 -- wait_online https://github.com/acme lima-homefield homefield-ci
+record "another group's list failing does not hide the group the runner is found in" \
+  "0/yes" "$rc/$(has "$out" 'lima-homefield is online: labels self-hosted,Linux,ARM64,homefield-ci, group homefield-ci')"
+
+run_fn GH_RUNNERS="$work/runners-in-none" GH_GROUPS="$work/groups-ids" GH_GRPRUN="$work/grpruns" GH_GRPRUN_FAIL=1 -- wait_online https://github.com/acme lima-homefield homefield-ci
+record "...nor does a failed group list turn 'in none' into a claim" \
+  "0/yes/no" "$rc/$(has "$out" 'group not found')/$(has "$out" 'in none of')"
+
+run_fn GH_RUNNERS="$work/runners-offline" GH_GROUPS="$work/groups-ids" GH_GRPRUN="$work/grpruns" -- wait_online https://github.com/acme lima-homefield homefield-ci
+record "offline for every poll: the group APIs are not called" "0" "$(called 'runner-groups')"
 
 run_fn GH_RUNNERS="$work/runners-online" -- wait_online https://github.com/acme/app lima-homefield homefield-ci
-record "a repository runner: read from the repository, no group" "0/1/no" "$rc/$(called 'repos/acme/app/actions/runners')/$(has "$out" 'group')"
+record "a repository runner: read from the repository, no group, no group call" "0/1/no/0" "$rc/$(called 'repos/acme/app/actions/runners')/$(has "$out" 'group')/$(called 'runner-groups')"
+
+# The stub answers with the rows the filters would produce, so a fixture could
+# invent a field the API does not send (it did: runner_group_id). With jq, apply
+# the filters wait_online actually sent (read back from the call log) to
+# API-shaped JSON: GitHub's organization runner object has only busy, id,
+# labels, name, os, status and version.
+if ! command -v jq >/dev/null 2>&1; then
+  echo "  SKIP the --jq filters are not applied: no jq on PATH"
+else
+  run_fn GH_RUNNERS="$work/runners-online" GH_GROUPS="$work/groups-ids" GH_GRPRUN="$work/grpruns" -- wait_online https://github.com/acme lima-homefield homefield-ci
+  runners_filter="$(grep -e 'actions/runners?' "$calls" | head -n 1 | sed 's/.* --jq //')"
+  groups_filter="$(grep -e 'runner-groups?' "$calls" | head -n 1 | sed 's/.* --jq //')"
+  group_runners_filter="$(grep -e 'runner-groups/4/runners?' "$calls" | head -n 1 | sed 's/.* --jq //')"
+  runners_json='{"total_count":2,"runners":[{"id":41,"name":"other","os":"Linux","status":"online","busy":true,"version":"2.320.0","labels":[{"id":1,"name":"self-hosted","type":"read-only"}]},{"id":42,"name":"lima-homefield","os":"Linux","status":"online","busy":false,"version":"2.320.0","labels":[{"id":1,"name":"self-hosted","type":"read-only"},{"id":2,"name":"homefield-ci","type":"custom"}]}]}'
+  groups_json='{"total_count":2,"runner_groups":[{"id":1,"name":"Default","visibility":"all","default":true,"allows_public_repositories":false,"runners_url":"x"},{"id":4,"name":"homefield-ci","visibility":"selected","default":false,"allows_public_repositories":false}]}'
+  group_runners_json='{"total_count":2,"runners":[{"id":42,"name":"lima-homefield","os":"Linux","status":"online","busy":false},{"id":43,"name":"x","os":"Linux","status":"offline","busy":false}]}'
+  record "runners filter: name, status, id, labels (no group field read)" $'other\tonline\t41\tself-hosted|lima-homefield\tonline\t42\tself-hosted,homefield-ci' \
+    "$(printf '%s' "$runners_json" | jq -r "$runners_filter" | tr '\n' '|' | sed 's/|$//')"
+  record "groups filter: name, visibility, public, id" $'Default\tall\tfalse\t1|homefield-ci\tselected\tfalse\t4' \
+    "$(printf '%s' "$groups_json" | jq -r "$groups_filter" | tr '\n' '|' | sed 's/|$//')"
+  record "group runners filter: the ids" "42|43" \
+    "$(printf '%s' "$group_runners_json" | jq -r "$group_runners_filter" | tr '\n' '|' | sed 's/|$//')"
+  # End to end: the real filters over API-shaped JSON, through wait_online.
+  jqstubs="$work/jqstubs"
+  mkdir -p "$jqstubs"
+  for t in awk cat dirname git grep jq mktemp sh sleep tr; do ln -s "$(command -v "$t")" "$jqstubs/$t"; done
+  cat >"$jqstubs/gh" <<'EOF'
+#!/bin/sh
+# gh as the API plus --jq: the JSON in $API_DIR/<kind>, filtered by the --jq argument.
+echo "gh $*" >>"$CALLS"
+case "$*" in
+  *runner-groups/*/runners*) kind=group-runners ;;
+  *runner-groups*) kind=groups ;;
+  *actions/runners*) kind=runners ;;
+esac
+filter=""
+for a in "$@"; do [ "$prev" != --jq ] || filter="$a"; prev="$a"; done
+jq -r "$filter" <"$API_DIR/$kind"
+EOF
+  chmod +x "$jqstubs/gh"
+  mkdir -p "$work/api"
+  printf '%s' "$runners_json" >"$work/api/runners"
+  printf '%s' "$groups_json" >"$work/api/groups"
+  printf '%s' "$group_runners_json" >"$work/api/group-runners"
+  stubs_saved="$stubs"
+  stubs="$jqstubs"
+  run_fn API_DIR="$work/api" -- wait_online https://github.com/acme lima-homefield homefield-ci
+  stubs="$stubs_saved"
+  record "the real filters over API-shaped JSON: the group is found and named" "0/yes" "$rc/$(has "$out" 'lima-homefield is online: labels self-hosted,homefield-ci, group Default (expected homefield-ci)')"
+fi
 
 run_fn GH_RUNNERS="$work/runners-offline" -- wait_online https://github.com/acme lima-homefield homefield-ci
 record "never online: a warning with the runners page, and the install does not fail" \
