@@ -13,6 +13,28 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ### Added
 
+- `homefield reset [--keep-vm] [--keep-group] [--remove-tool]` rolls back a
+  complete or half-finished install of one instance (a failed `install`, an
+  `uninstall` that stopped partway, a VM deleted by hand), and is a no-op that
+  exits 0 when there is nothing to undo. It lists what it will do and asks
+  `y/N` (`HOMEFIELD_YES=1` answers yes; without a terminal and without it, it
+  stops and changes nothing), refuses while a job is running (checked again
+after the confirmation, as the runner stays online meanwhile), deregisters the
+  runner (only the VM's copy of the registration when GitHub no longer lists
+  it), deletes the VM, and deletes the runner group when this install created
+  it, ending with a report of what was removed, kept or failed. The group is
+  deleted only if it is not Default, GitHub still lists it with the recorded id
+  and name, no runner other than this one is in it (deleting a group moves its
+  runners to Default) and `--keep-group` was not given. To know the group is
+  its own, `install` now records a created group in a per-instance state file,
+  `~/.local/state/homefield/<instance>.state` (`HOMEFIELD_STATE_DIR`), before it
+  creates the VM; a group that already existed is never recorded or deleted.
+  Unlike the issue's step 4, the wrapper script and install directory are
+  shared by every instance, so removing them is opt-in with `--remove-tool`,
+  and then happens last, only when every other step worked.
+  `uninstall` is unchanged. See `docs/runbook.md`, "Rolling back a failed
+  install".
+  [#127](https://github.com/i2Dev-com/homefield/issues/127)
 - `homefield diagnose [--json]` — one read-only report for "why is my CI not
   running": the VM (created, Lima status, isolation), the runner (registered
   name and id, whether GitHub lists it online or offline and busy or idle,

@@ -64,6 +64,9 @@ jobs:
       - name: homefield uninstall restores the service
         run: bash tests/uninstall.sh
 
+      - name: homefield reset rolls back an install
+        run: bash tests/reset.sh
+
       - name: homefield status without the runner's settings
         run: bash tests/status.sh
 
