@@ -85,6 +85,13 @@ homefield adopt --repo <owner>/<repo>    # hosted again: homefield route hosted 
 then adds it to the runner group and switches it to the local runner. It
 refuses a public repository. `--dry-run` shows what it would do.
 
+Rather than editing the workflows by hand, `homefield adopt --setup --repo
+<owner>/<repo>` opens a pull request that writes those edits for you: the
+routing expression on every pull-request job that runs on a GitHub-hosted
+image, the guard step listing them, and `runner.arch` added to the cache keys
+([`docs/adopting.md`](docs/adopting.md#let-adopt-write-steps-1-to-4)). Merge
+it, then run `homefield adopt` to switch the repository on.
+
 `homefield help` lists the options (`--label`, `--packages`, `--cpus`,
 ...). [`docs/runbook.md`](docs/runbook.md) covers operating it.
 

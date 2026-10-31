@@ -9,7 +9,7 @@
 #   bin/homefield status
 #   bin/homefield uninstall [--keep-vm]
 #   bin/homefield route <hosted|local> --repo <owner>/<repo> [--repo ...]
-#   bin/homefield adopt --repo <owner>/<repo> [--jobs "ci.yml:lint,..."] [--events E] [--dependabot hosted|local] [--fallback IMAGE] [--no-switch] [--dry-run]
+#   bin/homefield adopt --repo <owner>/<repo> [--jobs "ci.yml:lint,..."] [--setup] [--events E] [--dependabot hosted|local] [--fallback IMAGE] [--no-switch] [--dry-run]
 #   bin/homefield memory [--days N]
 #   bin/homefield report --repo <owner>/<repo> [--repo ...] [--since DATE]
 #   bin/homefield version
@@ -127,7 +127,24 @@ adopt:
   --group GROUP      runner group the repository needs access to (default
                      homefield-ci; skipped for Default and for personal accounts)
   --jobs "F:J,..."   file:job entries you mean to route, for the snippets it
-                     prints when the routing is not in place yet
+                     prints when the routing is not in place yet, and the
+                     jobs --setup routes when you give it a list
+  --setup            open a pull request that writes steps 1-4 of
+                     docs/adopting.md instead of waiting for them: every job
+                     of a workflow that runs on pull requests and asks today
+                     for a GitHub-hosted image gets the canonical expression
+                     (with a comment pointing at the guide), the routing guard
+                     lists exactly those jobs (written to
+                     .github/workflows/homefield-routing.yml when the
+                     repository has no guard yet), and the cache keys built
+                     from runner.os in those files gain runner.arch. A
+                     workflow whose file name holds a space or comma is never
+                     routed (a guard jobs: list cannot hold it); the run says
+                     so. Exits 1 with "nothing to route" when no job
+                     qualifies. It needs write access to the repository, and
+                     touches neither the runner group nor CI_RUNNER: after you
+                     merge it, run adopt without --setup
+                     (docs/adopting.md, step 5).
   --no-switch        do everything except set CI_RUNNER
   --dry-run          read-only: report what would change, change nothing
   Reads the repository's workflows on its default branch. Only when the
@@ -135,8 +152,9 @@ adopt:
   on pull requests), passes and at least one job is routed does it add the
   repository to the group and switch it; otherwise it prints what to add and
   exits 1, having changed nothing. Adding the repository to the group needs
-  admin:org; without it, it says so and goes on. Needs gh and python3. Does
-  not need the VM.
+  admin:org; without it, it says so and goes on. --setup stops earlier: it
+  opens the routing pull request and changes nothing else. Needs gh and
+  python3. Does not need the VM.
 
 memory:
   --days N           how many days to show (default 7)
@@ -1956,8 +1974,109 @@ adopt_switch() {
   die "not switched: merge the routing first, then run homefield adopt again"
 }
 
+# The branch `adopt --setup` writes its pull request from (#124). A fixed
+# name keeps a re-run pointed at the same pull request; an existing branch is
+# refused rather than rewritten.
+SETUP_BRANCH="homefield/route-to-local"
+SETUP_MSG="Route CI jobs to the local HomeField runner"
+# What adopt_setup has done so far, for the EXIT cleanup it installs.
+ADOPT_SETUP_REPO=""
+ADOPT_SETUP_BRANCH_MADE=0
+ADOPT_SETUP_PR_MADE=0
+
+# adopt_setup_cleanup: a run that died after creating the branch would leave
+# its commits on GitHub with no pull request to review, and would refuse its
+# own retry on the existing branch. Take the branch back. A branch that
+# already existed, or one whose pull request was opened, is never touched.
+adopt_setup_cleanup() {
+  [ "$ADOPT_SETUP_BRANCH_MADE" = 1 ] && [ "$ADOPT_SETUP_PR_MADE" = 0 ] || return 0
+  ADOPT_SETUP_BRANCH_MADE=0
+  echo "homefield: removing ${SETUP_BRANCH} on ${ADOPT_SETUP_REPO}, which has no pull request" >&2
+  gh api -X DELETE "repos/${ADOPT_SETUP_REPO}/git/refs/heads/${SETUP_BRANCH}" >/dev/null 2>&1 ||
+    echo "homefield: could not remove ${SETUP_BRANCH} on ${ADOPT_SETUP_REPO}: delete it by hand" >&2
+}
+
+# adopt_setup <owner/repo> <label> <expr> <jobs> <dry>: the --setup path, the
+# workflow edits of docs/adopting.md steps 1-4 opened as a pull request. The
+# plan comes from tools/adopt.py setup over the same downloaded workflows a
+# normal adopt checks; it is verified with routing_guard.py before anything
+# leaves the Mac, then written to SETUP_BRANCH through the Contents API and
+# opened with POST /pulls. Nothing here touches the runner group or CI_RUNNER:
+# that is step 5, after the pull request is merged. Needs gh with write access
+# to the repository; needs no VM.
+adopt_setup() {
+  local repo="$1" label="$2" expr="$3" jobs="$4" dry="$5"
+  local setup="$ADOPT_TMP/setup" plan kind value name enc sha head_sha url body check line
+  local opts=(--label "$label") routed="" files=""
+  [ -z "$ADOPT_FLAG_EVENTS" ] || opts+=(--events "$ADOPT_FLAG_EVENTS")
+  [ -z "$ADOPT_FLAG_DEPENDABOT" ] || opts+=(--dependabot "$ADOPT_FLAG_DEPENDABOT")
+  [ -z "$ADOPT_FLAG_FALLBACK" ] || opts+=(--fallback "$ADOPT_FLAG_FALLBACK")
+  ADOPT_SETUP_REPO="$repo"
+
+  plan="$(python3 -I "$ROOT/tools/adopt.py" setup "$ADOPT_TMP/workflows" "$setup" \
+    --expression "$expr" --jobs "$jobs" "${opts[@]}" 2>"$ADOPT_TMP/setup-err")" ||
+    die "adopt: setup: $(head -1 "$ADOPT_TMP/setup-err")"
+  while IFS=$'\t' read -r kind value; do
+    case "$kind" in
+      ROUTED) routed="${routed:+${routed},}${value}" ;;
+      FILE) files="${files}${value}"$'\n' ;;
+    esac
+  done <<<"$plan"
+  [ -n "$routed" ] || die "adopt: setup: no job was planned; run bin/homefield adopt without --setup to see why"
+  while IFS= read -r line; do adopt_warn "$line"; done <"$ADOPT_TMP/setup-err"
+
+  log "setup: routes $(printf '%s' "$routed" | tr ',' ' ')"
+  while IFS= read -r name; do
+    [ -n "$name" ] && log "setup: changes .github/workflows/${name}"
+  done <<<"$files"
+  # The staged files are checked with the very script the guard step runs, so
+  # merging what we generate cannot fail CI on routing.
+  check="$(python3 -I "$ROOT/routing-guard/routing_guard.py" --workflows-dir "$setup" "${opts[@]}" --jobs "$routed" 2>&1)" || {
+    printf '%s\n' "$check" | sed $'s/\033\\[[0-9;]*m//g' |
+      grep -v -e PASS -e '^self-hosted runner routing' -e ' passed, ' -e '^$' >&2 || true
+    die "adopt: setup: the generated workflows would fail the routing guard; nothing was sent to ${repo}"
+  }
+  if [ "$dry" = 1 ]; then
+    log "setup: dry run: nothing was sent to ${repo}"
+    return 0
+  fi
+
+  head_sha="$(gh api "repos/${repo}/commits/${ADOPT_BRANCH}" --jq .sha 2>"$ADOPT_TMP/err")" ||
+    die "adopt: setup: could not read ${ADOPT_BRANCH} on ${repo}: $(head -1 "$ADOPT_TMP/err")"
+  if gh api "repos/${repo}/git/ref/heads/${SETUP_BRANCH}" --jq .object.sha >/dev/null 2>&1; then
+    die "adopt: setup: the branch ${SETUP_BRANCH} already exists on ${repo}: merge or close its pull request, or delete the branch, and run again"
+  fi
+  gh api -X POST "repos/${repo}/git/refs" -f ref="refs/heads/${SETUP_BRANCH}" -f sha="$head_sha" >/dev/null ||
+    die "adopt: setup: could not create ${SETUP_BRANCH} on ${repo}"
+  ADOPT_SETUP_BRANCH_MADE=1
+  trap 'adopt_setup_cleanup; rm -rf "$ADOPT_TMP"' EXIT
+  log "setup: created ${SETUP_BRANCH} from ${ADOPT_BRANCH}"
+
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    enc="$(python3 -I "$ROOT/tools/adopt.py" quote "$name" </dev/null)" || exit 1
+    # A workflow that does not exist on the branch yet (the new guard file)
+    # has no sha to update, and the Contents API creates it.
+    sha="$(gh api "repos/${repo}/contents/.github/workflows/${enc}" -f ref="$SETUP_BRANCH" --jq .sha 2>/dev/null)" || sha=""
+    python3 -I "$ROOT/tools/adopt.py" contents-payload "$setup/$name" "${sha:-none}" "$SETUP_MSG" "$SETUP_BRANCH" \
+      >"$ADOPT_TMP/put.json" || die "adopt: setup: could not stage .github/workflows/${name}"
+    gh api -X PUT "repos/${repo}/contents/.github/workflows/${enc}" --input "$ADOPT_TMP/put.json" >/dev/null ||
+      die "adopt: setup: could not write .github/workflows/${name} to ${SETUP_BRANCH} on ${repo}"
+    log "setup: wrote .github/workflows/${name}"
+  done <<<"$files"
+
+  # shellcheck disable=SC2016  # `${{ runner.arch }}` is literal text for the PR body, not this shell's
+  body="$(printf 'This PR routes these jobs to the local HomeField runner. See [docs/adopting.md](docs/adopting.md).\n\n%s\n\nGenerated by `homefield adopt --repo %s --setup`:\n\n- Every routed job now carries the canonical `runs-on` expression for label %s (docs/adopting.md, step 2).\n- The routing guard lists exactly these jobs (step 3).\n- The cache keys of the routed files gained `${{ runner.arch }}` (step 4).\n\nNothing is switched on by this PR: `CI_RUNNER` stays unset, so everything runs hosted. After merging, run `homefield adopt --repo %s` to add the repository to the runner group and route (step 5).\n' \
+    "$(printf '%s\n' "$routed" | tr ',' '\n' | sed 's/^/- /')" "$repo" "$label" "$repo")"
+  url="$(gh api -X POST "repos/${repo}/pulls" -f title="$SETUP_MSG" -f head="$SETUP_BRANCH" -f base="$ADOPT_BRANCH" -f body="$body" --jq .html_url 2>"$ADOPT_TMP/err")" ||
+    die "adopt: setup: could not open the pull request on ${repo}: $(head -1 "$ADOPT_TMP/err")"
+  ADOPT_SETUP_PR_MADE=1
+  log "created pull request: ${url}"
+  log "next: review and merge it, then homefield adopt --repo ${repo} (docs/adopting.md, step 5)"
+}
+
 cmd_adopt() {
-  local repo="" nrepo=0 label="homefield-ci" label_given=0 group="homefield-ci" jobs="" switch=1 dry=0 entry out
+  local repo="" nrepo=0 label="homefield-ci" label_given=0 group="homefield-ci" jobs="" switch=1 dry=0 setup=0 entry out
   ADOPT_FLAG_EVENTS="" ADOPT_FLAG_DEPENDABOT="" ADOPT_FLAG_FALLBACK=""
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -1968,6 +2087,7 @@ cmd_adopt() {
       --fallback) ADOPT_FLAG_FALLBACK="${2:?--fallback needs a value}"; shift 2 ;;
       --group) group="${2:?--group needs a value}"; shift 2 ;;
       --jobs) jobs="${2:?--jobs needs a value}"; shift 2 ;;
+      --setup) setup=1; shift ;;
       --no-switch) switch=0; shift ;;
       --dry-run) dry=1; shift ;;
       *) die "adopt: unknown option $1 (see bin/homefield help)" ;;
@@ -1995,6 +2115,12 @@ cmd_adopt() {
   trap 'rm -rf "$ADOPT_TMP"' EXIT
   adopt_repository "$repo"
   adopt_fetch_workflows "$repo" "$ADOPT_BRANCH" "$ADOPT_TMP/workflows"
+  if [ "$setup" = 1 ]; then
+    # --setup stops at the pull request: steps 1-4 as a review, no group
+    # access and no switch, which stay the plain adopt run of step 5.
+    adopt_setup "$repo" "$label" "$out" "$jobs" "$dry"
+    return 0
+  fi
   adopt_routing_check "$ADOPT_TMP/workflows" "$label" "$label_given"
   adopt_cache_keys "$ADOPT_TMP/workflows"
   adopt_fallback "$ADOPT_FALLBACK"

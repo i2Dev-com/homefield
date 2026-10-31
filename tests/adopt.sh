@@ -32,6 +32,7 @@ mkdir -p "$stubs" "$work/tmp"
 cat >"$work/gh" <<'EOF'
 #!/bin/sh
 echo "gh $*" >>"$CALLS"
+state="${CALLS%/*}" # the test directory: where branch and pr_body state lives
 case "$*" in
   "variable get CI_RUNNER"*)
     if [ -n "${GH_CI_RUNNER:-}" ]; then echo "$GH_CI_RUNNER"; else echo "variable not found" >&2; exit 1; fi
@@ -57,6 +58,39 @@ case "$*" in
   *runner-groups*)
     if [ -n "${GH_LIST_FAIL:-}" ]; then echo '{"message":"Must have admin rights"}'; echo "gh: HTTP 403" >&2; exit 1; fi
     cat "$GH_GROUPS"
+    ;;
+  # --setup: reading the default branch, branch existence (flat names), branch
+  # creation and removal, and opening the pull request (its body lands in
+  # $state/pr_body for the assertions).
+  */commits/*)
+    echo '{"sha":"cafe0001"}'
+    ;;
+  *"/git/ref/heads/"*)
+    br=""
+    for a in "$@"; do case "$a" in */git/ref/heads/*) br="${a##*/git/ref/heads/}" ;; esac; done
+    if [ -n "$br" ] && [ -f "$state/branch-$(printf '%s' "$br" | tr / _)" ]; then
+      echo '{"object":{"sha":"1789abcd"}}'
+    else
+      echo "gh: Not Found (HTTP 404)" >&2; exit 1
+    fi
+    ;;
+  *"/git/refs/heads/"*)
+    for a in "$@"; do
+      case "$a" in */git/refs/heads/*) rm -f "$state/branch-$(printf '%s' "${a##*/git/refs/heads/}" | tr / _)" ;; esac
+    done
+    ;;
+  *"POST repos/"*"/git/refs"*)
+    for a in "$@"; do
+      case "$a" in ref=refs/heads/*) : >"$state/branch-$(printf '%s' "${a#ref=refs/heads/}" | tr / _)" ;; esac
+    done
+    echo '{"object":{"sha":"1789abcd"}}'
+    ;;
+  *"POST repos/"*"/pulls"*)
+    : >"$state/pr_body"
+    for a in "$@"; do
+      case "$a" in body=*) printf '%s\n' "${a#body=}" >>"$state/pr_body" ;; esac
+    done
+    echo '{"html_url":"https://github.com/acme/app/pull/77"}'
     ;;
   "api repos/"*)
     if [ -n "${GH_REPO_FAIL:-}" ]; then echo "gh: Not Found (HTTP 404)" >&2; exit 1; fi
@@ -948,6 +982,100 @@ record "quote: spaces and slashes are encoded" "a%20b%2Fc.yml" "$(python3 -I "$R
 out="$(python3 -I "$ROOT/tools/adopt.py" guards "$work/not-there" 2>&1)"; rc=$?
 record "guards: a missing directory is refused, not a traceback" "nonzero/yes/no" \
   "$(nonzero "$rc")/$(has "$out" 'not a directory')/$(has "$out" Traceback)"
+
+# ── adopt --setup ──────────────────────────────────────────────────────────
+echo "setup"
+# tools/adopt.py setup, byte-exact: the routed job gets the expression and a
+# comment, its cache key gains runner.arch, the guard's jobs: block lists
+# exactly it, and the job carrying the guard step stays hosted.
+mkdir -p "$work/setup-in"
+cat >"$work/setup-in/ci.yml" <<EOF
+name: CI
+on: [pull_request]
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/cache@v5
+        with:
+          path: ~/.npm
+          key: ${os_key}-npm-${hash_key}
+  guard:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v5
+      - name: Routing guard
+        uses: i2Dev-com/homefield/routing-guard@v0.3.1
+        with:
+          jobs: |
+            ci.yml:old
+EOF
+got="$(python3 -I "$ROOT/tools/adopt.py" setup "$work/setup-in" "$work/setup-out" --expression "$expr" 2>&1)"
+rc_setup=$?
+want="$(printf 'ROUTED\tci.yml:lint\nFILE\tci.yml\n')"
+cat >"$work/setup-want.yml" <<EOF
+name: CI
+on: [pull_request]
+jobs:
+  lint:
+    # Routed to the local HomeField runner (docs/adopting.md)
+    runs-on: $expr
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/cache@v5
+        with:
+          path: ~/.npm
+          key: ${os_key}-${arch_key}-npm-${hash_key}
+  guard:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v5
+      - name: Routing guard
+        uses: i2Dev-com/homefield/routing-guard@v0.3.1
+        with:
+          jobs: |
+            ci.yml:lint
+EOF
+record "setup: routes, comments, keys and the guard list, byte for byte" "0/yes/yes/1" \
+  "$rc_setup/$(cmp -s "$work/setup-out/ci.yml" "$work/setup-want.yml" && echo yes)/$([ "$got" = "$want" ] && echo yes)/$(find "$work/setup-out" -type f | wc -l | tr -d ' ')"
+got="$(python3 -I "$ROOT/tools/adopt.py" setup "$work/wf-norouted" "$work/setup-out2" --expression "$expr" 2>&1)"
+rc_setup=$?
+record "setup: a hosted job only inside the guard job: nothing to route, nothing staged" "nonzero/yes/no" \
+  "$(nonzero "$rc_setup")/$(has "$got" 'nothing to route')/$([ -d "$work/setup-out2" ] && echo yes || echo no)"
+got="$(python3 -I "$ROOT/tools/adopt.py" setup "$work/wf-label" "$work/setup-out3" --expression "$expr" 2>&1)"
+rc_setup=$?
+record "setup: a guard on another label stops the run, naming the flag to pass" "nonzero/yes" \
+  "$(nonzero "$rc_setup")/$(has "$got" 'pass --label acme-ci')"
+
+# The shell path over the fake gh. wf-ready routes lint and test already;
+# --setup adds the hosted build job. "my flow.yaml" is not routed: a space
+# in the file name is one the guard's jobs: list cannot hold.
+adopt -- --setup --dry-run
+record "--setup --dry-run: plans the jobs, sends nothing" "0/yes/yes/yes/0/0" \
+  "$rc/$(has "$out" 'setup: routes ci.yml:build ci.yml:lint ci.yml:test')/$(has "$out" 'my flow.yaml: its jobs are not routed')/$(has "$out" 'dry run: nothing was sent')/$(called 'X POST')/$(called 'X PUT')"
+adopt -- --setup
+record "--setup: branch, one write per file, pull request" "0/1/1/1/yes" \
+  "$rc/$(called 'X POST repos/acme/app/git/refs')/$(called 'X PUT repos/acme/app/contents/.github/workflows/ci.yml')/$(called 'X POST repos/acme/app/pulls')/$(has "$out" 'https://github.com/acme/app/pull/77')"
+record "...the spaced file is not written, and the body lists the jobs and step 5" "0/yes/yes" \
+  "$(called 'X PUT repos/acme/app/contents/.github/workflows/my%20flow.yaml')/$(has "$(cat "$work/pr_body")" 'ci.yml:build')/$(has "$(cat "$work/pr_body")" 'step 5')"
+record "...and the branch stands on the fake remote" "yes" \
+  "$([ -f "$work/branch-homefield_route-to-local" ] && echo yes || echo no)"
+adopt -- --setup
+record "--setup twice: the existing branch is refused, no second pull request" "nonzero/yes/0" \
+  "$(nonzero "$rc")/$(has "$out" 'already exists')/$(called 'X POST repos/acme/app/pulls')"
+rm -f "$work/branch-homefield_route-to-local"
+adopt GH_PUT_FAIL=1 -- --setup
+record "--setup failing mid-write: the branch is taken back, nothing is left" "nonzero/yes/1/gone" \
+  "$(nonzero "$rc")/$(has "$out" 'could not write')/$(called 'X DELETE repos/acme/app/git/refs/heads/homefield/route-to-local')/$([ -f "$work/branch-homefield_route-to-local" ] && echo present || echo gone)"
+adopt GH_WF="$work/wf-noguard" -- --setup
+record "--setup without a guard: the pull request adds homefield-routing.yml" "0/yes/1/1" \
+  "$rc/$(has "$out" 'setup: changes .github/workflows/homefield-routing.yml')/$(called 'X PUT repos/acme/app/contents/.github/workflows/homefield-routing.yml')/$(called 'X POST repos/acme/app/pulls')"
+record "...and no group write, no switch: those are step 5" "0/0" \
+  "$(called 'runner-groups/42/repositories')/$(called 'variable set')"
+adopt GH_REPO="$(printf 'false\t555\tmain\tOrganization')" -- --setup
+record "--setup on a public repository: refused, as ever" "nonzero/yes/0" \
+  "$(nonzero "$rc")/$(has "$out" 'is public')/$(called 'X POST')"
 
 # ── The docs say what the tool prints ──────────────────────────────────────
 echo "docs"
