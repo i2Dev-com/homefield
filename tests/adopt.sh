@@ -40,11 +40,31 @@ case "$*" in
   "variable set"*) ;;
   *"-X PUT"*)
     if [ -n "${GH_PUT_FAIL:-}" ]; then echo "gh: HTTP 403" >&2; exit 1; fi
+    # a Contents PUT records its JSON body, so a test can check the sha the
+    # update carried (none means create mode).
+    in="" prev="" cname=""
+    for a in "$@"; do
+      [ "$prev" = "--input" ] && in="$a"
+      case "$a" in */contents/.github/workflows/*) cname="${a##*/}" ;; esac
+      prev="$a"
+    done
+    if [ -n "$in" ] && [ -n "$cname" ]; then cat "$in" >"$state/put-$cname.json"; fi
     ;;
   *"/contents/.github/workflows/"*)
     for a in "$@"; do case "$a" in repos/*/contents/.github/workflows/*) name="${a##*/}" ;; esac; done
     name="$(printf '%s' "$name" | sed 's/%20/ /g')"
-    cat "$GH_WF/$name"
+    # Only a GET reaches this endpoint: like real gh, parameters without
+    # --method GET switch the call to POST, which answers nothing here.
+    case "$*" in *"-X GET"*) ;; *) echo "gh: HTTP 405" >&2; exit 1 ;; esac
+    jq=""
+    for a in "$@"; do [ "$a" = "--jq" ] && jq=1; done
+    if [ -n "$jq" ]; then
+      # the sha lookup of adopt --setup: GH_EXISTING_SHA is the file on the
+      # branch, its absence is the 404 of a file that does not exist yet.
+      if [ -n "${GH_EXISTING_SHA:-}" ]; then printf '%s\n' "$GH_EXISTING_SHA"; else echo "gh: Not Found (HTTP 404)" >&2; exit 1; fi
+    else
+      cat "$GH_WF/$name"
+    fi
     ;;
   *"/contents/.github/workflows"*)
     if [ ! -d "${GH_WF:-/nonexistent}" ]; then echo "gh: Not Found (HTTP 404)" >&2; exit 1; fi
@@ -63,13 +83,13 @@ case "$*" in
   # creation and removal, and opening the pull request (its body lands in
   # $state/pr_body for the assertions).
   */commits/*)
-    echo '{"sha":"cafe0001"}'
+    echo cafe0001
     ;;
   *"/git/ref/heads/"*)
     br=""
     for a in "$@"; do case "$a" in */git/ref/heads/*) br="${a##*/git/ref/heads/}" ;; esac; done
     if [ -n "$br" ] && [ -f "$state/branch-$(printf '%s' "$br" | tr / _)" ]; then
-      echo '{"object":{"sha":"1789abcd"}}'
+      echo 1789abcd
     else
       echo "gh: Not Found (HTTP 404)" >&2; exit 1
     fi
@@ -83,14 +103,14 @@ case "$*" in
     for a in "$@"; do
       case "$a" in ref=refs/heads/*) : >"$state/branch-$(printf '%s' "${a#ref=refs/heads/}" | tr / _)" ;; esac
     done
-    echo '{"object":{"sha":"1789abcd"}}'
+    echo 1789abcd
     ;;
   *"POST repos/"*"/pulls"*)
     : >"$state/pr_body"
     for a in "$@"; do
       case "$a" in body=*) printf '%s\n' "${a#body=}" >>"$state/pr_body" ;; esac
     done
-    echo '{"html_url":"https://github.com/acme/app/pull/77"}'
+    echo https://github.com/acme/app/pull/77
     ;;
   "api repos/"*)
     if [ -n "${GH_REPO_FAIL:-}" ]; then echo "gh: Not Found (HTTP 404)" >&2; exit 1; fi
@@ -1047,6 +1067,12 @@ got="$(python3 -I "$ROOT/tools/adopt.py" setup "$work/wf-label" "$work/setup-out
 rc_setup=$?
 record "setup: a guard on another label stops the run, naming the flag to pass" "nonzero/yes" \
   "$(nonzero "$rc_setup")/$(has "$got" 'pass --label acme-ci')"
+mkdir -p "$work/setup-x64"
+{ header; emit_job lint "$expr_x64" "$(guard_opts ci.yml:lint 'arch: x64')"; } >"$work/setup-x64/ci.yml"
+got="$(python3 -I "$ROOT/tools/adopt.py" setup "$work/setup-x64" "$work/setup-out4" --expression "$expr" 2>&1)"
+rc_setup=$?
+record "setup: a guard routed on x64 is refused, the VM is arm64" "nonzero/yes/no" \
+  "$(nonzero "$rc_setup")/$(has "$got" 'arch x64')/$([ -d "$work/setup-out4" ] && echo yes || echo no)"
 
 # The shell path over the fake gh. wf-ready routes lint and test already;
 # --setup adds the hosted build job. "my flow.yaml" is not routed: a space
@@ -1057,6 +1083,8 @@ record "--setup --dry-run: plans the jobs, sends nothing" "0/yes/yes/yes/0/0" \
 adopt -- --setup
 record "--setup: branch, one write per file, pull request" "0/1/1/1/yes" \
   "$rc/$(called 'X POST repos/acme/app/git/refs')/$(called 'X PUT repos/acme/app/contents/.github/workflows/ci.yml')/$(called 'X POST repos/acme/app/pulls')/$(has "$out" 'https://github.com/acme/app/pull/77')"
+record "...the sha lookup is a GET with the branch ref, not the POST -f alone would send" "1" \
+  "$(called '-X GET repos/acme/app/contents/.github/workflows/ci.yml -f ref=homefield/route-to-local')"
 record "...the spaced file is not written, and the body lists the jobs and step 5" "0/yes/yes" \
   "$(called 'X PUT repos/acme/app/contents/.github/workflows/my%20flow.yaml')/$(has "$(cat "$work/pr_body")" 'ci.yml:build')/$(has "$(cat "$work/pr_body")" 'step 5')"
 record "...and the branch stands on the fake remote" "yes" \
@@ -1073,9 +1101,15 @@ record "--setup without a guard: the pull request adds homefield-routing.yml" "0
   "$rc/$(has "$out" 'setup: changes .github/workflows/homefield-routing.yml')/$(called 'X PUT repos/acme/app/contents/.github/workflows/homefield-routing.yml')/$(called 'X POST repos/acme/app/pulls')"
 record "...and no group write, no switch: those are step 5" "0/0" \
   "$(called 'runner-groups/42/repositories')/$(called 'variable set')"
+record "...and a new file's payload carries no sha (the Contents create form)" "no" \
+  "$(grep -q '"sha"' "$work/put-homefield-routing.yml.json" && echo yes || echo no)"
 adopt GH_REPO="$(printf 'false\t555\tmain\tOrganization')" -- --setup
 record "--setup on a public repository: refused, as ever" "nonzero/yes/0" \
   "$(nonzero "$rc")/$(has "$out" 'is public')/$(called 'X POST')"
+rm -f "$work/branch-homefield_route-to-local"
+adopt GH_EXISTING_SHA=e1e1e1e1 -- --setup
+record "--setup on existing files: the update PUT sends the sha the GET read" "0/1/yes" \
+  "$rc/$(called '-X GET repos/acme/app/contents/.github/workflows/ci.yml -f ref=homefield/route-to-local')/$(grep -q '"sha": "e1e1e1e1"' "$work/put-ci.yml.json" && echo yes || echo no)"
 
 # ── The docs say what the tool prints ──────────────────────────────────────
 echo "docs"

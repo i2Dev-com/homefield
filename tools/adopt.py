@@ -714,8 +714,14 @@ def routing_workflow(label, jobs, events, dependabot, fallback):
 def check_guard_options(row, label, events, dependabot, fallback):
     """Refuse a setup run whose flags disagree with the guard already in the
     repository: setup only lists jobs, it does not re-route on another label
-    or with another fallback."""
-    where, _status, glabel, _blocks, _warns, gevents, gdependabot, gfallback, _arch, _jobs = row
+    or with another fallback. A guard on another architecture is refused too,
+    as plain adopt refuses it: there is no flag for it, the VM is arm64."""
+    where, _status, glabel, _blocks, _warns, gevents, gdependabot, gfallback, garc, _jobs = row
+    if garc != DEFAULT_ARCH:
+        raise SetupError(
+            f"the routing-guard step at {where} uses arch {garc}, but this VM is {DEFAULT_ARCH}: "
+            "a guard for another architecture routes its jobs to a runner this Mac does not have (docs/adopting.md, step 3)"
+        )
     for opt, got, want in (("label", glabel, label), ("events", gevents, events), ("dependabot", gdependabot, dependabot), ("fallback", gfallback, fallback)):
         if opt_words(got) != opt_words(want):
             raise SetupError(

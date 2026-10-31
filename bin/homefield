@@ -2056,8 +2056,9 @@ adopt_setup() {
     [ -n "$name" ] || continue
     enc="$(python3 -I "$ROOT/tools/adopt.py" quote "$name" </dev/null)" || exit 1
     # A workflow that does not exist on the branch yet (the new guard file)
-    # has no sha to update, and the Contents API creates it.
-    sha="$(gh api "repos/${repo}/contents/.github/workflows/${enc}" -f ref="$SETUP_BRANCH" --jq .sha 2>/dev/null)" || sha=""
+    # has no sha to update, and the Contents API creates it. -X GET matters:
+    # -f alone would switch gh api to POST, which never answers this lookup.
+    sha="$(gh api -X GET "repos/${repo}/contents/.github/workflows/${enc}" -f ref="$SETUP_BRANCH" --jq .sha 2>/dev/null)" || sha=""
     python3 -I "$ROOT/tools/adopt.py" contents-payload "$setup/$name" "${sha:-none}" "$SETUP_MSG" "$SETUP_BRANCH" \
       >"$ADOPT_TMP/put.json" || die "adopt: setup: could not stage .github/workflows/${name}"
     gh api -X PUT "repos/${repo}/contents/.github/workflows/${enc}" --input "$ADOPT_TMP/put.json" >/dev/null ||

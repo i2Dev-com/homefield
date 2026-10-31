@@ -25,7 +25,8 @@ fail, such as a new guard in the routing expression, bumps the minor version
   whose file name holds a space or a comma is never routed (a guard's
   `jobs:` list cannot hold it). The staged files are checked with
   `routing_guard.py` before anything is sent, the run
-  exits 1 with "nothing to route" when no job qualifies, and neither the
+  exits 1 with "nothing to route" when no job qualifies, a guard set to
+  `arch: x64` is refused (the VM is arm64), and neither the
   runner group nor `CI_RUNNER` is touched: after merging, plain
   `homefield adopt` (step 5) switches the repository on. Needs `gh`,
   `python3` and write access to the repository; needs no VM.
