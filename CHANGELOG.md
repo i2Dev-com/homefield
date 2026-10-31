@@ -414,4 +414,3 @@ First public release.
 - **`homefield memory` and `homefield report`.** Per-day memory use and
   out-of-memory kills from the guest's per-minute log, and queue wait,
   duration and minutes of local against hosted jobs from the GitHub API.
-# test
