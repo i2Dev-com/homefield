@@ -190,6 +190,15 @@ run_install -- --personal --url https://github.com/acme/app
 record "--personal passes through to install" "homefield stub: install --personal --url https://github.com/acme/app" "$(echo "$out" | grep 'homefield stub' || true)"
 run_install -- --org --url https://github.com/acme
 record "--org passes through to install" "homefield stub: install --org --url https://github.com/acme" "$(echo "$out" | grep 'homefield stub' || true)"
+# The hand-over runs the first-time command the installed release has: setup
+# when its help lists it, install for a release older than setup.
+run_install STUB_HAS_SETUP=1 -- --url https://github.com/acme --packages "x y"
+record "a release with setup: arguments are handed to setup" "homefield stub: setup --url https://github.com/acme --packages x y" "$(echo "$out" | grep 'homefield stub' || true)"
+run_install STUB_HAS_SETUP=1 -- --personal --url https://github.com/acme/app
+record "...--personal reaches setup" "homefield stub: setup --personal --url https://github.com/acme/app" "$(echo "$out" | grep 'homefield stub' || true)"
+echo y >"$work/answer"
+run_install STUB_HAS_SETUP=1 HOMEFIELD_TTY="$work/answer"
+record "...with a terminal and no arguments, setup runs" "homefield stub: setup" "$(echo "$out" | grep 'homefield stub' || true)"
 record "the wrapper runs the installed homefield by its real path, with arguments" "homefield stub: status --instance x" "$(env -i "$home/bin/homefield" status --instance x)"
 record "the wrapper is a script, not a symlink" "yes" "$([ -f "$home/bin/homefield" ] && [ ! -L "$home/bin/homefield" ] && echo yes || echo no)"
 record "the wrapper is two lines" "2" "$(wc -l <"$home/bin/homefield" | tr -d ' ')"
@@ -410,9 +419,6 @@ record "a release with setup: the set-up advice names setup, with the instance" 
 new_env gh curl limactl
 run_install HOMEFIELD_INSTANCE=homefield-2 FAKE_VM_STATUS=Running STUB_HAS_SETUP=1
 record "...and the advice for an unfinished setup names setup too" "yes/no" "$(has "$out" '  homefield setup --instance homefield-2')/$(has "$out" 'homefield install')"
-new_env gh curl limactl
-run_install STUB_HAS_SETUP=1 -- --url https://github.com/acme
-record "...arguments still go to the installed tool's install, not setup" "homefield stub: install --url https://github.com/acme" "$(echo "$out" | grep 'homefield stub' || true)"
 new_env gh curl limactl
 run_install FAKE_VM_STATUS=Running
 record "the default instance: the advice has no --instance" "no" "$(has "$out" '--instance')"

@@ -35,7 +35,9 @@ fail, such as a new guard in the routing expression, bumps the minor version
   command and the upgrade path. `install.sh`'s closing hint, and its advice for
   an unfinished setup, name `homefield setup` when the release it installed has
   that command, and `homefield install` for an older one (the default is a
-  pinned tag); the one-liner itself still hands over to `homefield install`.
+  pinned tag). The one-liner hands over to `homefield setup` the same way, so
+  its preflight is strict: a missing gh, python3 or Homebrew stops it before the
+  VM is created.
   [#129](https://github.com/i2Dev-com/homefield/issues/129)
 - `homefield reset [--keep-vm] [--keep-group] [--remove-tool]` rolls back a
   complete or half-finished install of one instance (a failed `install`, an

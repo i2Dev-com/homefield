@@ -41,7 +41,8 @@ curl -fsSL https://raw.githubusercontent.com/i2Dev-com/homefield/v0.3.1/install.
 
 This installs [Lima](https://lima-vm.io) with Homebrew if it is missing or older
 than 2.0 (it asks first), puts the tool in `~/.local/share/homefield` with a
-`homefield` command on your PATH, and runs `homefield install`. That asks for
+`homefield` command on your PATH, and runs `homefield setup` (`homefield install` on a
+release older than `setup`). That asks for
 your organization or repository URL, creates the VM, checks its isolation,
 provisions it, creates the `homefield-ci` runner group for an organization
 (selected repositories only, no public ones), registers the runner with the
@@ -92,8 +93,9 @@ fixes each failure (`brew install lima`, `gh auth login`, and so on); `setup`
 prints it first and stops on any failure, while `install` prints it and then
 gates on its own subset — macOS, Apple Silicon and Lima — before creating
 anything, so gh, python3 or Homebrew missing stops `preflight` and `setup` but
-not `install`. The one-liner checks only macOS, Apple Silicon and
-Lima, and needs Homebrew to install Lima.
+not `install`. The one-liner itself checks only macOS, Apple Silicon and
+Lima, and needs Homebrew to install Lima; it then hands over to `setup`, so a
+failed preflight check stops it before the VM is created.
 
 Registration needs a one-hour token, and the group needs the `admin:org`
 scope. `gh` fetches the token if you are an org owner or a repository admin

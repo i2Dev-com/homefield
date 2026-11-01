@@ -206,8 +206,8 @@ Run the [README's one-liner](../README.md#quick-start), or, from a checkout,
 `https://github.com/<owner>/<repo>`, which is what a personal account needs;
 options: `bin/homefield help`). It needs
 Lima ≥ 2.0 (verified on 2.2.0), which the one-liner installs. `setup` runs
-`install`, which does every step below (the one-liner hands over to `install`
-directly, which prints the preflight report but does not stop on it): it asks for the URL if it was not given, creates the VM and checks
+`install`, which does every step below (the one-liner hands over to `setup`, or
+to `install` when the release it installed has no `setup`): it asks for the URL if it was not given, creates the VM and checks
 its isolation, provisions it, creates the runner group, registers the runner,
 waits until it is online and enables autostart. Right after the URL it says
 whether the owner is an organization or a personal account (see *Plans* under
