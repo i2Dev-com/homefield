@@ -258,6 +258,11 @@ main() {
   # printed below name the instance themselves.
   local on=""
   [ "$INSTANCE" = homefield ] || on=" --instance ${INSTANCE}"
+  # The command the advice below names for a first-time setup: `setup` when the
+  # tool just installed has it, else `install`. REF may be a release older than
+  # `setup` (the default is a pinned tag), so what exists is asked, not assumed.
+  local first=install
+  if "$installed" help 2>/dev/null </dev/null | grep -q '^  setup '; then first=setup; fi
   # Run again with no arguments on a Mac that already has the VM, this is a
   # tool update, with or without a terminal: `install` there would upgrade the
   # VM and briefly stop the runner, which nobody asked for, and advice to set
@@ -267,7 +272,7 @@ main() {
     echo "The VM ${INSTANCE} already exists and was not changed. To update it too:"
     echo "  homefield upgrade${on}"
     echo "If its setup never finished (homefield status${on} shows no registration), finish it with:"
-    echo "  homefield setup${on}"
+    echo "  homefield ${first}${on}"
     return 0
   fi
   if [ $# -gt 0 ] || have_tty; then
@@ -279,7 +284,7 @@ main() {
   fi
   echo
   echo "Next, set up the runner:"
-  echo "  homefield setup${on} --url https://github.com/<org>      # or https://github.com/<owner>/<repo> (a personal account needs a repository)"
+  echo "  homefield ${first}${on} --url https://github.com/<org>      # or https://github.com/<owner>/<repo> (a personal account needs a repository)"
 }
 
 main "$@"

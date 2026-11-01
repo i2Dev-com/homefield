@@ -33,8 +33,9 @@ fail, such as a new guard in the routing expression, bumps the minor version
   upgrades it, like `install`, and prints a shorter summary. `install` is
   unchanged (its output is byte for byte what it was) and stays the lower-level
   command and the upgrade path. `install.sh`'s closing hint, and its advice for
-  an unfinished setup, now name `homefield setup`; the one-liner itself still
-  hands over to `homefield install`.
+  an unfinished setup, name `homefield setup` when the release it installed has
+  that command, and `homefield install` for an older one (the default is a
+  pinned tag); the one-liner itself still hands over to `homefield install`.
   [#129](https://github.com/i2Dev-com/homefield/issues/129)
 - `homefield reset [--keep-vm] [--keep-group] [--remove-tool]` rolls back a
   complete or half-finished install of one instance (a failed `install`, an
