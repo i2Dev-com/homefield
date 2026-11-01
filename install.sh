@@ -258,7 +258,7 @@ main() {
   # printed below name the instance themselves.
   local on=""
   [ "$INSTANCE" = homefield ] || on=" --instance ${INSTANCE}"
-  # The command the advice below names for a first-time setup: `setup` when the
+  # The first-time command, for the hand-over and the advice below: `setup` when the
   # tool just installed has it, else `install`. REF may be a release older than
   # `setup` (the default is a pinned tag), so what exists is asked, not assumed.
   local first=install
@@ -278,9 +278,9 @@ main() {
   if [ $# -gt 0 ] || have_tty; then
     echo
     if have_tty; then
-      exec "$installed" install "$@" <"$TTY"
+      exec "$installed" "$first" "$@" <"$TTY"
     fi
-    exec "$installed" install "$@" </dev/null
+    exec "$installed" "$first" "$@" </dev/null
   fi
   echo
   echo "Next, set up the runner:"
