@@ -19,7 +19,9 @@ has() { case "$1" in *"$2"*) echo yes ;; *) echo no ;; esac; }
 # What GitHub's source tarball looks like: one top directory, named after the
 # repository and the short commit.
 mkdir -p "$work/src/homefield-abc1234/bin" "$work/src/homefield-abc1234/vm"
-printf '#!/bin/sh\necho "homefield stub: $*"\n' >"$work/src/homefield-abc1234/bin/homefield"
+# STUB_HAS_SETUP=1 makes `help` list a setup command, as a release that has it does.
+# shellcheck disable=SC2016  # the stub body expands when it runs, not when written
+printf '#!/bin/sh\nif [ "$1" = help ] && [ "${STUB_HAS_SETUP:-}" = 1 ]; then echo "  setup      first-time setup"; exit 0; fi\necho "homefield stub: $*"\n' >"$work/src/homefield-abc1234/bin/homefield"
 chmod +x "$work/src/homefield-abc1234/bin/homefield"
 echo "name: homefield" >"$work/src/homefield-abc1234/vm/lima.yaml"
 echo "#!/bin/sh" >"$work/src/homefield-abc1234/vm/provision.sh"
@@ -121,7 +123,7 @@ record "the tool is unpacked with the top directory stripped" "yes" "$([ -x "$ho
 record "the ref and commit are recorded" "repo=i2Dev-com/homefield ref=v0.3.1 commit=abc1234" "$(tr '\n' ' ' <"$home/share/.homefield-ref" | sed 's/ $//')"
 record "no staging directory is left behind" "0" "$(find "$home" -name '.homefield-install*' | wc -l | tr -d ' ')"
 record "no arguments and no terminal: install is not run" "no" "$(has "$out" 'homefield stub')"
-record "...and the next command is printed" "yes" "$(has "$out" 'homefield install --url https://github.com/<org>')"
+record "...and the next command is printed: install, because this release has no setup" "yes/no" "$(has "$out" 'homefield install --url https://github.com/<org>')/$(has "$out" 'homefield setup')"
 record "...saying a personal account uses a repository URL" "yes" "$(has "$out" 'a personal account needs a repository')"
 record "the summary names the ref and commit" "yes" "$(has "$out" 'installed homefield v0.3.1 (abc1234)')"
 
@@ -400,6 +402,17 @@ record "VM homefield-2 exists: the advice names it" "yes/yes/yes" \
 new_env gh curl limactl
 run_install HOMEFIELD_INSTANCE=homefield-2
 record "no VM homefield-2, no terminal: the set-up advice names it" "yes" "$(has "$out" '  homefield install --instance homefield-2 --url https://github.com/<org>')"
+# The advice names the first-time command the installed release has: a pinned
+# release older than `setup` must not be told to run it (it would print usage).
+new_env gh curl limactl
+run_install HOMEFIELD_INSTANCE=homefield-2 STUB_HAS_SETUP=1
+record "a release with setup: the set-up advice names setup, with the instance" "yes/no" "$(has "$out" '  homefield setup --instance homefield-2 --url https://github.com/<org>')/$(has "$out" 'homefield install')"
+new_env gh curl limactl
+run_install HOMEFIELD_INSTANCE=homefield-2 FAKE_VM_STATUS=Running STUB_HAS_SETUP=1
+record "...and the advice for an unfinished setup names setup too" "yes/no" "$(has "$out" '  homefield setup --instance homefield-2')/$(has "$out" 'homefield install')"
+new_env gh curl limactl
+run_install STUB_HAS_SETUP=1 -- --url https://github.com/acme
+record "...arguments still go to the installed tool's install, not setup" "homefield stub: install --url https://github.com/acme" "$(echo "$out" | grep 'homefield stub' || true)"
 new_env gh curl limactl
 run_install FAKE_VM_STATUS=Running
 record "the default instance: the advice has no --instance" "no" "$(has "$out" '--instance')"

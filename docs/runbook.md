@@ -181,7 +181,10 @@ fails if the group is missing).
 
 ## Setup (once per machine)
 
-Run `homefield preflight` before installing to verify the prerequisites (macOS,
+`homefield setup` is the whole first-time setup in one command: it runs the
+prerequisite check below and stops when any check fails, then does what
+`install` does (the steps below) and ends with a summary and the next steps.
+Run `homefield preflight` on its own to verify the prerequisites (macOS,
 Apple Silicon, Lima ≥ 2.0, gh, a python3 that actually runs, Homebrew) are in
 place. It exits 0 when all pass, 1 otherwise, with messages pointing to the
 exact fix command (`brew install lima`, `gh auth login`, and so on; a missing
@@ -189,23 +192,46 @@ Homebrew points at <https://brew.sh>). For gh it reads the active
 account from `gh auth status --json hosts`, so an App-installed token (which
 reports no scopes) is accepted; a token without `admin:org` only warns, because
 an organization URL needs that scope while a repository URL does not. The
-`install` command prints it first and then gates on its own subset — macOS,
-Apple Silicon, Lima — before creating anything:
+`setup` command prints it first and stops on any failed check, before creating
+or touching anything (a warning does not stop it); `install` prints it and then
+gates on its own subset — macOS, Apple Silicon, Lima — before creating
+anything:
 
 ```bash
 homefield preflight
 ```
 
 Run the [README's one-liner](../README.md#quick-start), or, from a checkout,
-`bin/homefield install --url https://github.com/<org>` (or
+`bin/homefield setup --url https://github.com/<org>` (or
 `https://github.com/<owner>/<repo>`, which is what a personal account needs;
 options: `bin/homefield help`). It needs
-Lima ≥ 2.0 (verified on 2.2.0), which the one-liner installs. It does every
-step below: it asks for the URL if it was not given, creates the VM and checks
+Lima ≥ 2.0 (verified on 2.2.0), which the one-liner installs. `setup` runs
+`install`, which does every step below (the one-liner hands over to `install`
+directly, which prints the preflight report but does not stop on it): it asks for the URL if it was not given, creates the VM and checks
 its isolation, provisions it, creates the runner group, registers the runner,
 waits until it is online and enables autostart. Right after the URL it says
 whether the owner is an organization or a personal account (see *Plans* under
 [Runner group](#runner-group)).
+
+`setup` ends with a summary instead of `install`'s short advice: one line each
+for the VM (created or already there), the isolation check, the runner group
+(created, found, or what is wrong with it), the registered runner (name and id)
+and whether it is online with its labels. A line starts with a check mark when
+the step is done and was seen to be true, and with `!` when it needs attention:
+a runner group wider than recommended, a group that could not be checked, a
+runner that was not online within the wait or whose group could not be
+confirmed. A `!` line does not change the exit status, which stays 0 once the
+runner is registered. The next steps follow: route a repository with
+`homefield adopt --repo <owner>/<repo>`, the guide
+([`docs/adopting.md`](adopting.md)), advice for the group's state, and the
+repositories that can use the runner now. That list is group access, not
+whether a repository's `CI_RUNNER` is `local`: for an organization it is the
+repositories the selected group admits (read from GitHub; a list that could not
+be read is said so), for a repository or personal registration the one
+repository, and for the Default group, a group wider than recommended or one
+that was not checked, no list. On an instance that is already registered,
+`setup` upgrades it like `install` and ends with a shorter summary that does not
+look at the runner group again.
 
 The wait polls for the runner to show online on GitHub, up to about 90 seconds (18 tries at 5 seconds each). It reports progress every 15 seconds — `waiting for <name> (up to 90 s, waited 15 s)` — and says nothing when the runner appears online before the first report. Those three settings are read from the environment where `install` runs: `ONLINE_WAIT_TRIES` (default 18), `ONLINE_WAIT_INTERVAL` (default 5) and `ONLINE_PROGRESS_CYCLES` (default 3, the polls per progress line; a value below 1 falls back to 3).
 
@@ -508,7 +534,7 @@ runner is idle. Repositories and their routing don't change.
 **On the same Mac**, a second instance:
 
 ```bash
-homefield install --instance homefield-2 --url https://github.com/<org>
+homefield setup --instance homefield-2 --url https://github.com/<org>
 ```
 
 It is named `<local hostname>-homefield-2`. An instance name follows Lima's
@@ -531,7 +557,7 @@ limactl create --name=homefield-2 --mount-none --tty=false ~/.local/share/homefi
 limactl start --tty=false homefield-2
 limactl copy 50-awscli.sh homefield-2:/tmp/50-awscli.sh
 limactl shell homefield-2 sudo install -D -m 755 /tmp/50-awscli.sh /etc/homefield/provision.d/50-awscli.sh
-homefield install --instance homefield-2 --url https://github.com/<org>
+homefield setup --instance homefield-2 --url https://github.com/<org>
 ```
 
 Memory is the cost: each VM holds up to its `memory` (5 GiB by default) on
@@ -540,7 +566,7 @@ take about 10 GiB. Check the first one's peak with `homefield memory` before
 going lower.
 
 **On another Mac**, install the tool there ([Setup](#setup-once-per-machine))
-and run `homefield install` with the same URL, label, group and packages, and
+and run `homefield setup` with the same URL, label, group and packages, and
 the hooks put in first as above. The runner is named after that Mac, and a name
 already in use is refused ([Failure modes](#failure-modes)). The runner group
 is used as it is. Registering at an organization needs an organization owner's

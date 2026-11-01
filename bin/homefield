@@ -4,6 +4,7 @@
 # manual steps in docs/runbook.md, which stays the reference for what each one
 # does and why.
 #
+#   bin/homefield setup [--url https://github.com/<org>[/<repo>]] [options]
 #   bin/homefield install [--url https://github.com/<org>[/<repo>]] [options]
 #   bin/homefield upgrade [--packages "..."] [--force]
 #   bin/homefield status
@@ -42,10 +43,18 @@ usage() {
 Usage: bin/homefield <command> [options]
 
 Commands:
+  setup      The whole first-time setup in one command: preflight must pass in
+             full (any failed check stops it with nothing created), then the
+             same steps as install, ending with a summary of what is done (and
+             what needs attention) and the next steps, including the
+             repositories that can already use the runner. Takes install's
+             options. On an instance that is already registered it upgrades,
+             like install.
   install    Create the VM (if needed), provision it and register the runner.
              For an organization it also creates the runner group, and it
              waits until the runner shows online. On an instance that is
-             already registered, this is an upgrade.
+             already registered, this is an upgrade. The lower-level command
+             setup runs: it reports preflight but does not stop on it.
   upgrade    Re-run provisioning on a registered runner: packages, hooks,
              runner binary. Refuses while a job is running, unless --force.
              Also refuses when the VM cannot be asked whether one is.
@@ -71,7 +80,8 @@ Commands:
   preflight  Check prerequisites for a fresh install: macOS, Apple Silicon,
               Lima, gh, python3, brew. Exits 0 when all pass, 1
               otherwise (with messages pointing to the exact fix command).
-              Designed to be run before install; install calls it first.
+              Designed to be run before install; setup and install call it
+              first (setup stops on a failure, install only reports it).
   adopt      Prepare a repository to use the runner: check that its routing is
              merged, and only then give it access to the runner group and
              switch it to local. Refuses a public repository.
@@ -85,7 +95,7 @@ Commands:
 Options:
   --instance NAME    Lima instance (default homefield, or $HOMEFIELD_INSTANCE)
 
-install:
+install (and setup, which takes the same options):
   --url URL          https://github.com/<org> or https://github.com/<owner>/<repo>
                      (asked for on a terminal when a new registration has none).
                      Whether the owner is an organization or a personal account
@@ -1131,15 +1141,9 @@ remove_taken_name() {
 # (docs/runbook.md, "Runner group"), so install makes sure it exists before
 # the runner joins it, instead of leaving that to a manual step.
 
-# list_groups <org>: one line per runner group, tab separated: name,
-# visibility, allows_public_repositories. Tabs, because a name may have spaces.
-list_groups() {
-  gh api --paginate "orgs/${1}/actions/runner-groups?per_page=100" \
-    --jq '.runner_groups[] | [.name, .visibility, (.allows_public_repositories | tostring)] | @tsv' 2>/dev/null
-}
-
-# list_groups_ids <org>: like list_groups, with the group's id as a fourth
-# column, for the calls that address a group by id.
+# list_groups_ids <org>: one line per runner group, tab separated: name,
+# visibility, allows_public_repositories and id (the id for the calls that
+# address a group by it). Tabs, because a name may have spaces.
 list_groups_ids() {
   gh api --paginate "orgs/${1}/actions/runner-groups?per_page=100" \
     --jq '.runner_groups[] | [.name, .visibility, (.allows_public_repositories | tostring), (.id | tostring)] | @tsv' 2>/dev/null
@@ -1225,6 +1229,9 @@ lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 # account has no groups), "repo" (no groups), "default" (every repository in
 # the org), "wide" (warned about), "narrow", "created" or "unchecked".
 GROUP_STATE=""
+# The id of the group GROUP_STATE "narrow" or "created" is about (empty when
+# unknown, or for any other state), for the listing of its repositories.
+GROUP_ID=""
 
 # The instance's state file on this Mac: what install did that reset has to
 # undo, as `key=value` lines. Today one key, group_created=<org>/<group
@@ -1264,6 +1271,7 @@ state_set() {
 # (ACCOUNT_MODE) has no groups at all: nothing is asked of GitHub.
 ensure_group() {
   local url="$1" group="${2:-homefield-ci}" scope org groups="" name vis pub found=0 why="" out gid
+  GROUP_ID=""
   scope="$(api_scope "$url")" || exit 1
   if [ "$ACCOUNT_MODE" = personal ]; then
     GROUP_STATE=personal
@@ -1284,9 +1292,9 @@ ensure_group() {
     group_assumed "$group" "gh is not installed" || group_unchecked "$group" "gh is not installed"
     return 0
   fi
-  if ! groups="$(list_groups "$org")"; then
+  if ! groups="$(list_groups_ids "$org")"; then
     if offer_scope_refresh; then
-      groups="$(list_groups "$org")" || why="gh could not list the organization's runner groups, even after the scope refresh"
+      groups="$(list_groups_ids "$org")" || why="gh could not list the organization's runner groups, even after the scope refresh"
     else
       why="gh could not list the organization's runner groups (needs an org owner with the admin:org scope)"
     fi
@@ -1301,7 +1309,7 @@ ensure_group() {
   # (the registration token) has another cause, and a refresh would not help.
   scope_refresh_asked=1
 
-  while IFS=$'\t' read -r name vis pub; do
+  while IFS=$'\t' read -r name vis pub gid; do
     [ "$(lower "$name")" = "$(lower "$group")" ] || continue
     found=1
     why=""
@@ -1316,6 +1324,7 @@ ensure_group() {
       echo "homefield: narrow it to selected repositories with public ones off (docs/runbook.md, \"Runner group\")." >&2
     else
       GROUP_STATE=narrow
+      GROUP_ID="$gid"
       log "runner group ${name} exists (selected repositories only, no public ones)"
     fi
   done <<<"$groups"
@@ -1348,6 +1357,7 @@ ensure_group() {
   # reset the one fact it needs to undo this (the first "id" in the response is
   # the group's). Without an id, reset finds the group by its name.
   gid="$(printf '%s' "$out" | grep -o '"id": *[0-9][0-9]*' | head -1 | tr -cd '0-9')" || gid=""
+  GROUP_ID="$gid"
   state_set group_created "${org}/${group}/${gid}" ||
     echo "homefield: warning: could not record that this install created the runner group ${group} (${org}); reset will not delete it, so remove it by hand if you roll back (docs/runbook.md, \"Rolling back a failed install\")" >&2
   log "created runner group ${group}. No repository can use it yet: homefield adopt --repo <owner>/<repo> adds one (docs/adopting.md, step 5)"
@@ -1373,8 +1383,26 @@ ONLINE_PROGRESS_CYCLES=${ONLINE_PROGRESS_CYCLES:-3}
 # online an organization's groups are asked for it (find_runner_group); when
 # that cannot be done, the report says what was observed instead of assuming
 # the expected group.
+#
+# What it saw is also left for setup's summary, whatever the log said:
+# WAIT_RESULT is "online", "not-online" (the wait ran out; WAIT_SEEN is the
+# status GitHub listed, if any) or "unchecked" (nothing could be asked).
+# When online, WAIT_LABELS is GitHub's comma-separated label list, and for an
+# organization WAIT_GROUP_STATE says whether the groups confirmed the runner is
+# in the expected group ("match"), in another ("mismatch", WAIT_GROUP naming it)
+# or could not say ("unconfirmed"); empty when the groups were not asked.
+WAIT_RESULT=""
+WAIT_SEEN=""
+WAIT_LABELS=""
+WAIT_GROUP=""
+WAIT_GROUP_STATE=""
 wait_online() {
   local url="$1" name="$2" group="$3" scope org rows="" n status rid labels grp row rc tries=0 page seen=""
+  WAIT_RESULT="unchecked"
+  WAIT_SEEN=""
+  WAIT_LABELS=""
+  WAIT_GROUP=""
+  WAIT_GROUP_STATE=""
   page="$(runners_page "$url")" || exit 1
   if [ -z "$name" ] || ! command -v gh >/dev/null; then
     log "check that the runner is online at ${page}"
@@ -1397,6 +1425,8 @@ wait_online() {
       [ "$n" = "$name" ] || continue
       seen="$status"
       if [ "$status" = online ]; then
+        WAIT_RESULT=online
+        WAIT_LABELS="$labels"
         if [[ "$scope" == orgs/* ]]; then
           org="${scope#orgs/}"
           rc=0
@@ -1404,15 +1434,27 @@ wait_online() {
           case $rc in
             0)
               IFS=$'\t' read -r grp _ <<<"$row"
+              WAIT_GROUP="$grp"
               if [ "$grp" = "$group" ]; then
+                WAIT_GROUP_STATE=match
                 log "${name} is online: labels ${labels}, group ${grp}"
               else
+                WAIT_GROUP_STATE=mismatch
                 log "${name} is online: labels ${labels}, group ${grp} (expected ${group})"
               fi
               ;;
-            1) log "${name} is online: labels ${labels}, in none of the runner groups gh listed for ${org}" ;;
-            2) log "${name} is online: labels ${labels}, group not found (gh could not list the runners of every runner group in ${org})" ;;
-            *) log "${name} is online: labels ${labels}, group not checked (gh could not list the runner groups of ${org})" ;;
+            1)
+              WAIT_GROUP_STATE=unconfirmed
+              log "${name} is online: labels ${labels}, in none of the runner groups gh listed for ${org}"
+              ;;
+            2)
+              WAIT_GROUP_STATE=unconfirmed
+              log "${name} is online: labels ${labels}, group not found (gh could not list the runners of every runner group in ${org})"
+              ;;
+            *)
+              WAIT_GROUP_STATE=unconfirmed
+              log "${name} is online: labels ${labels}, group not checked (gh could not list the runner groups of ${org})"
+              ;;
           esac
         else
           log "${name} is online: labels ${labels}"
@@ -1423,6 +1465,8 @@ wait_online() {
     tries=$((tries + 1))
     [ "$tries" -ge "$ONLINE_WAIT_TRIES" ] || sleep "$ONLINE_WAIT_INTERVAL"
   done
+  WAIT_RESULT="not-online"
+  WAIT_SEEN="$seen"
   echo "homefield: warning: ${name} is not online after $((ONLINE_WAIT_TRIES * ONLINE_WAIT_INTERVAL)) s (${seen:-not listed yet}); check ${page} and bin/homefield status" >&2
   return 0
 }
@@ -1446,6 +1490,38 @@ enable_autostart() {
 }
 
 # ── Commands ────────────────────────────────────────────────────────────────
+# group_advice <group> <slug> <first> <rest>: the advice about the runner group
+# that ensure_group found (GROUP_STATE), for install's closing message and
+# setup's next steps. <first> starts its first line and <rest> the following
+# ones, so each caller can make it a bullet or a numbered item.
+group_advice() {
+  local group="${1:-homefield-ci}" slug="$2" first="$3" rest="$4" verb=install
+  [ "$SETUP" != 1 ] || verb=setup
+  case "$GROUP_STATE" in
+    narrow | created)
+      echo "${first}It is in the runner group ${group}, which admits only the"
+      echo "${rest}repositories added to it: homefield adopt --repo <owner>/<repo> adds one."
+      ;;
+    default)
+      echo "${first}It is in the Default group: every repository in the organization can"
+      echo "${rest}use it (docs/runbook.md, \"Runner group\")."
+      ;;
+    wide)
+      echo "${first}Narrow the runner group ${group} as warned above, then add"
+      echo "${rest}the repositories that should use it (docs/runbook.md, \"Runner group\")."
+      ;;
+    unchecked)
+      echo "${first}Check the runner group ${group} by hand: selected repositories,"
+      echo "${rest}public ones off (docs/runbook.md, \"Runner group\")."
+      ;;
+    personal)
+      echo "${first}It serves only ${slug}: a personal account has no account-wide runners or"
+      echo "${rest}runner groups. Another repository needs its own registration and its own VM:"
+      echo "${rest}homefield ${verb} --instance <name> --url https://github.com/<owner>/<repo>."
+      ;;
+  esac
+}
+
 # registered_next_steps <group> <url>: install's closing advice, by what
 # ensure_group found (GROUP_STATE).
 registered_next_steps() {
@@ -1453,29 +1529,7 @@ registered_next_steps() {
   slug="${slug#https://github.com/}"
   echo
   echo "Registered. Next:"
-  case "$GROUP_STATE" in
-    narrow | created)
-      echo "  - It is in the runner group ${group:-homefield-ci}, which admits only the"
-      echo "    repositories added to it: homefield adopt --repo <owner>/<repo> adds one."
-      ;;
-    default)
-      echo "  - It is in the Default group: every repository in the organization can"
-      echo "    use it (docs/runbook.md, \"Runner group\")."
-      ;;
-    wide)
-      echo "  - Narrow the runner group ${group:-homefield-ci} as warned above, then add"
-      echo "    the repositories that should use it (docs/runbook.md, \"Runner group\")."
-      ;;
-    unchecked)
-      echo "  - Check the runner group ${group:-homefield-ci} by hand: selected repositories,"
-      echo "    public ones off (docs/runbook.md, \"Runner group\")."
-      ;;
-    personal)
-      echo "  - It serves only ${slug}: a personal account has no account-wide runners or"
-      echo "    runner groups. Another repository needs its own registration and its own VM:"
-      echo "    homefield install --instance <name> --url https://github.com/<owner>/<repo>."
-      ;;
-  esac
+  group_advice "$group" "$slug" "  - " "    "
   cat <<EOF
   - Route jobs from a repository: docs/adopting.md, then
     homefield adopt --repo <owner>/<repo> (group access and the switch).
@@ -1483,8 +1537,161 @@ registered_next_steps() {
 EOF
 }
 
+# ── setup's summary ─────────────────────────────────────────────────────────
+# `homefield setup` is install behind a stricter gate (preflight must pass in
+# full) and with a closing summary instead of registered_next_steps. A line
+# starts with a check mark for what was done and is true, or "!" for what
+# needs attention; nothing is claimed that was not seen. SETUP is 1 for setup.
+SETUP=0
+# What the VM's status was before install touched it (empty: there was none).
+SETUP_VM_WAS=""
+
+# setup_vm_lines: the VM and its isolation. Both are facts by the time this is
+# called: ensure_vm left the VM running, and verify_isolation dies otherwise.
+setup_vm_lines() {
+  if [ -z "$SETUP_VM_WAS" ]; then
+    echo "✓ VM ${INSTANCE} created (Running)"
+  elif [ "$SETUP_VM_WAS" = Running ]; then
+    echo "✓ VM ${INSTANCE} already existed (Running)"
+  else
+    echo "✓ VM ${INSTANCE} already existed (${SETUP_VM_WAS}); started"
+  fi
+  echo "✓ Isolation verified (no host mounts)"
+}
+
+# setup_group_line <group> <slug>: the runner group, by what ensure_group found.
+setup_group_line() {
+  local group="${1:-homefield-ci}" slug="$2"
+  case "$GROUP_STATE" in
+    created) echo "✓ Runner group ${group} created (selected repositories, public off)" ;;
+    narrow) echo "✓ Runner group ${group} exists (selected repositories, public off)" ;;
+    default) echo "✓ Runner group Default (every repository in the organization can use it)" ;;
+    wide) echo "! Runner group ${group} is wider than recommended: narrow it (docs/runbook.md, \"Runner group\")" ;;
+    unchecked) echo "! Runner group ${group} was not checked: confirm it by hand (selected repositories, public off)" ;;
+    personal) echo "✓ Registered to ${slug} only (a personal account has no runner groups)" ;;
+    repo) echo "✓ Registered to ${slug} only (a repository has no runner groups)" ;;
+  esac
+}
+
+# setup_runner_lines <url> <name> <id>: the registration, and what wait_online
+# saw of the runner on GitHub.
+setup_runner_lines() {
+  local url="$1" name="$2" id="$3"
+  if [ -z "$name" ]; then
+    echo "! Runner registered, but its name could not be read from the VM: see $(runners_page "$url")"
+  elif [ -n "$id" ]; then
+    echo "✓ Runner registered (${name}, id ${id})"
+  else
+    echo "✓ Runner registered (${name})"
+  fi
+  case "$WAIT_RESULT" in
+    online)
+      case "$WAIT_GROUP_STATE" in
+        match) echo "✓ Runner online (labels: ${WAIT_LABELS//,/ }; group ${WAIT_GROUP})" ;;
+        *) echo "✓ Runner online (labels: ${WAIT_LABELS//,/ })" ;;
+      esac
+      case "$WAIT_GROUP_STATE" in
+        mismatch) echo "! Runner is in the runner group ${WAIT_GROUP}, not the one asked for: check it at $(runners_page "$url")" ;;
+        unconfirmed) echo "! Its runner group could not be confirmed: check it at $(runners_page "$url")" ;;
+      esac
+      ;;
+    not-online)
+      echo "! Runner not online yet (GitHub lists it as: ${WAIT_SEEN:-not listed yet}): check $(runners_page "$url") and homefield status"
+      ;;
+    *)
+      echo "! Runner online check skipped (GitHub could not be asked): check $(runners_page "$url")"
+      ;;
+  esac
+}
+
+# setup_repositories <slug>: who can use the runner now. This is group access,
+# not whether a repository's CI_RUNNER switch is on, so it says "can use". A
+# list that could not be read is said so, never printed as an empty one.
+setup_repositories() {
+  local slug="$1" org="${1%%/*}" repos r
+  echo
+  echo "Repositories that can use this runner:"
+  case "$GROUP_STATE" in
+    personal | repo)
+      echo "  ${slug} (this runner is registered to it)"
+      ;;
+    narrow | created)
+      if [ -z "$GROUP_ID" ]; then
+        echo "  could not be listed (the group's id is not known); see the runner group's page in ${org}'s settings"
+      elif repos="$(group_repositories "$org" "$GROUP_ID")"; then
+        if [ -z "$repos" ]; then
+          echo "  none yet: homefield adopt --repo <owner>/<repo> adds one"
+        else
+          while IFS= read -r r; do
+            if [ -n "$r" ]; then echo "  ${r}"; fi
+          done <<<"$repos"
+        fi
+      else
+        echo "  could not be listed (gh could not read the runner group's repositories); see the runner group's page in ${org}'s settings"
+      fi
+      ;;
+    default) echo "  every repository in ${org} (the Default group admits them all)" ;;
+    wide) echo "  not listed: this group admits repositories by kind, not from a list (narrow it, as warned above)" ;;
+    *) echo "  not listed: the runner group was not checked, so who can use it is unknown" ;;
+  esac
+}
+
+# setup_next_steps <group> <slug>: what to do now, then who can use the runner.
+setup_next_steps() {
+  local group="$1" slug="$2"
+  echo
+  echo "Next steps:"
+  echo "  1. Route a repository: homefield adopt --repo <owner>/<repo>"
+  echo "     (add --setup and it opens the pull request with the routing edits)"
+  echo "  2. See docs/adopting.md for the full guide"
+  group_advice "$group" "$slug" "  3. " "     "
+  setup_repositories "$slug"
+}
+
+# setup_summary <group> <url> <name> <id>: the end of a fresh setup.
+setup_summary() {
+  local group="$1" url="$2" slug="${2%/}"
+  slug="${slug#https://github.com/}"
+  echo
+  setup_vm_lines
+  setup_group_line "$group" "$slug"
+  setup_runner_lines "$url" "$3" "$4"
+  setup_next_steps "$group" "$slug"
+}
+
+# setup_upgrade_summary: the end of a setup that found its runner registered and
+# upgraded it. The registration and its group were not looked at again, so
+# neither is claimed. Its settings are read back from the VM for the line.
+setup_upgrade_summary() {
+  local name="" id=""
+  { IFS= read -r name || true; IFS= read -r id || true; } < <(runner_setting agentName agentId)
+  echo
+  setup_vm_lines
+  if [ -n "$name" ] && [ -n "$id" ]; then
+    echo "✓ Runner ${name} (id ${id}) was already registered: upgraded in place"
+  elif [ -n "$name" ]; then
+    echo "✓ Runner ${name} was already registered: upgraded in place"
+  else
+    echo "✓ The runner was already registered: upgraded in place"
+  fi
+  echo
+  echo "Next steps:"
+  echo "  1. Route a repository: homefield adopt --repo <owner>/<repo>"
+  echo "     (add --setup and it opens the pull request with the routing edits)"
+  echo "  2. See docs/adopting.md for the full guide"
+  echo "  3. homefield status shows the runner at any time"
+}
+
+# cmd_setup: install's options and steps, with the stricter preflight gate and
+# the summary (SETUP, read by cmd_install).
+cmd_setup() {
+  SETUP=1
+  cmd_install "$@"
+}
+
 cmd_install() {
-  local url="" label="" name="" group="" packages="" packages_set=0 cpus="" memory="" autostart=1 replace=0
+  local url="" label="" name="" group="" packages="" packages_set=0 cpus="" memory="" autostart=1 replace=0 cmd=install
+  [ "$SETUP" != 1 ] || cmd=setup
   while [ $# -gt 0 ]; do
     case "$1" in
       --url) url="${2:?--url needs a value}"; shift 2 ;;
@@ -1498,19 +1705,28 @@ cmd_install() {
       --group-exists) GROUP_EXISTS=1; shift ;;
       --replace) replace=1; shift ;;
       --personal)
-        [ "$ACCOUNT_FORCE" != org ] || die "install: --personal and --org cannot be used together"
+        [ "$ACCOUNT_FORCE" != org ] || die "${cmd}: --personal and --org cannot be used together"
         ACCOUNT_FORCE=personal; shift ;;
       --org)
-        [ "$ACCOUNT_FORCE" != personal ] || die "install: --personal and --org cannot be used together"
+        [ "$ACCOUNT_FORCE" != personal ] || die "${cmd}: --personal and --org cannot be used together"
         ACCOUNT_FORCE=org; shift ;;
-      *) die "install: unknown option $1 (see bin/homefield help)" ;;
+      *) die "${cmd}: unknown option $1 (see bin/homefield help)" ;;
     esac
   done
   # The readiness report comes first, before anything is created, and install
   # then gates on its own subset of it — macOS, arm64, Lima — which check_host
   # is: gh, python3 and brew are what the tool needs elsewhere (adopt, report,
   # the one-liner), and install itself can proceed without them.
-  cmd_preflight || true
+  # setup stops on a failed check instead (FAIL only: a WARN is not one), and
+  # before anything else, so a failed setup has created and touched nothing.
+  if [ "$SETUP" = 1 ]; then
+    local preflight_rc=0
+    cmd_preflight || preflight_rc=$?
+    [ "$preflight_rc" -eq 0 ] ||
+      die "setup stopped: fix the failed checks above and run it again; nothing was created"
+  else
+    cmd_preflight || true
+  fi
   check_host
   # Everything that can be checked is checked before anything is created: the
   # URL (asked for if it was not given), the organization, the runner group.
@@ -1521,6 +1737,7 @@ cmd_install() {
   # for the answer to "registered?" (a registered instance is just upgraded).
   local prepared=0
   vm_lookup
+  SETUP_VM_WAS="$VM_STATUS"
   if [ -z "$VM_STATUS" ]; then
     prepare_registration
     prepared=1
@@ -1535,6 +1752,7 @@ cmd_install() {
     local args=()
     [ "$packages_set" = 1 ] && args+=(--packages "$packages")
     cmd_upgrade "${args[@]+"${args[@]}"}"
+    [ "$SETUP" != 1 ] || setup_upgrade_summary
     return
   fi
 
@@ -1551,11 +1769,15 @@ cmd_install() {
   run_provision "RUNNER_TOKEN=${token}"$'\n' "${env[@]}"
   token=""
   [ "$autostart" = 1 ] && enable_autostart
-  # The name the runner registered under, read back from its config.
-  local registered_name=""
-  registered_name="$(runner_setting agentName)" || registered_name=""
+  # The name and id the runner registered under, read back from its config.
+  local registered_name="" registered_id=""
+  { IFS= read -r registered_name || true; IFS= read -r registered_id || true; } < <(runner_setting agentName agentId)
   wait_online "$url" "$registered_name" "${group:-homefield-ci}"
-  registered_next_steps "${group:-homefield-ci}" "$url"
+  if [ "$SETUP" = 1 ]; then
+    setup_summary "${group:-homefield-ci}" "$url" "$registered_name" "$registered_id"
+  else
+    registered_next_steps "${group:-homefield-ci}" "$url"
+  fi
 }
 
 cmd_upgrade() {
@@ -3620,10 +3842,11 @@ main() {
   [ -n "$cmd" ] || { usage >&2; exit 1; }
   # Only the commands that act on the VM: preflight, route, adopt, report and
   # version never use it, so a stale HOMEFIELD_INSTANCE does not stop them.
-  case "$cmd" in install | upgrade | status | diagnose | uninstall | reset | memory) check_instance ;; esac
+  case "$cmd" in setup | install | upgrade | status | diagnose | uninstall | reset | memory) check_instance ;; esac
   set -- "${rest[@]+"${rest[@]}"}"
   case "$cmd" in
     preflight) [ $# -eq 0 ] || die "preflight takes no options (see bin/homefield help)"; cmd_preflight ;;
+    setup) cmd_setup "$@" ;;
     install) cmd_install "$@" ;;
     upgrade) cmd_upgrade "$@" ;;
     status) cmd_status "$@" ;;
