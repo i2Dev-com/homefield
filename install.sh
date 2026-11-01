@@ -267,7 +267,7 @@ main() {
     echo "The VM ${INSTANCE} already exists and was not changed. To update it too:"
     echo "  homefield upgrade${on}"
     echo "If its setup never finished (homefield status${on} shows no registration), finish it with:"
-    echo "  homefield install${on}"
+    echo "  homefield setup${on}"
     return 0
   fi
   if [ $# -gt 0 ] || have_tty; then
@@ -279,7 +279,7 @@ main() {
   fi
   echo
   echo "Next, set up the runner:"
-  echo "  homefield install${on} --url https://github.com/<org>      # or https://github.com/<owner>/<repo> (a personal account needs a repository)"
+  echo "  homefield setup${on} --url https://github.com/<org>      # or https://github.com/<owner>/<repo> (a personal account needs a repository)"
 }
 
 main "$@"

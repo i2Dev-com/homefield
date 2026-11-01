@@ -25,7 +25,7 @@ It has three parts:
   credentials. It does have network access, including to the Mac's own
   services ([Security model](#security-model)).
 - **A one-command setup** ([`install.sh`](install.sh), then
-  [`bin/homefield`](bin/homefield)): install, upgrade, status, diagnose, uninstall, reset.
+  [`bin/homefield`](bin/homefield)): setup, install, upgrade, status, diagnose, uninstall, reset.
 - **A routing guard** ([`routing-guard`](routing-guard/action.yml)): a
   GitHub Action that fails CI unless every job that can reach the runner uses
   the one reviewed `runs-on` expression, with its safety guards, and the set of
@@ -61,8 +61,17 @@ without one. If the lookup cannot run (the API is unreachable, or your token
 cannot see the account), `--personal` or `--org` says which it is and skips the
 lookup; they cannot be combined.
 
-From a checkout, with Lima ≥ 2.0, run `bin/homefield install --url
-https://github.com/<org>` instead. Running the one-liner again upgrades the
+From a checkout, with Lima ≥ 2.0, run `bin/homefield setup --url
+https://github.com/<org>` instead. `setup` is the whole first-time setup in one
+command: it runs `preflight` first and stops, with nothing created, if any check
+fails (a warning does not stop it); then it does what `install` does, and ends
+with a summary, one line per step, that marks what is done with a check mark and
+what needs attention with `!` (a runner group wider than recommended, a runner
+that is not online yet), followed by the next steps and the repositories that
+can already use the runner. It takes `install`'s options, and on an instance
+that is already registered it upgrades it, as `install` does. `install` stays
+the lower-level command: it prints the preflight report but does not stop on it,
+and ends with its own short advice. Running the one-liner again upgrades the
 tool and leaves an existing VM alone; `homefield upgrade` updates the VM,
 `homefield version` says when a newer release exists, and `homefield status`
 shows the runner and whether GitHub still lists it. When something is wrong,
@@ -75,14 +84,15 @@ When an install stops partway, `homefield reset` rolls back whatever it left
 after listing it and asking; it is a no-op when there is nothing to undo
 ([runbook](docs/runbook.md#rolling-back-a-failed-install)).
 
-Before a checkout install, `homefield preflight` reports on everything the tool
+Before a checkout setup, `homefield preflight` reports on everything the tool
 needs: macOS, Apple Silicon, Lima ≥ 2.0, gh (logged in; the `admin:org` scope is
 only a warning, since a repository URL does not need it), python3 and Homebrew.
 It exits 0 when every check passes and 1 otherwise, naming the command that
-fixes each failure (`brew install lima`, `gh auth login`, and so on); `install`
-prints it first and then gates on its own subset — macOS, Apple Silicon and
-Lima — before creating anything, so gh, python3 or Homebrew missing stops
-`preflight` but not `install`. The one-liner checks only macOS, Apple Silicon and
+fixes each failure (`brew install lima`, `gh auth login`, and so on); `setup`
+prints it first and stops on any failure, while `install` prints it and then
+gates on its own subset — macOS, Apple Silicon and Lima — before creating
+anything, so gh, python3 or Homebrew missing stops `preflight` and `setup` but
+not `install`. The one-liner checks only macOS, Apple Silicon and
 Lima, and needs Homebrew to install Lima.
 
 Registration needs a one-hour token, and the group needs the `admin:org`

@@ -23,6 +23,7 @@ bash tests/report.sh               # `bin/homefield report`
 bash tests/install-sh.sh           # install.sh
 bash tests/runner-group.sh         # runner group, wait for online, `version`
 bash tests/account-type.sh         # `bin/homefield install`: personal account or organization, --personal / --org
+bash tests/setup.sh                # `bin/homefield setup`: the preflight gate, the summary, the next steps
 bash tests/adopt.sh                # `bin/homefield adopt`
 bash tests/preflight.sh            # `bin/homefield preflight`, the pre-install readiness check
 shellcheck bin/homefield install.sh vm/provision.sh routing-guard/tests/run.sh tests/*.sh

@@ -121,7 +121,7 @@ record "the tool is unpacked with the top directory stripped" "yes" "$([ -x "$ho
 record "the ref and commit are recorded" "repo=i2Dev-com/homefield ref=v0.3.1 commit=abc1234" "$(tr '\n' ' ' <"$home/share/.homefield-ref" | sed 's/ $//')"
 record "no staging directory is left behind" "0" "$(find "$home" -name '.homefield-install*' | wc -l | tr -d ' ')"
 record "no arguments and no terminal: install is not run" "no" "$(has "$out" 'homefield stub')"
-record "...and the next command is printed" "yes" "$(has "$out" 'homefield install --url https://github.com/<org>')"
+record "...and the next command is printed" "yes" "$(has "$out" 'homefield setup --url https://github.com/<org>')"
 record "...saying a personal account uses a repository URL" "yes" "$(has "$out" 'a personal account needs a repository')"
 record "the summary names the ref and commit" "yes" "$(has "$out" 'installed homefield v0.3.1 (abc1234)')"
 
@@ -396,10 +396,10 @@ record "install.sh with arguments leaves the instance to bin/homefield" "0/homef
 new_env gh curl limactl
 run_install HOMEFIELD_INSTANCE=homefield-2 FAKE_VM_STATUS=Running
 record "VM homefield-2 exists: the advice names it" "yes/yes/yes" \
-  "$(has "$out" '  homefield upgrade --instance homefield-2')/$(has "$out" 'homefield status --instance homefield-2 shows')/$(has "$out" '  homefield install --instance homefield-2')"
+  "$(has "$out" '  homefield upgrade --instance homefield-2')/$(has "$out" 'homefield status --instance homefield-2 shows')/$(has "$out" '  homefield setup --instance homefield-2')"
 new_env gh curl limactl
 run_install HOMEFIELD_INSTANCE=homefield-2
-record "no VM homefield-2, no terminal: the set-up advice names it" "yes" "$(has "$out" '  homefield install --instance homefield-2 --url https://github.com/<org>')"
+record "no VM homefield-2, no terminal: the set-up advice names it" "yes" "$(has "$out" '  homefield setup --instance homefield-2 --url https://github.com/<org>')"
 new_env gh curl limactl
 run_install FAKE_VM_STATUS=Running
 record "the default instance: the advice has no --instance" "no" "$(has "$out" '--instance')"

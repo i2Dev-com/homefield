@@ -88,6 +88,9 @@ jobs:
       - name: Personal account or organization (install)
         run: bash tests/account-type.sh
 
+      - name: bin/homefield setup
+        run: bash tests/setup.sh
+
       - name: bin/homefield adopt
         run: bash tests/adopt.sh
 

@@ -1,7 +1,9 @@
 # Adopting the local runner in a repository
 
 A checklist for routing a repository's pull-request CI to the local runner,
-once it is installed ([README: Quick start](../README.md#quick-start)).
+once it is installed ([README: Quick start](../README.md#quick-start)); the
+closing summary of `homefield setup` points here, and lists the repositories
+that can already use the runner.
 Steps 1–4 are edits to the repository's workflows; `homefield adopt` (step 5)
 does the rest of the setup and refuses to switch the repository on until
 those edits are merged. You can write steps 1–4 by hand, or have
@@ -230,7 +232,7 @@ step:
    is not looked at (it is open to every repository in the organization), and
    neither is a group whose list could not be read. A **personal-account**
    repository always adopts on its own, with its own repository-scoped
-   registration and no group step (`homefield install` detects a personal
+   registration and no group step (`homefield setup`, like `install`, detects a personal
    account, or `--personal` says so, and registers one repository):
    GitHub gives a personal account no account-wide runners or groups (one VM
    per repository for now,

@@ -13,6 +13,29 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ### Added
 
+- `homefield setup [install options]` — the first-time setup in one command.
+  It runs `preflight` first and, if any check fails (a warning does not count),
+  exits 1 saying so before creating or touching anything: no VM, no runner
+  group, no registration, no state file, and no GitHub write. Then it runs
+  `install`'s steps and ends with a summary instead of `install`'s advice: a
+  check mark line each for the VM (created, or already there), the isolation
+  check, the runner group, the registered runner (name and id) and the runner
+  online with its labels, and a `!` line for what needs attention (a group wider
+  than recommended or not checked, a runner not online within the wait or whose
+  group could not be confirmed); a `!` does not change the exit status, which
+  stays 0 once the runner is registered. The next steps follow: route a
+  repository with `homefield adopt --repo <owner>/<repo>`, the guide
+  (`docs/adopting.md`), the advice for the group's state, and the repositories
+  that can use the runner now (group access, not `CI_RUNNER`: an organization's
+  selected group is listed, or said to be empty or not listable; a repository or
+  personal registration names its repository; Default, wide and unchecked groups
+  say why there is no list). On an instance that is already registered it
+  upgrades it, like `install`, and prints a shorter summary. `install` is
+  unchanged (its output is byte for byte what it was) and stays the lower-level
+  command and the upgrade path. `install.sh`'s closing hint, and its advice for
+  an unfinished setup, now name `homefield setup`; the one-liner itself still
+  hands over to `homefield install`.
+  [#129](https://github.com/i2Dev-com/homefield/issues/129)
 - `homefield reset [--keep-vm] [--keep-group] [--remove-tool]` rolls back a
   complete or half-finished install of one instance (a failed `install`, an
   `uninstall` that stopped partway, a VM deleted by hand), and is a no-op that
