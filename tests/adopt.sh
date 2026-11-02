@@ -1019,7 +1019,7 @@ record "...the question is not asked, and the summary counts both jobs" "no/yes"
   "$(has "$out" 'uses CI minutes')/$(has "$out" 'verify: 2 on the local runner, 0 on GitHub-hosted runners, 0 still waiting for a runner')"
 record "...no warning about a hosted job, no advice about a failed one" "no/no" "$(has "$out" 'warning:')/$(has "$out" 'Job fails only on the local runner')"
 record "...the re-run comes after the run was read, and the report ends adopt with only what is left by hand" "yes/yes/no" \
-  "$(before "$(cat "$calls")" 'gh api repos/acme/app/actions/runs/9001' 'gh run rerun 9001')/$(has "$out" 'still by hand: add any tools the jobs lack, and record the setup in the repository (docs/adopting.md, step 7)')/$(has "$out" 'steps 6 and 7')"
+  "$(before "$(cat "$calls")" 'gh api repos/acme/app/actions/runs/9001' 'gh run rerun 9001')/$(has "$out" 'still by hand: add any tools the jobs lack, and note why a job stays hosted if you want to (docs/adopting.md, step 7)')/$(has "$out" 'steps 6 and 7')"
 
 verify GH_CI_RUNNER=local -- --verify
 record "...an already local CI_RUNNER is verified too, without writing the variable" "0/1/0" "$rc/$(rerun_n)/$(called 'variable set')"
