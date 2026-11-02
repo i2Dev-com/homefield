@@ -50,6 +50,22 @@ does not have.
                             to BRANCH with MESSAGE; SHA is "none" for a new
                             file
   adopt.py quote TEXT       TEXT percent-encoded for a URL path
+  adopt.py verify-run       stdin: the JSON of `gh run list --json databaseId,
+                            status,url,displayTitle`. Prints the first run as
+                            id, status, url and title joined by SEP (nothing
+                            for an empty list)
+  adopt.py verify-attempt   stdin: the JSON of a workflow run. Prints its
+                            run_attempt
+  adopt.py verify-status    stdin: the JSON of a workflow run. Prints its
+                            status
+  adopt.py verify-jobs ATTEMPT
+                            stdin: the JSON of the jobs of a run, one object
+                            per page as `gh api --paginate` prints them. Prints
+                            one line per job whose run_attempt is greater than
+                            ATTEMPT (jobs of an earlier attempt can still be
+                            listed right after a re-run): name, status,
+                            conclusion, runner_name and labels (joined by ",")
+                            separated by SEP; absent values are empty
 """
 import argparse
 import base64
@@ -102,6 +118,9 @@ KEY = re.compile(r"""^(\s*)(-\s+)?["']?([A-Za-z0-9_-]+)["']?:\s*(.*?)\s*$""")
 # routing_guard.py: group 1 is the indent, 2 the dash, 3 the key.
 BLOCK_START = re.compile(r"""^(\s*)(-\s+)?([^\s#][^#]*?:\s+)?(?:[&!]\S*\s+)*[|>][-+0-9]*\s*$""")
 CACHE_KEY = re.compile(r"^(\s*)(?:-\s+)?(key|restore-keys):\s*(.*?)\s*$")
+# What verify-* print between fields: not whitespace, so that bash's `read`
+# keeps an empty field (a job with no runner yet) empty.
+SEP = "\x1f"
 
 
 def read_lines(path):
@@ -880,6 +899,71 @@ def setup_plan(directory, out, expression, label, events, dependabot, fallback, 
     return routed, written
 
 
+def clean(value):
+    """A value of the GitHub API as one printable field: the names of jobs and
+    runs are set by whoever wrote the workflow and are printed to a terminal,
+    so control characters (an escape sequence, SEP itself) go."""
+    if value is None:
+        return ""
+    return "".join(ch if ch.isprintable() else "?" for ch in str(value))
+
+
+def json_documents(text):
+    """Every JSON value in text, one after another: what `gh api --paginate`
+    prints is one object per page."""
+    decoder = json.JSONDecoder()
+    at = 0
+    out = []
+    while True:
+        while at < len(text) and text[at].isspace():
+            at += 1
+        if at >= len(text):
+            return out
+        value, at = decoder.raw_decode(text, at)
+        out.append(value)
+
+
+def verify_run(text):
+    runs = json.loads(text)
+    if not isinstance(runs, list):
+        raise ValueError("not a list of runs")
+    if not runs:
+        return None
+    run = runs[0]
+    if not isinstance(run.get("databaseId"), int):
+        raise ValueError("a run without a databaseId")
+    return SEP.join(clean(run.get(key)) for key in ("databaseId", "status", "url", "displayTitle"))
+
+
+def verify_attempt(text):
+    attempt = json.loads(text).get("run_attempt")
+    if not isinstance(attempt, int) or isinstance(attempt, bool):
+        raise ValueError("a run without a run_attempt")
+    return attempt
+
+
+def verify_status(text):
+    status = json.loads(text).get("status")
+    if not isinstance(status, str) or not status:
+        raise ValueError("a run without a status")
+    return clean(status)
+
+
+def verify_jobs(text, after):
+    rows = []
+    for page in json_documents(text):
+        if not isinstance(page, dict) or not isinstance(page.get("jobs"), list):
+            raise ValueError("not the jobs of a run")
+        for job in page["jobs"]:
+            attempt = job.get("run_attempt", 1)
+            if not isinstance(attempt, int) or attempt <= after:
+                continue
+            labels = ",".join(clean(label) for label in job.get("labels") or [])
+            fields = [clean(job.get(key)) for key in ("name", "status", "conclusion", "runner_name")]
+            rows.append(SEP.join([*fields, labels]))
+    return rows
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -906,6 +990,10 @@ def main():
     c.add_argument("message")
     c.add_argument("branch")
     sub.add_parser("quote").add_argument("text")
+    sub.add_parser("verify-run")
+    sub.add_parser("verify-attempt")
+    sub.add_parser("verify-status")
+    sub.add_parser("verify-jobs").add_argument("attempt", type=int)
     args = ap.parse_args()
 
     if args.cmd in ("guards", "cache-keys", "setup") and not os.path.isdir(args.dir):
@@ -950,6 +1038,23 @@ def main():
         if args.sha != "none":
             body["sha"] = args.sha
         print(json.dumps(body))
+    elif args.cmd in ("verify-run", "verify-attempt", "verify-status", "verify-jobs"):
+        try:
+            text = sys.stdin.read()
+            if args.cmd == "verify-run":
+                row = verify_run(text)
+                if row is not None:
+                    print(row)
+            elif args.cmd == "verify-attempt":
+                print(verify_attempt(text))
+            elif args.cmd == "verify-status":
+                print(verify_status(text))
+            else:
+                for row in verify_jobs(text, args.attempt):
+                    print(row)
+        except (ValueError, AttributeError) as err:
+            print(f"adopt.py: {args.cmd}: {err}", file=sys.stderr)
+            return 1
     else:
         print(urllib.parse.quote(args.text, safe=""))
     return 0

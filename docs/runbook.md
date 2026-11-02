@@ -382,8 +382,10 @@ credentials out of hooks.
 also checks the repository's routing and runner group access first, and
 refuses to switch until the routing is merged
 ([adopting, step 5](adopting.md#5-merge-then-run-homefield-adopt)); `adopt
---setup --wait` runs it for you once the pull request it opens is merged.
-After that, `route` flips a repository either way:
+--setup --wait` runs it for you once the pull request it opens is merged. It
+afterwards offers to re-run the latest pull-request run and report where its
+jobs ran ([adopting](adopting.md#let-adopt-check-the-first-run)). After that,
+`route` flips a repository either way:
 
 ```bash
 # Back to hosted: the recovery path, and the safe default

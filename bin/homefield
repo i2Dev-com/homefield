@@ -222,6 +222,14 @@ adopt:
                      number, 1 or more; only with --wait)
   --no-switch        do everything except set CI_RUNNER
   --dry-run          read-only: report what would change, change nothing
+  --verify           after the switch (or when CI_RUNNER was already local),
+                     re-run the repository's latest completed pull-request run
+                     and report, job by job, whether it ran on the local
+                     runner (docs/adopting.md, step 6). It uses CI minutes,
+                     waits up to about 3 minutes, and never changes adopt's
+                     exit status. Without --verify, a terminal is asked first
+                     (default no); without a terminal the commands are printed
+  --no-verify        never offer it, and never touch the repository's runs
   Reads the repository's workflows on its default branch. Only when the
   routing guard is there (the pinned action, in a workflow that runs
   on pull requests), passes and at least one job is routed does it add the
@@ -3570,6 +3578,199 @@ adopt_switch() {
   die "not switched: merge the routing first, then run homefield adopt again"
 }
 
+# adopt_verify (#149) is docs/adopting.md step 6 done for you: it re-runs the
+# repository's latest pull-request run and reports, from the jobs API, where
+# each job landed. A job counts as local when the labels it asked for hold the
+# routing label: adopt works from any machine, so the runner's name is not
+# looked up in the VM. ADOPT_VERIFY_TRIES and ADOPT_VERIFY_INTERVAL are seams
+# for the tests, as ONLINE_WAIT_TRIES and ONLINE_WAIT_INTERVAL are.
+ADOPT_VERIFY_TRIES=${ADOPT_VERIFY_TRIES:-18}
+ADOPT_VERIFY_INTERVAL=${ADOPT_VERIFY_INTERVAL:-10}
+# 1 once a report of the jobs was printed (what the last line of adopt says).
+ADOPT_VERIFIED=0
+# The field separator of tools/adopt.py verify-*: not whitespace, so `read`
+# keeps an empty field (a job no runner has taken) in its place.
+ADOPT_FS=$'\x1f'
+ADOPT_VERIFY_ROWS=""
+
+# adopt_verify_commands <owner/repo>: the check, for someone who does it by hand.
+adopt_verify_commands() {
+  log "to check that the jobs land on the local runner (docs/adopting.md, step 6), re-run the latest pull-request run and read each job's runner:"
+  echo "  gh run list --repo $1 --event pull_request --limit 1"
+  echo "  gh run rerun <run-id> --repo $1"
+}
+
+# adopt_verify_poll <owner/repo> <run-id> <attempt>: reads the jobs of the
+# re-run (every job whose run_attempt is greater than <attempt>) into
+# ADOPT_VERIFY_ROWS until each has a runner or is completed, or the tries run
+# out. Jobs of the previous attempt can still be listed just after the re-run;
+# verify-jobs leaves them out. A job behind another one (a reusable workflow
+# called after a job it needs) may not be listed until that one is done, so while
+# the run is still going the poll does not settle before a job that asked for
+# the routing label is listed: a hosted job alone says nothing about the
+# routing. The run's status is read each time, into ADOPT_VERIFY_RUN_STATUS.
+# Returns 1, after saying why, when gh or the answer fails.
+ADOPT_VERIFY_RUN_STATUS=""
+adopt_verify_poll() {
+  local repo="$1" id="$2" attempt="$3" tries=0 settled has_local label_lc _name jstatus _conclusion runner labels
+  label_lc="$(printf '%s' "$ADOPT_LABEL" | tr '[:upper:]' '[:lower:]')"
+  while :; do
+    gh api --paginate "repos/${repo}/actions/runs/${id}/jobs?per_page=100" >"$ADOPT_TMP/v.json" 2>"$ADOPT_TMP/v.err" </dev/null || {
+      adopt_warn "could not verify: gh could not list the jobs of run ${id}: $(head -1 "$ADOPT_TMP/v.err")"
+      return 1
+    }
+    ADOPT_VERIFY_ROWS="$(python3 -I "$ROOT/tools/adopt.py" verify-jobs "$attempt" <"$ADOPT_TMP/v.json" 2>"$ADOPT_TMP/v.err")" || {
+      adopt_warn "could not verify: gh gave a list of jobs that this tool cannot read ($(head -1 "$ADOPT_TMP/v.err"))"
+      return 1
+    }
+    gh api "repos/${repo}/actions/runs/${id}" >"$ADOPT_TMP/v.json" 2>"$ADOPT_TMP/v.err" </dev/null || {
+      adopt_warn "could not verify: gh could not read run ${id}: $(head -1 "$ADOPT_TMP/v.err")"
+      return 1
+    }
+    ADOPT_VERIFY_RUN_STATUS="$(python3 -I "$ROOT/tools/adopt.py" verify-status <"$ADOPT_TMP/v.json" 2>"$ADOPT_TMP/v.err")" || {
+      adopt_warn "could not verify: gh gave a run that this tool cannot read ($(head -1 "$ADOPT_TMP/v.err"))"
+      return 1
+    }
+    settled=0
+    has_local=0
+    if [ -n "$ADOPT_VERIFY_ROWS" ]; then
+      settled=1
+      while IFS="$ADOPT_FS" read -r _name jstatus _conclusion runner labels; do
+        if [ -z "$runner" ] && [ "$jstatus" != completed ]; then settled=0; fi
+        case ",$(printf '%s' "$labels" | tr '[:upper:]' '[:lower:]')," in
+          *",${label_lc},"*) has_local=1 ;;
+        esac
+      done <<<"$ADOPT_VERIFY_ROWS"
+      if [ "$ADOPT_VERIFY_RUN_STATUS" != completed ] && [ "$has_local" = 0 ]; then settled=0; fi
+    fi
+    tries=$((tries + 1))
+    [ "$settled" = 0 ] || break
+    [ "$tries" -lt "$ADOPT_VERIFY_TRIES" ] || break
+    sleep "$ADOPT_VERIFY_INTERVAL"
+  done
+}
+
+# adopt_verify_report: one line per row of ADOPT_VERIFY_ROWS, and a warning for
+# each job that ran on a hosted runner. Everything here was read from the jobs
+# API; nothing is assumed from the routing.
+adopt_verify_report() {
+  local label_lc name jstatus conclusion runner labels verb state
+  local nlocal=0 nhosted=0 nwait=0 nnone=0 nfailed=0 budget=$((ADOPT_VERIFY_TRIES * ADOPT_VERIFY_INTERVAL))
+  label_lc="$(printf '%s' "$ADOPT_LABEL" | tr '[:upper:]' '[:lower:]')"
+  while IFS="$ADOPT_FS" read -r name jstatus conclusion runner labels; do
+    if [ -z "$runner" ]; then
+      if [ "$jstatus" = completed ]; then
+        log "verify: ${name}: ${conclusion:-completed} without a runner"
+        nnone=$((nnone + 1))
+      else
+        log "verify: ${name}: still waiting for a runner (${jstatus}) after ${budget} s; see \"Failure modes\" in docs/runbook.md"
+        nwait=$((nwait + 1))
+      fi
+      continue
+    fi
+    verb="is running on"
+    state="$jstatus"
+    if [ "$jstatus" = completed ]; then
+      verb="ran on"
+      state="$conclusion"
+    fi
+    case ",$(printf '%s' "$labels" | tr '[:upper:]' '[:lower:]')," in
+      *",${label_lc},"*)
+        nlocal=$((nlocal + 1))
+        case "$conclusion" in
+          failure | timed_out | startup_failure)
+            log "verify: ${name}: failed on the local runner ${runner} (${conclusion})"
+            nfailed=$((nfailed + 1))
+            ;;
+          *) log "verify: ${name}: ${verb} the local runner ${runner} (${state})" ;;
+        esac
+        ;;
+      *)
+        nhosted=$((nhosted + 1))
+        log "verify: ${name}: ${verb} a GitHub-hosted runner (${runner}; labels ${labels:-none})"
+        adopt_warn "${name} did not run on the local runner. Either it stays hosted by design (docs/adopting.md, step 1), or the routing did not take effect for it: check its runs-on, that CI_RUNNER is local, and that the re-run workflow file has the merged routing (a re-run uses the files of the original commit)"
+        ;;
+    esac
+  done <<<"$ADOPT_VERIFY_ROWS"
+  log "verify: ${nlocal} on the local runner, ${nhosted} on GitHub-hosted runners, ${nwait} still waiting for a runner, ${nnone} without a runner"
+  if [ "$nfailed" -gt 0 ]; then
+    log "verify: a job that fails only on the local runner usually needs a tool the VM lacks: re-run it hosted to confirm, then add the tool or keep it hosted (docs/adopting.md, step 6, item 2; docs/runbook.md, \"Job fails only on the local runner\")"
+  fi
+}
+
+# adopt_verify <owner/repo> <ask|yes|no> <dry> <switch>: offers, and on a yes
+# does, the check described above. Only after a switch that happened (or a
+# CI_RUNNER that already was local): with a dry run or --no-switch there is
+# nothing new to check. Nothing here fails adopt, whose own work succeeded: a
+# gh error is reported as "could not verify".
+adopt_verify() {
+  local repo="$1" mode="$2" dry="$3" switch="$4" answer="" row id jstatus url title attempt
+  # Reached only with the routing ready (adopt_switch stops otherwise), so
+  # CI_RUNNER is local now, or would be, or was left alone on request.
+  if [ "$dry" = 1 ] || [ "$switch" = 0 ]; then
+    if [ "$mode" = yes ]; then
+      if [ "$dry" = 1 ]; then log "verify: skipped (dry run)"; else log "verify: skipped (--no-switch)"; fi
+    fi
+    return 0
+  fi
+  [ "$mode" != no ] || return 0
+  if [ "$mode" = ask ]; then
+    if have_terminal; then
+      printf 'Re-run the latest pull-request run of %s (uses CI minutes) to confirm the local runner takes it? [y/N] ' "$repo" >&2
+      # End of input (Ctrl-D) is not a yes.
+      read -r answer || answer=""
+    fi
+    case "$answer" in
+      [Yy]*) ;;
+      *)
+        adopt_verify_commands "$repo"
+        return 0
+        ;;
+    esac
+  fi
+
+  gh run list --repo "$repo" --event pull_request --limit 1 --json databaseId,status,url,displayTitle >"$ADOPT_TMP/v.json" 2>"$ADOPT_TMP/v.err" </dev/null || {
+    adopt_warn "could not verify: gh could not list the runs of ${repo}: $(head -1 "$ADOPT_TMP/v.err")"
+    return 0
+  }
+  row="$(python3 -I "$ROOT/tools/adopt.py" verify-run <"$ADOPT_TMP/v.json" 2>"$ADOPT_TMP/v.err")" || {
+    adopt_warn "could not verify: gh gave a list of runs that this tool cannot read ($(head -1 "$ADOPT_TMP/v.err"))"
+    return 0
+  }
+  if [ -z "$row" ]; then
+    log "verify: ${repo} has no pull-request run yet, so there is nothing to re-run. Open a pull request and look at where its jobs run (docs/adopting.md, step 6)"
+    return 0
+  fi
+  IFS="$ADOPT_FS" read -r id jstatus url title <<<"$row"
+  if [ "$jstatus" != completed ]; then
+    log "verify: run ${id} (${title}) is still ${jstatus}, and a run can only be re-run once it has completed. Later: gh run rerun ${id} --repo ${repo}"
+    return 0
+  fi
+  gh api "repos/${repo}/actions/runs/${id}" >"$ADOPT_TMP/v.json" 2>"$ADOPT_TMP/v.err" </dev/null || {
+    adopt_warn "could not verify: gh could not read run ${id}: $(head -1 "$ADOPT_TMP/v.err")"
+    return 0
+  }
+  attempt="$(python3 -I "$ROOT/tools/adopt.py" verify-attempt <"$ADOPT_TMP/v.json" 2>"$ADOPT_TMP/v.err")" || {
+    adopt_warn "could not verify: gh gave a run that this tool cannot read ($(head -1 "$ADOPT_TMP/v.err"))"
+    return 0
+  }
+  gh run rerun "$id" --repo "$repo" >/dev/null 2>"$ADOPT_TMP/v.err" </dev/null || {
+    adopt_warn "could not verify: gh could not re-run run ${id}: $(head -1 "$ADOPT_TMP/v.err")"
+    return 0
+  }
+  log "verify: re-running run ${id} (${title}), ${url}; waiting up to $((ADOPT_VERIFY_TRIES * ADOPT_VERIFY_INTERVAL)) s for its jobs to be picked up"
+  adopt_verify_poll "$repo" "$id" "$attempt" || return 0
+  if [ -z "$ADOPT_VERIFY_ROWS" ]; then
+    adopt_warn "could not verify: no job of the re-run (attempt $((attempt + 1))) was listed in time; look at ${url}"
+    return 0
+  fi
+  ADOPT_VERIFIED=1
+  adopt_verify_report
+  if [ "$ADOPT_VERIFY_RUN_STATUS" != completed ]; then
+    log "verify: the run is still ${ADOPT_VERIFY_RUN_STATUS}: a job that starts only after others finish is not in this list yet; look at ${url}"
+  fi
+}
+
 # The branch `adopt --setup` writes its pull request from (#124). A fixed
 # name keeps a re-run pointed at the same pull request; an existing branch is
 # refused rather than rewritten.
@@ -3762,6 +3963,7 @@ adopt_wait_merged() {
 
 cmd_adopt() {
   local repo="" nrepo=0 label="homefield-ci" label_given=0 group="homefield-ci" jobs="" switch=1 dry=0 setup=0 entry out
+  local verify=ask
   local wait_timeout="" wait_minutes=60
   ADOPT_FLAG_EVENTS="" ADOPT_FLAG_DEPENDABOT="" ADOPT_FLAG_FALLBACK=""
   ADOPT_WAIT=0
@@ -3779,6 +3981,8 @@ cmd_adopt() {
       --wait-timeout) wait_timeout="${2:?--wait-timeout needs a value}"; shift 2 ;;
       --no-switch) switch=0; shift ;;
       --dry-run) dry=1; shift ;;
+      --verify) [ "$verify" != no ] || die "adopt: --verify and --no-verify contradict each other"; verify=yes; shift ;;
+      --no-verify) [ "$verify" != yes ] || die "adopt: --verify and --no-verify contradict each other"; verify=no; shift ;;
       *) die "adopt: unknown option $1 (see bin/homefield help)" ;;
     esac
   done
@@ -3837,7 +4041,12 @@ cmd_adopt() {
   adopt_switch "$repo" "$ADOPT_LABEL" "$dry" "$switch" "$jobs"
 
   log "done: ${repo}: runner group ${ADOPT_GROUP_OUTCOME}; routing ready; CI_RUNNER ${ADOPT_SWITCH_OUTCOME}"
-  log "still by hand: open a pull request and check the jobs ran on the local runner, add any tools they lack, and record the setup in the repository (docs/adopting.md, steps 6 and 7)"
+  adopt_verify "$repo" "$verify" "$dry" "$switch"
+  if [ "$ADOPT_VERIFIED" = 1 ]; then
+    log "still by hand: add any tools the jobs lack, and record the setup in the repository (docs/adopting.md, step 7)"
+  else
+    log "still by hand: open a pull request and check the jobs ran on the local runner, add any tools they lack, and record the setup in the repository (docs/adopting.md, steps 6 and 7)"
+  fi
 }
 
 # memory_cutoff_epoch <cutoff-day> <rows>: the cutoff day's midnight as an
