@@ -194,12 +194,15 @@ reports no scopes) is accepted; a token without `admin:org` only warns, because
 an organization URL needs that scope while a repository URL does not. The
 `setup` command prints it first and stops on any failed check, before creating
 or touching anything (a warning does not stop it). On a terminal, when gh is
-installed but has no active login, `setup` first offers `gh auth login -h
-github.com` (gh asks its own questions) and runs the check after it; declining,
-a login that does not finish, or no terminal leaves the check to fail as above.
-It does not offer when `GITHUB_TOKEN` or `GH_TOKEN` is set, since `gh` uses that
-instead of its stored login. `preflight` and `diagnose` only report, and `install`
-does not offer the login. `install` prints it and then
+installed, has no active login and no other check fails, `setup` first offers
+`gh auth login -h github.com` (gh asks its own questions) and runs the check
+after it; declining, end of input, a login that does not finish, or no terminal
+leaves the check to fail as above. It does not offer when another check fails
+too (a browser login would only be followed by the stop), when `gh` cannot
+answer the login question at all (a login would not fix that), or when
+`GITHUB_TOKEN` or `GH_TOKEN` is set, since `gh` uses that instead of its stored
+login. `preflight` and `diagnose` only report. `install` does not offer the
+login; it prints the preflight report and then
 gates on its own subset — macOS, Apple Silicon, Lima — before creating
 anything:
 

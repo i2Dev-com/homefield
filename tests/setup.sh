@@ -42,6 +42,8 @@ cat >"$stubs/gh" <<'EOF'
 echo "gh $*" >>"$CALLS"
 case "$*" in
   "auth status"*)
+    # A gh that cannot answer (too old for --json): no output, non-zero.
+    [ -z "${GH_STATUS_FAIL:-}" ] || exit 1
     if [ -f "$LOGGED_IN" ]; then echo "tester|repo"; else echo "|"; fi
     ;;
   "auth login"*)
@@ -125,7 +127,7 @@ if [ "${PF:-pass}" != real ]; then
       warn) PF_LEVEL[1]=warn PF_MSG[1]="gh authenticated as tester, no admin:org scope" ;;
       fail) PF_LEVEL[1]=fail PF_MSG[1]="gh not logged in: run 'gh auth login'" ;;
       login)
-        acct="$(gh_active_account)"
+        acct="$(gh_active_account)" || acct="|"
         if [ -z "${acct%%|*}" ]; then
           PF_LEVEL[1]=fail PF_MSG[1]="gh not logged in: run 'gh auth login'"
         else
@@ -244,6 +246,19 @@ record "GITHUB_TOKEN set: not offered (a login would not change what gh uses), s
   "$(nonzero "$rc")/$(called '^gh auth login')/$(has "$out" '[Y/n]')/$(has "$out" "'gh auth login' would not help")/$(has "$out" "FAIL  gh not logged in")"
 SRUN_IN="$work/answer" srun PF=login LOGGED_OUT=1 TTY=1 GH_TOKEN=x -- cmd_setup --url $org
 record "...GH_TOKEN the same" "nonzero/0" "$(nonzero "$rc")/$(called '^gh auth login')"
+SRUN_IN="$work/answer" srun PF=login LOGGED_OUT=1 TTY=1 GH_STATUS_FAIL=1 -- cmd_setup --url $org
+record "gh that cannot answer (status fails): not offered, a login would not fix it; the same preflight failure" "nonzero/0/no/yes" \
+  "$(nonzero "$rc")/$(called '^gh auth login')/$(has "$out" '[Y/n]')/$(has "$out" "FAIL  gh not logged in")"
+# Another check failing too (PF=real: no python3 or brew on the stub PATH): the
+# browser login would only be followed by the stop, so it is not asked.
+SRUN_IN="$work/answer" srun PF=real LOGGED_OUT=1 TTY=1 -- cmd_setup --url $org
+record "another check fails as well: no login offered, setup stops on the failures" "nonzero/0/no/yes/yes" \
+  "$(nonzero "$rc")/$(called '^gh auth login')/$(has "$out" '[Y/n]')/$(has "$out" 'FAIL  python3 not found')/$(has "$out" 'setup stopped')"
+# End of input at the question (Ctrl-D) is not a yes.
+: >"$work/eof"
+SRUN_IN="$work/eof" srun PF=login LOGGED_OUT=1 TTY=1 -- cmd_setup --url $org
+record "end of input at the question: no login, the preflight fails as before" "nonzero/0/yes" \
+  "$(nonzero "$rc")/$(called '^gh auth login')/$(has "$out" "FAIL  gh not logged in")"
 SRUN_IN="$work/answer" srun PF=login LOGGED_OUT=1 TTY=1 GH_LOGIN_NOOP=1 -- cmd_setup --url $org
 record "a login that ends without logging in: still not logged in, the preflight fails as before" "nonzero/1/yes/0" \
   "$(nonzero "$rc")/$(called '^gh auth login')/$(has "$out" "FAIL  gh not logged in: run 'gh auth login'")/$(called 'limactl create')"

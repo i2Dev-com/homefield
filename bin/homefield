@@ -46,7 +46,7 @@ Commands:
   setup      The whole first-time setup in one command: preflight must pass in
              full (any failed check stops it with nothing created; on a
              terminal, a gh that is not logged in is first offered
-             `gh auth login`), then the
+             `gh auth login` when it is the only failed check), then the
              same steps as install, ending with a summary of what is done (and
              what needs attention) and the next steps, including the
              repositories that can already use the runner. Takes install's
@@ -286,11 +286,12 @@ pf_add() {
 }
 # gh_active_account: "login|scopes" of the active github.com login, "|" when
 # there is none. The one place that asks, for preflight_collect's gh check and
-# setup's offer to log in (offer_gh_login), so the two cannot disagree.
+# setup's offer to log in (offer_gh_login), so the two cannot disagree. gh's own
+# status comes through: with --json it exits 0 when nobody is logged in, so a
+# non-zero status means the question could not be answered (a gh too old for
+# --json, a broken install), which is not the same as "not logged in".
 gh_active_account() {
-  local account
-  account="$(gh auth status --json hosts --jq '.hosts["github.com"] // [] | map(select(.active)) | (.[0] // {}) | "\(.login // "")|\(.scopes // "")"' 2>/dev/null </dev/null)" || account="|"
-  printf '%s' "$account"
+  gh auth status --json hosts --jq '.hosts["github.com"] // [] | map(select(.active)) | (.[0] // {}) | "\(.login // "")|\(.scopes // "")"' 2>/dev/null </dev/null
 }
 preflight_collect() {
   local version major minor login scopes whoami py_version
@@ -317,7 +318,7 @@ preflight_collect() {
   if ! command -v gh >/dev/null 2>&1; then
     pf_add gh fail "gh (GitHub CLI) not found: run 'brew install gh'"
   else
-    whoami="$(gh_active_account)"
+    whoami="$(gh_active_account)" || whoami="|"
     login="${whoami%%|*}"
     scopes="${whoami#*|}"
     if [ -z "$login" ]; then
@@ -926,12 +927,18 @@ offer_scope_refresh() {
 # calls it: preflight stays read-only and diagnose never prompts. gh asks its
 # own questions (account, protocol, scopes); the admin:org scope an
 # organization needs is added later by offer_scope_refresh.
+# Not offered when gh cannot answer (a login would not fix that), or when any
+# other check fails: a browser login would only be followed by the stop.
 offer_gh_login() {
   command -v gh >/dev/null 2>&1 || return 0
   have_terminal || return 0
-  local account answer
-  account="$(gh_active_account)"
+  local account answer i
+  account="$(gh_active_account)" || return 0
   [ -z "${account%%|*}" ] || return 0
+  preflight_collect
+  for ((i = 0; i < ${#PF_NAME[@]}; i++)); do
+    [ "${PF_LEVEL[i]}" != fail ] || [ "${PF_NAME[i]}" = gh ] || return 0
+  done
   if [ -n "${GITHUB_TOKEN:-}${GH_TOKEN:-}" ]; then
     # gh uses that variable instead of its stored login, so logging in
     # changes nothing for this command.
@@ -940,7 +947,8 @@ offer_gh_login() {
     return 0
   fi
   printf "gh is not logged in. Run 'gh auth login' now? [Y/n] " >&2
-  read -r answer || answer=""
+  # End of input (Ctrl-D) is not a yes.
+  read -r answer || return 0
   case "$answer" in [Nn]*) return 0 ;; esac
   gh auth login -h github.com || echo "homefield: 'gh auth login' did not finish" >&2
 }

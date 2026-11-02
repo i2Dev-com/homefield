@@ -44,9 +44,9 @@ if they are missing (Lima also if it is older than 2.0), after one question
 that names the `brew` commands it will run, puts the tool in
 `~/.local/share/homefield` with a `homefield` command on your PATH, and runs
 `homefield setup` (`homefield install` on a release older than `setup`). If `gh`
-is installed but not logged in, `setup` offers to run `gh auth login` for you on
-a terminal. That asks for
-your organization or repository URL, creates the VM, checks its isolation,
+is installed but not logged in, and that is the only thing missing, `setup`
+offers to run `gh auth login` for you on a terminal. That asks for your
+organization or repository URL, creates the VM, checks its isolation,
 provisions it, creates the `homefield-ci` runner group for an organization
 (selected repositories only, no public ones), registers the runner with the
 routing label `homefield-ci` and waits until GitHub shows it online. To give
@@ -69,8 +69,8 @@ From a checkout, with Lima ≥ 2.0, run `bin/homefield setup --url
 https://github.com/<org>` instead. `setup` is the whole first-time setup in one
 command: it runs `preflight` first and stops, with nothing created, if any check
 fails (a warning does not stop it; on a terminal, a `gh` that is not logged in
-is first offered `gh auth login`, and the check runs after it); then it does what `install` does, and ends
-with a summary, one line per step, that marks what is done with a check mark and
+is first offered `gh auth login` when no other check fails, and the check runs
+after it); then it does what `install` does, and ends with a summary, one line per step, that marks what is done with a check mark and
 what needs attention with `!` (a runner group wider than recommended, a runner
 that is not online yet), followed by the next steps and the repositories that
 can already use the runner. It takes `install`'s options, and on an instance

@@ -212,6 +212,34 @@ case_gh_logged_out_terminal() {
   fi
 }
 
+# case_gh_uses_helper: preflight's gh row comes from gh_active_account, the
+# helper setup's login offer asks too (#146). The helper is replaced after the
+# tool is sourced, with an account the gh stub knows nothing about, so a
+# preflight that asked gh on its own would report the stub's account instead.
+# And a helper that cannot answer (non-zero) is a logged-out gh, as it was
+# before the helper existed.
+# shellcheck disable=SC2016
+case_gh_uses_helper() {
+  local d="$work/gh-helper" out rc
+  ok_stub "$d"
+  out="$(env PATH="$d" HOMEFIELD_SOURCE_ONLY=1 \
+    "$BASH_BIN" -c '. "$1"; gh_active_account() { echo "override-user|admin:org"; }; cmd_preflight' _ "$ROOT/bin/homefield" 2>&1 </dev/null)"
+  rc=$?
+  if [ "$rc" -eq 0 ] && has "$out" "OK    gh authenticated as override-user (admin:org scope)"; then
+    record "preflight's gh row comes from gh_active_account" "$rc" "0"
+  else
+    record "preflight's gh row comes from gh_active_account" "$rc" "0 (got: $out)"
+  fi
+  out="$(env PATH="$d" HOMEFIELD_SOURCE_ONLY=1 \
+    "$BASH_BIN" -c '. "$1"; gh_active_account() { return 1; }; cmd_preflight' _ "$ROOT/bin/homefield" 2>&1 </dev/null)"
+  rc=$?
+  if [ "$rc" -eq 1 ] && has "$out" "FAIL  gh not logged in: run 'gh auth login'"; then
+    record "...a helper that cannot answer reads as not logged in, as before" "$rc" "1"
+  else
+    record "...a helper that cannot answer reads as not logged in, as before" "$rc" "1 (got: $out)"
+  fi
+}
+
 # case_gh_app_token: the active account is an App-installed token, which
 # reports no scopes, and an inactive account with scopes sits beside it. That
 # must be OK (not FAIL, not WARN), exit 0.
@@ -305,6 +333,7 @@ case_lima_old
 case_missing "gh missing" gh "FAIL  gh (GitHub CLI) not found: run 'brew install gh'"
 case_gh_logged_out
 case_gh_logged_out_terminal
+case_gh_uses_helper
 case_gh_app_token
 case_gh_scope_warn
 case_missing "python3 missing" python3 "FAIL  python3 not found: run 'brew install python'"
