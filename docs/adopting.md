@@ -240,11 +240,15 @@ step:
    [Runner group](runbook.md#runner-group)).
 6. **Switch.** When the routing is ready, sets `CI_RUNNER` to `local` (the same
    as `homefield route local`). If it is already `local`, it says so.
+7. **Verify.** Offers to do [step 6](#6-run-it) for you, after the switch (or
+   when `CI_RUNNER` was already `local`): it re-runs the repository's latest
+   pull-request run and reports where each job landed. See
+   [Let adopt check the first run](#let-adopt-check-the-first-run).
 
 It is safe to run again: what is done is reported, not repeated. `--dry-run`
 reads everything and changes nothing, and `--no-switch` does everything but
-the variable. Merge the routing first, then run it again if it stopped at
-step 2.
+the variable (neither offers the verification, since nothing was switched).
+Merge the routing first, then run it again if it stopped at step 2.
 
 **By hand**, for a machine without `gh` access to the organization settings:
 *Organization settings → Actions → Runner groups → `homefield-ci` → Repository
@@ -258,6 +262,8 @@ Default group, needs nothing here. Then set the variable:
 1. Open or re-run a PR, and confirm that the job log's *Runner name* is the
    local runner's (`bin/homefield status` shows it). If the job waits for a
    runner instead, see "Failure modes" in [`runbook.md`](runbook.md).
+   `homefield adopt` can do this for you
+   ([below](#let-adopt-check-the-first-run)).
 2. **Find toolchain gaps by running, not by reading.** The VM has what
    [`vm/provision.sh`](../vm/provision.sh) installs, which is less than
    `ubuntu-latest`, and grepping the workflows for the commands they call
@@ -266,6 +272,45 @@ Default group, needs nothing here. Then set the variable:
    [`runbook.md`](runbook.md)), or keep that job hosted. Only propose a change
    to the base set in `provision.sh` for something nearly every repository
    needs.
+
+### Let adopt check the first run
+
+After the switch, `homefield adopt` offers to re-run the repository's latest
+pull-request run and to report where each job landed, which is item 1 above.
+On a terminal it asks (the default is no, because the re-run uses CI minutes):
+
+```text
+Re-run the latest pull-request run of <owner>/<repo> (uses CI minutes) to confirm the local runner takes it? [y/N]
+```
+
+`--verify` does it without asking; `--no-verify` never does. Without a
+terminal and without `--verify` it asks nothing, re-runs nothing, and prints
+the two commands to do it by hand (`gh run list --repo <owner>/<repo> --event
+pull_request --limit 1` and `gh run rerun <run-id> --repo <owner>/<repo>`).
+It is not offered with `--dry-run` or `--no-switch`.
+
+It takes the newest `pull_request` run (a pull request from a fork may not be
+listed), re-runs it once it has completed, and reads the jobs of the new
+attempt from the API for about three minutes, until each has a runner or has
+finished. A job is local when the labels it asked for include the routing
+label; its line names the runner that took it. Per job it reports:
+
+- **ran on the local runner** `<name>`: what you wanted. A job that **failed**
+  on it is reported as such, with a pointer to item 2 below.
+- **ran on a GitHub-hosted runner**, with a warning: either the job stays
+  hosted by design (step 1), or the routing did not take effect for it. A
+  re-run uses the workflow files of the original commit, so a run from before
+  the routing was merged stays hosted whatever `CI_RUNNER` says; open a new
+  pull request instead.
+- **still waiting for a runner** when the time is up: see "Failure modes" in
+  [`runbook.md`](runbook.md). A job that needs another job also waits for it.
+
+Nothing is reported that the jobs API did not say. When there is no
+pull-request run yet, or the latest one is still running (a run can only be
+re-run once it has completed), it says so and re-runs nothing. A `gh` error is
+reported as "could not verify". Whatever it finds, `adopt` exits 0: the
+adoption itself succeeded, and the report is information. What is left by hand
+is item 2 and step 7.
 
 ## 7. Record it
 

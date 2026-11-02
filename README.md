@@ -120,7 +120,10 @@ homefield adopt --repo <owner>/<repo>    # hosted again: homefield route hosted 
 
 `adopt` checks that the repository's routing and guard are in place, and only
 then adds it to the runner group and switches it to the local runner. It
-refuses a public repository. `--dry-run` shows what it would do.
+refuses a public repository. `--dry-run` shows what it would do. After the
+switch it offers to re-run the repository's latest pull-request run and report
+where each job landed (`--verify` does it without asking, `--no-verify` never;
+[`docs/adopting.md`](docs/adopting.md#let-adopt-check-the-first-run)).
 
 Rather than editing the workflows by hand, `homefield adopt --setup --repo
 <owner>/<repo>` opens a pull request that writes those edits for you: the

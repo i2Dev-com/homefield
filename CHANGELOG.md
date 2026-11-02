@@ -13,6 +13,27 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ### Added
 
+- `homefield adopt --verify | --no-verify` — `docs/adopting.md` step 6 (open
+  a run, read the *Runner name*) done by `adopt` itself. After a switch that
+  happened, or a `CI_RUNNER` that was already `local`, it offers to re-run the
+  repository's latest pull-request run and reports, one line per job, where
+  each landed: on the local runner (with its name), on a GitHub-hosted runner
+  (a warning: the job stays hosted by design, or the routing did not take
+  effect for it), or still waiting for a runner when the time (about three
+  minutes) runs out, with a pointer to the runbook's failure modes. A job that
+  failed on the local runner points at the toolchain-gap advice. A job counts
+  as local by the labels it asked for, read from the jobs API, so it works from
+  any machine, and only jobs of the new attempt count. On a terminal it asks
+  first (`[y/N]`, the default is no, since the re-run uses CI minutes);
+  `--verify` skips the question, `--no-verify` never asks or touches a run,
+  and giving both is an error. Without a terminal and without `--verify` it
+  asks nothing and prints the two `gh` commands to do it by hand. It is not
+  offered with `--dry-run` or `--no-switch`. A repository with no pull-request
+  run yet, or whose latest run is still running, is told so and nothing is
+  re-run; a `gh` error is reported as "could not verify". `adopt` exits 0
+  whatever it finds. The closing "still by hand" line names only what remains
+  (tools the jobs lack, recording the setup) when the check ran.
+  [#149](https://github.com/i2Dev-com/homefield/issues/149)
 - `homefield setup [install options]` — the first-time setup in one command.
   It runs `preflight` first and, if any check fails (a warning does not count),
   exits 1 saying so before creating or touching anything: no VM, no runner

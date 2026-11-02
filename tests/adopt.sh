@@ -38,6 +38,28 @@ case "$*" in
     if [ -n "${GH_CI_RUNNER:-}" ]; then echo "$GH_CI_RUNNER"; else echo "variable not found" >&2; exit 1; fi
     ;;
   "variable set"*) ;;
+  # adopt --verify: the latest pull-request run (GH_RUNLIST, a JSON array),
+  # the re-run, the jobs of the run (GH_JOBS is a directory of pages as
+  # `gh api --paginate` prints them, one file per call: 1, 2, ...; the last
+  # one repeats) and the run object (GH_RUN).
+  "run list"*)
+    if [ -n "${GH_RUNLIST_FAIL:-}" ]; then echo "gh: HTTP 500" >&2; exit 1; fi
+    cat "$GH_RUNLIST"
+    ;;
+  "run rerun"*)
+    if [ -n "${GH_RERUN_FAIL:-}" ]; then echo "gh: HTTP 403: cannot re-run this workflow" >&2; exit 1; fi
+    ;;
+  "api "*"repos/"*"/actions/runs/"*"/jobs"*)
+    if [ -n "${GH_JOBS_FAIL:-}" ]; then echo "gh: HTTP 502" >&2; exit 1; fi
+    n=$(($(cat "$state/jobs-n" 2>/dev/null || echo 0) + 1))
+    echo "$n" >"$state/jobs-n"
+    while [ ! -f "$GH_JOBS/$n" ] && [ "$n" -gt 1 ]; do n=$((n - 1)); done
+    cat "$GH_JOBS/$n"
+    ;;
+  "api repos/"*"/actions/runs/"*)
+    if [ -n "${GH_RUN_FAIL:-}" ]; then echo "gh: HTTP 404" >&2; exit 1; fi
+    cat "$GH_RUN"
+    ;;
   *"-X PUT"*)
     if [ -n "${GH_PUT_FAIL:-}" ]; then echo "gh: HTTP 403" >&2; exit 1; fi
     # a Contents PUT records its JSON body, so a test can check the sha the
@@ -841,6 +863,222 @@ record "already local: nothing written" "0/0/0" "$rc/$(called 'X PUT')/$(called 
 record "...and the dry run says so up front" "yes" "$(has "$out" 'dry run: nothing will be changed')"
 adopt GH_GROUPS="$work/groups-all" -- --dry-run
 record "no gh call of a write kind in any dry run" "0" "$(called_any 'X POST' 'X PUT' 'X PATCH' 'X DELETE' 'variable set' 'run cancel' 'run rerun')"
+
+# ── Verify ─────────────────────────────────────────────────────────────────
+# The re-run of the latest pull-request run, and the report of where its jobs
+# ran. Fixtures: the run list and run object the stub serves, and directories
+# of jobs pages (one file per call of the jobs endpoint, the last repeating).
+echo "verify"
+# vjob <name> <status> <conclusion|null> <runner|null> <attempt> <label>...
+vjob() {
+  local name="$1" status="$2" concl="$3" runner="$4" attempt="$5" labels="" l
+  shift 5
+  for l in "$@"; do labels="${labels:+$labels,}\"$l\""; done
+  [ "$concl" = null ] || concl="\"$concl\""
+  [ "$runner" = null ] || runner="\"$runner\""
+  printf '{"name":"%s","status":"%s","conclusion":%s,"runner_name":%s,"run_attempt":%s,"labels":[%s]}' \
+    "$name" "$status" "$concl" "$runner" "$attempt" "$labels"
+}
+# vpage <job>...: one page of the jobs endpoint.
+vpage() {
+  local sep="" j out=""
+  for j in "$@"; do
+    out="$out$sep$j"
+    sep=","
+  done
+  printf '{"total_count":%d,"jobs":[%s]}\n' "$#" "$out"
+}
+vrun() { printf '[{"databaseId":%s,"status":"%s","url":"https://github.com/acme/app/actions/runs/%s","displayTitle":"Fix the thing"}]\n' "$1" "$2" "$1"; }
+loc=(self-hosted Linux ARM64 homefield-ci)
+vrun 9001 completed >"$work/runlist-done"
+vrun 9001 in_progress >"$work/runlist-running"
+echo '[]' >"$work/runlist-none"
+echo '{"id":9001,"run_attempt":1}' >"$work/run-1"
+# a local run, jobs on two pages (as --paginate prints them)
+mkdir -p "$work/jobs-local" "$work/jobs-mixed" "$work/jobs-stale" "$work/jobs-queued" "$work/jobs-failed" "$work/jobs-skip"
+{
+  vpage "$(vjob lint completed success homefield-1 2 "${loc[@]}")"
+  vpage "$(vjob test completed success homefield-1 2 "${loc[@]}")"
+} >"$work/jobs-local/1"
+vpage "$(vjob lint completed success homefield-1 2 "${loc[@]}")" \
+  "$(vjob e2e completed success "GitHub Actions 7" 2 ubuntu-latest)" >"$work/jobs-mixed/1"
+# the previous attempt is all that is listed at first, then nothing, then the new one
+vpage "$(vjob lint completed success "GitHub Actions 3" 1 ubuntu-latest)" >"$work/jobs-stale/1"
+vpage >"$work/jobs-stale/2"
+vpage "$(vjob lint completed success homefield-1 2 "${loc[@]}")" \
+  "$(vjob lint completed success "GitHub Actions 3" 1 ubuntu-latest)" >"$work/jobs-stale/3"
+vpage "$(vjob lint queued null null 2 "${loc[@]}")" \
+  "$(vjob test completed success homefield-1 2 "${loc[@]}")" >"$work/jobs-queued/1"
+vpage "$(vjob lint completed failure homefield-1 2 "${loc[@]}")" \
+  "$(vjob test in_progress null homefield-1 2 "${loc[@]}")" >"$work/jobs-failed/1"
+vpage "$(vjob lint completed skipped null 2 "${loc[@]}")" >"$work/jobs-skip/1"
+# a job named by someone with an escape sequence in it; the label in another case
+mkdir -p "$work/jobs-esc"
+vpage "$(vjob 'red\u001b[31m' completed success homefield-1 2 self-hosted Linux ARM64 HomeField-CI)" >"$work/jobs-esc/1"
+
+# verify <env...> -- <adopt args>: adopt with the re-run fixtures; no sleeping.
+verify() {
+  local envs=()
+  while [ $# -gt 0 ] && [ "$1" != -- ]; do
+    envs+=("$1")
+    shift
+  done
+  shift
+  rm -f "$work/jobs-n"
+  adopt GH_RUNLIST="$work/runlist-done" GH_RUN="$work/run-1" GH_JOBS="$work/jobs-local" \
+    ADOPT_VERIFY_INTERVAL=0 ADOPT_VERIFY_TRIES=5 "${envs[@]+"${envs[@]}"}" -- "$@"
+}
+# verify_tty <answer|EOF> <env...> -- <adopt args>: the same on a terminal,
+# which types the answer.
+verify_tty() {
+  local answer="$1" envs=() in="/dev/null"
+  shift
+  while [ $# -gt 0 ] && [ "$1" != -- ]; do
+    envs+=("$1")
+    shift
+  done
+  shift
+  if [ "$answer" != EOF ]; then
+    printf '%s\n' "$answer" >"$work/answer"
+    in="$work/answer"
+  fi
+  rm -f "$work/jobs-n"
+  : >"$calls"
+  # shellcheck disable=SC2016  # the -c script is expanded by the inner bash
+  out="$(env -i HOME="$work" PATH="$stubs" TMPDIR="$work/tmp" CALLS="$calls" HOMEFIELD_SOURCE_ONLY=1 \
+    GH_GROUPS="$work/groups-selected" GH_MEMBERS="$work/members-other" GH_WF="$work/wf-ready" \
+    GH_RUNLIST="$work/runlist-done" GH_RUN="$work/run-1" GH_JOBS="$work/jobs-local" \
+    ADOPT_VERIFY_INTERVAL=0 ADOPT_VERIFY_TRIES=5 "${envs[@]+"${envs[@]}"}" \
+    "$BASH" -c '. "$1"; shift; have_terminal() { true; }; "$@"' _ "$ROOT/bin/homefield" cmd_adopt --repo acme/app "$@" 2>&1 <"$in")"
+  rc=$?
+}
+rerun_n() { called '^gh run rerun'; }
+runs_n() { called_any '^gh run ' 'actions/runs/'; }
+ask='Re-run the latest pull-request run of acme/app (uses CI minutes) to confirm the local runner takes it? [y/N]'
+
+verify -- --verify
+record "--verify, every job local: exit 0, one local line per job" "0/yes/yes" \
+  "$rc/$(has "$out" 'verify: lint: ran on the local runner homefield-1 (success)')/$(has "$out" 'verify: test: ran on the local runner homefield-1 (success)')"
+record "...the latest pull-request run is listed (one run, as JSON), then the run is read" "1/1" \
+  "$(called '^gh run list --repo acme/app --event pull_request --limit 1 --json databaseId,status,url,displayTitle')/$(called '^gh api repos/acme/app/actions/runs/9001$')"
+record "...re-run exactly once, with that run's id" "1/1" "$(rerun_n)/$(called '^gh run rerun 9001 --repo acme/app$')"
+record "...the jobs are read, paginated" "1" "$(called '^gh api --paginate repos/acme/app/actions/runs/9001/jobs')"
+record "...the question is not asked, and the summary counts both jobs" "no/yes" \
+  "$(has "$out" 'uses CI minutes')/$(has "$out" 'verify: 2 on the local runner, 0 on GitHub-hosted runners, 0 still waiting for a runner')"
+record "...no warning about a hosted job, no advice about a failed one" "no/no" "$(has "$out" 'warning:')/$(has "$out" 'Job fails only on the local runner')"
+record "...the re-run comes after the run was read, and the report ends adopt with only what is left by hand" "yes/yes/no" \
+  "$(before "$(cat "$calls")" 'gh api repos/acme/app/actions/runs/9001' 'gh run rerun 9001')/$(has "$out" 'still by hand: add any tools the jobs lack, and record the setup in the repository (docs/adopting.md, step 7)')/$(has "$out" 'steps 6 and 7')"
+
+verify GH_CI_RUNNER=local -- --verify
+record "...an already local CI_RUNNER is verified too, without writing the variable" "0/1/0" "$rc/$(rerun_n)/$(called 'variable set')"
+verify GH_CI_RUNNER=hosted -- --verify
+record "...a switch that just happened is verified after it" "1/1/yes" \
+  "$(called 'variable set')/$(rerun_n)/$(before "$(cat "$calls")" 'variable set' 'gh run rerun')"
+
+verify GH_JOBS="$work/jobs-mixed" -- --verify
+record "a job on a hosted runner: reported as such, and warned about" "0/yes/yes/yes" \
+  "$rc/$(has "$out" 'verify: lint: ran on the local runner homefield-1 (success)')/$(has "$out" 'verify: e2e: ran on a GitHub-hosted runner (GitHub Actions 7; labels ubuntu-latest)')/$(has "$out" 'warning: e2e did not run on the local runner')"
+record "...only the hosted job is warned about, and the summary counts one of each" "1/yes" \
+  "$(printf '%s\n' "$out" | grep -c 'warning: .* did not run on the local runner')/$(has "$out" 'verify: 1 on the local runner, 1 on GitHub-hosted runners')"
+
+verify GH_JOBS="$work/jobs-stale" -- --verify
+record "jobs of the previous attempt are ignored until the new attempt is listed" "0/1/yes/no/3" \
+  "$rc/$(printf '%s\n' "$out" | grep -c 'verify: lint: ')/$(has "$out" 'verify: lint: ran on the local runner homefield-1 (success)')/$(has "$out" 'GitHub-hosted runner (GitHub Actions 3')/$(called 'actions/runs/9001/jobs')"
+
+verify GH_JOBS="$work/jobs-queued" ADOPT_VERIFY_TRIES=4 -- --verify
+record "a job still queued when the tries run out: a waiting line pointing at the failure modes" "0/yes/yes" \
+  "$rc/$(has "$out" 'verify: lint: still waiting for a runner (queued)')/$(has "$out" '"Failure modes" in docs/runbook.md')"
+record "...polled once per try, and the job that has a runner is still reported" "4/yes/yes" \
+  "$(called 'actions/runs/9001/jobs')/$(has "$out" 'verify: test: ran on the local runner')/$(has "$out" '1 still waiting for a runner')"
+
+verify GH_JOBS="$work/jobs-failed" -- --verify
+record "a job that failed on the local runner: said so, with the toolchain advice once" "0/yes/yes/1" \
+  "$rc/$(has "$out" 'verify: lint: failed on the local runner homefield-1 (failure)')/$(has "$out" 'docs/adopting.md, step 6, item 2; docs/runbook.md, "Job fails only on the local runner"')/$(printf '%s\n' "$out" | grep -c 'Job fails only on the local runner')"
+record "...a job that is still running on it is reported as running" "yes" "$(has "$out" 'verify: test: is running on the local runner homefield-1 (in_progress)')"
+verify GH_JOBS="$work/jobs-skip" -- --verify
+record "a skipped job (no runner needed): not reported as waiting" "0/yes/no" "$rc/$(has "$out" 'verify: lint: skipped without a runner')/$(has "$out" 'lint: still waiting')"
+
+verify GH_JOBS="$work/jobs-esc" -- --verify
+record "a job name with control characters is printed without them, and a label in another case is the routing label" "0/no/yes" \
+  "$rc/$(has "$out" $'\033')/$(has "$out" 'verify: red?[31m: ran on the local runner homefield-1 (success)')"
+
+verify GH_RUNLIST="$work/runlist-none" -- --verify
+record "no pull-request run yet: said so, pointing at step 6, no re-run, no more reads" "0/yes/yes/0/0" \
+  "$rc/$(has "$out" 'has no pull-request run yet')/$(has "$out" 'docs/adopting.md, step 6')/$(rerun_n)/$(called 'actions/runs/')"
+record "...and the last line still sends you to steps 6 and 7" "yes" "$(has "$out" 'docs/adopting.md, steps 6 and 7')"
+verify GH_RUNLIST="$work/runlist-running" -- --verify
+record "a run still in progress: not re-run, with the command for later" "0/yes/yes/0" \
+  "$rc/$(has "$out" 'run 9001 (Fix the thing) is still in_progress')/$(has "$out" 'gh run rerun 9001 --repo acme/app')/$(rerun_n)"
+
+verify -- --verify --no-verify
+record "--verify with --no-verify: refused before anything is read" "nonzero/yes/0" "$(nonzero "$rc")/$(has "$out" '--verify and --no-verify contradict each other')/$(called gh)"
+verify -- --no-verify --verify
+record "...in either order" "nonzero/yes/0" "$(nonzero "$rc")/$(has "$out" '--verify and --no-verify contradict each other')/$(called gh)"
+verify -- --no-verify
+record "--no-verify: no run is listed, read or re-run, and nothing is said about it" "0/0/no/no" \
+  "$rc/$(runs_n)/$(has "$out" 'gh run rerun')/$(has "$out" 'verify:')"
+verify_tty y -- --no-verify
+record "...also on a terminal: no question" "0/0/no" "$rc/$(runs_n)/$(has "$out" 'uses CI minutes')"
+
+verify --
+record "no terminal and no --verify: nothing asked, nothing re-run, the commands printed" "0/no/0/yes/yes" \
+  "$rc/$(has "$out" 'uses CI minutes')/$(runs_n)/$(has "$out" '  gh run list --repo acme/app --event pull_request --limit 1')/$(has "$out" '  gh run rerun <run-id> --repo acme/app')"
+record "...and the last line keeps the pointer to steps 6 and 7" "yes" "$(has "$out" 'docs/adopting.md, steps 6 and 7')"
+
+verify_tty y --
+record "on a terminal, y: the question is asked, and the run is verified" "0/yes/1/yes" \
+  "$rc/$(has "$out" "$ask")/$(rerun_n)/$(has "$out" 'verify: lint: ran on the local runner homefield-1 (success)')"
+verify_tty Y --
+record "...Y too" "1" "$(rerun_n)"
+verify_tty n --
+record "on a terminal, n: no re-run, the commands printed" "0/0/yes/yes" "$rc/$(rerun_n)/$(has "$out" "$ask")/$(has "$out" '  gh run rerun <run-id> --repo acme/app')"
+record "...nothing of the run was listed either" "0" "$(runs_n)"
+verify_tty "" --
+record "on a terminal, Enter alone: the default is no" "0/0/yes" "$rc/$(runs_n)/$(has "$out" "$ask")"
+verify_tty EOF --
+record "on a terminal, end of input: no" "0/0/yes" "$rc/$(runs_n)/$(has "$out" "$ask")"
+verify_tty y -- --verify
+record "--verify on a terminal: no question, verified" "no/1" "$(has "$out" 'uses CI minutes')/$(rerun_n)"
+
+verify -- --verify --dry-run
+record "--dry-run: nothing is listed or re-run, and it says why" "0/0/yes" "$rc/$(runs_n)/$(has "$out" 'verify: skipped (dry run)')"
+verify_tty y GH_CI_RUNNER=local -- --dry-run
+record "...no question on a terminal either, even when CI_RUNNER is local already" "0/no" "$(runs_n)/$(has "$out" 'uses CI minutes')"
+verify -- --verify --no-switch
+record "--no-switch: nothing is listed or re-run, and it says why" "0/0/yes" "$rc/$(runs_n)/$(has "$out" 'verify: skipped (--no-switch)')"
+verify_tty y -- --no-switch
+record "...no question on a terminal" "0/no" "$(runs_n)/$(has "$out" 'uses CI minutes')"
+verify GH_CI_RUNNER=local -- --verify --no-switch
+record "...an already local CI_RUNNER does not change that" "0" "$(runs_n)"
+verify GH_WF="$work/wf-noguard" -- --verify
+record "routing not ready: adopt stops before the switch and nothing is re-run" "nonzero/0" "$(nonzero "$rc")/$(runs_n)"
+
+verify GH_RUNLIST_FAIL=1 -- --verify
+record "gh cannot list the runs: could not verify, adopt still exits 0, nothing re-run" "0/yes/0" \
+  "$rc/$(has "$out" 'warning: could not verify: gh could not list the runs of acme/app: gh: HTTP 500')/$(rerun_n)"
+record "...so the last line sends you to steps 6 and 7" "yes" "$(has "$out" 'docs/adopting.md, steps 6 and 7')"
+verify GH_RUN_FAIL=1 -- --verify
+record "gh cannot read the run: could not verify, no re-run" "0/yes/0" "$rc/$(has "$out" 'could not verify: gh could not read run 9001')/$(rerun_n)"
+verify GH_RERUN_FAIL=1 -- --verify
+record "the re-run is refused: could not verify, with gh's reason" "0/yes/1/0" \
+  "$rc/$(has "$out" 'could not verify: gh could not re-run run 9001: gh: HTTP 403')/$(rerun_n)/$(called 'actions/runs/9001/jobs')"
+verify GH_JOBS_FAIL=1 -- --verify
+record "the jobs cannot be listed: could not verify, adopt still exits 0" "0/yes/1" \
+  "$rc/$(has "$out" 'could not verify: gh could not list the jobs of run 9001: gh: HTTP 502')/$(rerun_n)"
+record "...so the last line sends you to steps 6 and 7" "yes" "$(has "$out" 'docs/adopting.md, steps 6 and 7')"
+echo '{"id":9001}' >"$work/run-noattempt"
+verify GH_RUN="$work/run-noattempt" -- --verify
+record "a run object this tool cannot read: could not verify, no re-run" "0/yes/0" "$rc/$(has "$out" 'could not verify: gh gave a run that this tool cannot read')/$(rerun_n)"
+mkdir -p "$work/jobs-garbage"
+echo 'not json' >"$work/jobs-garbage/1"
+verify GH_JOBS="$work/jobs-garbage" -- --verify
+record "a list of jobs this tool cannot read: could not verify" "0/yes" "$rc/$(has "$out" 'could not verify: gh gave a list of jobs that this tool cannot read')"
+mkdir -p "$work/jobs-none"
+vpage >"$work/jobs-none/1"
+verify GH_JOBS="$work/jobs-none" ADOPT_VERIFY_TRIES=3 -- --verify
+record "no job of the new attempt ever listed: could not verify, naming the run" "0/yes/3" \
+  "$rc/$(has "$out" 'could not verify: no job of the re-run (attempt 2) was listed in time')/$(called 'actions/runs/9001/jobs')"
+record "...the downloaded and scratch files are removed afterwards" "0" "$(find "$work/tmp" -mindepth 1 | wc -l | tr -d ' ')"
 
 # ── Cache keys ─────────────────────────────────────────────────────────────
 echo "cache keys"

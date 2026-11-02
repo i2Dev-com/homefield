@@ -364,7 +364,9 @@ credentials out of hooks.
 `bin/homefield adopt --repo <owner>/<repo>` is the first switch to local: it
 also checks the repository's routing and runner group access first, and
 refuses to switch until the routing is merged
-([adopting, step 5](adopting.md#5-merge-then-run-homefield-adopt)). After
+([adopting, step 5](adopting.md#5-merge-then-run-homefield-adopt)), and
+afterwards offers to re-run the latest pull-request run and report where its
+jobs ran ([adopting](adopting.md#let-adopt-check-the-first-run)). After
 that, `route` flips a repository either way:
 
 ```bash
