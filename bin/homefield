@@ -1722,9 +1722,19 @@ setup_summary() {
 }
 
 # adopt's arguments for the routing pull request setup offers: the one place
-# to add a flag to. Set by setup_routing_args.
+# to add a flag to. Set by setup_routing_args. The label and group the runner
+# was registered with (cmd_install sets SETUP_LABEL and SETUP_GROUP from
+# --label and --group, empty when not given) go along: the pull request must
+# route on the label this runner carries, and the adopt that follows must look
+# at the group it joined.
 SETUP_ROUTING_ARGS=()
-setup_routing_args() { SETUP_ROUTING_ARGS=(--repo "$1" --setup); }
+SETUP_LABEL=""
+SETUP_GROUP=""
+setup_routing_args() {
+  SETUP_ROUTING_ARGS=(--repo "$1" --setup)
+  [ -z "$SETUP_LABEL" ] || SETUP_ROUTING_ARGS+=(--label "$SETUP_LABEL")
+  [ -z "$SETUP_GROUP" ] || SETUP_ROUTING_ARGS+=(--group "$SETUP_GROUP")
+}
 
 # setup_route_repo <owner/repo>: opens the routing pull request, by running
 # adopt. It runs in a subshell, so adopt's die cannot end setup, and a failure
@@ -1913,6 +1923,7 @@ cmd_install() {
   wait_online "$url" "$registered_name" "${group:-homefield-ci}"
   if [ "$SETUP" = 1 ]; then
     setup_summary "${group:-homefield-ci}" "$url" "$registered_name" "$registered_id"
+    SETUP_LABEL="$label" SETUP_GROUP="$group"
     setup_offer_routing "$url"
   else
     registered_next_steps "${group:-homefield-ci}" "$url"

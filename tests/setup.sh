@@ -437,6 +437,15 @@ record "...adopt's own output follows, and nothing about a failure or a later ru
   "$(has "${out#*Open the routing}" 'adopt ran')/$(has "$out" 'was not opened')/$(has "$out" 'Route it later')"
 SRUN_IN="$work/enter" srun GH_OWNER_TYPE=User TTY=1 -- cmd_setup --url $personal_url
 record "personal account, just Enter: yes" "0/1/cmd_adopt --repo someone/app --setup" "$rc/$(called '^cmd_adopt')/$(adopt_line)"
+SRUN_IN="$work/yes" srun GH_OWNER_TYPE=User TTY=1 -- cmd_setup --url $personal_url --label custom-ci --group my-group
+record "--label and --group given: adopt gets both, so the PR routes on the runner's label" "0/1/cmd_adopt --repo someone/app --setup --label custom-ci --group my-group" \
+  "$rc/$(called '^cmd_adopt')/$(adopt_line)"
+SRUN_IN="$work/no" srun GH_OWNER_TYPE=User TTY=1 -- cmd_setup --url $personal_url --label custom-ci --group my-group
+record "...and the command printed for later carries them" "yes" \
+  "$(has "$out" 'Route it later with: homefield adopt --repo someone/app --setup --label custom-ci --group my-group')"
+SRUN_IN="$work/yes" srun GH_OWNER_TYPE=User TTY=1 ADOPT_FAIL=exit -- cmd_setup --url $personal_url --label custom-ci
+record "...and so does the retry line after a failure; no --group when none was given" "yes/no" \
+  "$(has "$out" 'To try again: homefield adopt --repo someone/app --setup --label custom-ci')/$(has "$out" '--group')"
 SRUN_IN="$work/no" srun GH_OWNER_TYPE=User TTY=1 -- cmd_setup --url $personal_url
 record "personal account, n: adopt is not run; one line with the command for later; exit 0" "0/0/yes/no" \
   "$rc/$(called '^cmd_adopt')/$(has "$out" 'Route it later with: homefield adopt --repo someone/app --setup')/$(has "$out" 'adopt ran')"

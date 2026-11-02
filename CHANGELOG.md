@@ -26,7 +26,9 @@ fail, such as a new guard in the routing expression, bumps the minor version
   needing write access. If `adopt` fails, its message is shown, `setup` still
   exits 0 (the runner is set up) and prints the command to run again. Without a
   terminal, on an upgrade of a registered instance, and for `install`, nothing
-  changes.
+  changes. A `--label` or `--group` given to `setup` goes along to `adopt`
+  (and into the printed commands), so the pull request routes on the label the
+  runner carries.
   [#148](https://github.com/i2Dev-com/homefield/issues/148)
 - `homefield setup [install options]` — the first-time setup in one command.
   It runs `preflight` first and, if any check fails (a warning does not count),
