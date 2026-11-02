@@ -9,7 +9,8 @@ Steps 1–4 are edits to the repository's workflows; `homefield adopt` (step 5)
 does the rest of the setup and refuses to switch the repository on until
 those edits are merged. You can write steps 1–4 by hand, or have
 [`homefield adopt --setup`](#let-adopt-write-steps-1-to-4) open a pull request
-that writes them for you.
+that writes them for you (with `--wait` it also carries on into step 5 once
+you merge it).
 
 The repository must be **private** (see the trust boundary in
 [`runbook.md`](runbook.md#trust-boundary)).
@@ -180,7 +181,40 @@ first.
 That branch is the whole output: `--setup` adds nothing to the runner group
 and does not set `CI_RUNNER`, so merging it changes how *future* pull requests
 are routed while everything still runs hosted. Review the job list — step 1
-says what to keep hosted — then merge and run step 5.
+says what to keep hosted — then merge and run step 5, or let the same command
+wait for the merge:
+
+```bash
+homefield adopt --repo <owner>/<repo> --setup --wait
+```
+
+`--wait` makes the command, once it has opened the pull request, read that
+pull request every 10 seconds, and carry on in the same run when it is merged
+with exactly what step 5 does: it reads the repository and its workflows again
+at the default branch, and runs the checks, the group access and the switch
+below. The merge stays yours. Nothing is added to the runner group or switched
+while it waits, and a merged pull request whose routing does not pass the
+guard's checks stops the run with step 5's "not switched" message, as a plain
+adopt would.
+
+- **Timeout.** It waits 60 minutes; `--wait-timeout <minutes>` (a whole number,
+  1 or more) changes that. A pull request still open then ends the run with
+  exit 1 and the command to run once it is merged.
+- **Closed without a merge** ends the run with exit 1: nothing was switched and
+  no group access changed. The branch `homefield/route-to-local` stays, so
+  delete it before running `--setup` again.
+- **A read of the pull request that fails** (the network, the API) is tried
+  again, not taken for a closed pull request; five failed reads in a row end
+  the run with exit 1.
+- **Ctrl-C or `kill`** is safe at any point of the wait: the command prints the
+  step 5 command to run by hand, exits 130 (143 for SIGTERM) and leaves the
+  pull request and its branch as they are. A plain `homefield adopt --repo
+  <owner>/<repo>` is always the way to pick up from there, and is safe to
+  repeat.
+
+`--wait` needs `--setup` (it follows the pull request that `--setup` opens;
+for one you opened yourself, merge it and run step 5), and with `--dry-run` it
+has nothing to wait for, since a dry run sends nothing.
 
 ## 5. Merge, then run `homefield adopt`
 
@@ -190,6 +224,11 @@ guard runs. Then, from any machine with `gh` and `python3` (not the VM):
 ```bash
 homefield adopt --repo <owner>/<repo>
 ```
+
+(If you opened the pull request with `homefield adopt --setup --wait`, this
+step already runs by itself once you merge it; run it by hand only if that
+command was interrupted, timed out or stopped. See
+[Let adopt write steps 1 to 4](#let-adopt-write-steps-1-to-4).)
 
 It does the rest of the setup, in this order, and prints one line for each
 step:

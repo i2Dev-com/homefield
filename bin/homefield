@@ -12,7 +12,7 @@
 #   bin/homefield uninstall [--keep-vm]
 #   bin/homefield reset [--keep-vm] [--keep-group] [--remove-tool]
 #   bin/homefield route <hosted|local> --repo <owner>/<repo> [--repo ...]
-#   bin/homefield adopt --repo <owner>/<repo> [--jobs "ci.yml:lint,..."] [--setup] [--events E] [--dependabot hosted|local] [--fallback IMAGE] [--no-switch] [--dry-run]
+#   bin/homefield adopt --repo <owner>/<repo> [--jobs "ci.yml:lint,..."] [--setup [--wait [--wait-timeout MIN]]] [--events E] [--dependabot hosted|local] [--fallback IMAGE] [--no-switch] [--dry-run]
 #   bin/homefield memory [--days N]
 #   bin/homefield report --repo <owner>/<repo> [--repo ...] [--since DATE]
 #   bin/homefield version
@@ -207,7 +207,19 @@ adopt:
                      qualifies. It needs write access to the repository, and
                      touches neither the runner group nor CI_RUNNER: after you
                      merge it, run adopt without --setup
-                     (docs/adopting.md, step 5).
+                     (docs/adopting.md, step 5), or add --wait.
+  --wait             with --setup: after opening the pull request, wait for
+                     you to merge it, then carry on in this run with what
+                     adopt without --setup does (group access, then
+                     CI_RUNNER=local). Nothing is switched or added to the
+                     group while waiting, and the merge stays yours: if the
+                     merged routing does not pass, it stops as a plain adopt
+                     would. Checks every 10 seconds. Ctrl-C is safe: the pull
+                     request is left as it is, and adopt without --setup
+                     picks up from there. Exits 1 when the pull request is
+                     closed without a merge, or is still open at the timeout
+  --wait-timeout MIN minutes --wait waits for the merge (default 60; a whole
+                     number, 1 or more; only with --wait)
   --no-switch        do everything except set CI_RUNNER
   --dry-run          read-only: report what would change, change nothing
   Reads the repository's workflows on its default branch. Only when the
@@ -216,7 +228,8 @@ adopt:
   repository to the group and switch it; otherwise it prints what to add and
   exits 1, having changed nothing. Adding the repository to the group needs
   admin:org; without it, it says so and goes on. --setup stops earlier: it
-  opens the routing pull request and changes nothing else. Needs gh and
+  opens the routing pull request and changes nothing else (unless --wait
+  carries on after the merge; with --dry-run it waits for nothing). Needs gh and
   python3. Does not need the VM.
 
 memory:
@@ -3555,6 +3568,16 @@ SETUP_MSG="Route CI jobs to the local HomeField runner"
 ADOPT_SETUP_REPO=""
 ADOPT_SETUP_BRANCH_MADE=0
 ADOPT_SETUP_PR_MADE=0
+# The pull request adopt_setup opened, for --wait to poll.
+ADOPT_SETUP_PR_URL=""
+ADOPT_SETUP_PR_NUMBER=""
+# --wait: set by cmd_adopt; how often the pull request is read, in seconds
+# (tests set the interval to 0 or a value with a stub sleep); and the sleep in
+# flight, which an interrupt takes down.
+ADOPT_WAIT=0
+ADOPT_WAIT_INTERVAL=${ADOPT_WAIT_INTERVAL:-10}
+[ "$ADOPT_WAIT_INTERVAL" -ge 0 ] 2>/dev/null || ADOPT_WAIT_INTERVAL=10
+ADOPT_WAIT_SLEEPER=""
 
 # adopt_setup_cleanup: a run that died after creating the branch would leave
 # its commits on GitHub with no pull request to review, and would refuse its
@@ -3644,13 +3667,93 @@ adopt_setup() {
   url="$(gh api -X POST "repos/${repo}/pulls" -f title="$SETUP_MSG" -f head="$SETUP_BRANCH" -f base="$ADOPT_BRANCH" -f body="$body" --jq .html_url 2>"$ADOPT_TMP/err")" ||
     die "adopt: setup: could not open the pull request on ${repo}: $(head -1 "$ADOPT_TMP/err")"
   ADOPT_SETUP_PR_MADE=1
+  ADOPT_SETUP_PR_URL="$url"
+  ADOPT_SETUP_PR_NUMBER="${url##*/}"
   log "created pull request: ${url}"
-  log "next: review and merge it, then homefield adopt --repo ${repo} (docs/adopting.md, step 5)"
+  if [ "$ADOPT_WAIT" = 1 ]; then
+    log "next: review and merge it; this run waits for that"
+  else
+    log "next: review and merge it, then homefield adopt --repo ${repo} (docs/adopting.md, step 5); adopt --setup --wait does both in one run"
+  fi
+}
+
+# adopt_wait_interrupted <status>: Ctrl-C or SIGTERM while adopt_wait_merged
+# polls. The pull request and its branch stay as they are (PR_MADE is set, so
+# the EXIT cleanup leaves the branch alone), and nothing has been switched.
+adopt_wait_interrupted() {
+  if [ -n "$ADOPT_WAIT_SLEEPER" ]; then
+    # it may have ended on its own just now
+    kill "$ADOPT_WAIT_SLEEPER" 2>/dev/null || :
+  fi
+  echo >&2
+  echo "homefield: interrupted while waiting for ${ADOPT_SETUP_PR_URL}. It and its branch are untouched, and nothing was switched or added to the runner group. Once it is merged, run: homefield adopt --repo ${ADOPT_SETUP_REPO}" >&2
+  exit "$1"
+}
+
+# adopt_wait_merged <owner/repo> <minutes>: until the pull request adopt_setup
+# opened is merged, reading it every ADOPT_WAIT_INTERVAL seconds for about
+# that many minutes. Returns once merged; otherwise ends the run (a pull
+# request closed without a merge, one still open at the timeout, or a state
+# that stayed unreadable for 5 reads in a row). One failed read is not an
+# answer: the network or the API can blip, and a pull request that is not
+# known to be closed must not be reported closed.
+adopt_wait_merged() {
+  local repo="$1" minutes="$2" interval="$ADOPT_WAIT_INTERVAL"
+  local url="$ADOPT_SETUP_PR_URL" number="$ADOPT_SETUP_PR_NUMBER"
+  local tries per_minute polls=0 failures=0 row state merged reason
+  local hand="homefield adopt --repo ${repo}"
+  [[ "$number" =~ ^[0-9]+$ ]] ||
+    die "adopt: setup: could not read the pull request number from ${url}, so --wait cannot follow it; once it is merged, run: ${hand}"
+  tries=$((minutes * 60 / (interval > 0 ? interval : 1)))
+  [ "$tries" -ge 1 ] || tries=1
+  per_minute=$((interval > 0 ? 60 / interval : 60))
+  [ "$per_minute" -ge 1 ] || per_minute=1
+  trap 'adopt_wait_interrupted 130' INT
+  trap 'adopt_wait_interrupted 143' TERM
+  log "waiting for ${url} to be merged (up to ${minutes} min). Ctrl-C is safe: nothing is switched while waiting, and you can carry on by hand once it is merged: ${hand}"
+  while :; do
+    polls=$((polls + 1))
+    # An answer is a state of open or closed and a merged_at (or "-"), tab-separated.
+    if row="$(gh api "repos/${repo}/pulls/${number}" --jq '[.state, (.merged_at // "-")] | @tsv' 2>"$ADOPT_TMP/err" </dev/null)" &&
+      state="${row%%$'\t'*}" && merged="${row#*$'\t'}" && [ "$merged" != "$row" ] &&
+      { [ "$state" = open ] || [ "$state" = closed ]; }; then
+      failures=0
+      if [ "$merged" != "-" ]; then
+        break
+      elif [ "$state" = closed ]; then
+        die "adopt: ${url} was closed without being merged. Nothing was switched and no group access was changed. Its branch ${SETUP_BRANCH} is still there: delete it before running --setup again"
+      fi
+    else
+      failures=$((failures + 1))
+      if [ "$failures" -ge 5 ]; then
+        reason="$(head -1 "$ADOPT_TMP/err")"
+        die "adopt: could not read the state of ${url}: 5 reads in a row failed (${reason:-an answer this tool cannot read: ${row:-none}}). Nothing was switched. Once it is merged, run: ${hand}"
+      fi
+    fi
+    if [ "$polls" -ge "$tries" ]; then
+      die "adopt: ${url} is still open after ${minutes} min. Nothing was switched and no group access was changed. Once it is merged, run: ${hand}"
+    fi
+    if [ $((polls % per_minute)) -eq 0 ]; then
+      log "still waiting for ${url} to be merged ($((polls * interval / 60)) of ${minutes} min)"
+    fi
+    if [ "$interval" -gt 0 ]; then
+      # wait on a background sleep, not a foreground one: bash runs a trap
+      # only after a foreground command ends, but cuts wait short.
+      sleep "$interval" &
+      ADOPT_WAIT_SLEEPER=$!
+      wait "$ADOPT_WAIT_SLEEPER" || :
+      ADOPT_WAIT_SLEEPER=""
+    fi
+  done
+  trap - INT TERM
+  log "${url} is merged; carrying on with what adopt does after the merge"
 }
 
 cmd_adopt() {
   local repo="" nrepo=0 label="homefield-ci" label_given=0 group="homefield-ci" jobs="" switch=1 dry=0 setup=0 entry out
+  local wait_timeout="" wait_minutes=60
   ADOPT_FLAG_EVENTS="" ADOPT_FLAG_DEPENDABOT="" ADOPT_FLAG_FALLBACK=""
+  ADOPT_WAIT=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --repo) repo="${2:?--repo needs a value}"; nrepo=$((nrepo + 1)); shift 2 ;;
@@ -3661,6 +3764,8 @@ cmd_adopt() {
       --group) group="${2:?--group needs a value}"; shift 2 ;;
       --jobs) jobs="${2:?--jobs needs a value}"; shift 2 ;;
       --setup) setup=1; shift ;;
+      --wait) ADOPT_WAIT=1; shift ;;
+      --wait-timeout) wait_timeout="${2:?--wait-timeout needs a value}"; shift 2 ;;
       --no-switch) switch=0; shift ;;
       --dry-run) dry=1; shift ;;
       *) die "adopt: unknown option $1 (see bin/homefield help)" ;;
@@ -3671,6 +3776,14 @@ cmd_adopt() {
   [[ "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die "adopt: --repo must be <owner>/<repo>, got: $repo"
   [[ "$label" =~ ^[A-Za-z0-9._-]+$ ]] || die "adopt: --label must be one label"
   [ -n "$group" ] || die "adopt: --group needs a name"
+  if [ -n "$wait_timeout" ]; then
+    [[ "$wait_timeout" =~ ^[1-9][0-9]{0,5}$ ]] || die "adopt: --wait-timeout is a whole number of minutes, 1 or more; got: $wait_timeout"
+    [ "$ADOPT_WAIT" = 1 ] || die "adopt: --wait-timeout only goes with --wait"
+    wait_minutes="$wait_timeout"
+  fi
+  if [ "$ADOPT_WAIT" = 1 ] && [ "$setup" = 0 ]; then
+    die "adopt: --wait goes with --setup: it waits for the pull request that --setup opens. For a pull request you opened yourself, merge it and run: homefield adopt --repo ${repo}"
+  fi
   for entry in $(printf '%s' "$jobs" | tr ',' ' '); do
     [[ "$entry" =~ ^[A-Za-z0-9._-]+\.ya?ml:[A-Za-z0-9_-]+$ ]] || die "adopt: --jobs entries are <workflow-file>:<job-id>, such as ci.yml:lint; got: $entry"
   done
@@ -3690,9 +3803,21 @@ cmd_adopt() {
   adopt_fetch_workflows "$repo" "$ADOPT_BRANCH" "$ADOPT_TMP/workflows"
   if [ "$setup" = 1 ]; then
     # --setup stops at the pull request: steps 1-4 as a review, no group
-    # access and no switch, which stay the plain adopt run of step 5.
+    # access and no switch, which stay the plain adopt run of step 5. With
+    # --wait that run follows in this process once the pull request is merged:
+    # the workflows are read again, at the default branch, and everything
+    # below is what a plain adopt does.
     adopt_setup "$repo" "$label" "$out" "$jobs" "$dry"
-    return 0
+    if [ "$ADOPT_WAIT" = 0 ]; then
+      return 0
+    elif [ "$dry" = 1 ]; then
+      log "dry run: --wait has nothing to wait for, as no pull request was opened"
+      return 0
+    fi
+    adopt_wait_merged "$repo" "$wait_minutes"
+    rm -rf "${ADOPT_TMP:?}/workflows"
+    adopt_repository "$repo"
+    adopt_fetch_workflows "$repo" "$ADOPT_BRANCH" "$ADOPT_TMP/workflows"
   fi
   adopt_routing_check "$ADOPT_TMP/workflows" "$label" "$label_given"
   adopt_cache_keys "$ADOPT_TMP/workflows"
