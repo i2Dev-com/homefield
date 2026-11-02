@@ -3980,7 +3980,8 @@ adopt_wait_merged() {
     die "adopt: setup: could not read the pull request number from ${url}, so --wait cannot follow it; once it is merged, run: ${hand}"
   tries=$((minutes * 60 / (interval > 0 ? interval : 1)))
   [ "$tries" -ge 1 ] || tries=1
-  per_minute=$((interval > 0 ? 60 / interval : 60))
+  # an if, not a ?: in $(( )): bash 3.2 divides by zero in the branch not taken
+  if [ "$interval" -gt 0 ]; then per_minute=$((60 / interval)); else per_minute=60; fi
   [ "$per_minute" -ge 1 ] || per_minute=1
   trap 'adopt_wait_interrupted 130' INT
   trap 'adopt_wait_interrupted 143' TERM
