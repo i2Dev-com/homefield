@@ -56,6 +56,8 @@ does not have.
                             for an empty list)
   adopt.py verify-attempt   stdin: the JSON of a workflow run. Prints its
                             run_attempt
+  adopt.py verify-status    stdin: the JSON of a workflow run. Prints its
+                            status
   adopt.py verify-jobs ATTEMPT
                             stdin: the JSON of the jobs of a run, one object
                             per page as `gh api --paginate` prints them. Prints
@@ -940,6 +942,13 @@ def verify_attempt(text):
     return attempt
 
 
+def verify_status(text):
+    status = json.loads(text).get("status")
+    if not isinstance(status, str) or not status:
+        raise ValueError("a run without a status")
+    return clean(status)
+
+
 def verify_jobs(text, after):
     rows = []
     for page in json_documents(text):
@@ -983,6 +992,7 @@ def main():
     sub.add_parser("quote").add_argument("text")
     sub.add_parser("verify-run")
     sub.add_parser("verify-attempt")
+    sub.add_parser("verify-status")
     sub.add_parser("verify-jobs").add_argument("attempt", type=int)
     args = ap.parse_args()
 
@@ -1028,7 +1038,7 @@ def main():
         if args.sha != "none":
             body["sha"] = args.sha
         print(json.dumps(body))
-    elif args.cmd in ("verify-run", "verify-attempt", "verify-jobs"):
+    elif args.cmd in ("verify-run", "verify-attempt", "verify-status", "verify-jobs"):
         try:
             text = sys.stdin.read()
             if args.cmd == "verify-run":
@@ -1037,6 +1047,8 @@ def main():
                     print(row)
             elif args.cmd == "verify-attempt":
                 print(verify_attempt(text))
+            elif args.cmd == "verify-status":
+                print(verify_status(text))
             else:
                 for row in verify_jobs(text, args.attempt):
                     print(row)

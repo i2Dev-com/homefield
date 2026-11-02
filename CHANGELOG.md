@@ -23,7 +23,11 @@ fail, such as a new guard in the routing expression, bumps the minor version
   minutes) runs out, with a pointer to the runbook's failure modes. A job that
   failed on the local runner points at the toolchain-gap advice. A job counts
   as local by the labels it asked for, read from the jobs API, so it works from
-  any machine, and only jobs of the new attempt count. On a terminal it asks
+  any machine, and only jobs of the new attempt count. While the run is going
+  it keeps looking until a job with the routing label is listed (a job in a
+  reusable workflow that needs another job may not be listed until that one is
+  done), and it says when the run is still unfinished, so the list may not be
+  complete. On a terminal it asks
   first (`[y/N]`, the default is no, since the re-run uses CI minutes);
   `--verify` skips the question, `--no-verify` never asks or touches a run,
   and giving both is an error. Without a terminal and without `--verify` it
@@ -136,6 +140,23 @@ after the confirmation, as the runner stays online meanwhile), deregisters the
   `homefield adopt` (step 5) switches the repository on. Needs `gh`,
   `python3` and write access to the repository; needs no VM.
   [#124](https://github.com/i2Dev-com/homefield/issues/124)
+- `homefield adopt --repo <owner>/<repo> --setup --wait` waits for the pull
+  request `--setup` opens to be merged and then carries on in the same run
+  with what a plain `homefield adopt` does (it reads the repository and its
+  workflows again, runs the checks, adds the repository to the runner group and
+  sets `CI_RUNNER=local`), instead of leaving you to come back and run it. The
+  merge stays yours: nothing is added to the group or switched while it waits,
+  and a merged pull request whose routing does not pass stops the run with the
+  usual "not switched". It reads the pull request every 10 seconds and says
+  once a minute that it is still waiting. A pull request closed without a
+  merge, or still open after `--wait-timeout <minutes>` (a whole number, default
+  60), ends the run with exit 1 and the command to run after the merge; a
+  failed read is tried again, five in a row end the run. Ctrl-C or SIGTERM
+  prints that command, exits 130 or 143 and leaves the pull request and its
+  branch alone. `--wait` without `--setup` and `--wait-timeout` without
+  `--wait` are errors, and with `--dry-run` `--wait` has nothing to wait for.
+  Plain `homefield adopt` stays the way to pick up by hand. A compatible
+  change. [#147](https://github.com/i2Dev-com/homefield/issues/147)
 - The VM now asks Lima to stop mapping the Mac's loopback into the guest
   (`networkOpts.hostLoopback: false` in `vm/lima.yaml`, from
   [lima-vm/lima#5581](https://github.com/lima-vm/lima/pull/5581)). Only
