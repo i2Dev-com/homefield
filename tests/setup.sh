@@ -33,10 +33,23 @@ mkdir -p "$stubs" "$work/home"
 # id; tab separated); the runners in group N are GH_GRPRUN_N (GH_GRPRUN_FAIL
 # lists ids whose call fails); its repositories are GH_REPOS (or a failure).
 # A group created by a POST ($CREATED) is group 7, and listed afterwards.
+# Logged in, `gh auth status` reports "tester|repo" (as the jq filter in
+# gh_active_account would print it) when $LOGGED_IN exists, else "|". `gh auth
+# login` creates it, unless GH_LOGIN_FAIL makes it fail, or GH_LOGIN_NOOP makes
+# it end without logging in.
 cat >"$stubs/gh" <<'EOF'
 #!/bin/sh
 echo "gh $*" >>"$CALLS"
 case "$*" in
+  "auth status"*)
+    # A gh that cannot answer (too old for --json): no output, non-zero.
+    [ -z "${GH_STATUS_FAIL:-}" ] || exit 1
+    if [ -f "$LOGGED_IN" ]; then echo "tester|repo"; else echo "|"; fi
+    ;;
+  "auth login"*)
+    [ -z "${GH_LOGIN_FAIL:-}" ] || exit 1
+    [ -n "${GH_LOGIN_NOOP:-}" ] || : >"$LOGGED_IN"
+    ;;
   *"-X POST"*)
     if [ -n "${GH_CREATE_ERR:-}" ]; then echo "$GH_CREATE_ERR" >&2; exit 1; fi
     : >"$CREATED"
@@ -98,8 +111,10 @@ for t in awk cat dirname git grep head mktemp mv rm mkdir sed sh sleep tr wc; do
 
 # The harness: bin/homefield sourced, with the steps that need a guest replaced.
 # PF picks preflight's findings: pass, warn (one warning), fail (one failure),
-# or real (the real checks, against the stub-only PATH, which has no python3 or
-# brew).
+# login (the gh check from the real login state, as preflight_collect reads it
+# through gh_active_account; the rest passes), or real (the real checks,
+# against the stub-only PATH, which has no python3 or brew). TTY=1 stands in
+# for a terminal.
 cat >"$work/harness.sh" <<'EOF'
 HOMEFIELD_SOURCE_ONLY=1
 . "$ROOT_DIR/bin/homefield"
@@ -111,9 +126,18 @@ if [ "${PF:-pass}" != real ]; then
     case "${PF:-pass}" in
       warn) PF_LEVEL[1]=warn PF_MSG[1]="gh authenticated as tester, no admin:org scope" ;;
       fail) PF_LEVEL[1]=fail PF_MSG[1]="gh not logged in: run 'gh auth login'" ;;
+      login)
+        acct="$(gh_active_account)" || acct="|"
+        if [ -z "${acct%%|*}" ]; then
+          PF_LEVEL[1]=fail PF_MSG[1]="gh not logged in: run 'gh auth login'"
+        else
+          PF_MSG[1]="gh authenticated as ${acct%%|*}"
+        fi
+        ;;
     esac
   }
 fi
+have_terminal() { [ "${TTY:-}" = 1 ]; }
 verify_isolation() { echo "verify_isolation" >>"$CALLS"; log "isolation verified: no host mounts"; }
 is_registered() { [ "${REGISTERED:-no}" = yes ]; }
 cmd_upgrade() { echo "cmd_upgrade $*" >>"$CALLS"; log "upgrade ran"; }
@@ -138,20 +162,25 @@ printf 'Default\tall\tfalse\t1\nhomefield-ci\tselected\tfalse\t7\nother-group\ts
 online=$'test-mac-homefield\tonline\t41\tself-hosted,Linux,ARM64,homefield-ci\n'
 offline=$'test-mac-homefield\toffline\t41\tself-hosted,Linux,ARM64,homefield-ci\n'
 
-# srun [VAR=value ...] -- <function> [args]: sets out and rc. No terminal.
+# srun [VAR=value ...] -- <function> [args]: sets out and rc. No terminal;
+# stdin is empty, or the file named by SRUN_IN (the answers to a prompt).
 srun() {
-  local envs=()
+  local envs=() logged_in=1
   while [ $# -gt 0 ] && [ "$1" != -- ]; do
+    [ "$1" != LOGGED_OUT=1 ] || logged_in=0
     envs+=("$1")
     shift
   done
   shift
   : >"$calls"
   rm -rf "$state" "$provisioned" "$created_flag"
-  out="$(env -i HOME="$work/home" PATH="$stubs" CALLS="$calls" PROVISIONED="$provisioned" CREATED="$created_flag" HOMEFIELD_STATE_DIR="$state" \
+  # gh is logged in unless the case says LOGGED_OUT=1.
+  rm -f "$work/logged-in"
+  [ "$logged_in" = 0 ] || : >"$work/logged-in"
+  out="$(env -i HOME="$work/home" PATH="$stubs" CALLS="$calls" LOGGED_IN="$work/logged-in" PROVISIONED="$provisioned" CREATED="$created_flag" HOMEFIELD_STATE_DIR="$state" \
     ROOT_DIR="$ROOT" ONLINE_WAIT_INTERVAL=0 ONLINE_WAIT_TRIES=3 GH_GROUPS="$work/groups-narrow" \
     GH_RUNNERS_AFTER="$online" GH_GRPRUN_7=$'41\n' "${envs[@]+"${envs[@]}"}" \
-    "$BASH" "$work/harness.sh" "$@" 2>&1 </dev/null)"
+    "$BASH" "$work/harness.sh" "$@" 2>&1 <"${SRUN_IN:-/dev/null}")"
   rc=$?
 }
 called() { grep -c -e "$1" "$calls" || true; }
@@ -188,6 +217,65 @@ srun -- main setup --bogus
 record "main dispatches setup (and checks its instance)" "nonzero/yes" "$(nonzero "$rc")/$(has "$out" 'setup: unknown option --bogus')"
 srun HOMEFIELD_INSTANCE=bad/name -- main setup --url $org
 record "...the instance name is checked for setup as for install" "nonzero/yes/0" "$(nonzero "$rc")/$(has "$out" '--instance (or HOMEFIELD_INSTANCE) must be a Lima instance name')/$(called '^limactl')"
+
+# ── gh not logged in: setup offers the login (#146) ────────────────────────
+# PF=login reads the gh row from the stub's login state through the real
+# gh_active_account, so a login that works turns the failed check into a pass.
+echo "gh login offer"
+echo y >"$work/answer"
+SRUN_IN="$work/answer" srun PF=login LOGGED_OUT=1 TTY=1 -- cmd_setup --url $org
+record "logged out, terminal, y: gh auth login runs, then the checks pass and setup goes on" "0/1/yes/yes/yes" \
+  "$rc/$(called '^gh auth login -h github.com$')/$(has "$out" 'OK    gh authenticated as tester')/$(has "$out" 'All checks passed')/$(has "$out" 'Next steps:')"
+record "...asked before the preflight report, naming the command" "yes" \
+  "$(has "${out%%OK*}" "gh is not logged in. Run 'gh auth login' now? [Y/n]")"
+record "...no hardcoded scopes: gh asks its own questions" "0" "$(called 'auth login.*-s')"
+echo "" >"$work/answer"
+SRUN_IN="$work/answer" srun PF=login LOGGED_OUT=1 TTY=1 -- cmd_setup --url $org
+record "...just Enter is yes" "0/1" "$rc/$(called '^gh auth login')"
+echo n >"$work/answer"
+SRUN_IN="$work/answer" srun PF=login LOGGED_OUT=1 TTY=1 -- cmd_setup --url $org
+record "logged out, terminal, n: no login; the preflight fails as before and nothing is created" "nonzero/0/yes/yes/yes/0" \
+  "$(nonzero "$rc")/$(called '^gh auth login')/$(has "$out" "FAIL  gh not logged in: run 'gh auth login'")/$(has "$out" 'setup stopped: fix the failed checks above')/$(has "$out" 'nothing was created')/$(called 'limactl create')"
+SRUN_IN="$work/answer" srun PF=login LOGGED_OUT=1 -- cmd_setup --url $org
+record "logged out, no terminal: no question, no login; the same failure" "nonzero/0/no/yes/0" \
+  "$(nonzero "$rc")/$(called '^gh auth login')/$(has "$out" '[Y/n]')/$(has "$out" "FAIL  gh not logged in: run 'gh auth login'")/$(called 'limactl create')"
+record "...the only login lookup is the preflight report's own" "1" "$(called '^gh auth status')"
+echo y >"$work/answer"
+SRUN_IN="$work/answer" srun PF=login LOGGED_OUT=1 TTY=1 GITHUB_TOKEN=x -- cmd_setup --url $org
+record "GITHUB_TOKEN set: not offered (a login would not change what gh uses), said why" "nonzero/0/no/yes/yes" \
+  "$(nonzero "$rc")/$(called '^gh auth login')/$(has "$out" '[Y/n]')/$(has "$out" "'gh auth login' would not help")/$(has "$out" "FAIL  gh not logged in")"
+SRUN_IN="$work/answer" srun PF=login LOGGED_OUT=1 TTY=1 GH_TOKEN=x -- cmd_setup --url $org
+record "...GH_TOKEN the same" "nonzero/0" "$(nonzero "$rc")/$(called '^gh auth login')"
+SRUN_IN="$work/answer" srun PF=login LOGGED_OUT=1 TTY=1 GH_STATUS_FAIL=1 -- cmd_setup --url $org
+record "gh that cannot answer (status fails): not offered, a login would not fix it; the same preflight failure" "nonzero/0/no/yes" \
+  "$(nonzero "$rc")/$(called '^gh auth login')/$(has "$out" '[Y/n]')/$(has "$out" "FAIL  gh not logged in")"
+# Another check failing too (PF=real: no python3 or brew on the stub PATH): the
+# browser login would only be followed by the stop, so it is not asked.
+SRUN_IN="$work/answer" srun PF=real LOGGED_OUT=1 TTY=1 -- cmd_setup --url $org
+record "another check fails as well: no login offered, setup stops on the failures" "nonzero/0/no/yes/yes" \
+  "$(nonzero "$rc")/$(called '^gh auth login')/$(has "$out" '[Y/n]')/$(has "$out" 'FAIL  python3 not found')/$(has "$out" 'setup stopped')"
+# End of input at the question (Ctrl-D) is not a yes.
+: >"$work/eof"
+SRUN_IN="$work/eof" srun PF=login LOGGED_OUT=1 TTY=1 -- cmd_setup --url $org
+record "end of input at the question: no login, the preflight fails as before" "nonzero/0/yes" \
+  "$(nonzero "$rc")/$(called '^gh auth login')/$(has "$out" "FAIL  gh not logged in")"
+SRUN_IN="$work/answer" srun PF=login LOGGED_OUT=1 TTY=1 GH_LOGIN_NOOP=1 -- cmd_setup --url $org
+record "a login that ends without logging in: still not logged in, the preflight fails as before" "nonzero/1/yes/0" \
+  "$(nonzero "$rc")/$(called '^gh auth login')/$(has "$out" "FAIL  gh not logged in: run 'gh auth login'")/$(called 'limactl create')"
+SRUN_IN="$work/answer" srun PF=login LOGGED_OUT=1 TTY=1 GH_LOGIN_FAIL=1 -- cmd_setup --url $org
+record "a gh auth login that fails: said so, then the same preflight failure (setup does not crash)" "nonzero/1/yes/yes/0" \
+  "$(nonzero "$rc")/$(called '^gh auth login')/$(has "$out" "'gh auth login' did not finish")/$(has "$out" 'setup stopped: fix the failed checks above')/$(called 'limactl create')"
+SRUN_IN="$work/answer" srun PF=login TTY=1 -- cmd_setup --url $org
+record "already logged in, terminal: no question, no login, setup goes on" "0/0/no/yes" \
+  "$rc/$(called '^gh auth login')/$(has "$out" '[Y/n]')/$(has "$out" 'Next steps:')"
+SRUN_IN="$work/answer" srun PF=login LOGGED_OUT=1 TTY=1 -- cmd_install --url $org
+record "install is not offered the login: it goes on past the failed check, as before" "0/0/no/yes" \
+  "$rc/$(called '^gh auth login')/$(has "$out" '[Y/n]')/$(has "$out" "FAIL  gh not logged in")"
+# gh not installed at all: the PATH has no gh to ask.
+mv "$stubs/gh" "$stubs/gh.off"
+SRUN_IN="$work/answer" srun PF=pass TTY=1 -- offer_gh_login
+record "no gh on the PATH: nothing to offer, nothing asked" "0/no" "$rc/$(has "$out" '[Y/n]')"
+mv "$stubs/gh.off" "$stubs/gh"
 
 # ── a fresh setup for an organization ──────────────────────────────────────
 echo "fresh setup, organization"

@@ -142,6 +142,22 @@ after the confirmation, as the runner stays online meanwhile), deregisters the
 
 ### Fixed
 
+- A first run no longer dead-ends on `gh`. `install.sh` now asks one question
+  for everything Homebrew has to install, naming the commands it will run:
+  Lima (missing, or older than 2.0) and gh (missing), and `HOMEFIELD_YES=1`
+  installs both. Lima stays required, with the same failures as before; gh
+  never fails the installer: declining, no terminal without `HOMEFIELD_YES=1`,
+  no Homebrew or a failed `brew install gh` just goes on, and `homefield setup`'s preflight reports it with its
+  fix command. A Mac with no Homebrew and no Lima is now told so before
+  anything is downloaded or written. On a terminal, `homefield setup` offers
+  `gh auth login -h github.com` when gh is installed but not logged in and no
+  other check fails, before its preflight report, then runs the preflight;
+  declining, end of input, a login that does not finish, or no terminal leaves
+  the same failed check as before. It is not offered when another check fails
+  too, when gh cannot answer the login question, or when `GITHUB_TOKEN` or
+  `GH_TOKEN` is set (gh uses it instead of the stored login). `preflight`, `diagnose` and `install` do not offer the login,
+  and what preflight prints is unchanged. A compatible change.
+  [#146](https://github.com/i2Dev-com/homefield/issues/146)
 - `homefield install` now confirms the runner group an organization's runner
   landed in. After the runner shows online it asked GitHub's runner list for
   `runner_group_id`, a field that list never returns, so the check silently

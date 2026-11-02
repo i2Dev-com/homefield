@@ -39,11 +39,14 @@ On an Apple Silicon Mac, in a terminal:
 curl -fsSL https://raw.githubusercontent.com/i2Dev-com/homefield/v0.3.1/install.sh | bash
 ```
 
-This installs [Lima](https://lima-vm.io) with Homebrew if it is missing or older
-than 2.0 (it asks first), puts the tool in `~/.local/share/homefield` with a
-`homefield` command on your PATH, and runs `homefield setup` (`homefield install` on a
-release older than `setup`). That asks for
-your organization or repository URL, creates the VM, checks its isolation,
+This installs [Lima](https://lima-vm.io) and the GitHub CLI (`gh`) with Homebrew
+if they are missing (Lima also if it is older than 2.0), after one question
+that names the `brew` commands it will run, puts the tool in
+`~/.local/share/homefield` with a `homefield` command on your PATH, and runs
+`homefield setup` (`homefield install` on a release older than `setup`). If `gh`
+is installed but not logged in, and that is the only thing missing, `setup`
+offers to run `gh auth login` for you on a terminal. That asks for your
+organization or repository URL, creates the VM, checks its isolation,
 provisions it, creates the `homefield-ci` runner group for an organization
 (selected repositories only, no public ones), registers the runner with the
 routing label `homefield-ci` and waits until GitHub shows it online. To give
@@ -65,8 +68,9 @@ lookup; they cannot be combined.
 From a checkout, with Lima ≥ 2.0, run `bin/homefield setup --url
 https://github.com/<org>` instead. `setup` is the whole first-time setup in one
 command: it runs `preflight` first and stops, with nothing created, if any check
-fails (a warning does not stop it); then it does what `install` does, and ends
-with a summary, one line per step, that marks what is done with a check mark and
+fails (a warning does not stop it; on a terminal, a `gh` that is not logged in
+is first offered `gh auth login` when no other check fails, and the check runs
+after it); then it does what `install` does, and ends with a summary, one line per step, that marks what is done with a check mark and
 what needs attention with `!` (a runner group wider than recommended, a runner
 that is not online yet), followed by the next steps and the repositories that
 can already use the runner. It takes `install`'s options, and on an instance
@@ -94,8 +98,12 @@ prints it first and stops on any failure, while `install` prints it and then
 gates on its own subset — macOS, Apple Silicon and Lima — before creating
 anything, so gh, python3 or Homebrew missing stops `preflight` and `setup` but
 not `install`. The one-liner itself checks only macOS, Apple Silicon and
-Lima, and needs Homebrew to install Lima; it then hands over to `setup`, so a
-failed preflight check stops it before the VM is created.
+Lima, and needs Homebrew to install Lima, which it checks before downloading
+anything. It offers `brew install gh` in the same question but does not need
+it: declining, having no terminal (without `HOMEFIELD_YES=1`) or having no
+Homebrew goes on, and the preflight it then hands over to (`setup`) reports a
+missing `gh` with the command to run, so a failed preflight check stops it
+before the VM is created. `HOMEFIELD_YES=1` installs both without asking.
 
 Registration needs a one-hour token, and the group needs the `admin:org`
 scope. `gh` fetches the token if you are an org owner or a repository admin
@@ -279,7 +287,7 @@ pull-request code away from the Mac it runs on.
 
 | Path | What it is |
 |---|---|
-| [`install.sh`](install.sh) | The one-line installer: downloads the tool, puts `homefield` on the PATH, installs Lima, runs `homefield install` |
+| [`install.sh`](install.sh) | The one-line installer: downloads the tool, puts `homefield` on the PATH, installs Lima and gh (one question), runs `homefield setup` |
 | [`bin/homefield`](bin/homefield) | Install, upgrade, inspect and remove the runner on this Mac; adopt and switch repositories |
 | [`vm/lima.yaml`](vm/lima.yaml) | The VM: Ubuntu 24.04 arm64, no host mounts, no forwarding of guest ports to the Mac, no SSH-agent forwarding |
 | [`vm/provision.sh`](vm/provision.sh) | Runs inside the VM: packages, Docker, the checksum-pinned runner, maintenance timers, registration (settings at the top of the file); `ensure-service` restores the runner's service on its own |

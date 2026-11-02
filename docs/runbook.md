@@ -193,7 +193,16 @@ account from `gh auth status --json hosts`, so an App-installed token (which
 reports no scopes) is accepted; a token without `admin:org` only warns, because
 an organization URL needs that scope while a repository URL does not. The
 `setup` command prints it first and stops on any failed check, before creating
-or touching anything (a warning does not stop it); `install` prints it and then
+or touching anything (a warning does not stop it). On a terminal, when gh is
+installed, has no active login and no other check fails, `setup` first offers
+`gh auth login -h github.com` (gh asks its own questions) and runs the check
+after it; declining, end of input, a login that does not finish, or no terminal
+leaves the check to fail as above. It does not offer when another check fails
+too (a browser login would only be followed by the stop), when `gh` cannot
+answer the login question at all (a login would not fix that), or when
+`GITHUB_TOKEN` or `GH_TOKEN` is set, since `gh` uses that instead of its stored
+login. `preflight` and `diagnose` only report. `install` does not offer the
+login; it prints the preflight report and then
 gates on its own subset — macOS, Apple Silicon, Lima — before creating
 anything:
 
@@ -205,7 +214,11 @@ Run the [README's one-liner](../README.md#quick-start), or, from a checkout,
 `bin/homefield setup --url https://github.com/<org>` (or
 `https://github.com/<owner>/<repo>`, which is what a personal account needs;
 options: `bin/homefield help`). It needs
-Lima ≥ 2.0 (verified on 2.2.0), which the one-liner installs. `setup` runs
+Lima ≥ 2.0 (verified on 2.2.0), which the one-liner installs, with gh, in one
+Homebrew question (`HOMEFIELD_YES=1` answers it; Lima is required, so declining
+it, or no terminal without `HOMEFIELD_YES=1`, stops the one-liner with the brew
+command to run, while a missing gh never does and is left to `setup`'s
+preflight). `setup` runs
 `install`, which does every step below (the one-liner hands over to `setup`, or
 to `install` when the release it installed has no `setup`): it asks for the URL if it was not given, creates the VM and checks
 its isolation, provisions it, creates the runner group, registers the runner,

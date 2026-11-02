@@ -64,6 +64,8 @@ cat >"$tpl/brew" <<'EOF'
 #!/bin/sh
 echo "brew $*" >>"$CALLS"
 [ "$1" != --prefix ] || echo "$BREW_PREFIX"
+# FAKE_BREW_FAIL="<args>" makes that one brew command fail.
+[ "$*" != "${FAKE_BREW_FAIL:-}" ] || exit 1
 EOF
 cat >"$tpl/limactl" <<'EOF'
 #!/bin/sh
@@ -111,6 +113,8 @@ run_install() {
   rc=$?
 }
 called() { grep -c "$1" "$calls" || true; }
+# prompts: how many questions the run asked.
+prompts() { printf '%s\n' "$out" | grep -c '\[Y/n\]' || true; }
 nonzero() { [ "$1" -ne 0 ] && echo nonzero || echo "$1"; }
 
 # ── Fetching ───────────────────────────────────────────────────────────────
@@ -295,6 +299,8 @@ record "answering n stops, naming the command" "nonzero/yes/0" "$(nonzero "$rc")
 new_env gh curl
 run_install
 record "no Lima and no brew: stops, pointing at Lima's install page" "nonzero/yes" "$(nonzero "$rc")/$(has "$out" 'lima-vm.io')"
+record "...before anything is downloaded or written (#146)" "0/0/no" \
+  "$(called '^gh')/$(called '^curl')/$([ -e "$home/share" ] && echo yes || echo no)"
 new_env gh curl limactl brew
 run_install
 record "Lima 2.0 or later present: nothing is installed or upgraded" "0/0/0" "$rc/$(called '^brew install')/$(called '^brew upgrade')"
@@ -307,6 +313,79 @@ record "Lima 1.x with HOMEFIELD_YES=1: upgraded (the template: locator needs 2.0
 new_env gh curl limactl brew
 run_install FAKE_LIMA_VERSION=2.0.0
 record "Lima exactly 2.0.0: accepted" "0/0/0" "$rc/$(called '^brew install')/$(called '^brew upgrade')"
+
+# ── gh, asked with Lima in one question (#146) ─────────────────────────────
+# A fresh Mac has neither: one Y/n covers both, and nothing but Lima can make
+# install.sh fail, since setup's preflight reports a missing gh with its fix.
+echo "gh"
+new_env curl brew
+echo y >"$work/answer"
+run_install HOMEFIELD_TTY="$work/answer"
+record "Lima and gh missing: one question naming both commands" "1/yes" \
+  "$(prompts)/$(has "$out" 'Lima is not installed. gh is not installed. Run brew install lima and brew install gh? [Y/n]')"
+record "...y installs both" "1/1/0" "$(called '^brew install lima$')/$(called '^brew install gh$')/$rc"
+new_env curl brew
+echo n >"$work/answer"
+run_install HOMEFIELD_TTY="$work/answer"
+record "Lima and gh missing, n: stops as for Lima alone, naming only Lima's command" "nonzero/yes/0/1" \
+  "$(nonzero "$rc")/$(has "$out" 'Lima 2.0 or later is required. Run: brew install lima')/$(called '^brew install')/$(prompts)"
+new_env curl brew
+run_install
+record "Lima and gh missing, no terminal: stops as for Lima alone" "nonzero/yes/0" \
+  "$(nonzero "$rc")/$(has "$out" 'there is no terminal to ask on. Run: brew install lima')/$(called '^brew install')"
+new_env curl brew
+run_install HOMEFIELD_YES=1
+record "Lima and gh missing, HOMEFIELD_YES=1: both installed, no question" "0/1/1/0" \
+  "$rc/$(called '^brew install lima$')/$(called '^brew install gh$')/$(prompts)"
+new_env curl limactl brew
+echo y >"$work/answer"
+run_install HOMEFIELD_TTY="$work/answer" FAKE_LIMA_VERSION=1.9.9
+record "Lima older than 2.0 and gh missing: one question, upgrade and install" "1/yes/1/1" \
+  "$(prompts)/$(has "$out" 'Lima is older than 2.0. gh is not installed. Run brew upgrade lima and brew install gh? [Y/n]')/$(called '^brew upgrade lima$')/$(called '^brew install gh$')"
+new_env curl brew
+echo y >"$work/answer"
+run_install HOMEFIELD_TTY="$work/answer" FAKE_BREW_FAIL="install gh"
+record "Lima installed but brew install gh fails: a warning, install.sh still succeeds (gh is never required here)" "0/1/yes" \
+  "$rc/$(called '^brew install lima$')/$(has "$out" 'warning: brew install gh failed; setup will report it')"
+new_env curl brew
+run_install FAKE_BREW_FAIL="install lima" HOMEFIELD_YES=1
+record "brew install lima failing stops as before, before gh is tried" "nonzero/yes/0" \
+  "$(nonzero "$rc")/$(has "$out" 'brew install lima failed')/$(called '^brew install gh$')"
+
+# Only gh missing: never a new failure.
+new_env curl limactl brew
+echo y >"$work/answer"
+run_install HOMEFIELD_TTY="$work/answer"
+record "only gh missing, y: asked about gh alone and installed" "1/yes/1/0/0" \
+  "$(prompts)/$(has "$out" 'gh is not installed. Run brew install gh? [Y/n]')/$(called '^brew install gh$')/$(called '^brew install lima')/$rc"
+record "...and the hand-over to the installed tool still happens" "homefield stub: install" "$(echo "$out" | grep 'homefield stub' || true)"
+new_env curl limactl brew
+echo n >"$work/answer"
+run_install HOMEFIELD_TTY="$work/answer" STUB_HAS_SETUP=1
+record "only gh missing, n: goes on, nothing installed, setup is still handed over" "0/0/homefield stub: setup" \
+  "$rc/$(called '^brew install')/$(echo "$out" | grep 'homefield stub' || true)"
+record "...with a note that setup reports it and how to install it" "yes" "$(has "$out" 'gh was not installed; setup will report it. To install it: brew install gh')"
+new_env curl limactl brew
+run_install
+record "only gh missing, no terminal: goes on, nothing installed, with a note" "0/0/yes/yes" \
+  "$rc/$(called '^brew install')/$(has "$out" 'gh is not installed and there is no terminal to ask on')/$(has "$out" 'Next, set up the runner')"
+new_env curl limactl brew
+run_install HOMEFIELD_YES=1
+record "only gh missing, HOMEFIELD_YES=1: installed without asking" "0/1/0" "$rc/$(called '^brew install gh$')/$(prompts)"
+new_env curl limactl
+run_install
+record "only gh missing and no Homebrew: goes on without a word about gh or brew" "0/no" "$rc/$(has "$out" 'brew')"
+new_env curl limactl
+echo y >"$work/answer"
+run_install HOMEFIELD_TTY="$work/answer" HOMEFIELD_YES=1
+record "...also with HOMEFIELD_YES=1 and a terminal" "0/0" "$rc/$(prompts)"
+new_env curl limactl brew
+run_install HOMEFIELD_YES=1 FAKE_BREW_FAIL="install gh"
+record "only gh missing, brew install gh fails: a warning, install.sh still succeeds" "0/yes" \
+  "$rc/$(has "$out" 'warning: brew install gh failed; setup will report it')"
+new_env gh curl limactl brew
+run_install
+record "gh present: not asked about, not installed" "0/0/0" "$rc/$(called '^brew install')/$(prompts)"
 
 # ── Running it again ───────────────────────────────────────────────────────
 echo "running it again"

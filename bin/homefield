@@ -44,7 +44,9 @@ Usage: bin/homefield <command> [options]
 
 Commands:
   setup      The whole first-time setup in one command: preflight must pass in
-             full (any failed check stops it with nothing created), then the
+             full (any failed check stops it with nothing created; on a
+             terminal, a gh that is not logged in is first offered
+             `gh auth login` when it is the only failed check), then the
              same steps as install, ending with a summary of what is done (and
              what needs attention) and the next steps, including the
              repositories that can already use the runner. Takes install's
@@ -282,6 +284,15 @@ pf_add() {
   PF_LEVEL+=("$2")
   PF_MSG+=("$3")
 }
+# gh_active_account: "login|scopes" of the active github.com login, "|" when
+# there is none. The one place that asks, for preflight_collect's gh check and
+# setup's offer to log in (offer_gh_login), so the two cannot disagree. gh's own
+# status comes through: with --json it exits 0 when nobody is logged in, so a
+# non-zero status means the question could not be answered (a gh too old for
+# --json, a broken install), which is not the same as "not logged in".
+gh_active_account() {
+  gh auth status --json hosts --jq '.hosts["github.com"] // [] | map(select(.active)) | (.[0] // {}) | "\(.login // "")|\(.scopes // "")"' 2>/dev/null </dev/null
+}
 preflight_collect() {
   local version major minor login scopes whoami py_version
   PF_NAME=()
@@ -307,7 +318,7 @@ preflight_collect() {
   if ! command -v gh >/dev/null 2>&1; then
     pf_add gh fail "gh (GitHub CLI) not found: run 'brew install gh'"
   else
-    whoami="$(gh auth status --json hosts --jq '.hosts["github.com"] // [] | map(select(.active)) | (.[0] // {}) | "\(.login // "")|\(.scopes // "")"' 2>/dev/null)" || whoami="|"
+    whoami="$(gh_active_account)" || whoami="|"
     login="${whoami%%|*}"
     scopes="${whoami#*|}"
     if [ -z "$login" ]; then
@@ -906,6 +917,40 @@ offer_scope_refresh() {
   case "$answer" in [Nn]*) return 1 ;; esac
   # gh prints its one-time code on stdout; the caller may be in $(...).
   gh auth refresh -h github.com -s admin:org >&2
+}
+
+# offer_gh_login: setup's first run on a Mac where gh is installed but never
+# logged in. Offers `gh auth login` on a terminal so the preflight that follows
+# can pass, instead of stopping the user to run it and start over. Every
+# outcome falls through to preflight, which reports whatever login state is
+# left, with the same fix command; this changes nothing itself. Only setup
+# calls it: preflight stays read-only and diagnose never prompts. gh asks its
+# own questions (account, protocol, scopes); the admin:org scope an
+# organization needs is added later by offer_scope_refresh.
+# Not offered when gh cannot answer (a login would not fix that), or when any
+# other check fails: a browser login would only be followed by the stop.
+offer_gh_login() {
+  command -v gh >/dev/null 2>&1 || return 0
+  have_terminal || return 0
+  local account answer i
+  account="$(gh_active_account)" || return 0
+  [ -z "${account%%|*}" ] || return 0
+  preflight_collect
+  for ((i = 0; i < ${#PF_NAME[@]}; i++)); do
+    [ "${PF_LEVEL[i]}" != fail ] || [ "${PF_NAME[i]}" = gh ] || return 0
+  done
+  if [ -n "${GITHUB_TOKEN:-}${GH_TOKEN:-}" ]; then
+    # gh uses that variable instead of its stored login, so logging in
+    # changes nothing for this command.
+    echo "homefield: GITHUB_TOKEN or GH_TOKEN is set, and gh uses it instead of its stored login, so" >&2
+    echo "homefield: 'gh auth login' would not help. Unset it, or use a valid token." >&2
+    return 0
+  fi
+  printf "gh is not logged in. Run 'gh auth login' now? [Y/n] " >&2
+  # End of input (Ctrl-D) is not a yes.
+  read -r answer || return 0
+  case "$answer" in [Nn]*) return 0 ;; esac
+  gh auth login -h github.com || echo "homefield: 'gh auth login' did not finish" >&2
 }
 
 # get_token <registration|remove> <url>: prints the token. From gh when it can,
@@ -1719,8 +1764,10 @@ cmd_install() {
   # the one-liner), and install itself can proceed without them.
   # setup stops on a failed check instead (FAIL only: a WARN is not one), and
   # before anything else, so a failed setup has created and touched nothing.
+  # On a terminal, setup first offers to log gh in, so that check can pass.
   if [ "$SETUP" = 1 ]; then
     local preflight_rc=0
+    offer_gh_login
     cmd_preflight || preflight_rc=$?
     [ "$preflight_rc" -eq 0 ] ||
       die "setup stopped: fix the failed checks above and run it again; nothing was created"

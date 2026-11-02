@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # One-line installer for homefield: downloads the tool, puts `homefield` on the
-# PATH, makes sure Lima is there, and hands over to `homefield install`.
+# PATH, makes sure Lima and gh are there (one question covers both), and hands
+# over to `homefield setup` (`install` for a release older than setup).
 #
 #   curl -fsSL https://raw.githubusercontent.com/i2Dev-com/homefield/v0.3.1/install.sh | bash
 #   ... | bash -s -- --url https://github.com/<org>      # install options pass through
@@ -12,10 +13,17 @@
 #   HOMEFIELD_HOME      where the tool goes (default ~/.local/share/homefield)
 #   HOMEFIELD_BIN_DIR   where the `homefield` command goes (default: Homebrew's
 #                       bin when writable, else ~/.local/bin)
-#   HOMEFIELD_YES=1     install Lima with Homebrew without asking (needed when
-#                       there is no terminal to ask on)
+#   HOMEFIELD_YES=1     install Lima and gh with Homebrew without asking
+#                       (needed when there is no terminal to ask on)
 #   HOMEFIELD_INSTANCE  the VM's Lima instance name (default homefield), as for
 #                       bin/homefield
+#
+# Lima is required: if it is missing or older than 2.0 and you decline, or
+# there is no terminal and no HOMEFIELD_YES, this stops with the brew command
+# to run, and without Homebrew it stops before downloading anything. gh is not:
+# the one question offers `brew install gh` when it is missing, but declining,
+# no terminal or no Homebrew just goes on, and `homefield setup` reports it
+# with the command to run. Once gh is there, setup offers `gh auth login`.
 #
 # Everything is inside functions and `main` is the last line, so a download
 # that stops half way runs nothing. Runs on macOS's stock bash 3.2. Running it
@@ -199,26 +207,71 @@ lima_new_enough() {
   [ "$major" -ge 2 ]
 }
 
-ensure_lima() {
-  local verb=install what="is not installed"
-  if command -v limactl >/dev/null 2>&1; then
-    lima_new_enough && return 0
-    verb=upgrade
-    what="is older than 2.0"
+# plan_packages: what Homebrew has to install for this Mac, set before
+# anything is downloaded: LIMA_VERB (install or upgrade) and LIMA_WHAT (why)
+# when Lima is missing or older than 2.0, NEED_GH=1 when gh is not on the PATH
+# (setup's preflight needs it and `gh auth login` follows). A Lima that cannot
+# be had, with no Homebrew to get it, is told now, before anything is written.
+# Without Homebrew gh is only left for preflight to report, never a failure here.
+plan_packages() {
+  LIMA_VERB=""
+  LIMA_WHAT=""
+  NEED_GH=0
+  if ! command -v limactl >/dev/null 2>&1; then
+    LIMA_VERB=install
+    LIMA_WHAT="is not installed"
+  elif ! lima_new_enough; then
+    LIMA_VERB=upgrade
+    LIMA_WHAT="is older than 2.0"
   fi
-  command -v brew >/dev/null 2>&1 ||
-    die "Lima ${what}. Install 2.0 or later (https://lima-vm.io/docs/installation/, or install Homebrew from https://brew.sh and run: brew install lima), then run this again"
+  command -v gh >/dev/null 2>&1 || NEED_GH=1
+  if ! command -v brew >/dev/null 2>&1; then
+    [ -z "$LIMA_VERB" ] ||
+      die "Lima ${LIMA_WHAT}. Install 2.0 or later (https://lima-vm.io/docs/installation/, or install Homebrew from https://brew.sh and run: brew install lima), then run this again"
+    NEED_GH=0
+  fi
+}
+
+# ensure_packages: installs what plan_packages found with one question for all
+# of it. Lima is required: declining, no terminal to ask on, or a failed brew
+# stops with the command to run. gh is not: setup's preflight reports a missing
+# gh with its fix command, so nothing about gh makes a failure here.
+ensure_packages() {
+  local cmds="" answer
+  [ -z "$LIMA_VERB" ] || cmds="brew ${LIMA_VERB} lima"
+  [ "$NEED_GH" != 1 ] || cmds="${cmds:+$cmds and }brew install gh"
+  [ -n "$cmds" ] || return 0
   if [ "${HOMEFIELD_YES:-}" != 1 ]; then
-    have_tty || die "Lima ${what} and there is no terminal to ask on. Run: brew ${verb} lima   (or run this again with HOMEFIELD_YES=1 to have it done)"
-    local answer
-    printf 'Lima %s. Run brew %s lima? [Y/n] ' "$what" "$verb" >&2
+    if ! have_tty; then
+      [ -z "$LIMA_VERB" ] ||
+        die "Lima ${LIMA_WHAT} and there is no terminal to ask on. Run: brew ${LIMA_VERB} lima   (or run this again with HOMEFIELD_YES=1 to have it done)"
+      log "gh is not installed and there is no terminal to ask on; setup will report it. To install it: brew install gh"
+      return 0
+    fi
+    if [ -n "$LIMA_VERB" ]; then
+      printf 'Lima %s.' "$LIMA_WHAT" >&2
+      [ "$NEED_GH" != 1 ] || printf ' gh is not installed.' >&2
+      printf ' Run %s? [Y/n] ' "$cmds" >&2
+    else
+      printf 'gh is not installed. Run %s? [Y/n] ' "$cmds" >&2
+    fi
     read -r answer <"$TTY" || answer=""
     case "$answer" in
       "" | [Yy]*) ;;
-      *) die "Lima 2.0 or later is required. Run: brew ${verb} lima" ;;
+      *)
+        [ -z "$LIMA_VERB" ] || die "Lima 2.0 or later is required. Run: brew ${LIMA_VERB} lima"
+        log "gh was not installed; setup will report it. To install it: brew install gh"
+        return 0
+        ;;
     esac
   fi
-  brew "$verb" lima || die "brew ${verb} lima failed"
+  if [ -n "$LIMA_VERB" ]; then
+    brew "$LIMA_VERB" lima || die "brew ${LIMA_VERB} lima failed"
+  fi
+  if [ "$NEED_GH" = 1 ]; then
+    brew install gh ||
+      log "warning: brew install gh failed; setup will report it. To retry: brew install gh"
+  fi
 }
 
 vm_exists() {
@@ -230,6 +283,7 @@ main() {
   check_host
   check_settings
   [ $# -gt 0 ] || check_instance
+  plan_packages
 
   # Next to the destination, so that the swap below is a rename.
   mkdir -p "$(dirname "$INSTALL_DIR")"
@@ -241,7 +295,7 @@ main() {
   local bin_dir
   bin_dir="$(pick_bin_dir)"
   write_wrapper "$bin_dir"
-  ensure_lima
+  ensure_packages
 
   log "installed homefield ${REF}${COMMIT:+ (${COMMIT:0:7})} from ${REPO}"
   log "tool: ${INSTALL_DIR}"
