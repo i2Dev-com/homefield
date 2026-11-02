@@ -4,7 +4,8 @@ A checklist for routing a repository's pull-request CI to the local runner,
 once it is installed ([README: Quick start](../README.md#quick-start)); the
 closing summary of `homefield setup` points here, and lists the repositories
 that can already use the runner; on a terminal it then offers to run
-`homefield adopt --setup` for you.
+`homefield adopt --setup --wait` for you (see [Let adopt write steps 1 to
+4](#let-adopt-write-steps-1-to-4)).
 Steps 1–4 are edits to the repository's workflows; `homefield adopt` (step 5)
 does the rest of the setup and refuses to switch the repository on until
 those edits are merged. You can write steps 1–4 by hand, or have
@@ -199,18 +200,33 @@ adopt would.
 
 - **Timeout.** It waits 60 minutes; `--wait-timeout <minutes>` (a whole number,
   1 or more) changes that. A pull request still open then ends the run with
-  exit 1 and the command to run once it is merged.
-- **Closed without a merge** ends the run with exit 1: nothing was switched and
+  exit 4 and the command to run once it is merged.
+- **Closed without a merge** ends the run with exit 4: nothing was switched and
   no group access changed. The branch `homefield/route-to-local` stays, so
   delete it before running `--setup` again.
 - **A read of the pull request that fails** (the network, the API) is tried
   again, not taken for a closed pull request; five failed reads in a row end
-  the run with exit 1.
+  the run with exit 4.
 - **Ctrl-C or `kill`** is safe at any point of the wait: the command prints the
   step 5 command to run by hand, exits 130 (143 for SIGTERM) and leaves the
   pull request and its branch as they are. A plain `homefield adopt --repo
   <owner>/<repo>` is always the way to pick up from there, and is safe to
-  repeat.
+  repeat. The command it prints keeps the `--label` and `--group` you gave
+  (a plain adopt without `--group` looks at `homefield-ci`), so run it as
+  printed.
+- **After the merge**, a routing check that fails, a group that cannot be
+  changed or a switch that fails stops the run as a plain adopt would, with
+  exit 5 (the pull request is merged by then): run `homefield adopt --repo
+  <owner>/<repo>` once it is fixed.
+
+The exit status tells a caller (`homefield setup` reads it) how far the run
+got: 1 is a failure before the pull request existed (a public repository, no
+write access, nothing to route, the branch already there), and it is also what
+a run without `--wait` exits with for any failure; 4 is a pull request that is
+open and not merged when the wait ended; 5 is a merged pull request whose
+step 5 did not finish; 130 and 143 are Ctrl-C and SIGTERM. A fresh
+`homefield setup` runs this very command when you say yes to its offer, and
+tells these cases apart by that status.
 
 `--wait` needs `--setup` (it follows the pull request that `--setup` opens;
 for one you opened yourself, merge it and run step 5), and with `--dry-run` it
@@ -225,9 +241,10 @@ guard runs. Then, from any machine with `gh` and `python3` (not the VM):
 homefield adopt --repo <owner>/<repo>
 ```
 
-(If you opened the pull request with `homefield adopt --setup --wait`, this
-step already runs by itself once you merge it; run it by hand only if that
-command was interrupted, timed out or stopped. See
+(If you opened the pull request with `homefield adopt --setup --wait`, or said
+yes to the offer at the end of `homefield setup`, this step already runs by
+itself once you merge it; run it by hand only if that command was interrupted,
+timed out or stopped. See
 [Let adopt write steps 1 to 4](#let-adopt-write-steps-1-to-4).)
 
 It does the rest of the setup, in this order, and prints one line for each
