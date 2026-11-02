@@ -242,7 +242,24 @@ whether a repository's `CI_RUNNER` is `local`: for an organization it is the
 repositories the selected group admits (read from GitHub; a list that could not
 be read is said so), for a repository or personal registration the one
 repository, and for the Default group, a group wider than recommended or one
-that was not checked, no list. On an instance that is already registered,
+that was not checked, no list.
+
+After the summary, on a terminal, a fresh `setup` offers to open the routing
+pull request, so the next command does not have to be typed. A repository-scoped
+registration (a personal account, or a repository URL) knows the repository and
+asks `Open the routing pull request for <owner>/<repo> now? [Y/n]`; Enter or
+`y` runs `homefield adopt --repo <owner>/<repo> --setup`. An organization asks
+`Repository to route first (name or owner/repo; Enter to skip)`: a bare name
+means `<org>/<name>`, and text that is not a repository name is refused without
+running anything. `n`, Enter at the organization question and end of input
+(Ctrl-D) skip it, with a line naming the command for later. Nothing is created
+on GitHub without the answer, and `adopt` keeps its own checks (it refuses a
+public repository and needs write access). If `adopt` fails, its message is
+already above, the setup stays a success (exit 0), and `setup` prints the
+command to run again. Without a terminal there is no question, and an instance
+that is already registered (the upgrade) is not offered it.
+
+On an instance that is already registered,
 `setup` upgrades it like `install` and ends with a shorter summary that does not
 look at the runner group again.
 

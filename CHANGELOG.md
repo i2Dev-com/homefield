@@ -13,6 +13,23 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ### Added
 
+- `homefield setup` offers to open the routing pull request at the end of a
+  fresh setup, on a terminal, so the next command is not left to be typed. A
+  repository-scoped registration (a personal account, or a repository URL)
+  asks `Open the routing pull request for <owner>/<repo> now? [Y/n]`; an
+  organization asks which repository to route first (a name, meaning
+  `<org>/<name>`, or `owner/repo`; Enter skips, and text that is not a
+  repository name runs nothing). Yes runs `homefield adopt --repo <owner>/<repo>
+  --setup`; `n`, Enter at the organization question and end of input skip it
+  with a line naming the command for later. Nothing is created on GitHub
+  without the answer, and `adopt` keeps refusing public repositories and
+  needing write access. If `adopt` fails, its message is shown, `setup` still
+  exits 0 (the runner is set up) and prints the command to run again. Without a
+  terminal, on an upgrade of a registered instance, and for `install`, nothing
+  changes. A `--label` or `--group` given to `setup` goes along to `adopt`
+  (and into the printed commands), so the pull request routes on the label the
+  runner carries.
+  [#148](https://github.com/i2Dev-com/homefield/issues/148)
 - `homefield setup [install options]` — the first-time setup in one command.
   It runs `preflight` first and, if any check fails (a warning does not count),
   exits 1 saying so before creating or touching anything: no VM, no runner

@@ -142,6 +142,17 @@ verify_isolation() { echo "verify_isolation" >>"$CALLS"; log "isolation verified
 is_registered() { [ "${REGISTERED:-no}" = yes ]; }
 cmd_upgrade() { echo "cmd_upgrade $*" >>"$CALLS"; log "upgrade ran"; }
 get_token() { echo tok123; }
+# adopt: records its arguments; ADOPT_FAIL=exit ends it like die does, =return
+# fails it, =errexit runs a failing command first (it must not get past it).
+cmd_adopt() {
+  echo "cmd_adopt $*" >>"$CALLS"
+  echo "adopt ran"
+  case "${ADOPT_FAIL:-}" in
+    exit) echo "homefield: adopt: stub refusal" >&2; exit 1 ;;
+    return) echo "homefield: adopt: stub failure" >&2; return 1 ;;
+    errexit) false; echo "reached" >>"$CALLS" ;;
+  esac
+}
 run_provision() { echo "run_provision" >>"$CALLS"; : >"$PROVISIONED"; }
 runner_setting() {
   local k
@@ -402,5 +413,87 @@ record "...it still ends with that text (nothing printed after it)" "bin/homefie
 srun GH_OWNER_TYPE=User -- cmd_install --url https://github.com/someone/app
 record "install, personal: still names install for another repository" "yes/no" \
   "$(has "$out" 'homefield install --instance <name> --url https://github.com/<owner>/<repo>.')/$(has "$out" 'homefield setup --instance')"
+
+# ── the routing pull request offer (#148) ──────────────────────────────────
+# After a fresh setup's summary, on a terminal: a repository-scoped
+# registration offers adopt --setup for its repository, an organization asks
+# which repository first. The harness's cmd_adopt records its arguments.
+echo "routing pull request offer"
+personal_url=https://github.com/someone/app
+echo y >"$work/yes"
+echo "" >"$work/enter"
+echo n >"$work/no"
+printf 'app\n' >"$work/name"
+printf 'other/repo\n' >"$work/slugged"
+printf 'a b\n' >"$work/bad"
+adopt_line() { grep '^cmd_adopt' "$calls" || true; }
+
+SRUN_IN="$work/yes" srun GH_OWNER_TYPE=User TTY=1 -- cmd_setup --url $personal_url
+record "personal account, y: adopt runs once, for the repository, with --setup; setup exits 0" "0/1/cmd_adopt --repo someone/app --setup" \
+  "$rc/$(called '^cmd_adopt')/$(adopt_line)"
+record "...asked after the summary, naming the repository" "yes/yes" \
+  "$(has "$out" 'Open the routing pull request for someone/app now? [Y/n]')/$(has "${out%%Open the routing*}" 'Repositories that can use this runner:')"
+record "...adopt's own output follows, and nothing about a failure or a later run" "yes/no/no" \
+  "$(has "${out#*Open the routing}" 'adopt ran')/$(has "$out" 'was not opened')/$(has "$out" 'Route it later')"
+SRUN_IN="$work/enter" srun GH_OWNER_TYPE=User TTY=1 -- cmd_setup --url $personal_url
+record "personal account, just Enter: yes" "0/1/cmd_adopt --repo someone/app --setup" "$rc/$(called '^cmd_adopt')/$(adopt_line)"
+SRUN_IN="$work/yes" srun GH_OWNER_TYPE=User TTY=1 -- cmd_setup --url $personal_url --label custom-ci --group my-group
+record "--label and --group given: adopt gets both, so the PR routes on the runner's label" "0/1/cmd_adopt --repo someone/app --setup --label custom-ci --group my-group" \
+  "$rc/$(called '^cmd_adopt')/$(adopt_line)"
+SRUN_IN="$work/no" srun GH_OWNER_TYPE=User TTY=1 -- cmd_setup --url $personal_url --label custom-ci --group my-group
+record "...and the command printed for later carries them" "yes" \
+  "$(has "$out" 'Route it later with: homefield adopt --repo someone/app --setup --label custom-ci --group my-group')"
+SRUN_IN="$work/yes" srun GH_OWNER_TYPE=User TTY=1 ADOPT_FAIL=exit -- cmd_setup --url $personal_url --label custom-ci
+record "...and so does the retry line after a failure; no --group when none was given" "yes/no" \
+  "$(has "$out" 'To try again: homefield adopt --repo someone/app --setup --label custom-ci')/$(has "$out" '--group')"
+SRUN_IN="$work/no" srun GH_OWNER_TYPE=User TTY=1 -- cmd_setup --url $personal_url
+record "personal account, n: adopt is not run; one line with the command for later; exit 0" "0/0/yes/no" \
+  "$rc/$(called '^cmd_adopt')/$(has "$out" 'Route it later with: homefield adopt --repo someone/app --setup')/$(has "$out" 'adopt ran')"
+SRUN_IN="$work/yes" srun GH_OWNER_TYPE=Organization TTY=1 -- cmd_setup --url https://github.com/acme/app
+record "a repository URL, y: the repository from the URL" "0/1/cmd_adopt --repo acme/app --setup" "$rc/$(called '^cmd_adopt')/$(adopt_line)"
+: >"$work/eof"
+SRUN_IN="$work/eof" srun GH_OWNER_TYPE=User TTY=1 -- cmd_setup --url $personal_url
+record "repository question, end of input: a no; adopt not run; exit 0, the reminder printed" "0/0/yes" \
+  "$rc/$(called '^cmd_adopt')/$(has "$out" 'Route it later with: homefield adopt --repo someone/app --setup')"
+
+SRUN_IN="$work/name" srun TTY=1 -- cmd_setup --url $org
+record "organization, a bare name: <org>/<name>, with --setup" "0/1/cmd_adopt --repo acme/app --setup" "$rc/$(called '^cmd_adopt')/$(adopt_line)"
+record "...asked after the summary" "yes/yes" \
+  "$(has "$out" 'Repository to route first (name or owner/repo; Enter to skip): ')/$(has "${out%%Repository to route first*}" 'Repositories that can use this runner:')"
+SRUN_IN="$work/slugged" srun TTY=1 -- cmd_setup --url $org
+record "organization, owner/repo: used as typed" "0/1/cmd_adopt --repo other/repo --setup" "$rc/$(called '^cmd_adopt')/$(adopt_line)"
+SRUN_IN="$work/enter" srun TTY=1 -- cmd_setup --url $org
+record "organization, Enter: skipped quietly, with the command for later" "0/0/yes/no" \
+  "$rc/$(called '^cmd_adopt')/$(has "$out" 'Route it later with: homefield adopt --repo <owner>/<repo> --setup')/$(has "$out" 'not a repository')"
+SRUN_IN="$work/bad" srun TTY=1 -- cmd_setup --url $org
+record "organization, text that is no repository: not run, said so; exit 0" "0/0/yes/yes" \
+  "$rc/$(called '^cmd_adopt')/$(has "$out" 'not a repository name or owner/repo: a b; no pull request was opened')/$(has "$out" 'Route it later with')"
+SRUN_IN="$work/eof" srun TTY=1 -- cmd_setup --url $org
+record "organization, end of input: skipped; exit 0" "0/0/yes" \
+  "$rc/$(called '^cmd_adopt')/$(has "$out" 'Route it later with')"
+
+SRUN_IN="$work/yes" srun GH_OWNER_TYPE=User -- cmd_setup --url $personal_url
+record "no terminal: no question, adopt not run, only the printed next steps" "0/0/no/no/yes" \
+  "$rc/$(called '^cmd_adopt')/$(has "$out" '[Y/n]')/$(has "$out" 'Route it later')/$(has "$out" 'Next steps:')"
+SRUN_IN="$work/name" srun -- cmd_setup --url $org
+record "...an organization too" "0/0/no" "$rc/$(called '^cmd_adopt')/$(has "$out" 'Repository to route first')"
+
+SRUN_IN="$work/yes" srun GH_OWNER_TYPE=User TTY=1 ADOPT_FAIL=exit -- cmd_setup --url $personal_url
+record "adopt dies (exit): setup still exits 0, says the PR was not opened and how to retry" "0/1/yes/yes" \
+  "$rc/$(called '^cmd_adopt')/$(has "$out" 'The runner is set up. The routing pull request was not opened (adopt says why above).')/$(has "$out" 'To try again: homefield adopt --repo someone/app --setup')"
+record "...adopt's message and the summary are both before the retry line" "yes/yes" \
+  "$(has "${out%%The runner is set up*}" 'stub refusal')/$(has "${out%%The runner is set up*}" '✓ Runner registered')"
+SRUN_IN="$work/slugged" srun TTY=1 ADOPT_FAIL=return -- cmd_setup --url $org
+record "adopt fails (return 1), organization: exit 0 and the retry line names that repository" "0/yes" \
+  "$rc/$(has "$out" 'To try again: homefield adopt --repo other/repo --setup')"
+SRUN_IN="$work/yes" srun GH_OWNER_TYPE=User TTY=1 ADOPT_FAIL=errexit -- cmd_setup --url $personal_url
+record "adopt runs with errexit on: a failing command inside it stops it (not tested in an || context)" "0/0/yes" \
+  "$rc/$(called '^reached')/$(has "$out" 'To try again:')"
+
+SRUN_IN="$work/yes" srun LIMA_STATUS=Running REGISTERED=yes TTY=1 -- cmd_setup --url $personal_url
+record "an already registered instance (the upgrade summary), even with --url: no offer" "0/0/no/no/yes" \
+  "$rc/$(called '^cmd_adopt')/$(has "$out" 'Open the routing pull request')/$(has "$out" 'Repository to route first')/$(has "$out" 'Next steps:')"
+SRUN_IN="$work/yes" srun GH_OWNER_TYPE=User TTY=1 -- cmd_install --url $personal_url
+record "install is not offered it" "0/0/no" "$rc/$(called '^cmd_adopt')/$(has "$out" 'Open the routing pull request')"
 
 summary
