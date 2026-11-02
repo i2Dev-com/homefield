@@ -187,7 +187,7 @@ after the confirmation, as the runner stays online meanwhile), deregisters the
   usual "not switched". It reads the pull request every 10 seconds and says
   once a minute that it is still waiting. A pull request closed without a
   merge, or still open after `--wait-timeout <minutes>` (a whole number, default
-  60), ends the run with exit 1 and the command to run after the merge; a
+  60), ends the run with exit 4 and the command to run after the merge; a
   failed read is tried again, five in a row end the run. Ctrl-C or SIGTERM
   prints that command, exits 130 or 143 and leaves the pull request and its
   branch alone. `--wait` without `--setup` and `--wait-timeout` without
