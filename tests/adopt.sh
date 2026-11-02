@@ -33,6 +33,24 @@ cat >"$work/gh" <<'EOF'
 #!/bin/sh
 echo "gh $*" >>"$CALLS"
 state="${CALLS%/*}" # the test directory: where branch and pr_body state lives
+# GH_HANG=<text>: the first call whose arguments hold the text records HUNG
+# (what a test waits for before it signals) and then hangs for GH_HANG_SECS, as
+# a gh waiting on the network does; it carries on as usual if it is not killed.
+# GH_HANG2 is a second one (records HUNG2). GH_HANG_SLEEP is the real sleep,
+# not the recording stub.
+all="$*"
+hang() {
+  [ -n "$1" ] && [ ! -f "$state/hung$2" ] || return 0
+  case "$all" in
+    *"$1"*)
+      : >"$state/hung$2"
+      echo "HUNG$2" >>"$CALLS"
+      "$GH_HANG_SLEEP" "$3"
+      ;;
+  esac
+}
+hang "${GH_HANG:-}" "" "${GH_HANG_SECS:-30}"
+hang "${GH_HANG2:-}" 2 "${GH_HANG2_SECS:-30}"
 case "$*" in
   "variable get CI_RUNNER"*)
     if [ -n "${GH_CI_RUNNER:-}" ]; then echo "$GH_CI_RUNNER"; else echo "variable not found" >&2; exit 1; fi
@@ -1637,89 +1655,243 @@ record "exit trap: --wait but no pull request yet: 1" "1" "$rc"
 exit_status 0 1 0 1
 record "exit trap: a pull request but no --wait: 1" "1" "$rc"
 
-# Ctrl-C and SIGTERM while waiting: the guidance, 130 or 143, and the pull
-# request and its branch stay. The sleep is a real one, so that the wait is in
-# progress when the signal comes; it has to be cut short, not run to its end.
-# interrupt <signal> [setup|outside]: adopt on its own, signalled by pid; or
-# setup's routing step around it (#156), signalled in its whole process group
-# as a terminal does, then asked for what is left of that group. "outside" is
-# that step around an adopt that has no handler (a Ctrl-C before the pull
-# request exists, or after the merge): a stub that just sleeps.
+# Ctrl-C and SIGTERM in every phase of a --setup run (#158). The signals are
+# real, sent to real processes: INT to the whole process group, as a terminal
+# does, and TERM to the one process, as kill does. A phase is held still where
+# a test can aim at it, by a gh that hangs (the stub records HUNG before it
+# does) or by a real sleep, and the test waits for that record, not for a
+# time. The note has to be true for the phase, and the status exactly 130 or
+# 143: a signal that lands in a `|| die` must not turn into a failure status.
 nap() { "$real_sleep" 0.05; }
-interrupt() {
-  local sig="$1" mode="${2:-adopt}" pid i=0 tmp_before tmp_after status target cmd
-  cmd=(cmd_adopt --repo acme/app --setup --wait)
-  target=""
-  if [ "$mode" = setup ]; then cmd=(setup_route_repo acme/app); target=-; fi
-  if [ "$mode" = outside ]; then cmd=(eval 'cmd_adopt() { sleep 30; }; setup_route_repo acme/app'); target=-; fi
-  printf 'open\n' >"$work/pr-seq"
-  rm -f "$work/pr_polls" "$work/pr_merged" "$work/branch-homefield_route-to-local"
+# group_left <pgid>: how many processes of that group are alive.
+group_left() { ps -A -o pgid= | awk -v g="$1" '$1 == g' | wc -l | tr -d ' '; }
+# marker_wait <pattern>: until the stub has recorded it (10 s at most).
+marker_wait() {
+  local i=0
+  while ! grep -q -e "$1" "$calls" && [ "$i" -lt 200 ]; do nap; i=$((i + 1)); done
+}
+# interrupt <INT|TERM|INT+TERM> <phase> [adopt|setup|setup-alone|parent]:
+#   phase  pre (a write to the new branch is in flight), pending (the call that
+#          opens the pull request), wait (the wait for the merge), merged (the
+#          group access is in flight), switching (the CI_RUNNER write is), verify
+#          (the pause between two reads of the re-run), double (as pre, and the
+#          signal comes a second time while the cleanup runs)
+#   mode   adopt on its own; setup's routing step around it (setup), signalled
+#          in its whole process group; setup signalled alone, by its pid
+#          (setup-alone); or adopt told that a parent process it was not started
+#          by is setup (parent), which then ends without a signal reaching adopt
+# It leaves rc, out, intr_tmp (temporary directories before/after) and intr_left
+# (processes of the job's group still alive once it is over).
+interrupt() { interrupt_run "$@" 2>/dev/null; } # (bash 3.2 reports a job killed by TERM)
+interrupt_run() {
+  local sigs="$1" phase="$2" mode="${3:-adopt}" pid i sig target tmp_before tmp_after status left first=1
+  local seq=merged hang="" hang2="" wait_interval=30 verify_interval=600 drain=1 secs=30 fake="" marker cmd
+  local args=(--setup --wait) extra=()
+  case "$phase" in
+    pre) seq=open hang="X PUT repos/acme/app/contents" ;;
+    double) seq=open hang="X PUT repos/acme/app/contents" hang2="X DELETE" ;;
+    pending) seq=open hang="X POST repos/acme/app/pulls" ;;
+    wait) seq=open ;;
+    merged) hang="X PUT orgs/acme/actions/runner-groups" ;;
+    switching) hang="variable set" ;;
+    verify)
+      args+=(--verify)
+      extra=(GH_RUN="$work/run-going" GH_JOBS="$work/jobs-hostonly" GH_RUNLIST="$work/runlist-done" ADOPT_VERIFY_TRIES=100)
+      ;;
+  esac
+  case "$mode" in
+    setup-alone) wait_interval=2 drain=15 ;;
+    parent) verify_interval=2 drain=15 ;;
+  esac
+  extra+=(ADOPT_VERIFY_INTERVAL="$verify_interval")
+  case "$phase" in
+    wait) marker="^sleep ${wait_interval}\$" ;;
+    verify) marker="^sleep ${verify_interval}\$" ;;
+    *) marker='^HUNG$' ;;
+  esac
+  # a TERM to one process only is acted on when the foreground gh is over: let
+  # it finish, as it would, instead of waiting out its hang
+  case "${sigs%%+*}" in INT) ;; *) [ "$mode" = setup ] || secs=2 ;; esac
+  cmd=(cmd_adopt --repo acme/app "${args[@]}")
+  case "$mode" in setup | setup-alone) cmd=(setup_route_repo acme/app) ;; esac
+  printf '%s\n' "$seq" >"$work/pr-seq"
+  rm -f "$work/pr_polls" "$work/pr_merged" "$work/branch-homefield_route-to-local" "$work/hung" "$work/hung2" "$work/jobs-n"
   : >"$calls"
   tmp_before="$(find "$work/tmp" -mindepth 1 | wc -l)"
+  if [ "$mode" = parent ]; then
+    "$real_sleep" 1000 &
+    fake=$!
+  fi
   # job control gives the background job its own process group and leaves
   # SIGINT unignored, as a Ctrl-C at a terminal finds it
   set -m
   # shellcheck disable=SC2016  # the -c script is expanded by the inner bash
   env -i HOME="$work" PATH="$stubs" TMPDIR="$work/tmp" CALLS="$calls" HOMEFIELD_SOURCE_ONLY=1 \
     GH_GROUPS="$work/groups-selected" GH_MEMBERS="$work/members-other" GH_WF="$work/wf-ready" \
-    GH_PR_SEQ="$work/pr-seq" ADOPT_WAIT_INTERVAL=30 SLEEP_REAL=1 \
-    "$BASH" -c '. "$1"; shift; "$@"' _ "$ROOT/bin/homefield" "${cmd[@]}" \
+    GH_PR_SEQ="$work/pr-seq" ADOPT_WAIT_INTERVAL="$wait_interval" SLEEP_REAL=1 \
+    GH_HANG="$hang" GH_HANG_SECS="$secs" GH_HANG2="$hang2" GH_HANG2_SECS=2 GH_HANG_SLEEP="$real_sleep" \
+    FAKE_PARENT="$fake" "${extra[@]}" \
+    "$BASH" -c '. "$1"; shift; if [ -n "$FAKE_PARENT" ]; then ADOPT_PARENT_PID=$FAKE_PARENT; fi; "$@"' _ "$ROOT/bin/homefield" "${cmd[@]}" \
     >"$work/int.out" 2>&1 </dev/null &
   pid=$!
   set +m
-  while ! grep -q '^sleep 30$' "$calls" && [ "$i" -lt 200 ]; do nap; i=$((i + 1)); done
-  kill "-$sig" -- "${target}${pid}"
+  marker_wait "$marker"
+  for sig in ${sigs//+/ }; do
+    # a second signal comes while the first one's cleanup is still running
+    if [ "$first" = 0 ]; then marker_wait '^HUNG2$'; fi
+    first=0
+    target="$pid"
+    if [ "$sig" = INT ] || [ "$mode" = setup ]; then target="-$pid"; fi
+    if [ "$mode" = parent ]; then
+      kill "$fake"
+      wait "$fake" 2>/dev/null
+    else
+      kill "-$sig" -- "$target"
+    fi
+  done
   i=0
-  while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 100 ]; do nap; i=$((i + 1)); done
+  while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 200 ]; do nap; i=$((i + 1)); done
   if kill -0 "$pid" 2>/dev/null; then
-    kill -9 "$pid"
+    kill -9 -- "-$pid" 2>/dev/null
     wait "$pid" 2>/dev/null
     status=hung
   else
     wait "$pid"
     status=$?
   fi
+  # what is left of the group (the job's process group is its pid): checked
+  # once the job is over, for as long as the mode needs (setup ended alone
+  # leaves its adopt to notice, within one poll interval)
+  i=0
+  left="$(group_left "$pid")"
+  while [ "$left" != 0 ] && [ "$i" -lt $((drain * 20)) ]; do
+    nap
+    i=$((i + 1))
+    left="$(group_left "$pid")"
+  done
+  intr_left="$left"
+  [ "$left" = 0 ] || kill -9 -- "-$pid" 2>/dev/null
+  [ -z "$fake" ] || kill "$fake" 2>/dev/null
   tmp_after="$(find "$work/tmp" -mindepth 1 | wc -l)"
   rc="$status"
   out="$(cat "$work/int.out")"
   intr_tmp="$tmp_before/$tmp_after"
-  # processes of that group still alive (the job's process group is its pid)
-  intr_left="$(ps -A -o pgid= | awk -v g="$pid" '$1 == g' | wc -l | tr -d ' ')"
 }
-interrupt INT
+branch_there() { [ -f "$work/branch-homefield_route-to-local" ] && echo yes || echo no; }
+tmp_gone() { [ "${intr_tmp%/*}" = "${intr_tmp#*/}" ] && echo yes || echo "no ($intr_tmp)"; }
+notes_n() { printf '%s\n' "$out" | grep -c -F -e "$1" || true; }
+pr_note='interrupted before the pull request was opened. Nothing was switched or added to the runner group.'
+merged_note="interrupted after ${pr_url} was merged, before adopt finished"
+plain_cmd='homefield adopt --repo acme/app'
+branch_delete='X DELETE repos/acme/app/git/refs/heads/homefield/route-to-local'
+
+# while waiting for the merge: the pull request and its branch stay
+interrupt INT wait
 record "Ctrl-C while waiting: exit 130, not left sleeping, no process of the job left" "130/0" "$rc/$intr_left"
 record "...it says the pull request and branch are untouched, and the command to go on with" "yes/yes/yes" \
-  "$(has "$out" "interrupted while waiting for ${pr_url}")/$(has "$out" 'untouched')/$(has "$out" 'run: homefield adopt --repo acme/app')"
+  "$(has "$out" "interrupted while waiting for ${pr_url}")/$(has "$out" 'untouched')/$(has "$out" "run: ${plain_cmd}")"
 record "...no group call, no variable, no branch delete, nothing said about removing it" "0/0/0/no" \
   "$(called "$group_put")/$(called 'variable set')/$(called 'X DELETE')/$(has "$out" 'removing homefield/route-to-local')"
-record "...the branch is still there, and the temporary directory is gone" "yes/yes" \
-  "$([ -f "$work/branch-homefield_route-to-local" ] && echo yes || echo no)/$([ "${intr_tmp%/*}" = "${intr_tmp#*/}" ] && echo yes || echo "no ($intr_tmp)")"
-interrupt TERM
+record "...the branch is still there, and the temporary directory is gone" "yes/yes" "$(branch_there)/$(tmp_gone)"
+interrupt TERM wait
 record "SIGTERM while waiting: exit 143, guidance, branch kept, temporary directory gone, nothing left running" "143/yes/0/yes/yes/0" \
-  "$rc/$(has "$out" 'run: homefield adopt --repo acme/app')/$(called 'X DELETE')/$([ -f "$work/branch-homefield_route-to-local" ] && echo yes || echo no)/$([ "${intr_tmp%/*}" = "${intr_tmp#*/}" ] && echo yes || echo "no ($intr_tmp)")/$intr_left"
+  "$rc/$(has "$out" "run: ${plain_cmd}")/$(called 'X DELETE')/$(branch_there)/$(tmp_gone)/$intr_left"
 
-# Ctrl-C in setup's routing step: the signal reaches setup as well as adopt.
-# Adopt's trap says its piece, setup outlives it long enough to say its own
-# and ends with the signal's status, and no sleep is left behind. Setup traps
-# nothing (a kill of setup alone must not wait out the 60 minutes): a SIGTERM
-# to the group ends setup at once with 143, and adopt still says its note.
-interrupt INT setup
+# before the pull request: the branch it made has no pull request, so it is taken back
+interrupt INT pre
+record "Ctrl-C before the pull request exists, a write to the branch in flight: exactly 130, nothing left running" "130/0" "$rc/$intr_left"
+record "...the note says so, and that nothing was switched or added to the group" "1/no" \
+  "$(notes_n "$pr_note")/$(has "$out" 'untouched')"
+record "...the branch it made is taken back, after the note, and the temporary directory is gone" "1/gone/yes/yes" \
+  "$(called "$branch_delete")/$([ "$(branch_there)" = yes ] && echo there || echo gone)/$(before "$out" 'interrupted before' 'removing homefield/route-to-local')/$(tmp_gone)"
+record "...no group call, no variable, no pull request" "0/0/0" "$(called "$group_put")/$(called 'variable set')/$(called 'X POST repos/acme/app/pulls')"
+interrupt TERM pre
+record "SIGTERM before the pull request exists: exactly 143, the same note, the branch taken back" "143/1/1/gone/0" \
+  "$rc/$(notes_n "$pr_note")/$(called "$branch_delete")/$([ "$(branch_there)" = yes ] && echo there || echo gone)/$intr_left"
+
+# while the pull request is being opened: it may exist, so its branch must stay
+interrupt INT pending
+record "Ctrl-C while the pull request is being opened: exactly 130, nothing left running" "130/0" "$rc/$intr_left"
+record "...the note says it may exist, where to look, and that the branch was left" "yes/yes/yes/yes/no" \
+  "$(has "$out" 'interrupted while the pull request was being opened; it may exist: look at https://github.com/acme/app/pulls')/$(has "$out" 'The branch homefield/route-to-local was left in place')/$(has "$out" 'Nothing was switched or added to the runner group')/$(has "$out" 'interrupted')/$(has "$out" 'untouched')"
+record "...the branch is not deleted (that would close a pull request that was just opened)" "0/yes/no" \
+  "$(called 'X DELETE')/$(branch_there)/$(has "$out" 'removing homefield/route-to-local')"
+interrupt TERM pending
+record "SIGTERM while the pull request is being opened (gh finishes it): exactly 143, the branch kept, no delete" "143/0/yes/0" \
+  "$rc/$(called 'X DELETE')/$(branch_there)/$intr_left"
+record "...the note names the pull request, which exists" "yes" "$(has "$out" 'pull request')"
+
+# after the merge, before the switch is over: what may or may not have happened
+interrupt INT merged
+record "Ctrl-C after the merge, the group access in flight: exactly 130, nothing left running" "130/0" "$rc/$intr_left"
+record "...the note says the pull request was merged and adopt did not finish, and to run again" "1/yes/yes/yes" \
+  "$(notes_n "$merged_note")/$(has "$out" 'may or may not have been added to the runner group')/$(has "$out" 'CI_RUNNER may or may not be set')/$(has "$out" "Run again to finish (it is safe to repeat): ${plain_cmd}")"
+record "...nothing is claimed untouched, the branch is not deleted, no variable was set, the directory is gone" "no/0/0/yes" \
+  "$(has "$out" 'untouched')/$(called 'X DELETE')/$(called 'variable set')/$(tmp_gone)"
+interrupt TERM merged
+record "SIGTERM after the merge, the group access in flight: exactly 143, the same note" "143/1/0" "$rc/$(notes_n "$merged_note")/$intr_left"
+interrupt INT switching
+record "Ctrl-C after the merge, the CI_RUNNER write in flight: exactly 130, the same note" "130/1/0/0" \
+  "$rc/$(notes_n "$merged_note")/$(called 'X DELETE')/$intr_left"
+interrupt TERM switching
+record "SIGTERM after the merge, the CI_RUNNER write in flight: exactly 143, the same note" "143/1/0" "$rc/$(notes_n "$merged_note")/$intr_left"
+
+# after the switch: only the optional check is left, and it is cut short
+verify_note='interrupted after its work was done (runner group added; routing ready; CI_RUNNER set to local). Only the optional check that the jobs land on the local runner was cut short, and a re-run of the latest run may be in flight.'
+interrupt INT verify
+record "Ctrl-C while --verify pauses between reads: exactly 130, the sleep taken down, nothing left" "130/0" "$rc/$intr_left"
+record "...the note says the repository is routed, only the check was cut short, a re-run may be in flight" "1/no/no" \
+  "$(notes_n "$verify_note")/$(has "$out" 'untouched')/$(has "$out" 'may or may not')"
+record "...and gives the commands to check by hand, after the note" "yes/yes/yes" \
+  "$(has "$out" '  gh run list --repo acme/app --event pull_request --limit 1')/$(has "$out" '  gh run rerun <run-id> --repo acme/app')/$(before "$out" 'interrupted after its work' 'gh run rerun <run-id>')"
+record "...the group access and the switch were done once, the branch was not touched" "1/1/0" \
+  "$(called "$group_put")/$(called 'variable set CI_RUNNER --repo acme/app --body local')/$(called 'X DELETE')"
+interrupt TERM verify
+record "SIGTERM while --verify pauses: exactly 143, the same note, the sleep taken down at once" "143/1/0" "$rc/$(notes_n "$verify_note")/$intr_left"
+
+# a second signal while the first one's cleanup runs: one note, one status
+interrupt INT+TERM double
+record "Ctrl-C then SIGTERM while the branch is being taken back: the first status, the note once, the branch deleted once" "130/1/1/gone/0" \
+  "$rc/$(notes_n "$pr_note")/$(called "$branch_delete")/$([ "$(branch_there)" = yes ] && echo there || echo gone)/$intr_left"
+record "...the cleanup was not cut short: it says it removed the branch, and did not fail" "1/no" \
+  "$(notes_n 'removing homefield/route-to-local')/$(has "$out" 'could not remove')"
+
+# setup's routing step around adopt, signalled in its whole process group: adopt
+# says its piece in whatever phase, setup says its own and ends with the status
+setup_note='The runner is set up. adopt was interrupted (what it printed above says where things stand and what to run next).'
+interrupt INT wait setup
 record "setup's routing step, Ctrl-C to the process group: exit 130, no process of the group left" "130/0" "$rc/$intr_left"
 record "...adopt's note first, then setup's" "yes/yes/yes" \
-  "$(has "$out" "interrupted while waiting for ${pr_url}")/$(has "$out" 'The runner is set up. adopt was interrupted before it finished')/$(before "$out" 'interrupted while waiting' 'The runner is set up.')"
+  "$(has "$out" "interrupted while waiting for ${pr_url}")/$(has "$out" "$setup_note")/$(before "$out" 'interrupted while waiting' 'The runner is set up.')"
 record "...no --setup retry line (the branch exists), nothing removed, nothing switched" "no/0/0/0" \
   "$(has "$out" 'To try again')/$(called 'X DELETE')/$(called "$group_put")/$(called 'variable set')"
-record "...the branch and the pull request stay, the temporary directory is gone" "yes/yes" \
-  "$([ -f "$work/branch-homefield_route-to-local" ] && echo yes || echo no)/$([ "${intr_tmp%/*}" = "${intr_tmp#*/}" ] && echo yes || echo "no ($intr_tmp)")"
-interrupt TERM setup
+record "...the branch and the pull request stay, the temporary directory is gone" "yes/yes" "$(branch_there)/$(tmp_gone)"
+interrupt TERM wait setup
 record "setup's routing step, SIGTERM to the process group: exit 143, adopt's note, branch kept, no process left" "143/yes/yes/0" \
-  "$rc/$(has "$out" "interrupted while waiting for ${pr_url}")/$([ -f "$work/branch-homefield_route-to-local" ] && echo yes || echo no)/$intr_left"
-# An adopt that dies of the signal itself (outside its wait): setup ends the
-# same way and says nothing about a pull request, which may not exist or may
-# be merged by then.
-interrupt INT outside
-record "Ctrl-C while adopt is outside its wait: setup ends with 130, nothing left, no claim about a pull request, no retry" "130/0/no/no" \
-  "$rc/$intr_left/$(has "$out" 'is open')/$(has "$out" 'To try again')"
+  "$rc/$(has "$out" "interrupted while waiting for ${pr_url}")/$(branch_there)/$intr_left"
+record "...setup traps nothing, so a SIGTERM ends it at once, without its own note" "no" "$(has "$out" 'The runner is set up.')"
+interrupt INT pre setup
+record "setup's routing step, Ctrl-C before the pull request: 130, adopt's note, the branch taken back, then setup's" "130/1/1/yes/0" \
+  "$rc/$(notes_n "$pr_note")/$(called "$branch_delete")/$(before "$out" 'removing homefield/route-to-local' 'The runner is set up.')/$intr_left"
+record "...setup's note is there, and it claims no pull request" "yes/no" "$(has "$out" "$setup_note")/$(has "$out" 'is open')"
+interrupt INT merged setup
+record "setup's routing step, Ctrl-C after the merge: 130, adopt's note, then setup's" "130/1/yes/0" \
+  "$rc/$(notes_n "$merged_note")/$(has "$out" "$setup_note")/$intr_left"
+
+# setup killed alone (SIGTERM to its pid, not its group): it dies at once, and
+# the adopt it was running must not wait on for the merge. It notices within one
+# poll interval (2 s here); the test waits for the group to drain, up to 15 s.
+interrupt TERM wait setup-alone
+record "setup killed alone while adopt waits: setup ends with 143, and the group drains (adopt does not wait on)" "143/0" "$rc/$intr_left"
+record "...adopt says setup ended and that it stopped waiting, with the pull request and branch untouched" "yes/yes/yes" \
+  "$(has "$out" "setup has ended, so adopt stopped while waiting for ${pr_url}")/$(has "$out" 'untouched')/$(has "$out" "run: ${plain_cmd}")"
+record "...nothing deleted, switched or added to the group, the branch stays, the directory is gone" "0/0/0/yes/yes" \
+  "$(called 'X DELETE')/$(called "$group_put")/$(called 'variable set')/$(branch_there)/$(tmp_gone)"
+# the same check in the --verify poll, with a stand-in for setup that is ended
+interrupt TERM verify parent
+record "adopt told its parent is setup, which ends during --verify: adopt stops with 143 and the group drains" "143/0" "$rc/$intr_left"
+record "...the note says setup ended, that the repository is routed, and the check by hand" "yes/yes/yes" \
+  "$(has "$out" 'setup has ended, so adopt stopped after its work was done (runner group added; routing ready; CI_RUNNER set to local)')/$(has "$out" 'Only the optional check')/$(has "$out" '  gh run rerun <run-id> --repo acme/app')"
 
 # ── The docs say what the tool prints ──────────────────────────────────────
 echo "docs"

@@ -149,6 +149,9 @@ get_token() { echo tok123; }
 # and SIGTERM's.
 cmd_adopt() {
   echo "cmd_adopt $*" >>"$CALLS"
+  # the pid adopt was told is its parent, and its own $$ (a subshell keeps its
+  # parent's, so these are setup's)
+  echo "adopt_parent ${ADOPT_PARENT_PID:-none} $$" >>"$CALLS"
   echo "adopt ran"
   case "${ADOPT_FAIL:-}" in
     exit) echo "homefield: adopt: stub refusal" >&2; exit 1 ;;
@@ -460,6 +463,8 @@ record "...adopt's own output follows, and nothing about a failure or a later ru
   "$(has "${out#*Open the routing}" 'adopt ran')/$(has "$out" 'was not opened')/$(has "$out" 'Route it later')"
 SRUN_IN="$work/enter" srun GH_OWNER_TYPE=User TTY=1 -- cmd_setup --url $personal_url
 record "personal account, just Enter: yes" "0/1/cmd_adopt --repo someone/app --setup --wait" "$rc/$(called '^cmd_adopt')/$(adopt_line)"
+record "...adopt is told setup's own pid as its parent, so that it stops if setup is ended alone" "yes" \
+  "$(awk '/^adopt_parent/ { print ($2 ~ /^[0-9]+$/ && $2 == $3) ? "yes" : "no (" $2 " vs " $3 ")" }' "$calls")"
 SRUN_IN="$work/yes" srun GH_OWNER_TYPE=User TTY=1 -- cmd_setup --url $personal_url --label custom-ci --group my-group
 record "--label and --group given: adopt gets both, so the PR routes on the runner's label" "0/1/cmd_adopt --repo someone/app --setup --wait --label custom-ci --group my-group" \
   "$rc/$(called '^cmd_adopt')/$(adopt_line)"
@@ -533,10 +538,10 @@ record "...the open kind names no retry command, an organization too" "0/yes/no"
 # Ctrl-C: the same note as open, and setup ends with the signal's status
 SRUN_IN="$work/yes" srun GH_OWNER_TYPE=User TTY=1 ADOPT_FAIL=int -- cmd_setup --url $personal_url
 record "adopt interrupted (130): setup says adopt was interrupted, claims no state of the pull request, no retry, exits 130" "130/yes/no/yes/no" \
-  "$rc/$(has "$out" 'The runner is set up. adopt was interrupted before it finished (what it printed above says how far it got and what to run next).')/$(has "$out" 'is open')/$(has "$out" 'interrupted while waiting for the stub')/$(has "$out" 'To try again')"
+  "$rc/$(has "$out" 'The runner is set up. adopt was interrupted (what it printed above says where things stand and what to run next).')/$(has "$out" 'is open')/$(has "$out" 'interrupted while waiting for the stub')/$(has "$out" 'To try again')"
 SRUN_IN="$work/yes" srun GH_OWNER_TYPE=User TTY=1 ADOPT_FAIL=term -- cmd_setup --url $personal_url
 record "adopt terminated (143): setup says so too and exits 143" "143/yes" \
-  "$rc/$(has "$out" 'The runner is set up. adopt was interrupted before it finished (what it printed above says how far it got and what to run next).')"
+  "$rc/$(has "$out" 'The runner is set up. adopt was interrupted (what it printed above says where things stand and what to run next).')"
 # a status other than 4, 5, 130 and 143 is a run that opened nothing
 SRUN_IN="$work/yes" srun GH_OWNER_TYPE=User TTY=1 ADOPT_FAIL=exit -- cmd_setup --url $personal_url
 record "adopt exit 1: the 'not opened' message and the retry with --wait; not the open or merged ones" "0/yes/yes/no/no" \

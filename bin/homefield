@@ -216,12 +216,14 @@ adopt:
                      CI_RUNNER=local). Nothing is switched or added to the
                      group while waiting, and the merge stays yours: if the
                      merged routing does not pass, it stops as a plain adopt
-                     would. Checks every 10 seconds. Ctrl-C is safe: the pull
-                     request is left as it is, and adopt without --setup
-                     picks up from there. Exits 4 when the pull request is
-                     closed without a merge, still open at the timeout, or
-                     cannot be read, and 5 when it was merged but adopt then
-                     failed (130 and 143 after Ctrl-C and SIGTERM). Exits 1
+                     would. Checks every 10 seconds. Ctrl-C is safe in every
+                     phase: adopt says where things stand (a pull request
+                     is left as it is, a branch without one is taken back),
+                     and adopt without --setup picks up from there. Exits
+                     4 when the pull request is closed without a merge,
+                     still open at the timeout, or cannot be read, and 5
+                     when it was merged but adopt then failed (130 and 143
+                     after Ctrl-C and SIGTERM). Exits 1
                      for anything before the pull request exists, as without
                      --wait. A fresh `homefield setup` offers this command
                      (with --label and --group when given)
@@ -1808,24 +1810,28 @@ setup_plain_adopt() {
 #                      the branch exists
 #   ADOPT_EXIT_MERGED  merged, but adopt did not finish what follows
 #   130, 143           Ctrl-C or SIGTERM: setup ends with that status, as the
-#                      user cancelled. Only adopt's wait handles the signal
-#                      (and then it said where things stand); a signal before
-#                      the pull request exists or after its merge also ends
-#                      adopt with 130 or 143, so the note claims no more than
-#                      that adopt stopped
+#                      user cancelled. adopt handles both signals in every
+#                      phase of a --setup run (before the pull request, while
+#                      waiting, after the merge, in --verify), says where things
+#                      stand and exits with the signal's status, so this note
+#                      only points at what adopt printed
 #   other              nothing was opened (a public repository, no write
 #                      access, no workflow to route, the branch already there)
-# The terminal sends Ctrl-C to setup as well as to adopt. Setup needs no trap
-# for it: while waiting for a foreground subshell bash defers its own SIGINT,
-# and acts on it afterwards only if the subshell died of SIGINT. adopt's wait
-# handles Ctrl-C and exits 130, so setup carries on and says its note. Where
-# adopt dies of the signal instead, setup may end the same way without a note
-# (bash 5) or carry on to the note (bash 3.2, whose subshell exits 130 under
-# errexit). tests/adopt.sh signals the process group for real, on both.
+# The terminal sends Ctrl-C to setup as well as to adopt. Setup traps nothing:
+# while it waits for a foreground subshell bash defers its own SIGINT, and acts
+# on it afterwards only if the subshell died of SIGINT. adopt exits 130 itself,
+# so setup carries on to its note. A SIGTERM sent to setup alone ends it at
+# once, and its adopt (not a background job, which would ignore SIGINT and lose
+# stdin) would wait on: it is told setup's pid in ADOPT_PARENT_PID and stops
+# within one poll interval of setup being gone (adopt_check_parent).
+# tests/adopt.sh signals the process group and setup alone for real, on bash 3.2
+# and 5.
 setup_route_repo() {
   local rc
   setup_routing_args "$1"
   set +e
+  # $$ inside the subshell is still setup's pid
+  ADOPT_PARENT_PID=$$
   ( set -e; cmd_adopt "${SETUP_ROUTING_ARGS[@]}" )
   rc=$?
   set -e
@@ -1836,7 +1842,7 @@ setup_route_repo() {
       echo "The runner is set up. The routing pull request is open; adopt stopped waiting for it (what it printed above says what to run next)."
       ;;
     130 | 143)
-      echo "The runner is set up. adopt was interrupted before it finished (what it printed above says how far it got and what to run next)."
+      echo "The runner is set up. adopt was interrupted (what it printed above says where things stand and what to run next)."
       exit "$rc"
       ;;
     "$ADOPT_EXIT_MERGED")
@@ -3701,6 +3707,7 @@ adopt_verify_poll() {
   local repo="$1" id="$2" attempt="$3" tries=0 settled has_local label_lc _name jstatus _conclusion runner labels
   label_lc="$(printf '%s' "$ADOPT_LABEL" | tr '[:upper:]' '[:lower:]')"
   while :; do
+    adopt_check_parent
     gh api --paginate "repos/${repo}/actions/runs/${id}/jobs?per_page=100" >"$ADOPT_TMP/v.json" 2>"$ADOPT_TMP/v.err" </dev/null || {
       adopt_warn "could not verify: gh could not list the jobs of run ${id}: $(head -1 "$ADOPT_TMP/v.err")"
       return 1
@@ -3732,7 +3739,7 @@ adopt_verify_poll() {
     tries=$((tries + 1))
     [ "$settled" = 0 ] || break
     [ "$tries" -lt "$ADOPT_VERIFY_TRIES" ] || break
-    sleep "$ADOPT_VERIFY_INTERVAL"
+    adopt_nap "$ADOPT_VERIFY_INTERVAL"
   done
 }
 
@@ -3869,6 +3876,9 @@ ADOPT_SETUP_REPO=""
 ADOPT_PLAIN_CMD=""
 ADOPT_SETUP_BRANCH_MADE=0
 ADOPT_SETUP_PR_MADE=0
+# 1 while the POST that opens the pull request is in flight: the pull request
+# may exist although adopt has not seen the answer, so the branch must stay.
+ADOPT_SETUP_PR_PENDING=0
 # The pull request adopt_setup opened, for --wait to poll.
 ADOPT_SETUP_PR_URL=""
 ADOPT_SETUP_PR_NUMBER=""
@@ -3881,6 +3891,12 @@ ADOPT_WAIT_INTERVAL=${ADOPT_WAIT_INTERVAL:-10}
 ADOPT_WAIT_SLEEPER=""
 # Set once the wait saw the pull request merged.
 ADOPT_WAIT_MERGED=0
+# Set once adopt_switch returned: after that only the optional --verify is left.
+ADOPT_SWITCH_DONE=0
+# The pid of the process that started this adopt, when that is not the user's
+# terminal: setup_route_repo sets it to setup's pid. Empty for a standalone
+# adopt, which has no parent to watch.
+ADOPT_PARENT_PID=""
 # What adopt --setup --wait exits with when it fails after opening the pull
 # request (setup_route_repo reads them): ADOPT_EXIT_OPEN while it is not
 # merged, ADOPT_EXIT_MERGED once it is. Ctrl-C and SIGTERM keep 130 and 143.
@@ -3891,9 +3907,12 @@ ADOPT_EXIT_MERGED=5
 # adopt_setup_cleanup: a run that died after creating the branch would leave
 # its commits on GitHub with no pull request to review, and would refuse its
 # own retry on the existing branch. Take the branch back. A branch that
-# already existed, or one whose pull request was opened, is never touched.
+# already existed, one whose pull request was opened, and one whose pull
+# request may be about to exist (the POST was in flight when the run was
+# signalled: gh can still finish it, and deleting the branch would close it)
+# are never touched.
 adopt_setup_cleanup() {
-  [ "$ADOPT_SETUP_BRANCH_MADE" = 1 ] && [ "$ADOPT_SETUP_PR_MADE" = 0 ] || return 0
+  [ "$ADOPT_SETUP_BRANCH_MADE" = 1 ] && [ "$ADOPT_SETUP_PR_MADE" = 0 ] && [ "$ADOPT_SETUP_PR_PENDING" = 0 ] || return 0
   ADOPT_SETUP_BRANCH_MADE=0
   echo "homefield: removing ${SETUP_BRANCH} on ${ADOPT_SETUP_REPO}, which has no pull request" >&2
   gh api -X DELETE "repos/${ADOPT_SETUP_REPO}/git/refs/heads/${SETUP_BRANCH}" >/dev/null 2>&1 ||
@@ -3987,9 +4006,13 @@ adopt_setup() {
   # shellcheck disable=SC2016  # `${{ runner.arch }}` is literal text for the PR body, not this shell's
   body="$(printf 'This PR routes these jobs to the local HomeField runner. See [docs/adopting.md](docs/adopting.md).\n\n%s\n\nGenerated by `homefield adopt --repo %s --setup`:\n\n- Every routed job now carries the canonical `runs-on` expression for label %s (docs/adopting.md, step 2).\n- The routing guard lists exactly these jobs (step 3).\n- Cache keys in the routed files that were built from `runner.os` gained `${{ runner.arch }}` (step 4).\n\nNothing is switched on by this PR: `CI_RUNNER` stays unset, so everything runs hosted. After merging, `%s` adds the repository to the runner group and routes (step 5); if the `--wait` run that opened this PR is still going, it does that for you.\n' \
     "$(printf '%s\n' "$routed" | tr ',' '\n' | sed 's/^/- /')" "$repo" "$label" "$ADOPT_PLAIN_CMD")"
-  url="$(gh api -X POST "repos/${repo}/pulls" -f title="$SETUP_MSG" -f head="$SETUP_BRANCH" -f base="$ADOPT_BRANCH" -f body="$body" --jq .html_url 2>"$ADOPT_TMP/err")" ||
+  ADOPT_SETUP_PR_PENDING=1
+  url="$(gh api -X POST "repos/${repo}/pulls" -f title="$SETUP_MSG" -f head="$SETUP_BRANCH" -f base="$ADOPT_BRANCH" -f body="$body" --jq .html_url 2>"$ADOPT_TMP/err")" || {
+    ADOPT_SETUP_PR_PENDING=0
     die "adopt: setup: could not open the pull request on ${repo}: $(head -1 "$ADOPT_TMP/err")"
+  }
   ADOPT_SETUP_PR_MADE=1
+  ADOPT_SETUP_PR_PENDING=0
   ADOPT_SETUP_PR_URL="$url"
   ADOPT_SETUP_PR_NUMBER="${url##*/}"
   log "created pull request: ${url}"
@@ -4000,17 +4023,61 @@ adopt_setup() {
   fi
 }
 
-# adopt_wait_interrupted <status>: Ctrl-C or SIGTERM while adopt_wait_merged
-# polls. The pull request and its branch stay as they are (PR_MADE is set, so
-# the EXIT cleanup leaves the branch alone), and nothing has been switched.
-adopt_wait_interrupted() {
+# adopt_interrupted <status> [parent]: Ctrl-C or SIGTERM during a --setup run
+# (cmd_adopt installs it for INT and TERM, so it runs in every phase), or, with
+# "parent", setup having gone away (adopt_check_parent). It says where things
+# stand, which depends on how far the run got, and exits with <status>; the EXIT
+# trap (adopt_setup_exit) keeps 130 and 143, and takes back a branch that has
+# no pull request. Every statement below holds for its phase, and none is made
+# for a phase that cannot be told apart: a pull request being opened may exist.
+adopt_interrupted() {
+  local status="$1" lead="interrupted"
+  # A second signal (a double Ctrl-C, INT then TERM) must neither run this again
+  # nor print the note twice; the processes started from here on ignore them too.
+  trap '' INT TERM
   if [ -n "$ADOPT_WAIT_SLEEPER" ]; then
     # it may have ended on its own just now
     kill "$ADOPT_WAIT_SLEEPER" 2>/dev/null || :
   fi
+  [ "${2:-}" != parent ] || lead="setup has ended, so adopt stopped"
   echo >&2
-  echo "homefield: interrupted while waiting for ${ADOPT_SETUP_PR_URL}. It and its branch are untouched, and nothing was switched or added to the runner group. Once it is merged, run: ${ADOPT_PLAIN_CMD}" >&2
-  exit "$1"
+  if [ "$ADOPT_SWITCH_DONE" = 1 ]; then
+    # ADOPT_SWITCH_OUTCOME is set before the switch runs, so only this flag,
+    # set once adopt_switch returned, says that it is over.
+    echo "homefield: ${lead} after its work was done (runner group ${ADOPT_GROUP_OUTCOME}; routing ready; CI_RUNNER ${ADOPT_SWITCH_OUTCOME}). Only the optional check that the jobs land on the local runner was cut short, and a re-run of the latest run may be in flight. To check by hand:" >&2
+    adopt_verify_commands "$ADOPT_SETUP_REPO" >&2
+  elif [ "$ADOPT_WAIT_MERGED" = 1 ]; then
+    echo "homefield: ${lead} after ${ADOPT_SETUP_PR_URL} was merged, before adopt finished: ${ADOPT_SETUP_REPO} may or may not have been added to the runner group, and CI_RUNNER may or may not be set. Run again to finish (it is safe to repeat): ${ADOPT_PLAIN_CMD}" >&2
+  elif [ "$ADOPT_SETUP_PR_MADE" = 1 ] && [ "$ADOPT_WAIT" = 1 ]; then
+    echo "homefield: ${lead} while waiting for ${ADOPT_SETUP_PR_URL}. It and its branch are untouched, and nothing was switched or added to the runner group. Once it is merged, run: ${ADOPT_PLAIN_CMD}" >&2
+  elif [ "$ADOPT_SETUP_PR_MADE" = 1 ]; then
+    echo "homefield: ${lead} after opening ${ADOPT_SETUP_PR_URL}. It and its branch are untouched, and nothing was switched or added to the runner group. Once it is merged, run: ${ADOPT_PLAIN_CMD}" >&2
+  elif [ "$ADOPT_SETUP_PR_PENDING" = 1 ]; then
+    echo "homefield: ${lead} while the pull request was being opened; it may exist: look at https://github.com/${ADOPT_SETUP_REPO}/pulls. The branch ${SETUP_BRANCH} was left in place. Nothing was switched or added to the runner group." >&2
+  else
+    echo "homefield: ${lead} before the pull request was opened. Nothing was switched or added to the runner group." >&2
+  fi
+  exit "$status"
+}
+
+# adopt_check_parent: when setup started this adopt (ADOPT_PARENT_PID) and has
+# ended, stop. A SIGTERM sent to setup alone ends setup at once (it cannot act
+# on the signal while its foreground subshell runs, so it traps nothing) and
+# leaves this adopt, which would wait for the merge for up to an hour. The poll
+# loops call this, so adopt notices within one poll interval.
+adopt_check_parent() {
+  [ -n "$ADOPT_PARENT_PID" ] || return 0
+  kill -0 "$ADOPT_PARENT_PID" 2>/dev/null || adopt_interrupted 143 parent
+}
+
+# adopt_nap <seconds>: sleep that a trapped signal cuts short. Bash runs a trap
+# only after a foreground command ends, but cuts a wait short, so the sleep is
+# a background job that is waited for (the handler takes it down).
+adopt_nap() {
+  sleep "$1" &
+  ADOPT_WAIT_SLEEPER=$!
+  wait "$ADOPT_WAIT_SLEEPER" || :
+  ADOPT_WAIT_SLEEPER=""
 }
 
 # adopt_wait_merged <owner/repo> <minutes>: until the pull request adopt_setup
@@ -4032,10 +4099,9 @@ adopt_wait_merged() {
   # an if, not a ?: in $(( )): bash 3.2 divides by zero in the branch not taken
   if [ "$interval" -gt 0 ]; then per_minute=$((60 / interval)); else per_minute=60; fi
   [ "$per_minute" -ge 1 ] || per_minute=1
-  trap 'adopt_wait_interrupted 130' INT
-  trap 'adopt_wait_interrupted 143' TERM
   log "waiting for ${url} to be merged (up to ${minutes} min). Ctrl-C is safe: nothing is switched while waiting, and you can carry on by hand once it is merged: ${hand}"
   while :; do
+    adopt_check_parent
     polls=$((polls + 1))
     # An answer is a state of open or closed and a merged_at (or "-"), tab-separated.
     if row="$(gh api "repos/${repo}/pulls/${number}" --jq '[.state, (.merged_at // "-")] | @tsv' 2>"$ADOPT_TMP/err" </dev/null)" &&
@@ -4060,16 +4126,8 @@ adopt_wait_merged() {
     if [ $((polls % per_minute)) -eq 0 ]; then
       log "still waiting for ${url} to be merged ($((polls * interval / 60)) of ${minutes} min)"
     fi
-    if [ "$interval" -gt 0 ]; then
-      # wait on a background sleep, not a foreground one: bash runs a trap
-      # only after a foreground command ends, but cuts wait short.
-      sleep "$interval" &
-      ADOPT_WAIT_SLEEPER=$!
-      wait "$ADOPT_WAIT_SLEEPER" || :
-      ADOPT_WAIT_SLEEPER=""
-    fi
+    if [ "$interval" -gt 0 ]; then adopt_nap "$interval"; fi
   done
-  trap - INT TERM
   ADOPT_WAIT_MERGED=1
   log "${url} is merged; carrying on with what adopt does after the merge"
 }
@@ -4079,7 +4137,7 @@ cmd_adopt() {
   local verify=ask
   local wait_timeout="" wait_minutes=60
   ADOPT_FLAG_EVENTS="" ADOPT_FLAG_DEPENDABOT="" ADOPT_FLAG_FALLBACK=""
-  ADOPT_WAIT=0 ADOPT_WAIT_MERGED=0
+  ADOPT_WAIT=0 ADOPT_WAIT_MERGED=0 ADOPT_SWITCH_DONE=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --repo) repo="${2:?--repo needs a value}"; nrepo=$((nrepo + 1)); shift 2 ;;
@@ -4130,6 +4188,14 @@ cmd_adopt() {
 
   ADOPT_TMP="$(mktemp -d)"
   trap 'rm -rf "$ADOPT_TMP"' EXIT
+  if [ "$setup" = 1 ]; then
+    # Ctrl-C and SIGTERM end a --setup run in any phase with a note that says
+    # where things stand and exit 130 or 143 (adopt_interrupted), instead of
+    # dying by the default action with no word. A plain adopt changes nothing
+    # on GitHub before its group access, and keeps the default.
+    trap 'adopt_interrupted 130' INT
+    trap 'adopt_interrupted 143' TERM
+  fi
   adopt_repository "$repo"
   adopt_fetch_workflows "$repo" "$ADOPT_BRANCH" "$ADOPT_TMP/workflows"
   if [ "$setup" = 1 ]; then
@@ -4155,6 +4221,7 @@ cmd_adopt() {
   adopt_fallback "$ADOPT_FALLBACK"
   adopt_group_access "$repo" "$group" "$dry"
   adopt_switch "$repo" "$ADOPT_LABEL" "$dry" "$switch" "$jobs"
+  ADOPT_SWITCH_DONE=1
 
   log "done: ${repo}: runner group ${ADOPT_GROUP_OUTCOME}; routing ready; CI_RUNNER ${ADOPT_SWITCH_OUTCOME}"
   adopt_verify "$repo" "$verify" "$dry" "$switch"
