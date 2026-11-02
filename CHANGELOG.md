@@ -253,6 +253,14 @@ after the confirmation, as the runner stays online meanwhile), deregisters the
 
 ### Changed
 
+- `homefield setup --url https://github.com/<org>` asks for the `admin:org`
+  scope in the `gh auth login` it offers (`gh auth login -h github.com -s
+  admin:org`), so a first-time organization user authorizes in the browser
+  once, not again at the runner-group step. The owner is looked up first (the
+  public API works before gh is logged in); `--org` and `--personal` decide it
+  without the lookup. A repository URL, a personal account and a run with no
+  `--url` yet keep gh's default login, and the scope is offered later as
+  before. A compatible change.
 - When the directory the `homefield` command goes into is not on the PATH,
   `install.sh` now leads with the `export PATH=...` line to copy-paste into
   the current terminal ("add it now"), and only then the same line for

@@ -46,7 +46,8 @@ Commands:
   setup      The whole first-time setup in one command: preflight must pass in
              full (any failed check stops it with nothing created; on a
              terminal, a gh that is not logged in is first offered
-             `gh auth login` when it is the only failed check), then the
+             `gh auth login` when it is the only failed check, with
+             `-s admin:org` when --url is an organization), then the
              same steps as install, ending with a summary of what is done (and
              what needs attention) and the next steps, including the
              repositories that can already use the runner. On a terminal it then
@@ -956,14 +957,19 @@ offer_scope_refresh() {
 # outcome falls through to preflight, which reports whatever login state is
 # left, with the same fix command; this changes nothing itself. Only setup
 # calls it: preflight stays read-only and diagnose never prompts. gh asks its
-# own questions (account, protocol, scopes); the admin:org scope an
-# organization needs is added later by offer_scope_refresh.
+# own questions (account, protocol); the admin:org scope an organization's
+# runner group needs is asked for in the same login when --url names an
+# organization (#152), so that is one browser authorization, not two. Without
+# a URL, or for a personal account or a repository URL, the login is gh's
+# default, and offer_scope_refresh adds the scope later if it turns out to be
+# needed.
 # Not offered when gh cannot answer (a login would not fix that), or when any
 # other check fails: a browser login would only be followed by the stop.
+# offer_gh_login [url]
 offer_gh_login() {
   command -v gh >/dev/null 2>&1 || return 0
   have_terminal || return 0
-  local account answer i
+  local account answer i url="${1:-}" scopes=""
   account="$(gh_active_account)" || return 0
   [ -z "${account%%|*}" ] || return 0
   preflight_collect
@@ -977,11 +983,38 @@ offer_gh_login() {
     echo "homefield: 'gh auth login' would not help. Unset it, or use a valid token." >&2
     return 0
   fi
-  printf "gh is not logged in. Run 'gh auth login' now? [Y/n] " >&2
+  login_wants_org_scope "$url" && scopes="admin:org"
+  if [ -n "$scopes" ]; then
+    url="${url%/}"
+    printf "gh is not logged in. Run 'gh auth login -s admin:org' now? (%s's runner group needs that scope, so you authorize once) [Y/n] " "${url##*/}" >&2
+  else
+    printf "gh is not logged in. Run 'gh auth login' now? [Y/n] " >&2
+  fi
   # End of input (Ctrl-D) is not a yes.
   read -r answer || return 0
   case "$answer" in [Nn]*) return 0 ;; esac
-  gh auth login -h github.com || echo "homefield: 'gh auth login' did not finish" >&2
+  if [ -n "$scopes" ]; then
+    gh auth login -h github.com -s "$scopes" || echo "homefield: 'gh auth login' did not finish" >&2
+  else
+    gh auth login -h github.com || echo "homefield: 'gh auth login' did not finish" >&2
+  fi
+}
+
+# login_wants_org_scope <url>: whether the inline login should ask for
+# admin:org: --url is an organization's owner URL (the registration that
+# creates a runner group). --org says so, --personal says no, and otherwise the
+# owner is looked up as check_scope_owner does (the public API when gh is not
+# logged in yet). A repository URL registers one repository and needs no
+# group; an owner that cannot be looked up keeps gh's default login.
+login_wants_org_scope() {
+  local url="${1%/}" owner
+  [[ "$url" =~ ^https://github\.com/([A-Za-z0-9_.-]+)$ ]] || return 1
+  owner="${BASH_REMATCH[1]}"
+  case "$ACCOUNT_FORCE" in
+    org) return 0 ;;
+    personal) return 1 ;;
+  esac
+  [ "$(owner_type "$owner")" = Organization ]
 }
 
 # get_token <registration|remove> <url>: prints the token. From gh when it can,
@@ -1929,7 +1962,7 @@ cmd_install() {
   # On a terminal, setup first offers to log gh in, so that check can pass.
   if [ "$SETUP" = 1 ]; then
     local preflight_rc=0
-    offer_gh_login
+    offer_gh_login "$url"
     cmd_preflight || preflight_rc=$?
     [ "$preflight_rc" -eq 0 ] ||
       die "setup stopped: fix the failed checks above and run it again; nothing was created"

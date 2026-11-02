@@ -196,7 +196,12 @@ an organization URL needs that scope while a repository URL does not. The
 or touching anything (a warning does not stop it). On a terminal, when gh is
 installed, has no active login and no other check fails, `setup` first offers
 `gh auth login -h github.com` (gh asks its own questions) and runs the check
-after it; declining, end of input, a login that does not finish, or no terminal
+after it. When `--url` is an organization's owner URL (looked up, or `--org`),
+the login is `gh auth login -h github.com -s admin:org`, so the scope the
+runner group needs comes with the one browser authorization instead of a second
+one at the group step; a repository URL, a personal account, `--personal`, no
+`--url` yet or an owner that cannot be looked up keep gh's default login, and
+the scope is offered later, as above; declining, end of input, a login that does not finish, or no terminal
 leaves the check to fail as above. It does not offer when another check fails
 too (a browser login would only be followed by the stop), when `gh` cannot
 answer the login question at all (a login would not fix that), or when
