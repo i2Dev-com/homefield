@@ -505,9 +505,12 @@ record "adopt --wait stopped with the pull request open (exit 4): setup exits 0 
 record "...adopt's message and the summary both come first" "yes/yes" \
   "$(has "${out%%The runner is set up. The routing pull request is open*}" 'stub wait stopped')/$(has "${out%%The runner is set up. The routing pull request is open*}" '✓ Runner registered')"
 SRUN_IN="$work/yes" srun GH_OWNER_TYPE=User TTY=1 ADOPT_FAIL=merged -- cmd_setup --url $personal_url --label custom-ci
-record "adopt failed after the merge (exit 5): setup exits 0, says merged, names the plain adopt, no --setup" "0/yes/yes/no/no" \
-  "$rc/$(has "$out" 'The routing pull request was merged but adopt did not finish switching the repository (what it printed above says why); run: homefield adopt --repo someone/app')/$(has "$out" 'stub failed after the merge')/$(has "$out" 'To try again')/$(has "$out" 'is open')"
+record "adopt failed after the merge (exit 5): setup exits 0, says merged, names the plain adopt with the runner's label, no --setup" "0/yes/yes/no/no" \
+  "$rc/$(has "$out" 'The routing pull request was merged but adopt did not finish switching the repository (what it printed above says why); run: homefield adopt --repo someone/app --label custom-ci')/$(has "$out" 'stub failed after the merge')/$(has "$out" 'To try again')/$(has "$out" 'is open')"
 record "...the line is the plain adopt, not the command the offer ran" "no" "$(has "$out" 'run: homefield adopt --repo someone/app --setup')"
+SRUN_IN="$work/yes" srun GH_OWNER_TYPE=User TTY=1 ADOPT_FAIL=merged -- cmd_setup --url $personal_url --group 'my group'
+record "...and the group it joined, quoted, so the plain adopt does not look at homefield-ci instead" "yes/no" \
+  "$(has "$out" 'run: homefield adopt --repo someone/app --group my\ group')/$(has "$out" '--label')"
 SRUN_IN="$work/slugged" srun TTY=1 ADOPT_FAIL=open -- cmd_setup --url $org
 record "...the open kind names no retry command, an organization too" "0/yes/no" \
   "$rc/$(has "$out" 'The routing pull request is open; adopt stopped waiting for it')/$(has "$out" 'To try again')"

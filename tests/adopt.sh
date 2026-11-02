@@ -1577,6 +1577,19 @@ wait_adopt "merged" -- --setup
 record "--setup alone: no read of the pull request, and --wait is offered" "0/0/yes" \
   "$rc/$(polls)/$(has "$out" 'adopt --setup --wait does both in one run')"
 
+# The command to run after the merge keeps this run's --label and --group (a
+# plain adopt without --group looks at homefield-ci, and would add the
+# repository to the wrong group). A group name with a space is quoted.
+plain_hand='homefield adopt --repo acme/app --label homefield-ci --group my\ group'
+wait_adopt "open" ADOPT_WAIT_INTERVAL=30 -- --setup --wait --wait-timeout 1 --label homefield-ci --group "my group"
+record "the hand-off keeps --label and --group, quoted: the wait line, the timeout, and the pull request body" "yes/yes/yes" \
+  "$(has "$out" "carry on by hand once it is merged: ${plain_hand}")/$(has "$out" "Once it is merged, run: ${plain_hand}")/$(has "$(cat "$work/pr_body")" "\`${plain_hand}\` adds the repository")"
+wait_adopt "merged" -- --setup --group other-group
+record "...the next-step line without --wait too, and --group alone adds no --label" "yes/no" \
+  "$(has "$out" 'then homefield adopt --repo acme/app --group other-group (docs/adopting.md')/$(has "$out" '--label')"
+wait_adopt "open" ADOPT_WAIT_INTERVAL=30 -- --setup --wait --wait-timeout 1
+record "...no flags given, none added" "yes/no" "$(has "$out" 'Once it is merged, run: homefield adopt --repo acme/app')/$(has "$out" 'run: homefield adopt --repo acme/app --')"
+
 # a pull request URL with no number to follow
 wait_adopt "merged" GH_PR_URL=https://github.com/acme/app/pull/x -- --setup --wait
 record "a pull request number that cannot be read: stops, the pull request and branch stay, exit 4" "4/yes/0/0" \

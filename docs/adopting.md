@@ -211,7 +211,9 @@ adopt would.
   step 5 command to run by hand, exits 130 (143 for SIGTERM) and leaves the
   pull request and its branch as they are. A plain `homefield adopt --repo
   <owner>/<repo>` is always the way to pick up from there, and is safe to
-  repeat.
+  repeat. The command it prints keeps the `--label` and `--group` you gave
+  (a plain adopt without `--group` looks at `homefield-ci`), so run it as
+  printed.
 - **After the merge**, a routing check that fails, a group that cannot be
   changed or a switch that fails stops the run as a plain adopt would, with
   exit 5 (the pull request is merged by then): run `homefield adopt --repo

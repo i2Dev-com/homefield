@@ -29,7 +29,9 @@ fail, such as a new guard in the routing expression, bumps the minor version
   `adopt` fails (the runner is set up) but now says which case it was: no
   `--setup` retry line once the pull request exists, as its branch would make
   `--setup` refuse, and for a merged one the plain `homefield adopt --repo
-  <owner>/<repo>`. After Ctrl-C `setup` says `adopt` was
+  <owner>/<repo>`, with the `--label` and `--group` the runner was registered
+  with (adopt's own "run this after the merge" lines and the routing pull
+  request's body keep the ones you passed too). After Ctrl-C `setup` says `adopt` was
   interrupted (what it printed says how far it got) and exits 130, as you
   cancelled. A compatible change.
   [#156](https://github.com/i2Dev-com/homefield/issues/156)
