@@ -49,9 +49,13 @@ Commands:
              `gh auth login` when it is the only failed check), then the
              same steps as install, ending with a summary of what is done (and
              what needs attention) and the next steps, including the
-             repositories that can already use the runner. Takes install's
-             options. On an instance that is already registered it upgrades,
-             like install.
+             repositories that can already use the runner. On a terminal it then
+             offers to open the routing pull request (homefield adopt --setup)
+             for the repository the runner is registered to, or asks which
+             repository to route first for an organization; it opens nothing
+             unless you say yes, and a failed pull request does not fail
+             setup. Takes install's options. On an instance that is already
+             registered it upgrades, like install.
   install    Create the VM (if needed), provision it and register the runner.
              For an organization it also creates the runner group, and it
              waits until the runner shows online. On an instance that is
@@ -1725,6 +1729,90 @@ setup_summary() {
   setup_next_steps "$group" "$slug"
 }
 
+# adopt's arguments for the routing pull request setup offers: the one place
+# to add a flag to. Set by setup_routing_args. The label and group the runner
+# was registered with (cmd_install sets SETUP_LABEL and SETUP_GROUP from
+# --label and --group, empty when not given) go along: the pull request must
+# route on the label this runner carries, and the adopt that follows must look
+# at the group it joined.
+SETUP_ROUTING_ARGS=()
+SETUP_LABEL=""
+SETUP_GROUP=""
+setup_routing_args() {
+  SETUP_ROUTING_ARGS=(--repo "$1" --setup)
+  [ -z "$SETUP_LABEL" ] || SETUP_ROUTING_ARGS+=(--label "$SETUP_LABEL")
+  [ -z "$SETUP_GROUP" ] || SETUP_ROUTING_ARGS+=(--group "$SETUP_GROUP")
+}
+
+# setup_route_repo <owner/repo>: opens the routing pull request, by running
+# adopt. It runs in a subshell, so adopt's die cannot end setup, and a failure
+# (a public repository, no write access, no workflow to route, the branch
+# already there...) leaves setup a success: adopt has said why, and this says
+# how to try again. errexit is off around the subshell and on inside it,
+# because a subshell tested with `||` or `if` would run adopt with errexit off.
+setup_route_repo() {
+  local rc
+  setup_routing_args "$1"
+  set +e
+  ( set -e; cmd_adopt "${SETUP_ROUTING_ARGS[@]}" )
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] && return 0
+  echo
+  echo "The runner is set up. The routing pull request was not opened (adopt says why above)."
+  echo "To try again: homefield adopt ${SETUP_ROUTING_ARGS[*]}"
+}
+
+# setup_skip_routing <owner/repo>: a declined offer, with the command for later.
+setup_skip_routing() {
+  setup_routing_args "$1"
+  echo "Route it later with: homefield adopt ${SETUP_ROUTING_ARGS[*]}"
+}
+
+# setup_offer_routing <url>: the end of a fresh setup on a terminal. The
+# registration names the repository when it is repository-scoped (a personal
+# account, or a repository URL), so setup offers to open its routing pull
+# request; for an organization it asks which repository first. Nothing is
+# created on GitHub without the answer; adopt keeps refusing public
+# repositories and needing write access. End of input (Ctrl-D) is a no.
+setup_offer_routing() {
+  local slug="${1%/}" answer repo
+  slug="${slug#https://github.com/}"
+  have_terminal || return 0
+  echo
+  if [[ "$slug" == */* ]]; then
+    printf 'Open the routing pull request for %s now? [Y/n] ' "$slug" >&2
+    if ! read -r answer; then
+      echo >&2
+      answer=n
+    fi
+    case "$answer" in
+      [Nn]*) setup_skip_routing "$slug" ;;
+      *) setup_route_repo "$slug" ;;
+    esac
+    return 0
+  fi
+  printf 'Repository to route first (name or owner/repo; Enter to skip): ' >&2
+  if ! read -r answer; then
+    echo >&2
+    answer=""
+  fi
+  if [ -z "$answer" ]; then
+    setup_skip_routing "<owner>/<repo>"
+    return 0
+  fi
+  case "$answer" in
+    */*) repo="$answer" ;;
+    *) repo="${slug}/${answer}" ;;
+  esac
+  if [[ ! "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+    echo "homefield: not a repository name or owner/repo: ${answer}; no pull request was opened" >&2
+    setup_skip_routing "<owner>/<repo>"
+    return 0
+  fi
+  setup_route_repo "$repo"
+}
+
 # setup_upgrade_summary: the end of a setup that found its runner registered and
 # upgraded it. The registration and its group were not looked at again, so
 # neither is claimed. Its settings are read back from the VM for the line.
@@ -1843,6 +1931,8 @@ cmd_install() {
   wait_online "$url" "$registered_name" "${group:-homefield-ci}"
   if [ "$SETUP" = 1 ]; then
     setup_summary "${group:-homefield-ci}" "$url" "$registered_name" "$registered_id"
+    SETUP_LABEL="$label" SETUP_GROUP="$group"
+    setup_offer_routing "$url"
   else
     registered_next_steps "${group:-homefield-ci}" "$url"
   fi

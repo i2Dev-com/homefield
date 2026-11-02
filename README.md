@@ -73,8 +73,17 @@ is first offered `gh auth login` when no other check fails, and the check runs
 after it); then it does what `install` does, and ends with a summary, one line per step, that marks what is done with a check mark and
 what needs attention with `!` (a runner group wider than recommended, a runner
 that is not online yet), followed by the next steps and the repositories that
-can already use the runner. It takes `install`'s options, and on an instance
-that is already registered it upgrades it, as `install` does. `install` stays
+can already use the runner. On a terminal it then offers to open the routing
+pull request (`homefield adopt --setup`): for the repository the runner is
+registered to (a personal account, or a repository URL) it asks `Open the
+routing pull request for <owner>/<repo> now? [Y/n]`, and for an organization it
+asks which repository to route first (a name, or `owner/repo`; Enter skips).
+Nothing is opened on GitHub unless you say yes, and if `adopt` refuses (a
+public repository, no write access, no workflow to route) the setup is still
+done: it says so and how to run `adopt` again. Without a terminal, `setup`
+only prints the next steps. It takes `install`'s options, and on an instance
+that is already registered it upgrades it, as `install` does (without the
+offer). `install` stays
 the lower-level command: it prints the preflight report but does not stop on it,
 and ends with its own short advice. Running the one-liner again upgrades the
 tool and leaves an existing VM alone; `homefield upgrade` updates the VM,
@@ -132,7 +141,8 @@ image, the guard step listing them, and `runner.arch` added to the cache keys
 ([`docs/adopting.md`](docs/adopting.md#let-adopt-write-steps-1-to-4)). Merge
 it, then run `homefield adopt` to switch the repository on, or add `--wait`
 (`homefield adopt --setup --wait --repo <owner>/<repo>`) and the same command
-waits for your merge, then carries on and switches the repository on.
+waits for your merge, then carries on and switches the repository on. A fresh
+`setup` on a terminal offers to open this pull request for you at its end.
 
 `homefield help` lists the options (`--label`, `--packages`, `--cpus`,
 ...). [`docs/runbook.md`](docs/runbook.md) covers operating it.
