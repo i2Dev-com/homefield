@@ -4159,9 +4159,9 @@ cmd_adopt() {
   log "done: ${repo}: runner group ${ADOPT_GROUP_OUTCOME}; routing ready; CI_RUNNER ${ADOPT_SWITCH_OUTCOME}"
   adopt_verify "$repo" "$verify" "$dry" "$switch"
   if [ "$ADOPT_VERIFIED" = 1 ]; then
-    log "still by hand: add any tools the jobs lack, and record the setup in the repository (docs/adopting.md, step 7)"
+    log "still by hand: add any tools the jobs lack, and note why a job stays hosted if you want to (docs/adopting.md, step 7)"
   else
-    log "still by hand: open a pull request and check the jobs ran on the local runner, add any tools they lack, and record the setup in the repository (docs/adopting.md, steps 6 and 7)"
+    log "still by hand: open a pull request and check the jobs ran on the local runner, add any tools they lack, and note why a job stays hosted if you want to (docs/adopting.md, steps 6 and 7)"
   fi
 }
 

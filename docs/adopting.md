@@ -11,7 +11,10 @@ does the rest of the setup and refuses to switch the repository on until
 those edits are merged. You can write steps 1–4 by hand, or have
 [`homefield adopt --setup`](#let-adopt-write-steps-1-to-4) open a pull request
 that writes them for you (with `--wait` it also carries on into step 5 once
-you merge it).
+you merge it). If you said yes to the offer at the end of `homefield setup`,
+that is what ran: what was left to you was reviewing and merging the pull
+request, and steps 1–5 were done for you. This page is the same path by hand,
+and the reference for what each step does.
 
 The repository must be **private** (see the trust boundary in
 [`runbook.md`](runbook.md#trust-boundary)).
@@ -372,10 +375,16 @@ pull-request run yet, or the latest one is still running (a run can only be
 re-run once it has completed), it says so and re-runs nothing. A `gh` error is
 reported as "could not verify". Whatever it finds, `adopt` exits 0: the
 adoption itself succeeded, and the report is information. What is left by hand
-is item 2 and step 7.
+is item 2 and, if you want it, step 7.
 
 ## 7. Record it
 
-In the adopting repository, document which jobs are routed and why, how to
-switch back to hosted, and link to [`runbook.md`](runbook.md). The routed
-jobs themselves are already listed in the guard's `jobs`.
+Nothing needs to be written to record which jobs are routed. The setup pull
+request lists them in its body, and the routing guard's `jobs:` list in the
+repository holds the same set and fails CI if it drifts from the workflows.
+
+Add a note to the repository only for what those two do not capture: why a job
+stays hosted (step 1 has the usual reasons), so the next person does not route
+it by mistake. To switch the repository back to hosted, run
+`homefield route hosted --repo <owner>/<repo>`
+([`runbook.md`](runbook.md#switching-per-repository)).

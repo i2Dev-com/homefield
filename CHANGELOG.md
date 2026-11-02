@@ -253,6 +253,10 @@ after the confirmation, as the runner stays online meanwhile), deregisters the
 
 ### Changed
 
+- The last lines `homefield adopt` prints no longer say to "record the setup in
+  the repository" by hand: `docs/adopting.md` step 7 now says the setup pull
+  request and the guard's `jobs:` list are that record, and a note is only for
+  why a job stays hosted.
 - `homefield setup --url https://github.com/<org>` asks for the `admin:org`
   scope in the `gh auth login` it offers (`gh auth login -h github.com -s
   admin:org`), so a first-time organization user authorizes in the browser
