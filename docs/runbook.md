@@ -245,19 +245,33 @@ repository, and for the Default group, a group wider than recommended or one
 that was not checked, no list.
 
 After the summary, on a terminal, a fresh `setup` offers to open the routing
-pull request, so the next command does not have to be typed. A repository-scoped
-registration (a personal account, or a repository URL) knows the repository and
-asks `Open the routing pull request for <owner>/<repo> now? [Y/n]`; Enter or
-`y` runs `homefield adopt --repo <owner>/<repo> --setup`. An organization asks
+pull request and carry on once you merge it, so the next commands do not have
+to be typed. A repository-scoped registration (a personal account, or a
+repository URL) knows the repository and asks `Open the routing pull request
+for <owner>/<repo> now, and carry on once you merge it? [Y/n]`; Enter or `y`
+runs `homefield adopt --repo <owner>/<repo> --setup --wait`. An organization asks
 `Repository to route first (name or owner/repo; Enter to skip)`: a bare name
 means `<org>/<name>`, and text that is not a repository name is refused without
 running anything. `n`, Enter at the organization question and end of input
 (Ctrl-D) skip it, with a line naming the command for later. Nothing is created
 on GitHub without the answer, and `adopt` keeps its own checks (it refuses a
-public repository and needs write access). If `adopt` fails, its message is
-already above, the setup stays a success (exit 0), and `setup` prints the
-command to run again. Without a terminal there is no question, and an instance
-that is already registered (the upgrade) is not offered it.
+public repository and needs write access). `setup` then waits in that run, as
+[`adopt --setup --wait`](adopting.md#let-adopt-write-steps-1-to-4) does, for up
+to 60 minutes: when you merge the pull request it adds the repository to the
+runner group and switches it on, and `setup` ends. If `adopt` fails, its message
+is already above and the setup stays a success (exit 0), and `setup` says what
+is left, by the status `adopt` exited with (`4` and `5` are new for `--wait`;
+`adopt` exits 1 as ever for anything before the pull request exists):
+
+| `adopt` ended | `setup` prints |
+| --- | --- |
+| Before a pull request existed (exit 1: a public repository, no write access, no workflow to route, the branch already there) | `The routing pull request was not opened`, and `To try again: homefield adopt ...` with the same arguments |
+| With the pull request open and not merged (exit 4: the 60 minutes ran out, it was closed without a merge, or five reads in a row failed) | `The routing pull request is open; adopt stopped waiting for it`, and no `--setup` retry, as the branch exists: `adopt` printed what to run next (`homefield adopt --repo <owner>/<repo>` once it is merged) |
+| After the merge (exit 5: the routing check, group access or the switch failed) | `The routing pull request was merged but adopt did not finish switching the repository`, and `homefield adopt --repo <owner>/<repo>` |
+| Ctrl-C (exit 130; 143 for a SIGTERM that reached only `adopt`), wherever `adopt` was: waiting for the merge, before the pull request existed, or after the merge (at the `--verify` question, say) | `The runner is set up. adopt was interrupted before it finished`, and `setup` itself ends with 130 because you cancelled (bash 5 may end it without the line when `adopt` was outside its wait). What `adopt` printed says how far it got and what to run next. A SIGTERM to `setup` ends it at once, with 143 |
+
+Without a terminal there is no question, and an instance that is already
+registered (the upgrade) is not offered it.
 
 On an instance that is already registered,
 `setup` upgrades it like `install` and ends with a shorter summary that does not

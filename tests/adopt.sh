@@ -1523,14 +1523,14 @@ record "...nothing was written to the group or the variable before it" "0" \
 
 # closed without a merge
 wait_adopt "open closed" -- --setup --wait
-record "closed without a merge: stops, saying nothing was switched" "nonzero/yes/yes/2" \
-  "$(nonzero "$rc")/$(has "$out" 'was closed without being merged')/$(has "$out" 'Nothing was switched and no group access was changed')/$(polls)"
+record "closed without a merge: stops, saying nothing was switched, exit 4" "4/yes/yes/2" \
+  "$rc/$(has "$out" 'was closed without being merged')/$(has "$out" 'Nothing was switched and no group access was changed')/$(polls)"
 record "...no group call, no variable, the branch is not deleted" "0/0/0" "$(untouched)"
 
 # the timeout: 1 minute at a 30 s interval is two reads and one sleep between them
 wait_adopt "open" ADOPT_WAIT_INTERVAL=30 -- --setup --wait --wait-timeout 1
-record "still open at the timeout: stops, naming the command to run after the merge" "nonzero/yes/yes/2/1" \
-  "$(nonzero "$rc")/$(has "$out" "${pr_url} is still open after 1 min")/$(has "$out" 'Once it is merged, run: homefield adopt --repo acme/app')/$(polls)/$(called '^sleep 30$')"
+record "still open at the timeout: stops, naming the command to run after the merge, exit 4" "4/yes/yes/2/1" \
+  "$rc/$(has "$out" "${pr_url} is still open after 1 min")/$(has "$out" 'Once it is merged, run: homefield adopt --repo acme/app')/$(polls)/$(called '^sleep 30$')"
 record "...no group call, no variable, the branch is not deleted" "0/0/0" "$(untouched)"
 wait_adopt "open" ADOPT_WAIT_INTERVAL=30 -- --setup --wait --wait-timeout 3
 record "--wait-timeout 3 at 30 s: six reads" "6" "$(polls)"
@@ -1549,19 +1549,19 @@ record "four failed reads in a row, then merged: carried on" "0/5/1" "$rc/$(poll
 wait_adopt "fail fail open fail fail fail fail merged" -- --setup --wait
 record "failures that an answer interrupts do not add up" "0/8/1" "$rc/$(polls)/$(called "$group_put")"
 wait_adopt "fail" -- --setup --wait
-record "five failed reads in a row: stops, not as closed" "nonzero/yes/no/no/5" \
-  "$(nonzero "$rc")/$(has "$out" 'could not read the state of')/$(has "$out" 'was closed')/$(has "$out" 'still open')/$(polls)"
+record "five failed reads in a row: stops, not as closed, exit 4" "4/yes/no/no/5" \
+  "$rc/$(has "$out" 'could not read the state of')/$(has "$out" 'was closed')/$(has "$out" 'still open')/$(polls)"
 record "...with gh's reason, and the command to run after the merge" "yes/yes" \
   "$(has "$out" 'HTTP 502')/$(has "$out" 'Once it is merged, run: homefield adopt --repo acme/app')"
 record "...no group call, no variable, the branch is not deleted" "0/0/0" "$(untouched)"
 wait_adopt "garbage" -- --setup --wait
-record "an answer that cannot be read counts as a failed read" "nonzero/yes/no/5" \
-  "$(nonzero "$rc")/$(has "$out" 'could not read the state of')/$(has "$out" 'was closed')/$(polls)"
+record "an answer that cannot be read counts as a failed read, exit 4" "4/yes/no/5" \
+  "$rc/$(has "$out" 'could not read the state of')/$(has "$out" 'was closed')/$(polls)"
 
 # the merge does not switch anything by itself: the guard still decides
 wait_adopt "merged" GH_WF="$work/wf-noguard" GH_WF_MERGED="$work/wf-noguard" -- --setup --wait
-record "merged, but the routing is still not ready: not switched, the group untouched" "nonzero/yes/yes/0/0" \
-  "$(nonzero "$rc")/$(has "$out" 'not switched: merge the routing first')/$(has "$out" 'no routing-guard step in .github/workflows')/$(called "$group_put")/$(called 'variable set')"
+record "merged, but the routing is still not ready: not switched, the group untouched, exit 5" "5/yes/yes/0/0" \
+  "$rc/$(has "$out" 'not switched: merge the routing first')/$(has "$out" 'no routing-guard step in .github/workflows')/$(called "$group_put")/$(called 'variable set')"
 wait_adopt "open merged" GH_WF="$work/wf-noguard" GH_WF_MERGED="$work/wf-ready" -- --setup --wait
 record "the workflows are read at the merge, not before: the merged routing is what is checked" "0/1/1" \
   "$rc/$(called "$group_put")/$(called 'variable set CI_RUNNER --repo acme/app --body local')"
@@ -1579,15 +1579,66 @@ record "--setup alone: no read of the pull request, and --wait is offered" "0/0/
 
 # a pull request URL with no number to follow
 wait_adopt "merged" GH_PR_URL=https://github.com/acme/app/pull/x -- --setup --wait
-record "a pull request number that cannot be read: stops, the pull request and branch stay" "nonzero/yes/0/0" \
-  "$(nonzero "$rc")/$(has "$out" 'could not read the pull request number')/$(polls)/$(called 'X DELETE')"
+record "a pull request number that cannot be read: stops, the pull request and branch stay, exit 4" "4/yes/0/0" \
+  "$rc/$(has "$out" 'could not read the pull request number')/$(polls)/$(called 'X DELETE')"
+
+# The exit status of --wait (#156): 4 once the pull request exists and it is
+# not merged, 5 once merged; before that, and without --wait, 1 as ever.
+printf 'merged\n' >"$work/pr-seq"
+: >"$work/branch-homefield_route-to-local"
+adopt GH_PR_SEQ="$work/pr-seq" -- --setup --wait
+record "--setup --wait, the branch is already there (no pull request): exit 1, no read of a pull request" "1/yes/0" \
+  "$rc/$(has "$out" 'already exists')/$(polls)"
+rm -f "$work/branch-homefield_route-to-local"
+adopt GH_PR_SEQ="$work/pr-seq" GH_REPO="$(printf 'false\t555\tmain\tOrganization')" -- --setup --wait
+record "--setup --wait on a public repository (no pull request): exit 1" "1/yes" "$rc/$(has "$out" 'is public')"
+adopt GH_PR_SEQ="$work/pr-seq" GH_PUT_FAIL=1 -- --setup --wait
+record "--setup --wait failing mid-write (no pull request): exit 1, the branch taken back" "1/yes/gone" \
+  "$rc/$(has "$out" 'could not write')/$([ -f "$work/branch-homefield_route-to-local" ] && echo present || echo gone)"
+adopt GH_PR_SEQ="$work/pr-seq" GH_WF="$work/wf-norouted" -- --setup --wait
+record "--setup --wait with nothing to route (no pull request): exit 1" "1/yes" "$rc/$(has "$out" 'nothing to route')"
+: >"$work/branch-homefield_route-to-local"
+adopt -- --setup
+record "--setup without --wait, the branch is already there: exit 1, as before" "1/yes" "$rc/$(has "$out" 'already exists')"
+rm -f "$work/branch-homefield_route-to-local"
+adopt GH_WF="$work/wf-noguard" --
+record "plain adopt, routing not ready: exit 1, not the --wait statuses" "1/yes" "$rc/$(has "$out" 'not switched')"
+# adopt_setup_exit, state by state (wait, pull request made, merged, status in)
+exit_status() {
+  run_fn -- eval "ADOPT_TMP=\$(mktemp -d); ADOPT_WAIT=$1 ADOPT_SETUP_PR_MADE=$2 ADOPT_WAIT_MERGED=$3; (trap adopt_setup_exit EXIT; exit $4)"
+}
+exit_status 1 1 0 1
+record "exit trap: --wait, pull request open, status 1: 4" "4" "$rc"
+exit_status 1 1 1 1
+record "exit trap: --wait, pull request merged, status 1: 5" "5" "$rc"
+exit_status 1 1 0 2
+record "exit trap: ...any status but 0, 130 and 143 counts" "4" "$rc"
+exit_status 1 1 0 130
+record "exit trap: Ctrl-C keeps 130" "130" "$rc"
+exit_status 1 1 1 143
+record "exit trap: SIGTERM keeps 143, merged or not" "143" "$rc"
+exit_status 1 1 1 0
+record "exit trap: success stays 0" "0" "$rc"
+exit_status 1 0 0 1
+record "exit trap: --wait but no pull request yet: 1" "1" "$rc"
+exit_status 0 1 0 1
+record "exit trap: a pull request but no --wait: 1" "1" "$rc"
 
 # Ctrl-C and SIGTERM while waiting: the guidance, 130 or 143, and the pull
 # request and its branch stay. The sleep is a real one, so that the wait is in
 # progress when the signal comes; it has to be cut short, not run to its end.
+# interrupt <signal> [setup|outside]: adopt on its own, signalled by pid; or
+# setup's routing step around it (#156), signalled in its whole process group
+# as a terminal does, then asked for what is left of that group. "outside" is
+# that step around an adopt that has no handler (a Ctrl-C before the pull
+# request exists, or after the merge): a stub that just sleeps.
 nap() { "$real_sleep" 0.05; }
 interrupt() {
-  local sig="$1" pid i=0 tmp_before tmp_after status
+  local sig="$1" mode="${2:-adopt}" pid i=0 tmp_before tmp_after status target cmd
+  cmd=(cmd_adopt --repo acme/app --setup --wait)
+  target=""
+  if [ "$mode" = setup ]; then cmd=(setup_route_repo acme/app); target=-; fi
+  if [ "$mode" = outside ]; then cmd=(eval 'cmd_adopt() { sleep 30; }; setup_route_repo acme/app'); target=-; fi
   printf 'open\n' >"$work/pr-seq"
   rm -f "$work/pr_polls" "$work/pr_merged" "$work/branch-homefield_route-to-local"
   : >"$calls"
@@ -1599,12 +1650,12 @@ interrupt() {
   env -i HOME="$work" PATH="$stubs" TMPDIR="$work/tmp" CALLS="$calls" HOMEFIELD_SOURCE_ONLY=1 \
     GH_GROUPS="$work/groups-selected" GH_MEMBERS="$work/members-other" GH_WF="$work/wf-ready" \
     GH_PR_SEQ="$work/pr-seq" ADOPT_WAIT_INTERVAL=30 SLEEP_REAL=1 \
-    "$BASH" -c '. "$1"; shift; "$@"' _ "$ROOT/bin/homefield" cmd_adopt --repo acme/app --setup --wait \
+    "$BASH" -c '. "$1"; shift; "$@"' _ "$ROOT/bin/homefield" "${cmd[@]}" \
     >"$work/int.out" 2>&1 </dev/null &
   pid=$!
   set +m
   while ! grep -q '^sleep 30$' "$calls" && [ "$i" -lt 200 ]; do nap; i=$((i + 1)); done
-  kill "-$sig" "$pid"
+  kill "-$sig" -- "${target}${pid}"
   i=0
   while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 100 ]; do nap; i=$((i + 1)); done
   if kill -0 "$pid" 2>/dev/null; then
@@ -1619,9 +1670,11 @@ interrupt() {
   rc="$status"
   out="$(cat "$work/int.out")"
   intr_tmp="$tmp_before/$tmp_after"
+  # processes of that group still alive (the job's process group is its pid)
+  intr_left="$(ps -A -o pgid= | awk -v g="$pid" '$1 == g' | wc -l | tr -d ' ')"
 }
 interrupt INT
-record "Ctrl-C while waiting: exit 130, not left sleeping" "130" "$rc"
+record "Ctrl-C while waiting: exit 130, not left sleeping, no process of the job left" "130/0" "$rc/$intr_left"
 record "...it says the pull request and branch are untouched, and the command to go on with" "yes/yes/yes" \
   "$(has "$out" "interrupted while waiting for ${pr_url}")/$(has "$out" 'untouched')/$(has "$out" 'run: homefield adopt --repo acme/app')"
 record "...no group call, no variable, no branch delete, nothing said about removing it" "0/0/0/no" \
@@ -1629,8 +1682,31 @@ record "...no group call, no variable, no branch delete, nothing said about remo
 record "...the branch is still there, and the temporary directory is gone" "yes/yes" \
   "$([ -f "$work/branch-homefield_route-to-local" ] && echo yes || echo no)/$([ "${intr_tmp%/*}" = "${intr_tmp#*/}" ] && echo yes || echo "no ($intr_tmp)")"
 interrupt TERM
-record "SIGTERM while waiting: exit 143, guidance, branch kept, temporary directory gone" "143/yes/0/yes/yes" \
-  "$rc/$(has "$out" 'run: homefield adopt --repo acme/app')/$(called 'X DELETE')/$([ -f "$work/branch-homefield_route-to-local" ] && echo yes || echo no)/$([ "${intr_tmp%/*}" = "${intr_tmp#*/}" ] && echo yes || echo "no ($intr_tmp)")"
+record "SIGTERM while waiting: exit 143, guidance, branch kept, temporary directory gone, nothing left running" "143/yes/0/yes/yes/0" \
+  "$rc/$(has "$out" 'run: homefield adopt --repo acme/app')/$(called 'X DELETE')/$([ -f "$work/branch-homefield_route-to-local" ] && echo yes || echo no)/$([ "${intr_tmp%/*}" = "${intr_tmp#*/}" ] && echo yes || echo "no ($intr_tmp)")/$intr_left"
+
+# Ctrl-C in setup's routing step: the signal reaches setup as well as adopt.
+# Adopt's trap says its piece, setup outlives it long enough to say its own
+# and ends with the signal's status, and no sleep is left behind. Setup traps
+# nothing (a kill of setup alone must not wait out the 60 minutes): a SIGTERM
+# to the group ends setup at once with 143, and adopt still says its note.
+interrupt INT setup
+record "setup's routing step, Ctrl-C to the process group: exit 130, no process of the group left" "130/0" "$rc/$intr_left"
+record "...adopt's note first, then setup's" "yes/yes/yes" \
+  "$(has "$out" "interrupted while waiting for ${pr_url}")/$(has "$out" 'The runner is set up. adopt was interrupted before it finished')/$(before "$out" 'interrupted while waiting' 'The runner is set up.')"
+record "...no --setup retry line (the branch exists), nothing removed, nothing switched" "no/0/0/0" \
+  "$(has "$out" 'To try again')/$(called 'X DELETE')/$(called "$group_put")/$(called 'variable set')"
+record "...the branch and the pull request stay, the temporary directory is gone" "yes/yes" \
+  "$([ -f "$work/branch-homefield_route-to-local" ] && echo yes || echo no)/$([ "${intr_tmp%/*}" = "${intr_tmp#*/}" ] && echo yes || echo "no ($intr_tmp)")"
+interrupt TERM setup
+record "setup's routing step, SIGTERM to the process group: exit 143, adopt's note, branch kept, no process left" "143/yes/yes/0" \
+  "$rc/$(has "$out" "interrupted while waiting for ${pr_url}")/$([ -f "$work/branch-homefield_route-to-local" ] && echo yes || echo no)/$intr_left"
+# An adopt that dies of the signal itself (outside its wait): setup ends the
+# same way and says nothing about a pull request, which may not exist or may
+# be merged by then.
+interrupt INT outside
+record "Ctrl-C while adopt is outside its wait: setup ends with 130, nothing left, no claim about a pull request, no retry" "130/0/no/no" \
+  "$rc/$intr_left/$(has "$out" 'is open')/$(has "$out" 'To try again')"
 
 # ── The docs say what the tool prints ──────────────────────────────────────
 echo "docs"

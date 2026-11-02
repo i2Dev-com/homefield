@@ -13,6 +13,26 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ### Added
 
+- `homefield setup` now carries on after the routing pull request is merged:
+  the offer at the end of a fresh setup runs `homefield adopt --repo
+  <owner>/<repo> --setup --wait`, so after the pull request is opened it waits
+  for your merge and then adds the repository to the runner group and switches
+  it on, in the same run (Ctrl-C is safe). The question reads `Open the routing
+  pull request for <owner>/<repo> now, and carry on once you merge it? [Y/n]`,
+  and the command printed for a declined offer carries `--wait`. `adopt --wait`
+  has two new exit statuses so that `setup` can tell the cases apart: 4 when
+  the pull request is open and not merged (the wait timed out, it was closed
+  without a merge, or five reads in a row failed) and 5 when it was merged but
+  the routing check, the group access or the switch then failed. Anything
+  before the pull request exists still exits 1, as does every run without
+  `--wait`; Ctrl-C and SIGTERM stay 130 and 143. `setup` still exits 0 when
+  `adopt` fails (the runner is set up) but now says which case it was: no
+  `--setup` retry line once the pull request exists, as its branch would make
+  `--setup` refuse, and for a merged one the plain `homefield adopt --repo
+  <owner>/<repo>`. After Ctrl-C `setup` says `adopt` was
+  interrupted (what it printed says how far it got) and exits 130, as you
+  cancelled. A compatible change.
+  [#156](https://github.com/i2Dev-com/homefield/issues/156)
 - `homefield adopt --verify | --no-verify` — `docs/adopting.md` step 6 (open
   a run, read the *Runner name*) done by `adopt` itself. After a switch that
   happened, or a `CI_RUNNER` that was already `local`, it offers to re-run the

@@ -50,12 +50,13 @@ Commands:
              same steps as install, ending with a summary of what is done (and
              what needs attention) and the next steps, including the
              repositories that can already use the runner. On a terminal it then
-             offers to open the routing pull request (homefield adopt --setup)
-             for the repository the runner is registered to, or asks which
-             repository to route first for an organization; it opens nothing
-             unless you say yes, and a failed pull request does not fail
-             setup. Takes install's options. On an instance that is already
-             registered it upgrades, like install.
+             offers to open the routing pull request and carry on once you
+             merge it (homefield adopt --setup --wait) for the repository the
+             runner is registered to, or asks which repository to route first
+             for an organization; it opens nothing unless you say yes, and a
+             failed pull request does not fail setup (Ctrl-C while it waits
+             ends setup with 130). Takes install's options. On an instance
+             that is already registered it upgrades, like install.
   install    Create the VM (if needed), provision it and register the runner.
              For an organization it also creates the runner group, and it
              waits until the runner shows online. On an instance that is
@@ -216,8 +217,13 @@ adopt:
                      merged routing does not pass, it stops as a plain adopt
                      would. Checks every 10 seconds. Ctrl-C is safe: the pull
                      request is left as it is, and adopt without --setup
-                     picks up from there. Exits 1 when the pull request is
-                     closed without a merge, or is still open at the timeout
+                     picks up from there. Exits 4 when the pull request is
+                     closed without a merge, still open at the timeout, or
+                     cannot be read, and 5 when it was merged but adopt then
+                     failed (130 and 143 after Ctrl-C and SIGTERM). Exits 1
+                     for anything before the pull request exists, as without
+                     --wait. A fresh `homefield setup` offers this command
+                     (with --label and --group when given)
   --wait-timeout MIN minutes --wait waits for the merge (default 60; a whole
                      number, 1 or more; only with --wait)
   --no-switch        do everything except set CI_RUNNER
@@ -1730,7 +1736,8 @@ setup_summary() {
 }
 
 # adopt's arguments for the routing pull request setup offers: the one place
-# to add a flag to. Set by setup_routing_args. The label and group the runner
+# to add a flag to. Set by setup_routing_args. --wait carries on in the same
+# run once the pull request is merged (#156). The label and group the runner
 # was registered with (cmd_install sets SETUP_LABEL and SETUP_GROUP from
 # --label and --group, empty when not given) go along: the pull request must
 # route on the label this runner carries, and the adopt that follows must look
@@ -1739,17 +1746,36 @@ SETUP_ROUTING_ARGS=()
 SETUP_LABEL=""
 SETUP_GROUP=""
 setup_routing_args() {
-  SETUP_ROUTING_ARGS=(--repo "$1" --setup)
+  SETUP_ROUTING_ARGS=(--repo "$1" --setup --wait)
   [ -z "$SETUP_LABEL" ] || SETUP_ROUTING_ARGS+=(--label "$SETUP_LABEL")
   [ -z "$SETUP_GROUP" ] || SETUP_ROUTING_ARGS+=(--group "$SETUP_GROUP")
 }
 
-# setup_route_repo <owner/repo>: opens the routing pull request, by running
-# adopt. It runs in a subshell, so adopt's die cannot end setup, and a failure
-# (a public repository, no write access, no workflow to route, the branch
-# already there...) leaves setup a success: adopt has said why, and this says
-# how to try again. errexit is off around the subshell and on inside it,
-# because a subshell tested with `||` or `if` would run adopt with errexit off.
+# setup_route_repo <owner/repo>: opens the routing pull request and waits for
+# its merge, by running adopt --setup --wait. It runs in a subshell, so adopt's
+# die cannot end setup, and a failure leaves setup a success: adopt has said
+# why, and this says what is left. errexit is off around the subshell and on
+# inside it, because a subshell tested with `||` or `if` would run adopt with
+# errexit off. adopt's exit status tells the cases apart (see ADOPT_EXIT_OPEN):
+#   ADOPT_EXIT_OPEN    the pull request is open and the wait did not end in a
+#                      merge (timeout, closed, unreadable): no --setup retry,
+#                      the branch exists
+#   ADOPT_EXIT_MERGED  merged, but adopt did not finish what follows
+#   130, 143           Ctrl-C or SIGTERM: setup ends with that status, as the
+#                      user cancelled. Only adopt's wait handles the signal
+#                      (and then it said where things stand); a signal before
+#                      the pull request exists or after its merge also ends
+#                      adopt with 130 or 143, so the note claims no more than
+#                      that adopt stopped
+#   other              nothing was opened (a public repository, no write
+#                      access, no workflow to route, the branch already there)
+# The terminal sends Ctrl-C to setup as well as to adopt. Setup needs no trap
+# for it: while waiting for a foreground subshell bash defers its own SIGINT,
+# and acts on it afterwards only if the subshell died of SIGINT. adopt's wait
+# handles Ctrl-C and exits 130, so setup carries on and says its note. Where
+# adopt dies of the signal instead, setup may end the same way without a note
+# (bash 5) or carry on to the note (bash 3.2, whose subshell exits 130 under
+# errexit). tests/adopt.sh signals the process group for real, on both.
 setup_route_repo() {
   local rc
   setup_routing_args "$1"
@@ -1759,8 +1785,22 @@ setup_route_repo() {
   set -e
   [ "$rc" -eq 0 ] && return 0
   echo
-  echo "The runner is set up. The routing pull request was not opened (adopt says why above)."
-  echo "To try again: homefield adopt ${SETUP_ROUTING_ARGS[*]}"
+  case "$rc" in
+    "$ADOPT_EXIT_OPEN")
+      echo "The runner is set up. The routing pull request is open; adopt stopped waiting for it (what it printed above says what to run next)."
+      ;;
+    130 | 143)
+      echo "The runner is set up. adopt was interrupted before it finished (what it printed above says how far it got and what to run next)."
+      exit "$rc"
+      ;;
+    "$ADOPT_EXIT_MERGED")
+      echo "The runner is set up. The routing pull request was merged but adopt did not finish switching the repository (what it printed above says why); run: homefield adopt --repo $1"
+      ;;
+    *)
+      echo "The runner is set up. The routing pull request was not opened (adopt says why above)."
+      echo "To try again: homefield adopt ${SETUP_ROUTING_ARGS[*]}"
+      ;;
+  esac
 }
 
 # setup_skip_routing <owner/repo>: a declined offer, with the command for later.
@@ -1781,7 +1821,7 @@ setup_offer_routing() {
   have_terminal || return 0
   echo
   if [[ "$slug" == */* ]]; then
-    printf 'Open the routing pull request for %s now? [Y/n] ' "$slug" >&2
+    printf 'Open the routing pull request for %s now, and carry on once you merge it? [Y/n] ' "$slug" >&2
     if ! read -r answer; then
       echo >&2
       answer=n
@@ -3790,6 +3830,14 @@ ADOPT_WAIT=0
 ADOPT_WAIT_INTERVAL=${ADOPT_WAIT_INTERVAL:-10}
 [ "$ADOPT_WAIT_INTERVAL" -ge 0 ] 2>/dev/null || ADOPT_WAIT_INTERVAL=10
 ADOPT_WAIT_SLEEPER=""
+# Set once the wait saw the pull request merged.
+ADOPT_WAIT_MERGED=0
+# What adopt --setup --wait exits with when it fails after opening the pull
+# request (setup_route_repo reads them): ADOPT_EXIT_OPEN while it is not
+# merged, ADOPT_EXIT_MERGED once it is. Ctrl-C and SIGTERM keep 130 and 143.
+# Every other failure, and every run without --wait, exits 1 as before.
+ADOPT_EXIT_OPEN=4
+ADOPT_EXIT_MERGED=5
 
 # adopt_setup_cleanup: a run that died after creating the branch would leave
 # its commits on GitHub with no pull request to review, and would refuse its
@@ -3801,6 +3849,20 @@ adopt_setup_cleanup() {
   echo "homefield: removing ${SETUP_BRANCH} on ${ADOPT_SETUP_REPO}, which has no pull request" >&2
   gh api -X DELETE "repos/${ADOPT_SETUP_REPO}/git/refs/heads/${SETUP_BRANCH}" >/dev/null 2>&1 ||
     echo "homefield: could not remove ${SETUP_BRANCH} on ${ADOPT_SETUP_REPO}: delete it by hand" >&2
+}
+
+# adopt_setup_exit: the EXIT trap of a --setup run. Besides the cleanup, a
+# --wait run that fails once its pull request exists (a die in the wait, or
+# anywhere after the merge) exits ADOPT_EXIT_OPEN or ADOPT_EXIT_MERGED instead
+# of 1, so a caller can tell it from a run that opened nothing.
+adopt_setup_exit() {
+  local rc=$?
+  adopt_setup_cleanup
+  rm -rf "$ADOPT_TMP"
+  [ "$rc" -ne 0 ] && [ "$rc" -ne 130 ] && [ "$rc" -ne 143 ] &&
+    [ "$ADOPT_WAIT" = 1 ] && [ "$ADOPT_SETUP_PR_MADE" = 1 ] || return 0
+  if [ "$ADOPT_WAIT_MERGED" = 1 ]; then exit "$ADOPT_EXIT_MERGED"; fi
+  exit "$ADOPT_EXIT_OPEN"
 }
 
 # adopt_setup <owner/repo> <label> <expr> <jobs> <dry>: the --setup path, the
@@ -3856,7 +3918,7 @@ adopt_setup() {
   gh api -X POST "repos/${repo}/git/refs" -f ref="refs/heads/${SETUP_BRANCH}" -f sha="$head_sha" >/dev/null ||
     die "adopt: setup: could not create ${SETUP_BRANCH} on ${repo}"
   ADOPT_SETUP_BRANCH_MADE=1
-  trap 'adopt_setup_cleanup; rm -rf "$ADOPT_TMP"' EXIT
+  trap adopt_setup_exit EXIT
   log "setup: created ${SETUP_BRANCH} from ${ADOPT_BRANCH}"
 
   while IFS= read -r name; do
@@ -3958,6 +4020,7 @@ adopt_wait_merged() {
     fi
   done
   trap - INT TERM
+  ADOPT_WAIT_MERGED=1
   log "${url} is merged; carrying on with what adopt does after the merge"
 }
 
@@ -3966,7 +4029,7 @@ cmd_adopt() {
   local verify=ask
   local wait_timeout="" wait_minutes=60
   ADOPT_FLAG_EVENTS="" ADOPT_FLAG_DEPENDABOT="" ADOPT_FLAG_FALLBACK=""
-  ADOPT_WAIT=0
+  ADOPT_WAIT=0 ADOPT_WAIT_MERGED=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --repo) repo="${2:?--repo needs a value}"; nrepo=$((nrepo + 1)); shift 2 ;;
