@@ -170,6 +170,19 @@ diag() {
 }
 called() { grep -c -e "$1" "$calls" || true; }
 
+# On a terminal (have_terminal forced true) with gh logged out, diagnose reads
+# the same prerequisites as setup but is read-only: it never offers or runs
+# `gh auth login` (#146). The gh stub fails any call it does not expect.
+guest_fs
+: >"$calls"
+# shellcheck disable=SC2016  # the -c script is expanded by the bash it runs in
+out="$(env -i HOME="$home" PATH="$stubs" CALLS="$calls" FAKE_ROOT="$root" HOMEFIELD_GH_TIMEOUT=5 HOMEFIELD_SOURCE_ONLY=1 \
+  LIMA_STATUS=Running SETTING_OUT="$org_settings" GH_JQ_OUT='|' \
+  "$BASH_BIN" -c '. "$1"; have_terminal() { true; }; main diagnose' _ "$ROOT/bin/homefield" 2>&1 </dev/null)"
+rc=$?
+record "diagnose on a terminal with gh logged out: reports it, never offers or runs a login" "yes/no/0" \
+  "$(has "$out" "gh not logged in: run 'gh auth login'")/$(has "$out" '[Y/n]')/$(called 'auth login')"
+
 # A healthy organization runner in the group homefield-ci, which admits two
 # repositories.
 org_groups='Default\tall\tfalse\t1\nhomefield-ci\tselected\tfalse\t7\n'

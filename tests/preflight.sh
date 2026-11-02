@@ -190,6 +190,28 @@ case_gh_logged_out() {
   fi
 }
 
+# case_gh_logged_out_terminal: even on a terminal (have_terminal forced true),
+# preflight only reports a logged-out gh: it never offers `gh auth login`, which
+# is setup's alone (#146), and never runs it. The report is the same as without
+# a terminal.
+# shellcheck disable=SC2016
+case_gh_logged_out_terminal() {
+  local d="$work/gh-out-tty" out rc calls="$work/gh-out-tty-calls"
+  ok_stub "$d"
+  : >"$calls"
+  # The token variables are cleared: with one set, the offer would be skipped
+  # for that reason, not because preflight never makes it.
+  out="$(env -u GITHUB_TOKEN -u GH_TOKEN PATH="$d" HOMEFIELD_SOURCE_ONLY=1 GH_HOSTS='{"hosts":{}}' GH_JQ_OUT='|' GH_CALLS="$calls" \
+    "$BASH_BIN" -c '. "$1"; have_terminal() { true; }; cmd_preflight' _ "$ROOT/bin/homefield" 2>&1 </dev/null)"
+  rc=$?
+  if [ "$rc" -eq 1 ] && has "$out" "FAIL  gh not logged in: run 'gh auth login'" &&
+    ! has "$out" "[Y/n]" && ! grep -q '^auth login' "$calls"; then
+    record "gh logged out on a terminal: preflight reports it, never offers or runs a login" "$rc" "1"
+  else
+    record "gh logged out on a terminal: preflight reports it, never offers or runs a login" "$rc" "1 (got: $out; calls: $(cat "$calls"))"
+  fi
+}
+
 # case_gh_app_token: the active account is an App-installed token, which
 # reports no scopes, and an inactive account with scopes sits beside it. That
 # must be OK (not FAIL, not WARN), exit 0.
@@ -282,6 +304,7 @@ case_missing "limactl missing" limactl "FAIL  Lima not found: run 'brew install 
 case_lima_old
 case_missing "gh missing" gh "FAIL  gh (GitHub CLI) not found: run 'brew install gh'"
 case_gh_logged_out
+case_gh_logged_out_terminal
 case_gh_app_token
 case_gh_scope_warn
 case_missing "python3 missing" python3 "FAIL  python3 not found: run 'brew install python'"
