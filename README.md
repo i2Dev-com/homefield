@@ -127,7 +127,9 @@ Rather than editing the workflows by hand, `homefield adopt --setup --repo
 routing expression on every pull-request job that runs on a GitHub-hosted
 image, the guard step listing them, and `runner.arch` added to the cache keys
 ([`docs/adopting.md`](docs/adopting.md#let-adopt-write-steps-1-to-4)). Merge
-it, then run `homefield adopt` to switch the repository on.
+it, then run `homefield adopt` to switch the repository on, or add `--wait`
+(`homefield adopt --setup --wait --repo <owner>/<repo>`) and the same command
+waits for your merge, then carries on and switches the repository on.
 
 `homefield help` lists the options (`--label`, `--packages`, `--cpus`,
 ...). [`docs/runbook.md`](docs/runbook.md) covers operating it.

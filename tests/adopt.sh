@@ -53,6 +53,8 @@ case "$*" in
   *"/contents/.github/workflows/"*)
     for a in "$@"; do case "$a" in repos/*/contents/.github/workflows/*) name="${a##*/}" ;; esac; done
     name="$(printf '%s' "$name" | sed 's/%20/ /g')"
+    wfdir="$GH_WF"
+    if [ -f "$state/pr_merged" ] && [ -n "${GH_WF_MERGED:-}" ]; then wfdir="$GH_WF_MERGED"; fi
     # Only a GET reaches this endpoint: like real gh, parameters without
     # --method GET switch the call to POST, which answers nothing here.
     case "$*" in *"-X GET"*) ;; *) echo "gh: HTTP 405" >&2; exit 1 ;; esac
@@ -63,13 +65,15 @@ case "$*" in
       # branch, its absence is the 404 of a file that does not exist yet.
       if [ -n "${GH_EXISTING_SHA:-}" ]; then printf '%s\n' "$GH_EXISTING_SHA"; else echo "gh: Not Found (HTTP 404)" >&2; exit 1; fi
     else
-      cat "$GH_WF/$name"
+      cat "$wfdir/$name"
     fi
     ;;
   *"/contents/.github/workflows"*)
-    if [ ! -d "${GH_WF:-/nonexistent}" ]; then echo "gh: Not Found (HTTP 404)" >&2; exit 1; fi
+    wfdir="${GH_WF:-/nonexistent}"
+    if [ -f "$state/pr_merged" ] && [ -n "${GH_WF_MERGED:-}" ]; then wfdir="$GH_WF_MERGED"; fi
+    if [ ! -d "$wfdir" ]; then echo "gh: Not Found (HTTP 404)" >&2; exit 1; fi
     if [ -n "${GH_WF_FAIL:-}" ]; then echo "gh: Server Error (HTTP 500)" >&2; exit 1; fi
-    for f in "$GH_WF"/*; do if [ -f "$f" ]; then basename "$f"; fi; done
+    for f in "$wfdir"/*; do if [ -f "$f" ]; then basename "$f"; fi; done
     ;;
   *"runner-groups/"*"/repositories?"*)
     if [ -n "${GH_MEMBERS_FAIL:-}" ]; then echo "gh: HTTP 500" >&2; exit 1; fi
@@ -110,7 +114,26 @@ case "$*" in
     for a in "$@"; do
       case "$a" in body=*) printf '%s\n' "${a#body=}" >>"$state/pr_body" ;; esac
     done
-    echo https://github.com/acme/app/pull/77
+    echo "${GH_PR_URL:-https://github.com/acme/app/pull/77}"
+    ;;
+  # adopt --setup --wait reading the pull request: each read answers with the
+  # next word of the file GH_PR_SEQ (the last one repeats): open, closed
+  # (without a merge), merged, fail, or any other word as it is. The first
+  # merged answer is remembered, so that GH_WF_MERGED can be served after it.
+  *"/pulls/"*)
+    n=0
+    if [ -f "$state/pr_polls" ]; then n="$(cat "$state/pr_polls")"; fi
+    n=$((n + 1))
+    echo "$n" >"$state/pr_polls"
+    word="$(sed -n "${n}p" "$GH_PR_SEQ")"
+    if [ -z "$word" ]; then word="$(sed -n '$p' "$GH_PR_SEQ")"; fi
+    case "$word" in
+      open) printf 'open\t-\n' ;;
+      closed) printf 'closed\t-\n' ;;
+      merged) : >"$state/pr_merged"; printf 'closed\t2026-11-01T10:00:00Z\n' ;;
+      fail) echo "gh: HTTP 502" >&2; exit 1 ;;
+      *) printf '%s\n' "$word" ;;
+    esac
     ;;
   "api repos/"*)
     if [ -n "${GH_REPO_FAIL:-}" ]; then echo "gh: Not Found (HTTP 404)" >&2; exit 1; fi
@@ -120,6 +143,27 @@ esac
 EOF
 chmod +x "$work/gh"
 for t in awk basename cat dirname git grep head ls mkdir mktemp rm sed sleep tr wc; do ln -s "$(command -v "$t")" "$stubs/$t"; done
+# mktemp -d without a template puts the directory in TMPDIR on Linux but not on
+# macOS; the explicit template makes both land in $TMPDIR, where a test can
+# look for what a run left behind.
+real_mktemp="$(command -v mktemp)"
+rm -f "$stubs/mktemp"
+cat >"$stubs/mktemp" <<MKTEMP
+#!/bin/sh
+if [ "\$*" = "-d" ]; then exec "$real_mktemp" -d "\${TMPDIR:-/tmp}/adopt.XXXXXX"; fi
+exec "$real_mktemp" "\$@"
+MKTEMP
+chmod +x "$stubs/mktemp"
+# sleep only records itself, so that no test waits; SLEEP_REAL=1 makes it a real
+# sleep, for the one test that has to interrupt a wait in progress.
+real_sleep="$(command -v sleep)"
+rm -f "$stubs/sleep"
+cat >"$stubs/sleep" <<SLEEP
+#!/bin/sh
+echo "sleep \$*" >>"\$CALLS"
+if [ -n "\${SLEEP_REAL:-}" ]; then exec "$real_sleep" "\$@"; fi
+SLEEP
+chmod +x "$stubs/sleep"
 # The interpreter itself, not whatever `python3` resolves to: a pyenv (or asdf)
 # shim is a script that needs pyenv and its tools on PATH, which the isolated
 # PATH of these tests does not have.
@@ -1155,6 +1199,175 @@ rm -f "$work/branch-homefield_route-to-local"
 adopt GH_EXISTING_SHA=e1e1e1e1 -- --setup
 record "--setup on existing files: the update PUT sends the sha the GET read" "0/1/yes" \
   "$rc/$(called '-X GET repos/acme/app/contents/.github/workflows/ci.yml -f ref=homefield/route-to-local')/$(grep -q '"sha": "e1e1e1e1"' "$work/put-ci.yml.json" && echo yes || echo no)"
+
+# ── adopt --setup --wait ───────────────────────────────────────────────────
+echo "wait"
+pr_url="https://github.com/acme/app/pull/77"
+# wait_adopt "<word>..." <env...> -- <adopt args>: an adopt run whose pull
+# request answers with the words in turn (see the stub), polled with no
+# interval. A later ADOPT_WAIT_INTERVAL in the env wins.
+wait_adopt() {
+  local seq="$1" words
+  shift
+  read -ra words <<<"$seq"
+  printf '%s\n' "${words[@]}" >"$work/pr-seq"
+  rm -f "$work/pr_polls" "$work/pr_merged" "$work/branch-homefield_route-to-local"
+  adopt ADOPT_WAIT_INTERVAL=0 GH_PR_SEQ="$work/pr-seq" "$@"
+}
+polls() { called 'api repos/acme/app/pulls/77 '; }
+group_put="X PUT $put_path"
+# line_of <first|last> <pattern>: where in the recorded calls it is (empty: never).
+line_of() { grep -n -e "$2" "$calls" | cut -d: -f1 | if [ "$1" = first ]; then head -n 1; else tail -n 1; fi; }
+untouched() { echo "$(called "$group_put")/$(called 'variable set')/$(called 'X DELETE')"; }
+
+run_fn -- cmd_adopt --repo acme/app --wait
+record "--wait without --setup: refused, before any gh call" "nonzero/yes/0" \
+  "$(nonzero "$rc")/$(has "$out" '--wait goes with --setup')/$(called gh)"
+run_fn -- cmd_adopt --repo acme/app --wait-timeout 5
+record "--wait-timeout without --wait: refused" "nonzero/yes/0" \
+  "$(nonzero "$rc")/$(has "$out" '--wait-timeout only goes with --wait')/$(called gh)"
+run_fn -- cmd_adopt --repo acme/app --setup --wait-timeout 5
+record "--wait-timeout with --setup but without --wait: refused" "nonzero/yes" \
+  "$(nonzero "$rc")/$(has "$out" '--wait-timeout only goes with --wait')"
+for bad in 0 abc -5 1.5 007 1000000; do
+  run_fn -- cmd_adopt --repo acme/app --setup --wait --wait-timeout "$bad"
+  record "--wait-timeout $bad: refused, before any gh call" "nonzero/yes/0" \
+    "$(nonzero "$rc")/$(has "$out" 'whole number of minutes')/$(called gh)"
+done
+
+# merged on the first read
+wait_adopt "merged" -- --setup --wait
+record "merged at the first read: group access and the switch follow, in this run" "0/1/1/1/yes" \
+  "$rc/$(polls)/$(called "$group_put")/$(called 'variable set CI_RUNNER --repo acme/app --body local')/$(has "$out" 'done: acme/app: runner group added; routing ready; CI_RUNNER set to local')"
+record "...the wait is announced with the pull request, Ctrl-C and the way to go on by hand" "yes/yes/yes" \
+  "$(has "$out" "waiting for ${pr_url} to be merged (up to 60 min)")/$(has "$out" 'Ctrl-C is safe')/$(has "$out" 'carry on by hand once it is merged: homefield adopt --repo acme/app')"
+record "...the pull request came first, then the group, then the switch" "yes/yes" \
+  "$(before "$(cat "$calls")" 'X POST repos/acme/app/pulls' "$group_put")/$(before "$(cat "$calls")" "$group_put" 'variable set CI_RUNNER')"
+record "...the repository and its workflows are read again after the merge" "2/2" \
+  "$(called '^gh api repos/acme/app ')/$(called '^gh api -X GET repos/acme/app/contents/.github/workflows -f')"
+record "...and the next-step line says it is waiting, without offering --wait" "yes/no" \
+  "$(has "$out" 'next: review and merge it; this run waits for that')/$(has "$out" 'does both in one run')"
+record "...a merged pull request leaves its branch alone" "0" "$(called 'X DELETE')"
+
+# open, open, merged: nothing is added or switched before the merge answer
+wait_adopt "open open merged" ADOPT_WAIT_INTERVAL=10 -- --setup --wait
+record "open, open, merged: three reads, a sleep of the interval between each" "0/3/2" "$rc/$(polls)/$(called '^sleep 10$')"
+last_poll="$(line_of last 'api repos/acme/app/pulls/77 ')"
+record "...the group and the switch come only after the merged answer" "yes/yes" \
+  "$([ "$(line_of first "$group_put")" -gt "$last_poll" ] && echo yes || echo no)/$([ "$(line_of first 'variable set')" -gt "$last_poll" ] && echo yes || echo no)"
+record "...nothing was written to the group or the variable before it" "0" \
+  "$(head -n "$last_poll" "$calls" | grep -c -e "$group_put" -e 'variable set')"
+
+# closed without a merge
+wait_adopt "open closed" -- --setup --wait
+record "closed without a merge: stops, saying nothing was switched" "nonzero/yes/yes/2" \
+  "$(nonzero "$rc")/$(has "$out" 'was closed without being merged')/$(has "$out" 'Nothing was switched and no group access was changed')/$(polls)"
+record "...no group call, no variable, the branch is not deleted" "0/0/0" "$(untouched)"
+
+# the timeout: 1 minute at a 30 s interval is two reads and one sleep between them
+wait_adopt "open" ADOPT_WAIT_INTERVAL=30 -- --setup --wait --wait-timeout 1
+record "still open at the timeout: stops, naming the command to run after the merge" "nonzero/yes/yes/2/1" \
+  "$(nonzero "$rc")/$(has "$out" "${pr_url} is still open after 1 min")/$(has "$out" 'Once it is merged, run: homefield adopt --repo acme/app')/$(polls)/$(called '^sleep 30$')"
+record "...no group call, no variable, the branch is not deleted" "0/0/0" "$(untouched)"
+wait_adopt "open" ADOPT_WAIT_INTERVAL=30 -- --setup --wait --wait-timeout 3
+record "--wait-timeout 3 at 30 s: six reads" "6" "$(polls)"
+wait_adopt "open" -- --setup --wait --wait-timeout 1
+record "no sleep at all with a zero interval" "0" "$(called '^sleep')"
+
+# a progress line about once a minute, not at every read
+wait_adopt "open open open open open merged" ADOPT_WAIT_INTERVAL=30 -- --setup --wait --wait-timeout 3
+record "five open reads at 30 s: a progress line at each minute, not each read" "0/6/2" \
+  "$rc/$(polls)/$(printf '%s\n' "$out" | grep -c 'still waiting for')"
+record "...saying how long it has waited" "yes" "$(has "$out" "still waiting for ${pr_url} to be merged (1 of 3 min)")"
+
+# a read that fails is not a closed pull request
+wait_adopt "fail fail fail fail merged" -- --setup --wait
+record "four failed reads in a row, then merged: carried on" "0/5/1" "$rc/$(polls)/$(called "$group_put")"
+wait_adopt "fail fail open fail fail fail fail merged" -- --setup --wait
+record "failures that an answer interrupts do not add up" "0/8/1" "$rc/$(polls)/$(called "$group_put")"
+wait_adopt "fail" -- --setup --wait
+record "five failed reads in a row: stops, not as closed" "nonzero/yes/no/no/5" \
+  "$(nonzero "$rc")/$(has "$out" 'could not read the state of')/$(has "$out" 'was closed')/$(has "$out" 'still open')/$(polls)"
+record "...with gh's reason, and the command to run after the merge" "yes/yes" \
+  "$(has "$out" 'HTTP 502')/$(has "$out" 'Once it is merged, run: homefield adopt --repo acme/app')"
+record "...no group call, no variable, the branch is not deleted" "0/0/0" "$(untouched)"
+wait_adopt "garbage" -- --setup --wait
+record "an answer that cannot be read counts as a failed read" "nonzero/yes/no/5" \
+  "$(nonzero "$rc")/$(has "$out" 'could not read the state of')/$(has "$out" 'was closed')/$(polls)"
+
+# the merge does not switch anything by itself: the guard still decides
+wait_adopt "merged" GH_WF="$work/wf-noguard" GH_WF_MERGED="$work/wf-noguard" -- --setup --wait
+record "merged, but the routing is still not ready: not switched, the group untouched" "nonzero/yes/yes/0/0" \
+  "$(nonzero "$rc")/$(has "$out" 'not switched: merge the routing first')/$(has "$out" 'no routing-guard step in .github/workflows')/$(called "$group_put")/$(called 'variable set')"
+wait_adopt "open merged" GH_WF="$work/wf-noguard" GH_WF_MERGED="$work/wf-ready" -- --setup --wait
+record "the workflows are read at the merge, not before: the merged routing is what is checked" "0/1/1" \
+  "$rc/$(called "$group_put")/$(called 'variable set CI_RUNNER --repo acme/app --body local')"
+wait_adopt "merged" GH_CI_RUNNER=hosted -- --setup --wait --no-switch
+record "--no-switch still holds after the wait" "0/1/0" "$rc/$(called "$group_put")/$(called 'variable set')"
+
+# a dry run sends nothing, so there is no pull request to wait for
+wait_adopt "merged" -- --setup --wait --dry-run
+record "--setup --wait --dry-run: says so, sends nothing, reads no pull request" "0/yes/0/0/0/0" \
+  "$rc/$(has "$out" '--wait has nothing to wait for')/$(polls)/$(called 'X POST')/$(called 'X PUT')/$(called 'variable set')"
+# without --wait the line still offers it
+wait_adopt "merged" -- --setup
+record "--setup alone: no read of the pull request, and --wait is offered" "0/0/yes" \
+  "$rc/$(polls)/$(has "$out" 'adopt --setup --wait does both in one run')"
+
+# a pull request URL with no number to follow
+wait_adopt "merged" GH_PR_URL=https://github.com/acme/app/pull/x -- --setup --wait
+record "a pull request number that cannot be read: stops, the pull request and branch stay" "nonzero/yes/0/0" \
+  "$(nonzero "$rc")/$(has "$out" 'could not read the pull request number')/$(polls)/$(called 'X DELETE')"
+
+# Ctrl-C and SIGTERM while waiting: the guidance, 130 or 143, and the pull
+# request and its branch stay. The sleep is a real one, so that the wait is in
+# progress when the signal comes; it has to be cut short, not run to its end.
+nap() { "$real_sleep" 0.05; }
+interrupt() {
+  local sig="$1" pid i=0 tmp_before tmp_after status
+  printf 'open\n' >"$work/pr-seq"
+  rm -f "$work/pr_polls" "$work/pr_merged" "$work/branch-homefield_route-to-local"
+  : >"$calls"
+  tmp_before="$(find "$work/tmp" -mindepth 1 | wc -l)"
+  # job control gives the background job its own process group and leaves
+  # SIGINT unignored, as a Ctrl-C at a terminal finds it
+  set -m
+  # shellcheck disable=SC2016  # the -c script is expanded by the inner bash
+  env -i HOME="$work" PATH="$stubs" TMPDIR="$work/tmp" CALLS="$calls" HOMEFIELD_SOURCE_ONLY=1 \
+    GH_GROUPS="$work/groups-selected" GH_MEMBERS="$work/members-other" GH_WF="$work/wf-ready" \
+    GH_PR_SEQ="$work/pr-seq" ADOPT_WAIT_INTERVAL=30 SLEEP_REAL=1 \
+    "$BASH" -c '. "$1"; shift; "$@"' _ "$ROOT/bin/homefield" cmd_adopt --repo acme/app --setup --wait \
+    >"$work/int.out" 2>&1 </dev/null &
+  pid=$!
+  set +m
+  while ! grep -q '^sleep 30$' "$calls" && [ "$i" -lt 200 ]; do nap; i=$((i + 1)); done
+  kill "-$sig" "$pid"
+  i=0
+  while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 100 ]; do nap; i=$((i + 1)); done
+  if kill -0 "$pid" 2>/dev/null; then
+    kill -9 "$pid"
+    wait "$pid" 2>/dev/null
+    status=hung
+  else
+    wait "$pid"
+    status=$?
+  fi
+  tmp_after="$(find "$work/tmp" -mindepth 1 | wc -l)"
+  rc="$status"
+  out="$(cat "$work/int.out")"
+  intr_tmp="$tmp_before/$tmp_after"
+}
+interrupt INT
+record "Ctrl-C while waiting: exit 130, not left sleeping" "130" "$rc"
+record "...it says the pull request and branch are untouched, and the command to go on with" "yes/yes/yes" \
+  "$(has "$out" "interrupted while waiting for ${pr_url}")/$(has "$out" 'untouched')/$(has "$out" 'run: homefield adopt --repo acme/app')"
+record "...no group call, no variable, no branch delete, nothing said about removing it" "0/0/0/no" \
+  "$(called "$group_put")/$(called 'variable set')/$(called 'X DELETE')/$(has "$out" 'removing homefield/route-to-local')"
+record "...the branch is still there, and the temporary directory is gone" "yes/yes" \
+  "$([ -f "$work/branch-homefield_route-to-local" ] && echo yes || echo no)/$([ "${intr_tmp%/*}" = "${intr_tmp#*/}" ] && echo yes || echo "no ($intr_tmp)")"
+interrupt TERM
+record "SIGTERM while waiting: exit 143, guidance, branch kept, temporary directory gone" "143/yes/0/yes/yes" \
+  "$rc/$(has "$out" 'run: homefield adopt --repo acme/app')/$(called 'X DELETE')/$([ -f "$work/branch-homefield_route-to-local" ] && echo yes || echo no)/$([ "${intr_tmp%/*}" = "${intr_tmp#*/}" ] && echo yes || echo "no ($intr_tmp)")"
 
 # ── The docs say what the tool prints ──────────────────────────────────────
 echo "docs"
