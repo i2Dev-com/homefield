@@ -45,7 +45,9 @@ that names the `brew` commands it will run, puts the tool in
 `~/.local/share/homefield` with a `homefield` command on your PATH, and runs
 `homefield setup` (`homefield install` on a release older than `setup`). If `gh`
 is installed but not logged in, and that is the only thing missing, `setup`
-offers to run `gh auth login` for you on a terminal. That asks for your
+offers to run `gh auth login` for you on a terminal (with `-s admin:org` when
+`--url` is an organization, so the runner group needs no second authorization).
+That asks for your
 organization or repository URL, creates the VM, checks its isolation,
 provisions it, creates the `homefield-ci` runner group for an organization
 (selected repositories only, no public ones), registers the runner with the
@@ -55,6 +57,10 @@ the URL up front, or any other option, append it:
 ```bash
 ... | bash -s -- --url https://github.com/<org>      # or https://github.com/<owner>/<repo>
 ```
+
+For an organization, give `--url` up front: the login `setup` offers then asks
+for the `admin:org` scope the runner group needs in the same browser
+authorization, instead of a second one later.
 
 `install` looks the URL's owner up first (with `gh`, else the public API) and
 says whether it found an organization or a personal account. A personal

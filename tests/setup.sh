@@ -242,11 +242,27 @@ record "...the instance name is checked for setup as for install" "nonzero/yes/0
 echo "gh login offer"
 echo y >"$work/answer"
 SRUN_IN="$work/answer" srun PF=login LOGGED_OUT=1 TTY=1 -- cmd_setup --url $org
-record "logged out, terminal, y: gh auth login runs, then the checks pass and setup goes on" "0/1/yes/yes/yes" \
-  "$rc/$(called '^gh auth login -h github.com$')/$(has "$out" 'OK    gh authenticated as tester')/$(has "$out" 'All checks passed')/$(has "$out" 'Next steps:')"
-record "...asked before the preflight report, naming the command" "yes" \
-  "$(has "${out%%OK*}" "gh is not logged in. Run 'gh auth login' now? [Y/n]")"
-record "...no hardcoded scopes: gh asks its own questions" "0" "$(called 'auth login.*-s')"
+record "logged out, terminal, y, organization URL: gh auth login runs with admin:org, then the checks pass and setup goes on" "0/1/yes/yes/yes" \
+  "$rc/$(called '^gh auth login -h github.com -s admin:org$')/$(has "$out" 'OK    gh authenticated as tester')/$(has "$out" 'All checks passed')/$(has "$out" 'Next steps:')"
+record "...asked before the preflight report, naming the command and why the scope (#152)" "yes" \
+  "$(has "${out%%OK*}" "gh is not logged in. Run 'gh auth login -s admin:org' now? (acme's runner group needs that scope, so you authorize once) [Y/n]")"
+# The scope is asked for only where a runner group will need it: an
+# organization's owner URL (looked up, or said with --org). Everything else is
+# gh's default login, with its own questions.
+login_case() { # <description> <expected login call count with -s> <expected plain> <env...> -- <setup args>
+  local desc="$1" scoped="$2" plain="$3"
+  shift 3
+  SRUN_IN="$work/answer" srun PF=login LOGGED_OUT=1 TTY=1 "$@"
+  record "$desc" "$scoped/$plain" "$(called '^gh auth login -h github.com -s admin:org$')/$(called '^gh auth login -h github.com$')"
+}
+login_case "...a trailing slash on the URL is the same" 1 0 -- cmd_setup --url $org/
+login_case "--org says it is an organization, whatever the lookup: admin:org" 1 0 GH_OWNER_TYPE=User -- cmd_setup --url $org --org
+login_case "--personal says it is not: gh's default login" 0 1 -- cmd_setup --url $org --personal
+login_case "a repository URL registers one repository and needs no group: gh's default login" 0 1 -- cmd_setup --url $org/app
+login_case "an owner that is a personal account: gh's default login" 0 1 GH_OWNER_TYPE=User -- cmd_setup --url https://github.com/someone
+login_case "no URL given (asked after the login): gh's default login" 0 1 -- cmd_setup
+SRUN_IN="$work/answer" srun PF=login LOGGED_OUT=1 TTY=1 GH_OWNER_TYPE=User -- cmd_setup --url https://github.com/someone
+record "...and its prompt does not mention the scope" "no" "$(has "$out" 'admin:org')"
 echo "" >"$work/answer"
 SRUN_IN="$work/answer" srun PF=login LOGGED_OUT=1 TTY=1 -- cmd_setup --url $org
 record "...just Enter is yes" "0/1" "$rc/$(called '^gh auth login')"
