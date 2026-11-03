@@ -9,7 +9,14 @@ fail, such as a new guard in the routing expression, bumps the minor version
 (0.1 to 0.2). Compatible changes bump the patch. Merged changes wait on
 `main`, under *Unreleased*, until a release is cut.
 
-## Unreleased
+## v0.3.2 (2026-11-03)
+
+Compatible with v0.3.1 (workflows unchanged). To upgrade, run the README's
+one-liner again, then `homefield upgrade` on each runner: re-provisioning
+brings an existing runner the loopback probe's verdicts (which only prove
+closed on Lima ≥ 2.3.0, not a stable release yet) and the memory sampler's
+boot column. Bump `routing-guard@v0.3.1` pins to `@v0.3.2`: `homefield adopt`
+counts only its own release.
 
 ### Added
 
