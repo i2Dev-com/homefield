@@ -33,9 +33,29 @@ It has three parts:
 
 ## Quick start
 
-On an Apple Silicon Mac, in a terminal, with the URL of your organization (or,
-for a personal account or a single repository,
-`https://github.com/<owner>/<repo>`):
+**You need:**
+
+- An Apple Silicon Mac that stays awake while you want routed jobs to run.
+  A sleeping Mac (or one with its lid closed) takes no jobs; they queue, and
+  GitHub fails them after 24 hours. In System Settings (Battery or Energy,
+  Options) turn on the option that prevents automatic sleeping when the display
+  is off, or run `caffeinate -s` in a terminal for a while (it holds only on
+  power). `setup` turns on Lima's autostart so the VM comes back after a reboot
+  ([runbook: Setup](docs/runbook.md#setup-once-per-machine)).
+- About 5 GiB of memory for the VM while it runs, and a 60 GiB virtual disk
+  (6 CPUs, all set in [`vm/lima.yaml`](vm/lima.yaml); `--cpus` and `--memory`
+  change the first two when the VM is created).
+- **Private** repositories. A public one is refused.
+- For an organization, an owner's `gh` login (it asks for the `admin:org`
+  scope), or a registration token you paste. A repository URL needs neither.
+- For an organization on the **Free** plan, `--group Default` at the end of the
+  command below: custom runner groups need Team or Enterprise, and `setup`
+  stops at the group step without it. Read
+  [Organizations and plans](#requirements-and-limitations) first, because that
+  group admits every repository in the organization.
+
+On such a Mac, in a terminal, with the URL of your organization (or, for a
+personal account or a single repository, `https://github.com/<owner>/<repo>`):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/i2Dev-com/homefield/v0.3.1/install.sh | bash -s -- --url https://github.com/<org>
@@ -66,6 +86,31 @@ From then on the routed jobs of that repository's pull requests run on your
 Mac. `homefield route hosted --repo <owner>/<repo>` switches it back. The rest
 of this section is detail: account types, preflight and what to do when
 something stops.
+
+### Later: another repository, another runner, leaving
+
+- **Another repository.** One command, from any terminal with `gh`:
+
+  ```bash
+  homefield adopt --setup --wait --repo <owner>/<repo>
+  ```
+
+  It opens the routing pull request, waits for you to merge it, then adds the
+  repository to the runner group and switches it to the local runner, as in
+  step 5 above. Without `--wait`, run `homefield adopt --repo <owner>/<repo>`
+  after the merge. If the repository has no pull-request job on a GitHub-hosted
+  image it stops with "nothing to route". To keep some jobs hosted, see
+  [`docs/adopting.md`](docs/adopting.md#1-choose-the-jobs).
+- **Another runner**, when jobs wait for each other: `homefield setup
+  --instance homefield-2 --url https://github.com/<org>` on the same Mac, or
+  the same one-liner on another Mac. Repositories and routing do not change,
+  so at the end answer **n** (or press Enter at the organization's question) to
+  the offer to open a routing pull request. Use the same `--label`, `--group`
+  and `--packages` as the first runner
+  ([runbook: More runners](docs/runbook.md#more-runners)).
+- **Leaving.** Switch each repository back with `homefield route hosted --repo
+  <owner>/<repo>`, then `homefield uninstall` removes the runner's registration
+  and the VM ([runbook: Removing the runner](docs/runbook.md#removing-the-runner)).
 
 ### Details and options
 
