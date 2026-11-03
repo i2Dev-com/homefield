@@ -589,6 +589,13 @@ runner is idle. Repositories and their routing don't change.
 homefield setup --instance homefield-2 --url https://github.com/<org>
 ```
 
+Run on a terminal, a new registration ends with the offer to open a routing
+pull request (the one a first setup makes). A second runner needs none, since
+repositories and their routing are already done: answer `n`, or press Enter at
+an organization's "Repository to route first" question. Answering yes runs
+`adopt` as usual: for a repository with nothing left to route it refuses
+("nothing to route"), and the runner is set up either way.
+
 It is named `<local hostname>-homefield-2`. An instance name follows Lima's
 rule (letters and digits, with a single `.`, `_` or `-` between them, at most
 76 characters, not ending in `.yml` or `.yaml`), and homefield refuses any
@@ -619,7 +626,8 @@ going lower.
 
 **On another Mac**, install the tool there ([Setup](#setup-once-per-machine))
 and run `homefield setup` with the same URL, label, group and packages, and
-the hooks put in first as above. The runner is named after that Mac, and a name
+the hooks put in first as above. Answer `n` to the routing-pull-request offer
+at the end, as for a second instance. The runner is named after that Mac, and a name
 already in use is refused ([Failure modes](#failure-modes)). The runner group
 is used as it is. Registering at an organization needs an organization owner's
 `gh` login with `admin:org`, or a registration token pasted when asked.

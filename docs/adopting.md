@@ -16,6 +16,16 @@ that is what ran: what was left to you was reviewing and merging the pull
 request, and steps 1–5 were done for you. This page is the same path by hand,
 and the reference for what each step does.
 
+For a repository after the first, the whole page is one command, which opens
+the pull request, waits for your merge and then switches the repository on:
+
+```bash
+homefield adopt --setup --wait --repo <owner>/<repo>
+```
+
+The steps below are what it does, for when you want to write the edits yourself
+or need to know why it refused.
+
 The repository must be **private** (see the trust boundary in
 [`runbook.md`](runbook.md#trust-boundary)).
 

@@ -274,6 +274,13 @@ after the confirmation, as the runner stays online meanwhile), deregisters the
 
 ### Changed
 
+- Docs only: the README's Quick start now opens with what you need (an Apple
+  Silicon Mac that stays awake, the VM's memory, disk and CPU, private
+  repositories, org-owner rights, and `--group Default` on the Free plan) and
+  ends with "Later": another repository (`homefield adopt --setup --wait`),
+  another runner or Mac (answer `n` to the routing-pull-request offer), and
+  leaving. `docs/adopting.md` leads with the one-command path, and the runbook's
+  "More runners" says what to answer to the offer.
 - The last lines `homefield adopt` prints no longer say to "record the setup in
   the repository" by hand: `docs/adopting.md` step 7 now says the setup pull
   request and the guard's `jobs:` list are that record, and a note is only for
