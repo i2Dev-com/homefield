@@ -223,6 +223,27 @@ after the confirmation, as the runner stays online meanwhile), deregisters the
 
 ### Fixed
 
+- `homefield adopt --setup` (and so `--setup --wait`, and the offer at the end of
+  `homefield setup`) now says where things stand on Ctrl-C or SIGTERM in every
+  phase, not only while it waits for the merge, and exits 130 or 143 each
+  time. Before the pull request was opened it takes back the branch it made and
+  says nothing was switched; while the pull request is being opened it says the
+  pull request may exist and leaves the branch (deleting it would close that
+  pull request), saying how to delete it if there is none; after the merge it says the group access and `CI_RUNNER` may
+  or may not be done and to run `homefield adopt --repo <owner>/<repo>` again
+  (safe to repeat); during `--verify` it says the repository is routed, only
+  the optional check was cut short, and prints the commands to check by hand.
+  Before, a signal outside the wait ended `adopt` with no word and, before the
+  pull request existed, left the branch behind, and under `homefield setup`
+  could end setup without its note. A second signal while it reports no longer
+  prints the note twice and ends the run at once, with the first signal's
+  status (so a hung cleanup call can be aborted), the call that creates the
+  branch is covered by the cleanup too, and `--verify` stops between reads at
+  once instead of after the pause. `kill` sent to `homefield setup` alone no longer leaves the
+  `adopt` it was running waiting for the merge for up to an hour: that `adopt`
+  stops, saying setup ended, at its next check, within one poll interval (10
+  seconds by default; a step already in progress finishes first).
+  [#158](https://github.com/i2Dev-com/homefield/issues/158)
 - A first run no longer dead-ends on `gh`. `install.sh` now asks one question
   for everything Homebrew has to install, naming the commands it will run:
   Lima (missing, or older than 2.0) and gh (missing), and `HOMEFIELD_YES=1`
