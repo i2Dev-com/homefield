@@ -3893,6 +3893,8 @@ ADOPT_WAIT_SLEEPER=""
 ADOPT_WAIT_MERGED=0
 # Set once adopt_switch returned: after that only the optional --verify is left.
 ADOPT_SWITCH_DONE=0
+# 1 once cmd_adopt installed the INT and TERM handler (a --setup run).
+ADOPT_HANDLER=0
 # The pid of the process that started this adopt, when that is not the user's
 # terminal: setup_route_repo sets it to setup's pid. Empty for a standalone
 # adopt, which has no parent to watch.
@@ -3916,7 +3918,7 @@ adopt_setup_cleanup() {
   ADOPT_SETUP_BRANCH_MADE=0
   echo "homefield: removing ${SETUP_BRANCH} on ${ADOPT_SETUP_REPO}, which has no pull request" >&2
   gh api -X DELETE "repos/${ADOPT_SETUP_REPO}/git/refs/heads/${SETUP_BRANCH}" >/dev/null 2>&1 ||
-    echo "homefield: could not remove ${SETUP_BRANCH} on ${ADOPT_SETUP_REPO}: delete it by hand" >&2
+    echo "homefield: could not remove ${SETUP_BRANCH} on ${ADOPT_SETUP_REPO} (it may not have been created): delete it by hand if it exists" >&2
 }
 
 # adopt_setup_exit: the EXIT trap of a --setup run. Besides the cleanup, a
@@ -3983,10 +3985,16 @@ adopt_setup() {
   if gh api "repos/${repo}/git/ref/heads/${SETUP_BRANCH}" --jq .object.sha >/dev/null 2>&1; then
     die "adopt: setup: the branch ${SETUP_BRANCH} already exists on ${repo}: merge or close its pull request, or delete the branch, and run again"
   fi
-  gh api -X POST "repos/${repo}/git/refs" -f ref="refs/heads/${SETUP_BRANCH}" -f sha="$head_sha" >/dev/null ||
-    die "adopt: setup: could not create ${SETUP_BRANCH} on ${repo}"
+  # The cleanup is armed before the call: a signal while it is in flight can
+  # find gh finishing it, and the branch would be left with no one to remove
+  # it. Where gh was killed before it created the ref, the cleanup's delete
+  # finds nothing, and says so.
   ADOPT_SETUP_BRANCH_MADE=1
   trap adopt_setup_exit EXIT
+  gh api -X POST "repos/${repo}/git/refs" -f ref="refs/heads/${SETUP_BRANCH}" -f sha="$head_sha" >/dev/null || {
+    ADOPT_SETUP_BRANCH_MADE=0
+    die "adopt: setup: could not create ${SETUP_BRANCH} on ${repo}"
+  }
   log "setup: created ${SETUP_BRANCH} from ${ADOPT_BRANCH}"
 
   while IFS= read -r name; do
@@ -4030,11 +4038,14 @@ adopt_setup() {
 # trap (adopt_setup_exit) keeps 130 and 143, and takes back a branch that has
 # no pull request. Every statement below holds for its phase, and none is made
 # for a phase that cannot be told apart: a pull request being opened may exist.
+# A second signal (a double Ctrl-C, INT then TERM) ends the run at once and
+# silently with the first signal's status: the note is not printed twice, and a
+# cleanup call that hangs can still be aborted.
 adopt_interrupted() {
   local status="$1" lead="interrupted"
-  # A second signal (a double Ctrl-C, INT then TERM) must neither run this again
-  # nor print the note twice; the processes started from here on ignore them too.
-  trap '' INT TERM
+  # expanded now, so that the first status wins
+  # shellcheck disable=SC2064
+  trap "exit $status" INT TERM
   if [ -n "$ADOPT_WAIT_SLEEPER" ]; then
     # it may have ended on its own just now
     kill "$ADOPT_WAIT_SLEEPER" 2>/dev/null || :
@@ -4053,7 +4064,7 @@ adopt_interrupted() {
   elif [ "$ADOPT_SETUP_PR_MADE" = 1 ]; then
     echo "homefield: ${lead} after opening ${ADOPT_SETUP_PR_URL}. It and its branch are untouched, and nothing was switched or added to the runner group. Once it is merged, run: ${ADOPT_PLAIN_CMD}" >&2
   elif [ "$ADOPT_SETUP_PR_PENDING" = 1 ]; then
-    echo "homefield: ${lead} while the pull request was being opened; it may exist: look at https://github.com/${ADOPT_SETUP_REPO}/pulls. The branch ${SETUP_BRANCH} was left in place. Nothing was switched or added to the runner group." >&2
+    echo "homefield: ${lead} while the pull request was being opened; it may exist: look at https://github.com/${ADOPT_SETUP_REPO}/pulls. If there is none, delete the branch (gh api -X DELETE repos/${ADOPT_SETUP_REPO}/git/refs/heads/${SETUP_BRANCH}) and run again. The branch was left in place. Nothing was switched or added to the runner group." >&2
   else
     echo "homefield: ${lead} before the pull request was opened. Nothing was switched or added to the runner group." >&2
   fi
@@ -4064,20 +4075,35 @@ adopt_interrupted() {
 # ended, stop. A SIGTERM sent to setup alone ends setup at once (it cannot act
 # on the signal while its foreground subshell runs, so it traps nothing) and
 # leaves this adopt, which would wait for the merge for up to an hour. The poll
-# loops call this, so adopt notices within one poll interval.
+# loops call this, so adopt notices within one poll interval; a step already in
+# progress (the group access, the switch) finishes first. A parent that is
+# killed but not yet reaped is a zombie that still answers kill -0, so its
+# state is read too (no ps, or no answer from it, is "not a zombie").
 adopt_check_parent() {
+  local stat
   [ -n "$ADOPT_PARENT_PID" ] || return 0
   kill -0 "$ADOPT_PARENT_PID" 2>/dev/null || adopt_interrupted 143 parent
+  stat="$(ps -o stat= -p "$ADOPT_PARENT_PID" 2>/dev/null)" || stat=""
+  stat="${stat#"${stat%%[! ]*}"}"
+  case "$stat" in Z*) adopt_interrupted 143 parent ;; esac
 }
 
 # adopt_nap <seconds>: sleep that a trapped signal cuts short. Bash runs a trap
-# only after a foreground command ends, but cuts a wait short, so the sleep is
-# a background job that is waited for (the handler takes it down).
+# only after a foreground command ends, but cuts a wait short, so with the
+# handler installed (a --setup run) the sleep is a background job that is
+# waited for, which the handler takes down. Without it (a plain adopt, whose
+# Ctrl-C kills the shell) it stays in the foreground: a background job of a
+# non-interactive shell ignores SIGINT, and would outlive the shell holding its
+# stdout open.
 adopt_nap() {
-  sleep "$1" &
-  ADOPT_WAIT_SLEEPER=$!
-  wait "$ADOPT_WAIT_SLEEPER" || :
-  ADOPT_WAIT_SLEEPER=""
+  if [ "$ADOPT_HANDLER" = 1 ]; then
+    sleep "$1" &
+    ADOPT_WAIT_SLEEPER=$!
+    wait "$ADOPT_WAIT_SLEEPER" || :
+    ADOPT_WAIT_SLEEPER=""
+  else
+    sleep "$1"
+  fi
 }
 
 # adopt_wait_merged <owner/repo> <minutes>: until the pull request adopt_setup
@@ -4137,7 +4163,7 @@ cmd_adopt() {
   local verify=ask
   local wait_timeout="" wait_minutes=60
   ADOPT_FLAG_EVENTS="" ADOPT_FLAG_DEPENDABOT="" ADOPT_FLAG_FALLBACK=""
-  ADOPT_WAIT=0 ADOPT_WAIT_MERGED=0 ADOPT_SWITCH_DONE=0
+  ADOPT_WAIT=0 ADOPT_WAIT_MERGED=0 ADOPT_SWITCH_DONE=0 ADOPT_HANDLER=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --repo) repo="${2:?--repo needs a value}"; nrepo=$((nrepo + 1)); shift 2 ;;
@@ -4195,6 +4221,7 @@ cmd_adopt() {
     # on GitHub before its group access, and keeps the default.
     trap 'adopt_interrupted 130' INT
     trap 'adopt_interrupted 143' TERM
+    ADOPT_HANDLER=1
   fi
   adopt_repository "$repo"
   adopt_fetch_workflows "$repo" "$ADOPT_BRANCH" "$ADOPT_TMP/workflows"

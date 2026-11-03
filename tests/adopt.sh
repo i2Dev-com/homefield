@@ -140,10 +140,17 @@ case "$*" in
     ;;
   *"/git/refs/heads/"*)
     for a in "$@"; do
-      case "$a" in */git/refs/heads/*) rm -f "$state/branch-$(printf '%s' "${a##*/git/refs/heads/}" | tr / _)" ;; esac
+      case "$a" in
+        */git/refs/heads/*)
+          f="$state/branch-$(printf '%s' "${a##*/git/refs/heads/}" | tr / _)"
+          if [ ! -f "$f" ]; then echo "gh: Not Found (HTTP 404)" >&2; exit 1; fi
+          rm -f "$f"
+          ;;
+      esac
     done
     ;;
   *"POST repos/"*"/git/refs"*)
+    if [ -n "${GH_REFS_FAIL:-}" ]; then echo "gh: HTTP 422" >&2; exit 1; fi
     for a in "$@"; do
       case "$a" in ref=refs/heads/*) : >"$state/branch-$(printf '%s' "${a#ref=refs/heads/}" | tr / _)" ;; esac
     done
@@ -1675,7 +1682,9 @@ marker_wait() {
 #          opens the pull request), wait (the wait for the merge), merged (the
 #          group access is in flight), switching (the CI_RUNNER write is), verify
 #          (the pause between two reads of the re-run), double (as pre, and the
-#          signal comes a second time while the cleanup runs)
+#          signal comes a second time while the cleanup runs, which finishes),
+#          doublehang (the same, with a cleanup that hangs), branch (the call
+#          that creates the branch)
 #   mode   adopt on its own; setup's routing step around it (setup), signalled
 #          in its whole process group; setup signalled alone, by its pid
 #          (setup-alone); or adopt told that a parent process it was not started
@@ -1685,11 +1694,13 @@ marker_wait() {
 interrupt() { interrupt_run "$@" 2>/dev/null; } # (bash 3.2 reports a job killed by TERM)
 interrupt_run() {
   local sigs="$1" phase="$2" mode="${3:-adopt}" pid i sig target tmp_before tmp_after status left first=1
-  local seq=merged hang="" hang2="" wait_interval=30 verify_interval=600 drain=1 secs=30 fake="" marker cmd
+  local seq=merged hang="" hang2="" secs2=2 wait_interval=30 verify_interval=600 drain=1 secs=30 fake="" marker cmd
   local args=(--setup --wait) extra=()
   case "$phase" in
     pre) seq=open hang="X PUT repos/acme/app/contents" ;;
     double) seq=open hang="X PUT repos/acme/app/contents" hang2="X DELETE" ;;
+    doublehang) seq=open hang="X PUT repos/acme/app/contents" hang2="X DELETE" secs2=30 ;;
+    branch) seq=open hang="X POST repos/acme/app/git/refs" ;;
     pending) seq=open hang="X POST repos/acme/app/pulls" ;;
     wait) seq=open ;;
     merged) hang="X PUT orgs/acme/actions/runner-groups" ;;
@@ -1729,7 +1740,7 @@ interrupt_run() {
   env -i HOME="$work" PATH="$stubs" TMPDIR="$work/tmp" CALLS="$calls" HOMEFIELD_SOURCE_ONLY=1 \
     GH_GROUPS="$work/groups-selected" GH_MEMBERS="$work/members-other" GH_WF="$work/wf-ready" \
     GH_PR_SEQ="$work/pr-seq" ADOPT_WAIT_INTERVAL="$wait_interval" SLEEP_REAL=1 \
-    GH_HANG="$hang" GH_HANG_SECS="$secs" GH_HANG2="$hang2" GH_HANG2_SECS=2 GH_HANG_SLEEP="$real_sleep" \
+    GH_HANG="$hang" GH_HANG_SECS="$secs" GH_HANG2="$hang2" GH_HANG2_SECS="$secs2" GH_HANG_SLEEP="$real_sleep" \
     FAKE_PARENT="$fake" "${extra[@]}" \
     "$BASH" -c '. "$1"; shift; if [ -n "$FAKE_PARENT" ]; then ADOPT_PARENT_PID=$FAKE_PARENT; fi; "$@"' _ "$ROOT/bin/homefield" "${cmd[@]}" \
     >"$work/int.out" 2>&1 </dev/null &
@@ -1813,7 +1824,7 @@ record "SIGTERM before the pull request exists: exactly 143, the same note, the 
 interrupt INT pending
 record "Ctrl-C while the pull request is being opened: exactly 130, nothing left running" "130/0" "$rc/$intr_left"
 record "...the note says it may exist, where to look, and that the branch was left" "yes/yes/yes/yes/no" \
-  "$(has "$out" 'interrupted while the pull request was being opened; it may exist: look at https://github.com/acme/app/pulls')/$(has "$out" 'The branch homefield/route-to-local was left in place')/$(has "$out" 'Nothing was switched or added to the runner group')/$(has "$out" 'interrupted')/$(has "$out" 'untouched')"
+  "$(has "$out" 'interrupted while the pull request was being opened; it may exist: look at https://github.com/acme/app/pulls')/$(has "$out" 'If there is none, delete the branch (gh api -X DELETE repos/acme/app/git/refs/heads/homefield/route-to-local) and run again. The branch was left in place')/$(has "$out" 'Nothing was switched or added to the runner group')/$(has "$out" 'interrupted')/$(has "$out" 'untouched')"
 record "...the branch is not deleted (that would close a pull request that was just opened)" "0/yes/no" \
   "$(called 'X DELETE')/$(branch_there)/$(has "$out" 'removing homefield/route-to-local')"
 interrupt TERM pending
@@ -1849,12 +1860,55 @@ record "...the group access and the switch were done once, the branch was not to
 interrupt TERM verify
 record "SIGTERM while --verify pauses: exactly 143, the same note, the sleep taken down at once" "143/1/0" "$rc/$(notes_n "$verify_note")/$intr_left"
 
-# a second signal while the first one's cleanup runs: one note, one status
+# a second signal while the first one's cleanup runs: the note once, the first
+# status, and the run ends at once (a cleanup that hangs can be aborted)
 interrupt INT+TERM double
 record "Ctrl-C then SIGTERM while the branch is being taken back: the first status, the note once, the branch deleted once" "130/1/1/gone/0" \
   "$rc/$(notes_n "$pr_note")/$(called "$branch_delete")/$([ "$(branch_there)" = yes ] && echo there || echo gone)/$intr_left"
-record "...the cleanup was not cut short: it says it removed the branch, and did not fail" "1/no" \
+record "...the cleanup said so once, and did not fail" "1/no" \
   "$(notes_n 'removing homefield/route-to-local')/$(has "$out" 'could not remove')"
+interrupt INT+INT doublehang
+record "a second Ctrl-C while the cleanup hangs ends the run at once (not hung), with the first status" "130/0" "$rc/$intr_left"
+record "...the note and the cleanup's line are printed once, the delete was started once" "1/1/1" \
+  "$(notes_n "$pr_note")/$(notes_n 'removing homefield/route-to-local')/$(called "$branch_delete")"
+
+# the call that creates the branch is in the cleanup too: gh may finish it (a
+# SIGTERM to adopt alone), or be killed before it did (Ctrl-C to the group)
+interrupt TERM branch
+record "SIGTERM while the branch is being created (gh finishes it): exactly 143, the branch taken back" "143/1/gone/1/no/0" \
+  "$rc/$(called "$branch_delete")/$([ "$(branch_there)" = yes ] && echo there || echo gone)/$(notes_n "$pr_note")/$(has "$out" 'could not remove')/$intr_left"
+interrupt INT branch
+record "Ctrl-C while the branch is being created (gh killed first): exactly 130, a delete tried, the note once, no leaked branch" "130/1/1/gone/0" \
+  "$rc/$(called "$branch_delete")/$(notes_n "$pr_note")/$([ "$(branch_there)" = yes ] && echo there || echo gone)/$intr_left"
+record "...the delete finds nothing, and says the branch may not have been created" "yes" "$(has "$out" 'could not remove homefield/route-to-local on acme/app (it may not have been created): delete it by hand if it exists')"
+adopt GH_REFS_FAIL=1 -- --setup
+record "a branch that could not be created is not deleted: the failure only" "nonzero/yes/0/no" \
+  "$(nonzero "$rc")/$(has "$out" 'could not create homefield/route-to-local')/$(called 'X DELETE')/$(has "$out" 'removing homefield')"
+
+# a plain adopt installs no handler, so its --verify pause is a foreground
+# sleep: a background one would ignore Ctrl-C and outlive adopt, holding its
+# output open for whatever reads it
+rm -f "$work/jobs-n"
+# shellcheck disable=SC2016  # the eval script is expanded by the inner bash
+run_fn GH_GROUPS="$work/groups-selected" GH_MEMBERS="$work/members-other" GH_WF="$work/wf-ready" \
+  GH_RUNLIST="$work/runlist-done" GH_RUN="$work/run-going" GH_JOBS="$work/jobs-hostonly" ADOPT_VERIFY_INTERVAL=1 ADOPT_VERIFY_TRIES=3 \
+  -- eval 'wait() { echo WAITED >>"$CALLS"; builtin wait "$@"; }; cmd_adopt --repo acme/app --verify'
+record "a plain adopt's --verify pauses with a foreground sleep: it paused, and waited for no background job" "0/2/0" \
+  "$rc/$(called '^sleep 1$')/$(called '^WAITED$')"
+# shellcheck disable=SC2016  # the eval script is expanded by the inner bash
+run_fn -- eval 'wait() { echo WAITED >>"$CALLS"; builtin wait "$@"; }; ADOPT_HANDLER=1; adopt_nap 0'
+record "...while with the handler installed the pause is a background job that is waited for" "1" "$(called '^WAITED$')"
+
+# the parent check: a parent that is a zombie (killed, not yet reaped) still
+# answers kill -0, so its state is read
+run_fn -- eval 'ps() { echo " Z+ "; }; ADOPT_PARENT_PID=$$; adopt_check_parent'
+record "a parent in state Z counts as gone: adopt stops with 143 and says setup ended" "143/yes" "$rc/$(has "$out" 'setup has ended, so adopt stopped')"
+run_fn -- eval 'ps() { echo "Ss"; }; ADOPT_PARENT_PID=$$; adopt_check_parent; echo carried-on'
+record "...a sleeping parent is not gone" "0/yes" "$rc/$(has "$out" 'carried-on')"
+run_fn -- eval 'ADOPT_PARENT_PID=$$; adopt_check_parent; echo carried-on'
+record "...nor is one when ps is missing or says nothing" "0/yes" "$rc/$(has "$out" 'carried-on')"
+run_fn -- eval 'ADOPT_PARENT_PID=999999; adopt_check_parent'
+record "...and a parent that does not exist is gone" "143" "$rc"
 
 # setup's routing step around adopt, signalled in its whole process group: adopt
 # says its piece in whatever phase, setup says its own and ends with the status

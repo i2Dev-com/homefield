@@ -215,7 +215,10 @@ adopt would.
   - *Before the pull request is opened*, nothing was switched or added to the
     runner group, and the branch the command made is taken back.
   - *While the pull request is being opened*, it may exist: the command says
-    where to look and leaves the branch, since deleting it would close it.
+    where to look and leaves the branch, since deleting it would close it. If
+    there is no pull request, delete the branch (`gh api -X DELETE
+    repos/<owner>/<repo>/git/refs/heads/homefield/route-to-local`) and run
+    again.
   - *While waiting*, it prints the step 5 command to run by hand and leaves the
     pull request and its branch as they are.
   - *After the merge*, the group access and `CI_RUNNER` may or may not be done:
@@ -229,8 +232,9 @@ adopt would.
   (a plain adopt without `--group` looks at `homefield-ci`), so run it as
   printed. If `homefield setup` started the run and is ended alone (`kill
   <setup-pid>`, not its whole process group), the run stops by itself, saying
-  setup ended, within one poll interval (10 seconds by default; not while it
-  is at the `--verify` question).
+  setup ended, at its next check, within one poll interval (10 seconds by
+  default); a step already in progress (the group access, the switch) finishes
+  first, and the `--verify` question is not watched.
 - **After the merge**, a routing check that fails, a group that cannot be
   changed or a switch that fails stops the run as a plain adopt would, with
   exit 5 (the pull request is merged by then): run `homefield adopt --repo
