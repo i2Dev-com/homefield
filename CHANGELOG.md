@@ -9,14 +9,16 @@ fail, such as a new guard in the routing expression, bumps the minor version
 (0.1 to 0.2). Compatible changes bump the patch. Merged changes wait on
 `main`, under *Unreleased*, until a release is cut.
 
-## Unreleased
+## v0.4.0 (2026-11-04)
 
 Bumps the minor from v0.3.2: `homefield adopt --setup` now routes a
 repository without a guard with the simple expression unless `--guards` is
 given (a default change, though no workflow that passes v0.3.2's guard fails
 now — the simple-mode check accepts both shapes). Output colors are off when
 it matters — piped or captured — so nothing reading homefield's output
-changes.
+changes. To upgrade, run the README's one-liner again, then `homefield
+upgrade` on each runner. Bump `routing-guard@v0.3.2` pins to `@v0.4.0`:
+`homefield adopt` counts only its own release.
 
 ### Added
 
