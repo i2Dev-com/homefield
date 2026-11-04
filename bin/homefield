@@ -3879,7 +3879,7 @@ adopt_verify() {
     esac
   fi
 
-  gh run list --repo "$repo" --event pull_request --limit 1 --json databaseId,status,url,displayTitle >"$ADOPT_TMP/v.json" 2>"$ADOPT_TMP/v.err" </dev/null || {
+  gh run list --repo "$repo" --event pull_request --limit 1 --json databaseId,status,url,displayTitle,workflowName >"$ADOPT_TMP/v.json" 2>"$ADOPT_TMP/v.err" </dev/null || {
     adopt_warn "could not verify: gh could not list the runs of ${repo}: $(head -1 "$ADOPT_TMP/v.err")"
     return 0
   }

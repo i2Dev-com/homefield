@@ -1036,8 +1036,8 @@ ask='Re-run the latest pull-request run of acme/app (uses CI minutes) to confirm
 verify -- --verify
 record "--verify, every job local: exit 0, one local line per job" "0/yes/yes" \
   "$rc/$(has "$out" 'verify: lint: ran on the local runner homefield-1 (success)')/$(has "$out" 'verify: test: ran on the local runner homefield-1 (success)')"
-record "...the latest pull-request run is listed (one run, as JSON), then the run is read: once for its attempt, once with the jobs" "1/2" \
-  "$(called '^gh run list --repo acme/app --event pull_request --limit 1 --json databaseId,status,url,displayTitle')/$(called '^gh api repos/acme/app/actions/runs/9001$')"
+record "...the latest pull-request run is listed (one run, as JSON, with its workflow name), then the run is read: once for its attempt, once with the jobs" "1/2" \
+  "$(called '^gh run list --repo acme/app --event pull_request --limit 1 --json databaseId,status,url,displayTitle,workflowName')/$(called '^gh api repos/acme/app/actions/runs/9001$')"
 record "...re-run exactly once, with that run's id" "1/1" "$(rerun_n)/$(called '^gh run rerun 9001 --repo acme/app$')"
 record "...the jobs are read, paginated" "1" "$(called '^gh api --paginate repos/acme/app/actions/runs/9001/jobs')"
 record "...the question is not asked, and the summary counts both jobs" "no/yes" \
