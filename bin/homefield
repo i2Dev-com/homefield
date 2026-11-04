@@ -467,10 +467,11 @@ cmd_preflight() {
   # Summary
   echo ""
   if [ "$failed" -eq 0 ]; then
-    echo "$(color_wrap 1 "All checks passed (${total}/${total}).")"
+    printf '%s\n' "$(color_wrap 1 "All checks passed (${total}/${total}).")"
     return 0
   fi
-  echo "$(color_wrap 3 "FAILED ${failed}/${total} check(s).") Fix the above and retry."
+  printf '%s ' "$(color_wrap 3 "FAILED ${failed}/${total} check(s).")"
+  echo "Fix the above and retry."
   return 1
 }
 
@@ -2572,7 +2573,7 @@ dg_render_human() {
   else
     case "$DG_ISO" in
       verified) echo "  - Isolation: verified (no host mounts, /Users hidden)" ;;
-      failed) echo "  - Isolation: BROKEN (${DG_ISO_WHY})" ;;
+      failed) echo "  - Isolation: $(color_wrap 3 "BROKEN") (${DG_ISO_WHY})" ;;
       *) echo "  - Isolation: unknown (${DG_ISO_WHY})" ;;
     esac
     case "$DG_REG" in
@@ -2591,13 +2592,13 @@ dg_render_human() {
       echo "  - On GitHub: $(dg_gh_text)"
       case "$DG_SVC" in
         running) echo "  - Service: running (${DG_UNIT})" ;;
-        *) echo "  - Service: NOT running (${DG_UNIT:-no service installed})" ;;
+        *) echo "  - Service: $(color_wrap 3 "NOT running") (${DG_UNIT:-no service installed})" ;;
       esac
       echo "  - Version: ${DG_VER}"
       echo "  - Extra packages: ${DG_PKGS:-none}"
       case "$DG_NPM" in
-        ok) echo "  - npm: ok" ;;
-        broken) echo "  - npm: BROKEN (a runner self-update can flatten the externals symlinks; docs/runbook.md, \"Runner updates\")" ;;
+        ok) echo "  - npm: $(color_wrap 1 ok)" ;;
+        broken) echo "  - npm: $(color_wrap 3 "BROKEN") (a runner self-update can flatten the externals symlinks; docs/runbook.md, \"Runner updates\")" ;;
         *) echo "  - npm: unknown (could not ask the VM)" ;;
       esac
     else
@@ -2649,23 +2650,23 @@ dg_render_human() {
   n=${#PF_NAME[@]}
   for ((i = 0; i < n; i++)); do
     case "${PF_LEVEL[i]}" in
-      ok) printf '  - %-6s%s\n' OK "${PF_MSG[i]}" ;;
-      warn) printf '  - %-6s%s\n' WARN "${PF_MSG[i]}" ;;
-      *) printf '  - %-6s%s\n' FAIL "${PF_MSG[i]}" ;;
+      ok) printf '  - %s%-6s%s%s\n' "$(hf_color 1)" OK "$(hf_color 0)" "${PF_MSG[i]}" ;;
+      warn) printf '  - %s%-6s%s%s\n' "$(hf_color 2)" WARN "$(hf_color 0)" "${PF_MSG[i]}" ;;
+      *) printf '  - %s%-6s%s%s\n' "$(hf_color 3)" FAIL "$(hf_color 0)" "${PF_MSG[i]}" ;;
     esac
   done
   echo ""
   n=${#DG_P_MSG[@]}
   if [ "$n" -eq 0 ]; then
     if [ "${#DG_WARN[@]}" -eq 0 ]; then
-      echo "Summary: healthy."
+      printf '%s\n' "$(color_wrap 1 "Summary: healthy.")"
     else
-      echo "Summary: healthy as far as it could be checked."
+      printf '%s\n' "$(color_wrap 1 "Summary: healthy as far as it could be checked.")"
     fi
   else
-    if [ "$n" -eq 1 ]; then echo "Summary: 1 problem found."; else echo "Summary: ${n} problems found."; fi
+    if [ "$n" -eq 1 ]; then printf '%s\n' "$(color_wrap 3 "Summary: 1 problem found.")"; else printf '%s\n' "$(color_wrap 3 "Summary: ${n} problems found.")"; fi
     for ((i = 0; i < n; i++)); do
-      echo "  $((i + 1)). ${DG_P_MSG[i]}"
+      printf '  %d. %s\n' "$((i + 1))" "$(color_wrap 3 "${DG_P_MSG[i]}")"
       [ -z "${DG_P_FIX[i]}" ] || echo "     Fix: ${DG_P_FIX[i]}"
     done
   fi
@@ -3313,7 +3314,7 @@ ADOPT_GUARDS=0
 ADOPT_ROUTED=""
 ADOPT_WORKFLOWS=0
 
-adopt_warn() { echo "homefield: warning: $*" >&2; }
+adopt_warn() { echo "homefield: warning: $(color_wrap 2 "$*")" >&2; }
 
 # adopt_repository <owner/repo>: sets ADOPT_REPO_ID, ADOPT_BRANCH and
 # ADOPT_OWNER_TYPE. Only private repositories may reach the runner.
@@ -4566,10 +4567,14 @@ cmd_version() {
 # ── Main ────────────────────────────────────────────────────────────────────
 # --instance may come before or after the command.
 main() {
-  local cmd="" rest=()
+  local cmd="" rest=() color_opt=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --instance) INSTANCE="${2:?--instance needs a value}"; shift 2 ;;
+      # --color is global, accepted before or after the command, and never
+      # reaches a command's own parser: the emitters read HF_ANSI_OFF, which
+      # color_init sets before any output.
+      --color=*) color_opt="$1"; shift ;;
       *)
         if [ -z "$cmd" ]; then cmd="$1"; else rest+=("$1"); fi
         shift
@@ -4577,7 +4582,7 @@ main() {
     esac
   done
   [ -n "$cmd" ] || { usage >&2; exit 1; }
-  color_init "$cmd" "$@"
+  color_init ${color_opt:+"$color_opt"} "$cmd" "$@"
   # Only the commands that act on the VM: preflight, route, adopt, report and
   # version never use it, so a stale HOMEFIELD_INSTANCE does not stop them.
   case "$cmd" in setup | install | upgrade | status | diagnose | uninstall | reset | memory) check_instance ;; esac
