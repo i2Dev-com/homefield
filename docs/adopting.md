@@ -47,6 +47,11 @@ Keep hosted:
   can be routed ([routing options](#routing-options)), but then they depend on
   the Mac being awake, and a deploy gated on CI can queue behind it.
 
+The [parity table](runbook.md#what-the-vm-has-compared-with-a-hosted-runner)
+in the runbook lists what `ubuntu-latest` has that the VM does not —
+privileges, apt packages, CLI tools, browsers, language versions — and says
+whether provisioning closes each gap or the job must stay hosted.
+
 ## 2. Route them
 
 Replace each chosen job's `runs-on` with the routing expression, verbatim.
