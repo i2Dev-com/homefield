@@ -23,8 +23,6 @@ fail, such as a new guard in the routing expression, bumps the minor version
   GitHub reports them with stripped, so the `admin:org` preflight matches
   whichever order they come back in.
 
-## v0.4.0 (2026-11-04)
-
 ### Added
 
 - `homefield start`: boots a stopped VM, then reports whether its runner is
