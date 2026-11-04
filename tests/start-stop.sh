@@ -154,6 +154,12 @@ record "booted, GitHub could not be asked: exits 1, online unproven" "1/yes/yes"
   "$rc/$(has "$out" 'github: not checked')/$(has "$err+$out" 'bin/homefield status --instance homefield')"
 record "...never read as taking jobs" "no" "$(has "$out" 'taking jobs: yes')"
 
+# The timer kills a gh that sleeps past GH_TIMEOUT (sleep 3 > timeout 1), so
+# the answer is the timed-out wording, not a plain failure.
+hf "${online[@]}" GH_SLEEP=1 HOMEFIELD_GH_TIMEOUT=1 -- start
+record "booted, GitHub times out: exits 1, online unproven" "1/yes/yes/no" \
+  "$rc/$(has "$out" 'github: not checked (timed out after 1s')/$(has "$err+$out" 'bin/homefield status --instance homefield')/$(has "$out" 'taking jobs: yes')"
+
 hf "${online[@]}" LIMA_STATUS=Stopped SHELL_FAIL=1 -- start
 record "booted, but the guest cannot be asked: exits 1 as unknown, not 'not registered'" "1/yes/no" \
   "$rc/$(has "$out" 'runner: unknown (could not ask the VM)')/$(has "$out" 'not registered')"

@@ -2229,10 +2229,10 @@ cmd_status() {
 
 # ── start / stop ────────────────────────────────────────────────────────────
 # The VM lifecycle the failure mode needs. Until now only install, upgrade,
-# uninstall and reset started or stopped a VM internally (ensure_vm at 537-553,
-# uninstall's deregister path and reset), so diagnose named limactl for the
-# most common "CI is not running" state. Starting a stopped VM does what
-# ensure_vm's start does (line 551): `--tty=false`, and stdin closed. Booting
+# uninstall and reset started or stopped a VM internally (ensure_vm,
+# uninstall's deregister path), so diagnose named limactl for the most common
+# "CI is not running" state. Starting a stopped VM does what ensure_vm's start
+# does: `--tty=false`, and stdin closed. Booting
 # is not the same fact as serving jobs, so start asks afterwards: registered,
 # service running and GitHub listing it online. status's helpers answer both
 # (runner_service_state, runner_on_github) and its GH_TIMEOUT bounds the GitHub
