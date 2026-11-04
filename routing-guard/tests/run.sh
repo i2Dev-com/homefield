@@ -341,12 +341,15 @@ check "self-check: Dependabot clauses are not required when local" "0" "$(selfch
 # to simple, or mixing, keeps passing), so the canonical fixture must also
 # pass under simple mode. events and dependabot have no effect there — every
 # event routes — so they are refused rather than silently ignored.
+# shellcheck disable=SC2016  # GitHub expression text, not shell
 SIMPLE='${{ vars.CI_RUNNER == '"'"'local'"'"' && '"'"'homefield-ci'"'"' || '"'"'ubuntu-latest'"'"' }}'
 check "--print-expression, mode simple, is the one-clause string byte for byte" "$SIMPLE" \
   "$(python3 "$SCRIPT" --print-expression --mode simple)"
+# shellcheck disable=SC2016  # GitHub expression text, not shell
 check "--print-expression, mode simple with a fallback, changes the tail" \
   '${{ vars.CI_RUNNER == '"'"'local'"'"' && '"'"'homefield-ci'"'"' || '"'"'ubuntu-24.04-arm'"'"' }}' \
   "$(python3 "$SCRIPT" --print-expression --mode simple --fallback ubuntu-24.04-arm)"
+# shellcheck disable=SC2016  # GitHub expression text, not shell
 check "--print-expression, mode simple with a label, carries it" \
   '${{ vars.CI_RUNNER == '"'"'local'"'"' && '"'"'acme-ci'"'"' || '"'"'ubuntu-latest'"'"' }}' \
   "$(python3 "$SCRIPT" --print-expression --mode simple --label acme-ci)"
@@ -363,10 +366,10 @@ invalid "mode guards with a reserved label" "label 'linux'" --mode guards --labe
 # fails under the default (guards) mode. The mutation's delimiter is @ (the
 # expression holds | and the canonical /) and every & in a replacement is
 # escaped (a bare & means the whole match).
-SIMPLE_EXPR="${SIMPLE}"
+# shellcheck disable=SC2016  # GitHub expression text, not shell
 SIMPLE_SED='${{ vars.CI_RUNNER == '"'"'local'"'"' \&\& '"'"'homefield-ci'"'"' || '"'"'ubuntu-latest'"'"' }}'
 simple_mutation="s@\\\${{ vars.CI_RUNNER.*}}@${SIMPLE_SED}@"
-LABEL= MODE=simple case_ "simple expression, simple mode"      pass "$EXPECTED" "$simple_mutation"
+MODE=simple case_ "simple expression, simple mode" pass "$EXPECTED" "$simple_mutation"
 case_ "simple expression, guards mode"          fail "$EXPECTED" "$simple_mutation"
 LABEL=acme-ci MODE=simple case_ "simple expression, its label, simple mode" pass "$EXPECTED" \
   "s@\\\${{ vars.CI_RUNNER.*}}@\${{ vars.CI_RUNNER == 'local' \&\& 'acme-ci' || 'ubuntu-latest' }}@"
