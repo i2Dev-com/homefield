@@ -87,6 +87,11 @@ DEFAULT_LABEL = "homefield-ci"
 DEFAULT_EVENTS = "pull_request"
 DEFAULT_DEPENDABOT = "hosted"
 DEFAULT_FALLBACK = "ubuntu-latest"
+# The expression's shape (routing_guard.py --mode): guards is the canonical
+# multi-clause one, simple the one-clause one whose only guardrail is the
+# CI_RUNNER switch. A guard step without a mode input is guards: the input
+# arrived when the action learned --mode.
+DEFAULT_MODE = "guards"
 # The architecture the guard defaults to, which is the VM adopt sets up:
 # bin/homefield refuses a step whose arch is anything else, and checks with the
 # step's own value, so what it reports is what CI runs.
@@ -108,10 +113,20 @@ SETUP_FILE = "homefield-routing.yml"
 GUARD_WORKFLOW_NAME = "HomeField routing"
 # A GitHub-hosted image name as routing_guard.py's HOSTED reads it (keep the
 # two in step): what a job must ask for today to be routable by setup.
+# A deliberate opt-in built on the CI_RUNNER switch, in either shape: what a
+# job already carrying routing asks for, so setup in simple mode does not
+# rewrite it. A drift the guard refuses also matches here — setup lists such
+# a job and the guard check before anything is sent refuses it, rather than
 HOSTED_RUNS = re.compile(
     r"""^(\[\s*)?(['"]?)(ubuntu|windows|macos)-[a-z0-9._-]+\2(?(1)\s*\])$""",
     re.IGNORECASE,
 )
+# A deliberate opt-in built on the CI_RUNNER switch, in either shape: what a
+# job already carrying routing asks for, so setup in simple mode does not
+# rewrite it. A drift the guard refuses also matches here — setup lists such
+# a job and the guard check before anything is sent refuses it, rather than
+# setup silently rewriting a hand-written expression.
+OPTED_IN = re.compile(r"^\$\{\{\s*vars\.CI_RUNNER == 'local' .*\}\}$")
 # The trigger options after which a pull request may not run the workflow.
 FILTERS = ("branches", "branches-ignore", "paths", "paths-ignore")
 ON_KEY = re.compile(r"^([\"']?)on\1:\s*(.*?)\s*$")
@@ -499,7 +514,7 @@ def opt_words(text):
 
 def guards(directory):
     """(file:line, status, label, blocking, warnings, events, dependabot,
-    fallback, arch, job entries)
+    fallback, arch, mode, job entries)
     for every step that uses some routing guard. The status is "source" for
     one that is not ACTION_PATH at RELEASE or a full commit SHA (another
     repository, another release, a branch, a major-only tag), "blocked" for one that
@@ -532,7 +547,7 @@ def guards(directory):
                 reason = f"the routing-guard step at {where} uses {value}, but adopt recognizes {ACTION}, the release this copy of homefield checks with, or a full commit SHA (docs/adopting.md, step 3)"
                 if path.lower() == ACTION_PATH.lower() and RELEASE_REF.fullmatch(ref):
                     reason += f". {ref} may have other rules: pin {RELEASE}, or install homefield {ref} (homefield version)"
-                found.append((where, "source", label, [reason], [], DEFAULT_EVENTS, DEFAULT_DEPENDABOT, DEFAULT_FALLBACK, DEFAULT_ARCH, jobs))
+                found.append((where, "source", label, [reason], [], DEFAULT_EVENTS, DEFAULT_DEPENDABOT, DEFAULT_FALLBACK, DEFAULT_ARCH, DEFAULT_MODE, jobs))
                 continue
             unreadable = None
             if flow:
@@ -540,7 +555,7 @@ def guards(directory):
             elif not label:
                 unreadable = f"the routing-guard step at {where} sets label: to nothing, which the guard refuses. Remove the line to use {DEFAULT_LABEL}, or name the label (docs/adopting.md, step 3)"
             if unreadable:
-                found.append((where, "source", label or "-", [unreadable], [], DEFAULT_EVENTS, DEFAULT_DEPENDABOT, DEFAULT_FALLBACK, DEFAULT_ARCH, jobs))
+                found.append((where, "source", label or "-", [unreadable], [], DEFAULT_EVENTS, DEFAULT_DEPENDABOT, DEFAULT_FALLBACK, DEFAULT_ARCH, DEFAULT_MODE, jobs))
                 continue
             blocks, warns = check_guard(name, at, files)
             if sha:
@@ -550,6 +565,7 @@ def guards(directory):
                 option(values, "dependabot", DEFAULT_DEPENDABOT),
                 option(values, "fallback", DEFAULT_FALLBACK),
                 option(values, "arch", DEFAULT_ARCH),
+                option(values, "mode", DEFAULT_MODE),
             )
             found.append((where, "blocked" if blocks else "ok", label, blocks, warns, *opts, jobs))
     return found
@@ -586,7 +602,11 @@ def cache_keys(directory):
     return hits
 
 
-def guard_snippet(label, jobs, events=DEFAULT_EVENTS, dependabot=DEFAULT_DEPENDABOT, fallback=DEFAULT_FALLBACK):
+def guard_snippet(label, jobs, events=DEFAULT_EVENTS, dependabot=DEFAULT_DEPENDABOT, fallback=DEFAULT_FALLBACK, mode=DEFAULT_MODE):
+    """The `with:` block of a routing-guard step. In guards mode the shape is
+    today's: the mode input is the action's default, so it is not written. In
+    simple mode the mode input is written and events/dependabot are not: the
+    one-clause expression routes every event, and the guard refuses them."""
     entries = jobs or ["ci.yml:<job-id>"]
     out = [
         "      - name: Routing guard",
@@ -597,11 +617,14 @@ def guard_snippet(label, jobs, events=DEFAULT_EVENTS, dependabot=DEFAULT_DEPENDA
     out += [f"            {e}" for e in entries]
     if label != DEFAULT_LABEL:
         out.append(f"          label: {label}")
-    names = [e for e in re.split(r"[\s,]+", events) if e]
-    if set(names) != {DEFAULT_EVENTS}:
-        out.append(f"          events: {', '.join(names)}")
-    if dependabot != DEFAULT_DEPENDABOT:
-        out.append(f"          dependabot: {dependabot}")
+    if mode != DEFAULT_MODE:
+        out.append(f"          mode: {mode}")
+    if mode == DEFAULT_MODE:
+        names = [e for e in re.split(r"[\s,]+", events) if e]
+        if set(names) != {DEFAULT_EVENTS}:
+            out.append(f"          events: {', '.join(names)}")
+        if dependabot != DEFAULT_DEPENDABOT:
+            out.append(f"          dependabot: {dependabot}")
     if fallback != DEFAULT_FALLBACK:
         out.append(f"          fallback: {fallback}")
     return "\n".join(out)
@@ -708,7 +731,7 @@ def guard_jobs_edit(lines, at, entries):
     return None  # a jobs: list continued on following lines in another form
 
 
-def routing_workflow(label, jobs, events, dependabot, fallback):
+def routing_workflow(label, jobs, events, dependabot, fallback, mode=DEFAULT_MODE):
     """The workflow `adopt --setup` creates when the repository has no guard:
     one job, on every pull request, that checks out and runs the guard. The
     job itself stays on a GitHub-hosted runner: it is the check, not a
@@ -726,42 +749,53 @@ def routing_workflow(label, jobs, events, dependabot, fallback):
             "    runs-on: ubuntu-latest",
             "    steps:",
             "      - uses: actions/checkout@v5",
-            guard_snippet(label, jobs, events, dependabot, fallback),
+            guard_snippet(label, jobs, events, dependabot, fallback, mode),
             "",
         ]
     )
 
 
-def check_guard_options(row, label, events, dependabot, fallback):
+def check_guard_options(row, label, events, dependabot, fallback, mode):
     """Refuse a setup run whose flags disagree with the guard already in the
     repository: setup only lists jobs, it does not re-route on another label
     or with another fallback. A guard on another architecture is refused too,
-    as plain adopt refuses it: there is no flag for it, the VM is arm64."""
-    where, _status, glabel, _blocks, _warns, gevents, gdependabot, gfallback, garc, _jobs = row
+    as plain adopt refuses it: there is no flag for it, the VM is arm64. In
+    simple mode events and dependabot do not apply, so they are not compared."""
+    where, _status, glabel, _blocks, _warns, gevents, gdependabot, gfallback, garc, gmode, _jobs = row
     if garc != DEFAULT_ARCH:
         raise SetupError(
             f"the routing-guard step at {where} uses arch {garc}, but this VM is {DEFAULT_ARCH}: "
             "a guard for another architecture routes its jobs to a runner this Mac does not have (docs/adopting.md, step 3)"
         )
-    for opt, got, want in (("label", glabel, label), ("events", gevents, events), ("dependabot", gdependabot, dependabot), ("fallback", gfallback, fallback)):
+    pairs = [("label", glabel, label), ("fallback", gfallback, fallback), ("mode", gmode, mode)]
+    if mode != "simple":
+        pairs += [("events", gevents, events), ("dependabot", gdependabot, dependabot)]
+    for opt, got, want in pairs:
         if opt_words(got) != opt_words(want):
+            if opt == "mode":
+                fix = "run without --guards" if want == "guards" else "pass --guards"
+            else:
+                fix = f"pass --{opt} {got}"
             raise SetupError(
                 f"the routing-guard step at {where} uses {opt} {got}, but this run asks for {want}: setup does not change a guard's options; "
-                f"pass --{opt} {got}, or edit the guard (docs/adopting.md, step 3)"
+                f"{fix}, or edit the guard (docs/adopting.md, step 3)"
             )
 
 
-def routable_jobs(info, expression):
+def routable_jobs(info, expression, accept_switch=False):
     """The jobs of one workflow that setup would route: not a reusable
     workflow call, no always-false `if:`, and a runs-on that already carries
-    the canonical expression or asks for a single GitHub-hosted image today —
-    except a job that runs the guard, which keeps the runner it was given."""
+    the expression or asks for a single GitHub-hosted image today — except a
+    job that runs the guard, which keeps the runner it was given.
+    accept_switch widens "carries the expression" to any deliberate opt-in
+    built on the CI_RUNNER switch, so a setup run in simple mode sees the
+    jobs a repository routed with the canonical expression before it."""
     out = []
     for job in info["jobs"]:
         if job["uses"] or (job["if"] and condition(job["if"][1]) == "false") or not job["runs_on"]:
             continue
         value = scalar(job["runs_on"][1])
-        if value == expression:
+        if value == expression or (accept_switch and OPTED_IN.match(value)):
             out.append(job)
             continue
         if any(job["start"] < g < job["end"] for g in info["guards"]):
@@ -771,10 +805,10 @@ def routable_jobs(info, expression):
     return out
 
 
-def setup_plan(directory, out, expression, label, events, dependabot, fallback, only):
+def setup_plan(directory, out, expression, label, events, dependabot, fallback, only, mode=DEFAULT_MODE):
     """Stage the `homefield adopt --setup` rewrite of the workflows in DIR into
     OUT: every job of a workflow that runs on pull requests that today asks
-    for a GitHub-hosted image gets the canonical expression (with a comment
+    for a GitHub-hosted image gets the expression for `mode` (with a comment
     pointing at docs/adopting.md), the `runner.os`-only cache keys of the
     routed files get `${{ runner.arch }}`, and the routing guard lists exactly
     the routed jobs — its `jobs:` block updated where a usable guard exists,
@@ -807,10 +841,11 @@ def setup_plan(directory, out, expression, label, events, dependabot, fallback, 
             + " setup does not change a guard step it cannot recognize; pin or remove that step, then run again"
         )
     if usable:
-        check_guard_options(usable[0], label, events, dependabot, fallback)
+        check_guard_options(usable[0], label, events, dependabot, fallback, mode)
 
     routed = []
     edits = {}
+    accept_switch = mode == "simple"
 
     def edit(name, span):
         edits.setdefault(name, []).append(span)
@@ -821,20 +856,21 @@ def setup_plan(directory, out, expression, label, events, dependabot, fallback, 
             # The guard lists jobs as file:job in a text list split on spaces
             # and commas, so a job of such a file can never be listed — it
             # must stay hosted (that is also why adopt --jobs refuses it).
-            if routable_jobs(info, expression):
+            if routable_jobs(info, expression, accept_switch):
                 print(
                     f"setup: {name}: its jobs are not routed: the file name has a space or comma, which a guard jobs: list cannot hold (docs/adopting.md, step 1)",
                     file=sys.stderr,
                 )
             continue
         pr_file = "pull_request" in info["events"]
-        for job in routable_jobs(info, expression):
+        for job in routable_jobs(info, expression, accept_switch):
             key = f"{name}:{job['id']}"
             value = scalar(job["runs_on"][1])
-            if value == expression:
+            if value == expression or (accept_switch and OPTED_IN.match(value)):
                 # Already opted in: the guard's list is exact, so this job
                 # stays listed whatever --jobs asks for and whichever events
-                # its workflow runs on.
+                # its workflow runs on, and its line keeps the shape (and any
+                # comment) its author wrote.
                 routed.append(key)
                 continue
             if not pr_file or (only and key not in only):
@@ -897,7 +933,7 @@ def setup_plan(directory, out, expression, label, events, dependabot, fallback, 
             shutil.copyfile(os.path.join(directory, name), os.path.join(out, name))
     written = sorted(edits)
     if guard_new:
-        write_lines(os.path.join(out, guard_new), routing_workflow(label, routed, events, dependabot, fallback).splitlines())
+        write_lines(os.path.join(out, guard_new), routing_workflow(label, routed, events, dependabot, fallback, mode).splitlines())
         written.append(guard_new)
     return routed, written
 
@@ -988,6 +1024,7 @@ def main():
     p.add_argument("--events", default=DEFAULT_EVENTS)
     p.add_argument("--dependabot", default=DEFAULT_DEPENDABOT)
     p.add_argument("--fallback", default=DEFAULT_FALLBACK)
+    p.add_argument("--mode", default=DEFAULT_MODE)
     p.add_argument("--jobs", default="")
     s = sub.add_parser("setup")
     s.add_argument("dir")
@@ -997,6 +1034,7 @@ def main():
     s.add_argument("--events", default=DEFAULT_EVENTS)
     s.add_argument("--dependabot", default=DEFAULT_DEPENDABOT)
     s.add_argument("--fallback", default=DEFAULT_FALLBACK)
+    s.add_argument("--mode", default=DEFAULT_MODE)
     s.add_argument("--jobs", default="")
     c = sub.add_parser("contents-payload")
     c.add_argument("file")
@@ -1015,15 +1053,27 @@ def main():
         return 1
 
     if args.cmd == "guards":
-        for where, status, label, blocks, warns, events, dependabot, fallback, arch, jobs in guards(args.dir):
+        for where, status, label, blocks, warns, events, dependabot, fallback, arch, mode, jobs in guards(args.dir):
             joined = [";".join(t.replace(";", ",") for t in texts) or "-" for texts in (blocks, warns)]
-            print("\t".join([where, status, label, *joined, events, dependabot, fallback, arch, " ".join(jobs)]))
+            print("\t".join([where, status, label, *joined, events, dependabot, fallback, arch, mode, " ".join(jobs)]))
     elif args.cmd == "cache-keys":
         for hit in cache_keys(args.dir):
             print(hit)
     elif args.cmd == "guard-snippet":
-        print(guard_snippet(args.label, [j for j in re.split(r"[\s,]+", args.jobs) if j], args.events, args.dependabot, args.fallback))
+        if args.mode not in ("guards", "simple"):
+            print(f"adopt.py: mode: {args.mode!r} must be guards or simple", file=sys.stderr)
+            return 1
+        if args.mode == "simple" and (args.events != DEFAULT_EVENTS or args.dependabot != DEFAULT_DEPENDABOT):
+            print("adopt.py: events and dependabot have no effect in simple mode, which routes every event", file=sys.stderr)
+            return 1
+        print(guard_snippet(args.label, [j for j in re.split(r"[\s,]+", args.jobs) if j], args.events, args.dependabot, args.fallback, args.mode))
     elif args.cmd == "setup":
+        if args.mode not in ("guards", "simple"):
+            print(f"adopt.py: mode: {args.mode!r} must be guards or simple", file=sys.stderr)
+            return 1
+        if args.mode == "simple" and (args.events != DEFAULT_EVENTS or args.dependabot != DEFAULT_DEPENDABOT):
+            print("adopt.py: events and dependabot have no effect in simple mode, which routes every event", file=sys.stderr)
+            return 1
         try:
             routed, written = setup_plan(
                 args.dir,
@@ -1034,6 +1084,7 @@ def main():
                 args.dependabot,
                 args.fallback,
                 {j for j in re.split(r"[\s,]+", args.jobs) if j},
+                args.mode,
             )
         except SetupError as err:
             print(err, file=sys.stderr)
