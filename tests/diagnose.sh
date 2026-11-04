@@ -225,7 +225,7 @@ record "...Summary names one problem" "yes" "$(has "$out" 'Summary: 1 problem fo
 guest_fs
 diag LIMA_STATUS=Stopped "${healthy[@]}" --
 record "stopped VM: exits 1, says Stopped and that diagnose does not start it" "1/yes/yes" "$rc/$(has "$out" '  - Created: yes (Stopped)')/$(has "$out" '  - Guest checks: skipped (the VM is Stopped, and diagnose never starts it)')"
-record "...with the command that starts it" "yes" "$(has "$out" '     Fix: limactl start homefield')"
+record "...with the command that starts it" "yes" "$(has "$out" '     Fix: bin/homefield start --instance homefield')"
 record "...the VM was not started or stopped, and the guest was not even asked" "0/0/0" "$(called '^limactl start')/$(called '^limactl stop')/$(called '^limactl shell')"
 record "...GitHub was not asked either" "0" "$(called '^gh api')"
 
@@ -409,7 +409,7 @@ else
   record "an empty group: healthy, an empty list, the hint" "True/[]/1" "$(parse 'import json,sys; d=json.load(sys.stdin); print(d["healthy"], d["github"]["group"]["repositories"], len(d["hints"]), sep="/")')"
 
   diag LIMA_STATUS=Stopped "${healthy[@]}" -- --json
-  record "stopped VM: exits 1, healthy false, the problem and its fix" "1/False/vm/limactl start homefield" \
+  record "stopped VM: exits 1, healthy false, the problem and its fix" "1/False/vm/bin/homefield start --instance homefield" \
     "$rc/$(parse 'import json,sys; d=json.load(sys.stdin); p=d["problems"][0]; print(d["healthy"], p["check"], p["fix"], sep="/")')"
   record "...guest not checked, the reason, nulls for what was not asked" "False/the VM is Stopped, and diagnose never starts it/None/None/skipped" \
     "$(parse 'import json,sys; v=json.load(sys.stdin)["vm"]; print(v["guest_checked"], v["skipped_reason"], v["registered"], v["extra_packages"], v["npm"], sep="/")')"
