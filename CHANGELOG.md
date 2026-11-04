@@ -9,6 +9,33 @@ fail, such as a new guard in the routing expression, bumps the minor version
 (0.1 to 0.2). Compatible changes bump the patch. Merged changes wait on
 `main`, under *Unreleased*, until a release is cut.
 
+## Unreleased
+
+Compatible with v0.3.2 (workflows unchanged; output colors are off when it
+matters — piped or captured — so nothing reading homefield's output changes).
+
+### Added
+
+- Severity colors: `OK`/`WARN`/`FAIL` markers and summaries (preflight,
+  diagnose), the summary lines (adopt), warnings and errors print green,
+  yellow and red when the output goes to a terminal. Piped output stays
+  plain byte-for-byte, so scripts, `grep` and the test suites see exactly
+  the old text; `HOMEFIELD_COLOR=always` colors a pipe anyway, `NO_COLOR`
+  turns color off everywhere, and `--color=never` (a global option, accepted
+  before or after the command) beats the variable. A colored marker still
+  carries its plain word, so `--color=never` output is identical to
+  v0.3.2's.
+
+### Fixed
+
+- `adopt`'s verify step no longer re-runs the routing guard's own run: after
+  `adopt --setup` the newest `pull_request` run is often the guard
+  workflow's, which is hosted by design, so the check always ended in the
+  hosted warning whatever the routing does (seen adopting a personal
+  repository). It now re-runs the newest `pull_request` run of any other
+  workflow; if the only `pull_request` run is the guard's, it says so and
+  points at opening a pull request on the repository instead.
+
 ## v0.3.2 (2026-11-03)
 
 Compatible with v0.3.1 (workflows unchanged). To upgrade, run the README's

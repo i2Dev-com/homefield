@@ -377,14 +377,17 @@ the two commands to do it by hand (`gh run list --repo <owner>/<repo> --event
 pull_request --limit 1` and `gh run rerun <run-id> --repo <owner>/<repo>`).
 It is not offered with `--dry-run` or `--no-switch`.
 
-It takes the newest `pull_request` run (a pull request from a fork may not be
-listed), re-runs it once it has completed, and reads the jobs of the new
-attempt from the API for about three minutes, until each has a runner or has
-finished. While the run is still going it keeps looking until a job that
-asked for the routing label is listed, because a job behind another one (a
-reusable workflow called after a job it needs) may not be listed until that
-one is done. A job is local when the labels it asked for include the routing
-label; its line names the runner that took it. Per job it reports:
+It takes the newest `pull_request` run that is not the routing guard's own
+workflow (the guard's job is hosted by design, so re-running it proves
+nothing; if the only `pull_request` run is the guard's, `adopt` says so and
+points at opening a pull request on the repository instead), re-runs it once
+it has completed, and reads the jobs of the new attempt from the API for
+about three minutes, until each has a runner or has finished. While the run
+is still going it keeps looking until a job that asked for the routing label
+is listed, because a job behind another one (a reusable workflow called
+after a job it needs) may not be listed until that one is done. A job is
+local when the labels it asked for include the routing label; its line names
+the runner that took it. Per job it reports:
 
 - **ran on the local runner** `<name>`: what you wanted. A job that **failed**
   on it is reported as such, with a pointer to item 2 below.
