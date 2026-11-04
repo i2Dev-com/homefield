@@ -117,13 +117,23 @@ BASH_BIN="$(command -v bash)"
 # preflight <stub-dir> [env assignments...]: run cmd_preflight against the stubs.
 # Sets pf_out (stdout) and pf_rc. GH_HOSTS/GH_JQ_OUT default to a logged-in
 # account with admin:org, so a case overrides only the one it is testing.
-# The -c script is expanded by that bash, not by this suite.
+# The -c script is expanded by that bash, not by this suite. Color options and
+# HOMEFIELD_COLOR/NO_COLOR among the assignments are handed to color_init, the
+# same entry point main uses, so the tests exercise the real switch handling.
 # shellcheck disable=SC2016
 preflight() {
   local dir="$1"; shift
+  local color_args="" env_pairs=() a
+  for a in "$@"; do
+    case "$a" in
+      --color=*) color_args="$color_args $a" ;;
+      HOMEFIELD_COLOR=*|NO_COLOR=*) env_pairs+=("$a") ;;
+      *) env_pairs+=("$a") ;;
+    esac
+  done
   pf_out="$(env PATH="$dir" HOMEFIELD_SOURCE_ONLY=1 \
-    GH_HOSTS="${GH_HOSTS-}" GH_JQ_OUT="${GH_JQ_OUT-}" "$@" \
-    "$BASH_BIN" -c '. "$1"; cmd_preflight' _ "$ROOT/bin/homefield" 2>&1)"
+    GH_HOSTS="${GH_HOSTS-}" GH_JQ_OUT="${GH_JQ_OUT-}" ${env_pairs[@]+"${env_pairs[@]}"} \
+    "$BASH_BIN" -c '. "$1"; color_init'"$color_args"'; cmd_preflight' _ "$ROOT/bin/homefield" 2>&1)"
   pf_rc=$?
 }
 
@@ -343,5 +353,98 @@ case_mixed
 case_not_macos
 case_not_arm64
 case_macos_version
+
+# ── Color ───────────────────────────────────────────────────────────────────
+# Colors are off unless stdout is a terminal or --color=always / HOMEFIELD_COLOR
+# says so; NO_COLOR wins over everything; --color=never wins over the variable.
+# Every case here runs with stdout piped (command substitution), so "auto"
+# means off, and any case wanting color passes --color=always.
+
+# case_color_off_by_default: piped output carries no ANSI escapes, and the
+# plain-text prefixes the other cases assert on are untouched.
+case_color_off_by_default() {
+  local d="$work/color-default"; ok_stub "$d"
+  preflight "$d"
+  if [ "$pf_rc" -eq 0 ] && ! printf '%s' "$pf_out" | grep -q "$(printf '\033')" &&
+    has "$pf_out" "OK    Lima" && has "$pf_out" "All checks passed (6/6)."; then
+    record "color: piped output has no ANSI and plain prefixes" "plain" "plain"
+  else
+    record "color: piped output has no ANSI and plain prefixes" "plain" "colored (got: $pf_out)"
+  fi
+}
+
+# case_color_always: --color=always colors the level prefixes and the summary,
+# keeping the message text itself unchanged. The grep patterns escape [ with a
+# backslash: a literal `\033[32m` inside a BRE bracket expression is not what
+# it looks like.
+case_color_always() {
+  local d="$work/color-always"; ok_stub "$d"
+  preflight "$d" --color=always
+  if [ "$pf_rc" -eq 0 ] && printf '%s' "$pf_out" | grep -q "$(printf '\033\[32m')" &&
+    has "$pf_out" "OK" && has "$pf_out" "Lima 2.2.0" &&
+    has "$pf_out" "All checks passed (6/6)."; then
+    record "color: --color=always colors OK green, text intact" "green" "green"
+  else
+    record "color: --color=always colors OK green, text intact" "green" "not green (got: $pf_out)"
+  fi
+}
+
+# case_color_no_color_env: NO_COLOR=1 beats --color=always.
+case_color_no_color_env() {
+  local d="$work/color-nocolor"; ok_stub "$d"
+  preflight "$d" --color=always NO_COLOR=1
+  if [ "$pf_rc" -eq 0 ] && ! printf '%s' "$pf_out" | grep -q "$(printf '\033')"; then
+    record "color: NO_COLOR beats --color=always" "plain" "plain"
+  else
+    record "color: NO_COLOR beats --color=always" "plain" "colored (got: $pf_out)"
+  fi
+}
+
+# case_color_never: --color=never beats HOMEFIELD_COLOR=always.
+case_color_never() {
+  local d="$work/color-never"; ok_stub "$d"
+  preflight "$d" --color=never HOMEFIELD_COLOR=always
+  if [ "$pf_rc" -eq 0 ] && ! printf '%s' "$pf_out" | grep -q "$(printf '\033')"; then
+    record "color: --color=never beats HOMEFIELD_COLOR" "plain" "plain"
+  else
+    record "color: --color=never beats HOMEFIELD_COLOR" "plain" "colored (got: $pf_out)"
+  fi
+}
+
+# case_color_env: HOMEFIELD_COLOR=always colors piped output.
+case_color_env() {
+  local d="$work/color-env"; ok_stub "$d"
+  preflight "$d" HOMEFIELD_COLOR=always
+  if [ "$pf_rc" -eq 0 ] && printf '%s' "$pf_out" | grep -q "$(printf '\033\[32m')"; then
+    record "color: HOMEFIELD_COLOR=always colors piped output" "green" "green"
+  else
+    record "color: HOMEFIELD_COLOR=always colors piped output" "green" "not green (got: $pf_out)"
+  fi
+}
+
+# case_color_warn_fail: WARN is yellow, FAIL red. The gh stub is given scopes
+# without admin:org (the WARN source) and brew is removed (the FAIL source),
+# so one run carries both a yellow and a red marker.
+case_color_warn_fail() {
+  local d="$work/color-levels"
+  stub_dir "$d" limactl gh python3 brew uname sw_vers awk dirname
+  rm -f "$d/brew"
+  preflight "$d" --color=always GH_JQ_OUT='person|repo, read:org'
+  local yellow red
+  yellow="$(printf '\033\[33m')"; red="$(printf '\033\[31m')"
+  if [ "$pf_rc" -eq 1 ] && printf '%s' "$pf_out" | grep -q "$yellow" &&
+    printf '%s' "$pf_out" | grep -q "$red"; then
+    record "color: WARN yellow, FAIL red" "yellow+red" "yellow+red"
+  else
+    record "color: WARN yellow, FAIL red" "yellow+red" "(got: $pf_out)"
+  fi
+}
+
+case_color_off_by_default
+case_color_always
+case_color_no_color_env
+case_color_never
+case_color_env
+case_color_warn_fail
 
 summary
