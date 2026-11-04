@@ -109,6 +109,16 @@ REFUSED = {
 }
 DEFAULT_EVENTS = "pull_request"
 DEPENDABOT = ("hosted", "local")
+# The expression's shape. guards is the reviewed multi-clause expression
+# (events, Dependabot and fork pull requests each guarded); simple is the
+# one-clause expression a personal repository routes with — the CI_RUNNER
+# switch is the only guardrail, so it routes every event (pushes, schedules,
+# Dependabot's and forks' pull requests included) and assumes everyone who
+# can open a pull request is trusted with the Mac. The check in simple mode
+# still accepts the canonical expression, so a repository can move between
+# the shapes, or mix them, without failing.
+MODES = ("guards", "simple")
+DEFAULT_MODE = "guards"
 # The runner's architecture label, the third label in the expression. Written
 # as GitHub's lowercase label names. A typo here would pass every copy that
 # carries it and leave those jobs waiting for a runner that has no such label,
@@ -162,6 +172,14 @@ FORK_ANY = f"(github.event_name != 'pull_request' || {FORK_PR})"
 
 def fork_clause(events: list) -> str:
     return FORK_PR if events == ["pull_request"] else FORK_ANY
+
+
+def simple_expression(label: str, fallback: str) -> str:
+    """The one-clause expression: the CI_RUNNER switch decides between the
+    routing label and the hosted fallback. It carries no event, Dependabot or
+    fork clause: every event routes, so it is for repositories whose every
+    contributor may use the Mac."""
+    return f"${{{{ vars.CI_RUNNER == 'local' && '{label}' || '{fallback}' }}}}"
 
 
 def canonical_expression(
@@ -243,6 +261,13 @@ def main() -> int:
     )
     ap.add_argument("--dependabot", default="hosted", help="hosted or local")
     ap.add_argument(
+        "--mode",
+        default=DEFAULT_MODE,
+        help=" or ".join(MODES)
+        + ": guards checks the multi-clause expression, simple the one-clause"
+        " one (every event routes); simple also accepts the guards expression",
+    )
+    ap.add_argument(
         "--fallback", default="ubuntu-latest", help="the GitHub-hosted image used when not local"
     )
     ap.add_argument(
@@ -279,7 +304,18 @@ def main() -> int:
     problem = option_problem(args.arch, args.dependabot, args.fallback)
     if problem:
         return refuse(problem)
+    if args.mode not in MODES:
+        return refuse(f"mode: {args.mode!r} must be {' or '.join(MODES)}")
+    if args.mode == "simple":
+        for opt, given in (("events", args.events), ("dependabot", args.dependabot)):
+            default = {"events": DEFAULT_EVENTS, "dependabot": "hosted"}[opt]
+            if given != default:
+                return refuse(f"{opt}: {given!r} has no effect in simple mode, which routes every event; drop the option")
     canonical = canonical_expression(args.label, args.arch, events, args.dependabot, args.fallback)
+    accepted = [canonical]
+    if args.mode == "simple":
+        accepted.append(simple_expression(args.label, args.fallback))
+        canonical = accepted[-1]
     if args.print_expression:
         print(canonical)
         return 0
@@ -400,15 +436,15 @@ def main() -> int:
                 value = m.group(1)
                 if HOSTED.match(value):
                     continue
-                if value != canonical:
+                if value not in accepted:
                     fail(
                         f"{where}: runs-on is neither a GitHub-hosted image nor the"
-                        " canonical expression\n"
+                        f" {args.mode} expression\n"
                         f"         got:  {value or '(multi-line)'}\n         want: {canonical}"
                     )
                     continue
                 found.append(f"{name}:{job}")
-                ok(f"{where} uses the canonical expression")
+                ok(f"{where} uses the {args.mode} expression")
 
     if args.list:
         for key in found:
@@ -424,7 +460,17 @@ def main() -> int:
         if key not in expected:
             fail(f"{key} opts in but is not in the expected list — add it deliberately")
 
-    for needle, why in guards(events, args.dependabot, args.fallback):
+    if args.mode == "simple":
+        # The simple expression's own invariants: the switch that keeps the
+        # rollback (`homefield route hosted`) and the hosted fallback. Its
+        # point is to have no other clauses.
+        invariants = [
+            ("vars.CI_RUNNER == 'local'", "opt-in switch"),
+            (f"|| '{args.fallback}'", "hosted fallback"),
+        ]
+    else:
+        invariants = guards(events, args.dependabot, args.fallback)
+    for needle, why in invariants:
         if needle in canonical:
             ok(f"canonical expression has {why}")
         else:

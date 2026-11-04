@@ -242,7 +242,9 @@ where each job landed (`--verify` does it without asking, `--no-verify` never;
 Rather than editing the workflows by hand, `homefield adopt --setup --repo
 <owner>/<repo>` opens a pull request that writes those edits for you: the
 routing expression on every pull-request job that runs on a GitHub-hosted
-image, the guard step listing them, and `runner.arch` added to the cache keys
+image — the simple expression for a repository without a guard, or pass
+`--guards` for the guarded one above — the guard step listing them, and
+`runner.arch` added to the cache keys
 ([`docs/adopting.md`](docs/adopting.md#let-adopt-write-steps-1-to-4)). Merge
 it, then run `homefield adopt` to switch the repository on, or add `--wait`
 (`homefield adopt --setup --wait --repo <owner>/<repo>`) and the same command
@@ -347,6 +349,20 @@ runs-on: ${{ vars.CI_RUNNER == 'local' && github.event_name == 'pull_request' &&
 It sends the job to the local runner only when the repository variable
 `CI_RUNNER` is `local`, the event is a pull request, the author is not
 Dependabot and the branch is not from a fork; otherwise to `ubuntu-latest`.
+That is the guarded expression, `guards` mode. A repository whose every
+contributor you trust with the Mac routes with the simple one instead — the
+one-clause expression that `homefield adopt --setup` writes for a repository
+without a guard (`--guards` asks for this guarded one):
+
+```yaml
+runs-on: ${{ vars.CI_RUNNER == 'local' && 'homefield-ci' || 'ubuntu-latest' }}
+```
+
+It has no event, Dependabot or fork clause: every event routes, and the
+switch is the only guardrail — also the off button (`homefield route
+hosted`). It is for a private repository where being able to open a pull
+request already means being trusted with the Mac. The guard accepts either
+shape, and a repository may mix them.
 That is the default. The routed events, Dependabot and the hosted fallback
 image are options of the action, and the expression changes with them
 ([routing options](docs/adopting.md#routing-options)).

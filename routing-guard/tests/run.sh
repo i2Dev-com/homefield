@@ -40,7 +40,7 @@ case_() {
     printf '\n%s\n' "$append" >>"$dir/ci.yml"
   fi
   local got=pass
-  python3 "$SCRIPT" --workflows-dir "$dir" --jobs "$expected" ${LABEL:+--label "$LABEL"} >"$dir/out" 2>&1 || got=fail
+  python3 "$SCRIPT" --workflows-dir "$dir" --jobs "$expected" ${LABEL:+--label "$LABEL"} ${MODE:+--mode "$MODE"} >"$dir/out" 2>&1 || got=fail
   if [ "$got" = "$want" ]; then
     echo "  ok   ${name} (${got})"
     pass=$((pass + 1))
@@ -310,8 +310,12 @@ sys.path.insert(0, sys.argv[1])
 import routing_guard as g
 weaken = os.environ.get("WEAKEN")
 if weaken:
-    real = g.canonical_expression
-    g.canonical_expression = lambda *a, **k: eval(weaken, {}, {"x": real(*a, **k)})
+    # Weaken whichever builder the mode under test uses: both get the same
+    # wrapper, and only the one the check calls is evaluated.
+    def wrap(real):
+        return lambda *a, **k: eval(weaken, {}, {"x": real(*a, **k)})
+    g.canonical_expression = wrap(g.canonical_expression)
+    g.simple_expression = wrap(g.simple_expression)
 sys.argv = ["routing_guard.py", "--workflows-dir", sys.argv[2], "--jobs", ""] + sys.argv[3:]
 sys.exit(g.main())
 ' "${HERE}/.." "$empty" "$@" >/dev/null 2>&1 || rc=$?
@@ -329,6 +333,83 @@ check "self-check: a fork clause that skips non-PR events fails the push form" "
   "$(WEAKEN="x.replace(\"(github.event_name != 'pull_request' || \", '(').replace('repository)', 'repository')" selfcheck --events push)"
 check "self-check: a fallback that is not the chosen one fails" "1" "$(WEAKEN="x.replace('ubuntu-24.04-arm', 'ubuntu-latest')" selfcheck --fallback ubuntu-24.04-arm)"
 check "self-check: Dependabot clauses are not required when local" "0" "$(selfcheck --dependabot local)"
+
+# ── Mode: simple ───────────────────────────────────────────────────────────
+# Simple mode is the one-clause expression a personal repository routes with:
+# the CI_RUNNER switch is the only guardrail, and the hosted fallback stays.
+# The check accepts both shapes (a repo moving from the canonical expression
+# to simple, or mixing, keeps passing), so the canonical fixture must also
+# pass under simple mode. events and dependabot have no effect there — every
+# event routes — so they are refused rather than silently ignored.
+# shellcheck disable=SC2016  # GitHub expression text, not shell
+SIMPLE='${{ vars.CI_RUNNER == '"'"'local'"'"' && '"'"'homefield-ci'"'"' || '"'"'ubuntu-latest'"'"' }}'
+check "--print-expression, mode simple, is the one-clause string byte for byte" "$SIMPLE" \
+  "$(python3 "$SCRIPT" --print-expression --mode simple)"
+# shellcheck disable=SC2016  # GitHub expression text, not shell
+check "--print-expression, mode simple with a fallback, changes the tail" \
+  '${{ vars.CI_RUNNER == '"'"'local'"'"' && '"'"'homefield-ci'"'"' || '"'"'ubuntu-24.04-arm'"'"' }}' \
+  "$(python3 "$SCRIPT" --print-expression --mode simple --fallback ubuntu-24.04-arm)"
+# shellcheck disable=SC2016  # GitHub expression text, not shell
+check "--print-expression, mode simple with a label, carries it" \
+  '${{ vars.CI_RUNNER == '"'"'local'"'"' && '"'"'acme-ci'"'"' || '"'"'ubuntu-latest'"'"' }}' \
+  "$(python3 "$SCRIPT" --print-expression --mode simple --label acme-ci)"
+invalid "mode simple with events" "has no effect" --mode simple --events push
+invalid "mode simple with dependabot" "has no effect" --mode simple --dependabot local
+invalid "mode a typo" "must be guards or simple" --mode maybe
+invalid "mode empty" "must be guards or simple" --mode ""
+invalid "mode in another case" "must be guards or simple" --mode Simple
+check "--print-expression, mode spelled as the default, is the canonical string" "$TODAY" \
+  "$(python3 "$SCRIPT" --print-expression --mode guards)"
+invalid "mode guards with a reserved label" "label 'linux'" --mode guards --label linux
+
+# A fixture whose jobs carry the simple expression: passes under simple mode,
+# fails under the default (guards) mode. The mutation's delimiter is @ (the
+# expression holds | and the canonical /) and every & in a replacement is
+# escaped (a bare & means the whole match).
+# shellcheck disable=SC2016  # GitHub expression text, not shell
+SIMPLE_SED='${{ vars.CI_RUNNER == '"'"'local'"'"' \&\& '"'"'homefield-ci'"'"' || '"'"'ubuntu-latest'"'"' }}'
+simple_mutation="s@\\\${{ vars.CI_RUNNER.*}}@${SIMPLE_SED}@"
+MODE=simple case_ "simple expression, simple mode" pass "$EXPECTED" "$simple_mutation"
+case_ "simple expression, guards mode"          fail "$EXPECTED" "$simple_mutation"
+LABEL=acme-ci MODE=simple case_ "simple expression, its label, simple mode" pass "$EXPECTED" \
+  "s@\\\${{ vars.CI_RUNNER.*}}@\${{ vars.CI_RUNNER == 'local' \&\& 'acme-ci' || 'ubuntu-latest' }}@"
+# Grandfathering: a workflow mixing both shapes passes in simple mode.
+mix() { # <job id> <runs-on value>: append a job with the given runs-on
+  printf '\n  %s:\n    runs-on: %s\n    steps:\n      - run: echo %s\n' "$1" "$2" "$1"
+}
+mixdir="$(mktemp -d)"
+cp "${HERE}/base/"*.yml "$mixdir/"
+"${SED_INPLACE[@]}" -e "s@\\\${{ vars.CI_RUNNER.*}}@${SIMPLE_SED}@" "$mixdir/ci.yml"
+printf '\n  extra:\n    runs-on: %s\n    steps:\n      - run: echo extra\n' "$(python3 "$SCRIPT" --print-expression)" >>"$mixdir/ci.yml"
+check "a canonical job next to simple ones is accepted, simple mode" "pass" \
+  "$(python3 "$SCRIPT" --workflows-dir "$mixdir" --mode simple --jobs "$EXPECTED ci.yml:extra" >/dev/null 2>&1 && echo pass || echo fail)"
+check "...and listed by --list, simple mode" "ci.yml:changes
+ci.yml:checks
+ci.yml:extra" "$(python3 "$SCRIPT" --workflows-dir "$mixdir" --mode simple --list)"
+check "the same mix fails under guards mode" "fail" \
+  "$(python3 "$SCRIPT" --workflows-dir "$mixdir" --jobs "$EXPECTED ci.yml:extra" >/dev/null 2>&1 && echo pass || echo fail)"
+rm -rf "$mixdir"
+# The simple expression must not drift either: dropping its switch or its
+# fallback fails, as dropping the canonical's does.
+MODE=simple case_ "simple switch dropped"       fail "$EXPECTED" "s/vars.CI_RUNNER == 'local' \&\& //"
+MODE=simple case_ "simple fallback dropped"     fail "$EXPECTED" "s/ || 'ubuntu-latest' }}/ }}/"
+MODE=simple case_ "simple label swapped"        fail "$EXPECTED" \
+  "s@\\\${{ vars.CI_RUNNER.*}}@\${{ vars.CI_RUNNER == 'local' \&\& 'other-ci' || 'ubuntu-latest' }}@"
+MODE=simple case_ "simple, bare self-hosted"    fail "$EXPECTED" "s/^    runs-on: ubuntu-latest\$/    runs-on: self-hosted/"
+MODE=simple case_ "simple, hosted still passes" pass "$EXPECTED" "s/^    runs-on: ubuntu-latest\$/    runs-on: ubuntu-24.04-arm/"
+MODE=simple case_ "simple, switch only, no fallback" fail "$EXPECTED" \
+  "s@\\\${{ vars.CI_RUNNER.*}}@\${{ vars.CI_RUNNER == 'local' \&\& 'homefield-ci' }}@"
+MODE=simple case_ "simple, wrong event context still refused" fail "$EXPECTED" \
+  "s@\\\${{ vars.CI_RUNNER.*}}@\${{ vars.CI_RUNNER == 'local' \&\& github.event_name == 'pull_request' \&\& 'homefield-ci' || 'ubuntu-latest' }}@"
+
+# The self-check guards the simple builder too: the check runs with the
+# mode's own expression, so a weakened simple_expression fails there.
+check "self-check, simple: the intact expression passes" "0" "$(selfcheck --mode simple)"
+check "self-check, simple: a missing switch fails" "1" \
+  "$(WEAKEN="x.replace(\"vars.CI_RUNNER == 'local' && \", '')" selfcheck --mode simple)"
+check "self-check, simple: a missing fallback fails" "1" \
+  "$(WEAKEN="x.replace(\" || 'ubuntu-latest'\", '')" selfcheck --mode simple)"
+check "self-check, simple: the canonical self-check still passes with options" "0" "$(selfcheck --events push,schedule --dependabot local --fallback ubuntu-24.04-arm)"
 
 # A key named `runs-on:` outside `jobs:` — a workflow_dispatch input, say — is
 # not routing and must not fail the check (it would read as an empty, hence

@@ -14,7 +14,10 @@ that writes them for you (with `--wait` it also carries on into step 5 once
 you merge it). If you said yes to the offer at the end of `homefield setup`,
 that is what ran: what was left to you was reviewing and merging the pull
 request, and steps 1–5 were done for you. This page is the same path by hand,
-and the reference for what each step does.
+and the reference for what each step does. For a repository without a guard
+yet — a personal one being adopted for the first time — the pull request
+routes with the simple expression (step 2); pass `--guards` to the command if
+you want the guarded one instead.
 
 For a repository after the first, the whole page is one command, which opens
 the pull request, waits for your merge and then switches the repository on:
@@ -46,9 +49,29 @@ Keep hosted:
 
 ## 2. Route them
 
-Replace each chosen job's `runs-on` with the canonical expression, verbatim.
+Replace each chosen job's `runs-on` with the routing expression, verbatim.
 It must match the `routing-guard` version used in step 3 (`@v0.3.2` below); see
-[`CHANGELOG.md`](../CHANGELOG.md) when upgrading:
+[`CHANGELOG.md`](../CHANGELOG.md) when upgrading. There are two shapes.
+
+A repository whose every contributor you trust with the Mac routes with the
+simple one:
+
+```yaml
+runs-on: ${{ vars.CI_RUNNER == 'local' && 'homefield-ci' || 'ubuntu-latest' }}
+```
+
+It sends the job to the local runner when the repository variable `CI_RUNNER`
+is `local`, and to `ubuntu-latest` otherwise — whatever the event: pushes,
+schedules, Dependabot's and forks' pull requests included. Its only guardrail
+is the switch, which is also the off button (`homefield route hosted`); what
+keeps strangers off the runner is everything else — the repository being
+private and the runner group. `homefield adopt --setup` writes this shape for
+a repository without a guard unless you pass `--guards`, and the guard in
+step 3 carries `mode: simple` with it.
+
+A repository with contributors you would not each trust with the Mac, or one
+that wants to keep pushes and Dependabot hosted, routes with the guarded
+expression instead:
 
 ```yaml
 runs-on: ${{ vars.CI_RUNNER == 'local' && github.event_name == 'pull_request' && github.actor != 'dependabot[bot]' && !startsWith(github.head_ref, 'dependabot/') && github.event.pull_request.head.repo.full_name == github.repository && fromJSON('["self-hosted","linux","arm64","homefield-ci"]') || 'ubuntu-latest' }}
@@ -72,6 +95,18 @@ In a job that runs on every PR, after `actions/checkout`:
           jobs: |
             ci.yml:lint
             ci.yml:test
+```
+
+If the repository routes with the simple expression (step 2), the guard
+carries `mode: simple` and nothing else changes:
+
+```yaml
+      - name: Routing guard
+        uses: i2Dev-com/homefield/routing-guard@v0.3.2
+        with:
+          jobs: |
+            ci.yml:lint
+          mode: simple
 ```
 
 `jobs` lists `workflow-file:job-id` for every job you routed in step 2.
@@ -100,13 +135,22 @@ without `if: false` or `continue-on-error: true`.
 
 ### Routing options
 
-The expression above is the default. Three options of `routing-guard` change
-it; each also exists as a flag of `homefield adopt` with the same name
-(`--events`, `--dependabot`, `--fallback`). Whatever you choose, the
+The guarded expression above is the shape of `guards` mode, the guard's
+default. Three options of `routing-guard` change it; each also exists as a
+flag of `homefield adopt` with the same name (`--events`, `--dependabot`,
+`--fallback`). Whatever you choose, the
 expression in step 2 and the guard in step 3 have to agree, and `homefield
 adopt` refuses a guard whose options differ from the flags you pass it. Adopt
 also reads the step's `arch` (below) and refuses a step whose `arch:` is not
 `arm64`: it sets up the arm64 VM, and there is no flag to change that.
+
+The shape itself is a fourth option: `mode: simple` (or `homefield adopt
+--setup` without `--guards` on a repository without a guard) selects the
+one-clause expression of step 2. It has no `events` or `dependabot` choice —
+every event routes — so the guard refuses them there, and `homefield adopt`
+refuses `--events` and `--dependabot` without `--guards`. The guard in simple
+mode also accepts the guarded expression, so a repository can move between
+the shapes, or mix them, without failing.
 
 ```yaml
       - uses: i2Dev-com/homefield/routing-guard@v0.3.2
@@ -120,6 +164,7 @@ also reads the step's `arch` (below) and refuses a step whose `arch:` is not
 
 | Option | Default | Choices | What choosing differently costs |
 |---|---|---|---|
+| `mode` | `guards` | `guards`, `simple` | `simple` checks the one-clause expression (step 2) and accepts the guarded one too; it has no events or Dependabot choice — every event routes — and refuses them. `guards` is the reviewed multi-clause expression this section describes. |
 | `events` | `pull_request` | any of `pull_request`, `push`, `workflow_dispatch`, `schedule`, separated by newlines, commas or spaces | Jobs on `push`, `workflow_dispatch` and `schedule` run on the Mac, so they wait while it sleeps (GitHub fails them after 24 hours), and a deploy gated on CI can queue behind them until `CI_RUNNER` is switched. `pull_request_target` is refused: it runs with the repository's secrets on code from forks. So is `merge_group`: a merge group can hold a fork's pull request, and the event has no pull request to check. |
 | `dependabot` | `hosted` | `hosted`, `local` | With `local`, Dependabot's branches bring unreviewed install scripts onto a VM that is not thrown away after the job. |
 | `fallback` | `ubuntu-latest` | a GitHub-hosted image name: `ubuntu-*`, `windows-*` or `macos-*` | None to the guarantee: it is the image jobs run on when `CI_RUNNER` is not `local`, such as `ubuntu-24.04-arm` for jobs that build for arm64. A self-hosted label is refused, because it would send the job to the runner whenever the switch is off. The guard checks only the prefix, so `homefield adopt` warns about a name that is not one of GitHub's standard labels: a typo would make jobs wait. |
@@ -166,11 +211,15 @@ plain adopt checks and opens a pull request against the default branch that
 writes steps 2–4 for you:
 
 - every job of a workflow that runs on `pull_request` and asks for a
-  GitHub-hosted image today gets the canonical expression, with a comment
-  pointing here;
+  GitHub-hosted image today gets the routing expression — simple, unless
+  `--guards` is given or a guard already in the repository carries another
+  shape (`--guards` and an existing simple-mode guard are refused together) —
+  with a comment pointing here;
 - the routing guard lists exactly those jobs — its `jobs:` block is updated
   where a guard step already runs on pull requests, otherwise a new
   `.github/workflows/homefield-routing.yml` holds the checkout and the guard;
+  with the simple expression it carries `mode: simple`, and without one it
+  carries no `mode:` input at all;
 - every `key:`/`restore-keys:` line in those files that uses `runner.os`
   without `runner.arch` gains `${{ runner.arch }}`.
 
@@ -180,13 +229,16 @@ limit is why `--jobs` refuses such names.
 
 The staged files are checked with the very `routing_guard.py` the guard step
 runs, so the pull request cannot open something its own guard would fail.
-Jobs that already carry the expression always stay in the guard's list (it is
-exact, wherever they run), whatever `--jobs` says; `--jobs "ci.yml:lint,..."`
+Jobs that already carry either shape stay as they are — an already-guarded
+job is listed and not rewritten even when the run is simple-mode — whatever
+`--jobs` says; `--jobs "ci.yml:lint,..."`
 adds exactly that list of hosted jobs on top, and `--label`, `--events`,
 `--dependabot` and `--fallback` shape the
 expression and the guard as they do for a plain adopt (an existing guard must
 already use them, or the run stops and says so; a guard set to `arch: x64` is
-refused too, the VM being arm64). An edited file is written with LF line
+refused too, the VM being arm64). In simple mode `--events` and `--dependabot`
+are refused: the one-clause expression routes every event. An edited file is
+written with LF line
 endings even if it had CRLF ones. It exits 1 with "nothing to
 route" when no job qualifies, and with the branch's name when
 `homefield/route-to-local` already exists — merge or delete that pull request

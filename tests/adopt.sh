@@ -253,6 +253,8 @@ printf '100\n555\n200\n' >"$work/members-with"
 # ── Workflow fixtures ──────────────────────────────────────────────────────
 expr="$(python3 "$ROOT/routing-guard/routing_guard.py" --print-expression)"
 expr_acme="$(python3 "$ROOT/routing-guard/routing_guard.py" --print-expression --label acme-ci)"
+expr_simple="$(python3 "$ROOT/routing-guard/routing_guard.py" --print-expression --mode simple)"
+expr_acme_simple="$(python3 "$ROOT/routing-guard/routing_guard.py" --print-expression --mode simple --label acme-ci)"
 expr_push="$(python3 "$ROOT/routing-guard/routing_guard.py" --print-expression --events push)"
 expr_combo="$(python3 "$ROOT/routing-guard/routing_guard.py" --print-expression --events push,schedule --dependabot local --fallback ubuntu-24.04-arm)"
 expr_x64="$(python3 "$ROOT/routing-guard/routing_guard.py" --print-expression --arch x64)"
@@ -529,8 +531,13 @@ run_fn() {
   done
   shift
   : >"$calls"
+  # The suites exercise this checkout, whose RELEASE is the one before the
+  # release that carries --mode: let simple mode through unless a case asks
+  # for the refusal by passing HOMEFIELD_MODE_RELEASE= (empty, so adopt.py
+  # falls back to its own threshold).
   # shellcheck disable=SC2016  # the -c script is expanded by the inner bash
-  out="$(env -i HOME="$work" PATH="$stubs" TMPDIR="$work/tmp" CALLS="$calls" HOMEFIELD_SOURCE_ONLY=1 "${envs[@]+"${envs[@]}"}" \
+  out="$(env -i HOME="$work" PATH="$stubs" TMPDIR="$work/tmp" CALLS="$calls" HOMEFIELD_SOURCE_ONLY=1 \
+    HOMEFIELD_MODE_RELEASE="${HOMEFIELD_MODE_RELEASE:-v0.3.2}" "${envs[@]+"${envs[@]}"}" \
     "$BASH" -c '. "$1"; shift; "$@"' _ "$ROOT/bin/homefield" "$@" 2>&1 </dev/null)"
   rc=$?
 }
@@ -666,11 +673,13 @@ record "the last lines say what is left by hand" "yes/yes" "$(has "$out" 'CI_RUN
 adopt GH_WF="$work/wf-noguard" --
 record "no guard step: not ready, nothing switched, exit 1" "nonzero/yes/yes/0" \
   "$(nonzero "$rc")/$(has "$out" 'routing: not ready')/$(has "$out" 'no routing-guard step in .github/workflows')/$(called 'variable set')"
-record "...the canonical expression is printed" "yes" "$(has "$out" "runs-on: $expr")"
+record "...the simple expression is printed (no guard yet: simple mode)" "yes" "$(has "$out" "runs-on: $expr_simple")"
 record "...and the guard step, with the jobs that are routed" "yes/yes/yes" \
   "$(has "$out" 'uses: i2Dev-com/homefield/routing-guard@v0.3.2')/$(has "$out" '            ci.yml:lint')/$(has "$out" '            ci.yml:test')"
 record "...the default label is not written into the guard" "no" "$(has "$out" 'label: homefield-ci')"
 record "...and the last line says to merge first" "yes" "$(has "$out" 'not switched: merge the routing first, then run homefield adopt again')"
+adopt GH_WF="$work/wf-noguard" -- --guards
+record "...with --guards: the guarded expression is printed instead" "yes" "$(has "$out" "runs-on: $expr")"
 
 adopt GH_WF="$work/wf-mismatch" --
 record "a guard that differs from the routed jobs: not ready" "nonzero/yes/yes/0" \
@@ -699,7 +708,7 @@ record "...unless --label says otherwise: not ready, and only that label's jobs 
 adopt GH_WF="$work/wf-label" -- --label acme-ci
 record "...--label that agrees is fine" "0/1" "$rc/$(called 'variable set CI_RUNNER --repo acme/app --body local')"
 adopt GH_WF="$work/wf-noguard" -- --label acme-ci
-record "snippets carry the chosen label in the expression and the guard" "yes/yes" "$(has "$out" "runs-on: $expr_acme")/$(has "$out" '          label: acme-ci')"
+record "snippets carry the chosen label in the expression and the guard" "yes/yes" "$(has "$out" "runs-on: $expr_acme_simple")/$(has "$out" '          label: acme-ci')"
 
 # Routing options: events, dependabot and fallback, held to the guard the way
 # the label is.
@@ -740,8 +749,23 @@ adopt GH_WF="$work/wf-prt" --
 record "a guard with events pull_request_target: not ready, with the guard's reason" "nonzero/yes/0" \
   "$(nonzero "$rc")/$(has "$out" 'pull_request_target is refused')/$(called 'variable set')"
 adopt GH_WF="$work/wf-noguard" -- --events 'push,schedule' --dependabot local --fallback ubuntu-24.04-arm
-record "no guard yet: the expression and the snippet carry the options" "nonzero/yes/yes/yes/yes/no" \
+record "no guard yet, --events/--dependabot without --guards: refused (simple routes every event)" "nonzero/yes" \
+  "$(nonzero "$rc")/$(has "$out" 'have no effect in simple mode')"
+adopt GH_WF="$work/wf-noguard" -- --events push
+record "...either flag alone is refused too" "nonzero/yes/0" \
+  "$(nonzero "$rc")/$(has "$out" 'have no effect in simple mode')/$(called 'variable set')"
+adopt GH_WF="$work/wf-noguard" -- --dependabot local
+record "...dependabot alone likewise" "nonzero/yes" \
+  "$(nonzero "$rc")/$(has "$out" 'have no effect in simple mode')"
+adopt GH_WF="$work/wf-noguard" -- --guards --events 'push,schedule' --dependabot local --fallback ubuntu-24.04-arm
+record "no guard yet with --guards: the expression and the snippet carry the options" "nonzero/yes/yes/yes/yes/no" \
   "$(nonzero "$rc")/$(has "$out" "runs-on: $expr_combo")/$(has "$out" '          events: push, schedule')/$(has "$out" '          dependabot: local')/$(has "$out" '          fallback: ubuntu-24.04-arm')/$(has "$out" 'label:')"
+adopt GH_WF="$work/wf-noguard" -- --setup --events push
+record "--setup with --events alone, no --guards: refused" "nonzero/yes/0" \
+  "$(nonzero "$rc")/$(has "$out" 'have no effect in simple mode')/$(called 'X POST')"
+adopt GH_WF="$work/wf-noguard" -- --setup --dependabot local
+record "--setup with --dependabot alone: refused" "nonzero/yes/0" \
+  "$(nonzero "$rc")/$(has "$out" 'have no effect in simple mode')/$(called 'X POST')"
 adopt GH_WF="$work/wf-noguard" --
 record "...the defaults are not written into the guard" "no/no/no" \
   "$(has "$out" 'events:')/$(has "$out" 'dependabot:')/$(has "$out" 'fallback:')"
@@ -1258,10 +1282,10 @@ printf 'on: [push, pull_request]\r\njobs:\r\n  j:\r\n    steps:\r\n      - uses:
 printf 'jobs:\n  j:\n    steps:\n      - uses: o/r/routing-guard@v0.3.2\n' >"$shapes/c.yml"
 echo "not a workflow" >"$shapes/d.txt"
 got="$(python3 -I "$ROOT/tools/adopt.py" guards "$shapes")"
-want="$(printf 'a.yml:6\tok\thomefield-ci\t-\t-\tpull_request\thosted\tubuntu-latest\tarm64\ta.yml:one a.yml:two\na.yml:15\tok\tacme-ci\t-\t-\tpull_request\thosted\tubuntu-latest\tarm64\ta.yml:one a.yml:two\na.yml:22\tok\thomefield-ci\t-\t-\tpull_request\thosted\tubuntu-latest\tarm64\ta.yml:one\nb.yaml:5\tok\thomefield-ci\t-\t-\tpull_request\thosted\tubuntu-latest\tarm64\tb.yml:j\nc.yml:4\tsource\thomefield-ci\tthe routing-guard step at c.yml:4 uses o/r/routing-guard@v0.3.2, but adopt recognizes i2Dev-com/homefield/routing-guard@v0.3.2, the release this copy of homefield checks with, or a full commit SHA (docs/adopting.md, step 3)\t-\tpull_request\thosted\tubuntu-latest\tarm64\t')"
+want="$(printf 'a.yml:6\tok\thomefield-ci\t-\t-\tpull_request\thosted\tubuntu-latest\tarm64\tguards\ta.yml:one a.yml:two\na.yml:15\tok\tacme-ci\t-\t-\tpull_request\thosted\tubuntu-latest\tarm64\tguards\ta.yml:one a.yml:two\na.yml:22\tok\thomefield-ci\t-\t-\tpull_request\thosted\tubuntu-latest\tarm64\tguards\ta.yml:one\nb.yaml:5\tok\thomefield-ci\t-\t-\tpull_request\thosted\tubuntu-latest\tarm64\tguards\tb.yml:j\nc.yml:4\tsource\thomefield-ci\tthe routing-guard step at c.yml:4 uses o/r/routing-guard@v0.3.2, but adopt recognizes i2Dev-com/homefield/routing-guard@v0.3.2, the release this copy of homefield checks with, or a full commit SHA (docs/adopting.md, step 3)\t-\tpull_request\thosted\tubuntu-latest\tarm64\tguards\t')"
 record "guards: shapes of the step (block, inline, quoted, uses after with, CRLF, none, another action)" "$want" "$got"
 got="$(python3 -I "$ROOT/tools/adopt.py" guards "$work/wf-i2dev")"
-want="$(printf 'ci-checks.yml:9\tok\thomefield-ci\t-\tci.yml:5: the pull_request trigger has branches, paths-ignore filters;ci.yml:19: job checks, which calls ci-checks.yml, has an if: condition\tpull_request\thosted\tubuntu-latest\tarm64\tci-checks.yml:lint ci-checks.yml:test')"
+want="$(printf 'ci-checks.yml:9\tok\thomefield-ci\t-\tci.yml:5: the pull_request trigger has branches, paths-ignore filters;ci.yml:19: job checks, which calls ci-checks.yml, has an if: condition\tpull_request\thosted\tubuntu-latest\tarm64\tguards\tci-checks.yml:lint ci-checks.yml:test')"
 record "guards: the columns of a guard behind a caller (status, blocking, warnings joined by ;)" "$want" "$got"
 mkdir -p "$work/opts-shape"
 cat >"$work/opts-shape/ci.yml" <<'EOF'
@@ -1287,7 +1311,7 @@ jobs:
           events: ''
 EOF
 got="$(python3 -I "$ROOT/tools/adopt.py" guards "$work/opts-shape" | cut -f1,2,6-)"
-want="$(printf 'ci.yml:5\tok\tpush schedule\tlocal\tubuntu-24.04-arm\tarm64\tci.yml:j\nci.yml:13\tok\tpush workflow_dispatch\thosted\tubuntu-latest\tarm64\tci.yml:j\nci.yml:17\tok\t-\thosted\tubuntu-latest\tarm64\tci.yml:j')"
+want="$(printf 'ci.yml:5\tok\tpush schedule\tlocal\tubuntu-24.04-arm\tarm64\tguards\tci.yml:j\nci.yml:13\tok\tpush workflow_dispatch\thosted\tubuntu-latest\tarm64\tguards\tci.yml:j\nci.yml:17\tok\t-\thosted\tubuntu-latest\tarm64\tguards\tci.yml:j')"
 record "guards: events, dependabot and fallback columns (block, inline, empty)" "$want" "$got"
 mkdir -p "$work/arch-shape"
 cat >"$work/arch-shape/ci.yml" <<'EOF'
@@ -1516,6 +1540,70 @@ record "...and no group write, no switch: those are step 5" "0/0" \
   "$(called 'runner-groups/42/repositories')/$(called 'variable set')"
 record "...and a new file's payload carries no sha (the Contents create form)" "no" \
   "$(grep -q '"sha"' "$work/put-homefield-routing.yml.json" && echo yes || echo no)"
+rm -f "$work/branch-homefield_route-to-local"
+
+# Simple mode end to end. Without a guard, --setup routes with the one-clause
+# expression and writes the guard step in simple mode; --guards switches the
+# pull request to the guarded expression. The PUT payloads are the files the
+# fake remote received, their content base64 in the Contents form.
+mkdir -p "$work/wf-simple"
+{ header; emit_job lint ubuntu-latest; } >"$work/wf-simple/ci.yml"
+payload() { python3 -c 'import json,base64,sys;print(base64.b64decode(json.load(open(sys.argv[1]))["content"]).decode())' "$work/put-$1.json"; }
+adopt GH_WF="$work/wf-simple" -- --setup
+record "--setup, no guard: simple mode, routing workflow and ci.yml written" "0/yes/yes/2" \
+  "$rc/$(has "$out" 'setup: changes .github/workflows/homefield-routing.yml')/$(has "$out" 'setup: changes .github/workflows/ci.yml')/$(called 'X PUT')"
+record "...the guard step carries mode: simple, and no events or dependabot" "yes/no/no" \
+  "$(payload homefield-routing.yml | grep -q '          mode: simple' && echo yes || echo no)/$(payload homefield-routing.yml | grep -q '          events:' && echo yes || echo no)/$(payload homefield-routing.yml | grep -q '          dependabot:' && echo yes || echo no)"
+record "...the routed job carries the simple expression, with the comment" "yes/yes/no" \
+  "$(payload ci.yml | grep -qF "runs-on: $expr_simple" && echo yes || echo no)/$(payload ci.yml | grep -q 'Routed to the local HomeField runner' && echo yes || echo no)/$(payload ci.yml | grep -q 'github.event_name' && echo yes || echo no)"
+rm -f "$work/branch-homefield_route-to-local"
+adopt GH_WF="$work/wf-simple" -- --guards --setup
+record "--setup --guards, no guard: the guarded expression, and no mode input" "yes/no" \
+  "$(payload ci.yml | grep -qF "runs-on: $expr" && echo yes || echo no)/$(payload homefield-routing.yml | grep -q '          mode:' && echo yes || echo no)"
+rm -f "$work/branch-homefield_route-to-local"
+# Before the release that carries --mode is cut, a checkout of main refuses
+# to write simple mode: the guard step it writes pins the release, whose
+# checker would fail the workflows on their first pull request.
+run_fn HOMEFIELD_MODE_RELEASE= GH_GROUPS="$work/groups-selected" GH_MEMBERS="$work/members-other" GH_WF="$work/wf-simple" -- cmd_adopt --repo acme/app --setup
+record "--setup simple before the mode release exists: refused, --guards named" "nonzero/yes/0" \
+  "$(nonzero "$rc")/$(has "$out" 'is not cut yet; pass --guards')/$(called 'X POST')"
+
+# A repository already on the guarded expression but with no guard yet: simple
+# mode lists the jobs as they are (grandfathered), and rewrites nothing.
+mkdir -p "$work/wf-canonical"
+{ header; emit_job lint "$expr"; } >"$work/wf-canonical/ci.yml"
+adopt GH_WF="$work/wf-canonical" -- --setup
+record "--setup, no guard, jobs already guarded: listed, ci.yml not rewritten" "0/yes/1/no" \
+  "$rc/$(has "$out" 'setup: routes ci.yml:lint')/$(called 'X PUT')/$(has "$out" 'setup: changes .github/workflows/ci.yml')"
+rm -f "$work/branch-homefield_route-to-local"
+
+# A guard step already in simple mode: --setup keeps it and routes with the
+# simple expression; --guards is refused, and plain adopt follows the guard.
+mkdir -p "$work/wf-simpleguard"
+{ header; emit_job lint "$expr_simple"; emit_job build ubuntu-latest; \
+  emit_job guardjob ubuntu-latest "$(guard_opts ci.yml:lint 'mode: simple')"; } >"$work/wf-simpleguard/ci.yml"
+adopt GH_WF="$work/wf-simpleguard" -- --setup
+record "--setup on a simple-mode guard: kept, the hosted job routed with the simple expression" "0/yes/1/yes/yes" \
+  "$rc/$(has "$out" 'setup: routes ci.yml:build')/$(called 'X PUT repos/acme/app/contents/.github/workflows/ci.yml')/$(payload ci.yml | grep -q '          mode: simple' && echo yes || echo no)/$(payload ci.yml | grep -qF "runs-on: $expr_simple" && echo yes || echo no)"
+rm -f "$work/branch-homefield_route-to-local"
+adopt GH_WF="$work/wf-simpleguard" -- --guards --setup
+record "--setup --guards on a simple-mode guard: refused" "nonzero/yes" \
+  "$(nonzero "$rc")/$(has "$out" 'uses mode simple, but this run asks for guards')"
+adopt GH_WF="$work/wf-simpleguard" --
+record "plain adopt on a simple-mode guard: ready, CI_RUNNER switched" "0/yes/yes/no/1" \
+  "$rc/$(has "$out" 'routing: ready')/$(has "$out" 'these jobs are routed: ci.yml:lint')/$(has "$out" 'ci.yml:build')/$(called 'variable set CI_RUNNER --repo acme/app --body local')"
+
+# A repository mixing the shapes, with a simple-mode guard listing both: plain
+# adopt follows the guard's mode and accepts both.
+mkdir -p "$work/wf-mixed"
+{ header; emit_job lint "$expr_simple"; emit_job test "$expr"; \
+  emit_job guardjob ubuntu-latest "$(guard_opts ci.yml:lint 'jobs: |' '            ci.yml:lint' '            ci.yml:test' 'mode: simple')"; } >"$work/wf-mixed/ci.yml"
+adopt GH_WF="$work/wf-mixed" --
+record "plain adopt, a simple job and a guarded one: both routed, ready" "0/yes/yes/1" \
+  "$rc/$(has "$out" 'routing: ready')/$(has "$out" 'these jobs are routed: ci.yml:lint ci.yml:test')/$(called 'variable set CI_RUNNER --repo acme/app --body local')"
+adopt GH_WF="$work/wf-mixed" -- --guards
+record "...the same repository with --guards: refused, the guard is simple" "nonzero/yes/0" \
+  "$(nonzero "$rc")/$(has "$out" 'uses mode simple, but --guards is given')/$(called 'variable set')"
 adopt GH_REPO="$(printf 'false\t555\tmain\tOrganization')" -- --setup
 record "--setup on a public repository: refused, as ever" "nonzero/yes/0" \
   "$(nonzero "$rc")/$(has "$out" 'is public')/$(called 'X POST')"

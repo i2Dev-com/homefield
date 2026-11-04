@@ -1,9 +1,9 @@
 name: Routing guard
 description: >-
   Fails if any workflow job routes to the local self-hosted runner without the
-  canonical runs-on expression (a hosted fallback and fork pull requests
-  excluded always; the routed events and Dependabot per `events` and
-  `dependabot`), or if the set of opted-in jobs differs from `jobs`.
+  runs-on expression this guard accepts (the canonical multi-clause
+  expression, or — with mode: simple — the one-clause expression plus the
+  canonical one), or if the set of opted-in jobs differs from `jobs`.
 
 inputs:
   jobs:
@@ -22,6 +22,15 @@ inputs:
     description: The runner's architecture label, arm64 or x64. Any other value is refused.
     required: false
     default: arm64
+  mode:
+    description: >-
+      guards checks the canonical multi-clause expression (events, Dependabot
+      and fork pull requests each guarded). simple checks the one-clause
+      expression — vars.CI_RUNNER decides between the routing label and the
+      fallback, and every event routes — and also accepts the canonical one.
+      With simple, events and dependabot are refused.
+    required: false
+    default: guards
   events:
     description: >-
       The events whose jobs are routed to the local runner, from
@@ -59,6 +68,7 @@ runs:
         INPUT_JOBS: ${{ inputs.jobs }}
         INPUT_LABEL: ${{ inputs.label }}
         INPUT_ARCH: ${{ inputs.arch }}
+        INPUT_MODE: ${{ inputs.mode }}
         INPUT_EVENTS: ${{ inputs.events }}
         INPUT_DEPENDABOT: ${{ inputs.dependabot }}
         INPUT_FALLBACK: ${{ inputs.fallback }}
@@ -68,6 +78,7 @@ runs:
           --workflows-dir "$INPUT_WORKFLOWS_DIR" \
           --label "$INPUT_LABEL" \
           --arch "$INPUT_ARCH" \
+          --mode "$INPUT_MODE" \
           --events "$INPUT_EVENTS" \
           --dependabot "$INPUT_DEPENDABOT" \
           --fallback "$INPUT_FALLBACK" \
