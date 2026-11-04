@@ -25,7 +25,7 @@ It has three parts:
   credentials. It does have network access, including to the Mac's own
   services ([Security model](#security-model)).
 - **A one-command setup** ([`install.sh`](install.sh), then
-  [`bin/homefield`](bin/homefield)): setup, install, upgrade, status, diagnose, uninstall, reset.
+  [`bin/homefield`](bin/homefield)): setup, install, upgrade, start, stop, status, diagnose, uninstall, reset.
 - **A routing guard** ([`routing-guard`](routing-guard/action.yml)): a
   GitHub Action that fails CI unless every job that can reach the runner uses
   the one reviewed `runs-on` expression, with its safety guards, and the set of
@@ -166,6 +166,12 @@ does not stop on it, and ends with its own short advice. Running the one-liner
 again upgrades the tool and leaves an existing VM alone; `homefield upgrade`
 updates the VM, `homefield version` says when a newer release exists, and
 `homefield status` shows the runner and whether GitHub still lists it.
+`homefield start` boots a stopped VM and then says whether its runner is
+actually taking jobs: registered, its service running and GitHub listing it
+online — booted and online are separate facts, and it exits 1 with the fix
+when they diverge. `homefield stop` stops the VM, so its runner takes no jobs
+until it starts again, but refuses while a job is running, since stopping
+would cancel it.
 
 #### Personal account or organization
 

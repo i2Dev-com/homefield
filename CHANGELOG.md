@@ -9,6 +9,23 @@ fail, such as a new guard in the routing expression, bumps the minor version
 (0.1 to 0.2). Compatible changes bump the patch. Merged changes wait on
 `main`, under *Unreleased*, until a release is cut.
 
+## Unreleased
+
+### Added
+
+- `homefield start`: boots a stopped VM, then reports whether its runner is
+  taking jobs — registered, its service running and GitHub listing it online.
+  Booted and online are separate facts: it exits 0 only when GitHub lists the
+  runner `online`, names the fix for each state that keeps it from serving
+  jobs otherwise, and never reads a VM, guest or GitHub answer it could not
+  get as healthy.
+- `homefield stop`: stops the VM, so its runner takes no jobs until it starts
+  again. It refuses while a job is running (stopping would cancel it) and
+  when the VM cannot be asked whether one is; stopping an already-stopped VM
+  is not an error.
+- `diagnose` names `bin/homefield start` as the fix for a stopped VM, where
+  it named `limactl start` before.
+
 ## v0.4.0 (2026-11-04)
 
 Bumps the minor from v0.3.2: `homefield adopt --setup` now routes a
