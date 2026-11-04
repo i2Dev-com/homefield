@@ -470,4 +470,31 @@ record "no call anywhere started, stopped, created, deleted or edited a VM" "0" 
 record "...none changed the runner service, registered or removed it" "0" "$(grep -c -E 'systemctl (start|stop|restart)|config\.sh|svc\.sh|provision\.sh' "$allcalls" || true)"
 record "...and gh made no write (-X) call" "0" "$(grep -c -E '^gh .*-X ' "$allcalls" || true)"
 
+echo "color:"
+# Piped runs (this suite's diag captures stdout) must stay plain: every
+# substring assertion above depends on it. --color=always colors the same
+# lines; NO_COLOR beats the variable. diagnose goes through main, so the
+# option reaches color_init the way a user's invocation does.
+guest_fs
+diag "${healthy[@]}" NPM_OUT=broken -- --color=always
+esc="$(printf '\033')"
+# The color wraps the word BROKEN mid-line, so the text around it stays plain:
+# 'npm: ' before the escape, the reason after the reset.
+record "diagnose --color=always: BROKEN word red, summary red, fix line plain" "yes/yes/yes" \
+  "$(printf '%s' "$out" | grep -qF "npm: ${esc}[31mBROKEN${esc}[0m" && echo yes || echo no)/$(printf '%s' "$out" | grep -qF "${esc}[31mSummary: 1 problem found." && echo yes || echo no)/$(printf '%s' "$out" | grep -qF "${esc}     Fix:" && echo no || echo yes)"
+record "...the BROKEN reason still plain after the reset" "yes" \
+  "$(printf '%s' "$out" | grep -qF 'BROKEN'"${esc}"'[0m (a runner self-update' && echo yes || echo no)"
+guest_fs
+diag "${healthy[@]}" NPM_OUT=broken -- HOMEFIELD_COLOR=always NO_COLOR=1
+record "diagnose: NO_COLOR beats HOMEFIELD_COLOR=always (piped or not)" "no" \
+  "$(printf '%s' "$out" | grep -qF "${esc}" && echo yes || echo no)"
+guest_fs
+diag "${healthy[@]}" -- --color=never HOMEFIELD_COLOR=always
+record "diagnose: --color=never beats HOMEFIELD_COLOR" "no" \
+  "$(printf '%s' "$out" | grep -qF "${esc}" && echo yes || echo no)"
+guest_fs
+diag "${healthy[@]}" --
+record "diagnose piped: no ANSI anywhere" "no" \
+  "$(printf '%s' "$out" | grep -qF "${esc}" && echo yes || echo no)"
+
 summary

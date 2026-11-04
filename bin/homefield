@@ -276,8 +276,64 @@ without one, pass --group-exists for a group you created and checked by hand.
 EOF
 }
 
+# ── Color ───────────────────────────────────────────────────────────────────
+# Colors are for the severity markers (OK/WARN/FAIL, warnings, errors) and
+# only when the user will actually see them: the default (auto) colors a
+# terminal and leaves a pipe alone, because every consumer of piped output —
+# the test suites' substring matches, a `grep homefield`, CI logs — wants the
+# plain text. HOMEFIELD_COLOR=always forces colors into a pipe (NO_COLOR beats
+# it, as the no-color.org convention), --color=never beats the variable, and
+# --color=always beats both being unset. Each level's marker keeps its plain
+# word (OK, WARN, FAIL, warning:) so `--color=never` output is byte-identical
+# to the pre-color output and scrapers of either form never see an escape.
+HF_ANSI_OFF=1
+# color_init [args...]: scan the option list once, before any output. Called
+# from main with the command's arguments; a sourced bin/homefield (tests) calls
+# it through the emitters below, so the level of a marker never depends on
+# where in main it was set.
+color_init() {
+  HF_ANSI_OFF=1
+  local mode="" arg
+  for arg in "$@"; do
+    case "$arg" in
+      --color=*) mode="${arg#--color=}" ;;
+    esac
+  done
+  case "${mode:-${HOMEFIELD_COLOR:-auto}}" in
+    never) HF_ANSI_OFF=1 ;;
+    always)
+      case "${NO_COLOR:-}" in "") HF_ANSI_OFF=0 ;; *) HF_ANSI_OFF=1 ;; esac
+      ;;
+    auto|*)
+      # A terminal on stdout is the one case auto colors; stderr emitters
+      # (die, adopt_warn) follow stdout's decision, so a run is all-or-nothing.
+      if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then HF_ANSI_OFF=0; else HF_ANSI_OFF=1; fi
+      ;;
+  esac
+}
+# hf_color <code>: prints the ANSI SGR for <code> (1=green,2=yellow,3=red,
+# 0=reset) or nothing when colors are off. The escapes are spelled with
+# printf's \033 so no literal control bytes land in the source.
+hf_color() {
+  if [ "$HF_ANSI_OFF" = 0 ]; then
+    case "$1" in
+      1) printf '\033[32m' ;;
+      2) printf '\033[33m' ;;
+      3) printf '\033[31m' ;;
+      0) printf '\033[0m' ;;
+    esac
+  fi
+}
+color_wrap() { # color_wrap <code> <text>: <text> wrapped in <code>, or bare
+  if [ "$HF_ANSI_OFF" = 0 ]; then
+    printf '%s%s%s' "$(hf_color "$1")" "$2" "$(hf_color 0)"
+  else
+    printf '%s' "$2"
+  fi
+}
+
 die() {
-  echo "homefield: $*" >&2
+  echo "homefield: $(color_wrap 3 "$*")" >&2
   exit 1
 }
 log() { echo "homefield: $*"; }
@@ -397,24 +453,25 @@ preflight_collect() {
 # cmd_preflight: preflight_collect's checks, one line each, each failure with
 # the command that fixes it. Exits 0 when every check passes, 1 otherwise.
 cmd_preflight() {
-  local failed=0 total i level
+  local failed=0 total i level level_color
   preflight_collect
   total=${#PF_NAME[@]}
   for ((i = 0; i < total; i++)); do
     case "${PF_LEVEL[i]}" in
-      ok) level=OK ;;
-      warn) level=WARN ;;
-      *) level=FAIL; failed=$((failed + 1)) ;;
+      ok) level=OK; level_color=1 ;;
+      warn) level=WARN; level_color=2 ;;
+      *) level=FAIL; level_color=3; failed=$((failed + 1)) ;;
     esac
-    printf '  %-6s%s\n' "$level" "${PF_MSG[i]}"
+    printf '  %s%-6s%s%s\n' "$(hf_color "$level_color")" "$level" "$(hf_color 0)" "${PF_MSG[i]}"
   done
   # Summary
   echo ""
   if [ "$failed" -eq 0 ]; then
-    echo "All checks passed (${total}/${total})."
+    printf '%s\n' "$(color_wrap 1 "All checks passed (${total}/${total}).")"
     return 0
   fi
-  echo "FAILED ${failed}/${total} check(s). Fix the above and retry."
+  printf '%s ' "$(color_wrap 3 "FAILED ${failed}/${total} check(s).")"
+  echo "Fix the above and retry."
   return 1
 }
 
@@ -2516,7 +2573,7 @@ dg_render_human() {
   else
     case "$DG_ISO" in
       verified) echo "  - Isolation: verified (no host mounts, /Users hidden)" ;;
-      failed) echo "  - Isolation: BROKEN (${DG_ISO_WHY})" ;;
+      failed) echo "  - Isolation: $(color_wrap 3 "BROKEN") (${DG_ISO_WHY})" ;;
       *) echo "  - Isolation: unknown (${DG_ISO_WHY})" ;;
     esac
     case "$DG_REG" in
@@ -2535,13 +2592,13 @@ dg_render_human() {
       echo "  - On GitHub: $(dg_gh_text)"
       case "$DG_SVC" in
         running) echo "  - Service: running (${DG_UNIT})" ;;
-        *) echo "  - Service: NOT running (${DG_UNIT:-no service installed})" ;;
+        *) echo "  - Service: $(color_wrap 3 "NOT running") (${DG_UNIT:-no service installed})" ;;
       esac
       echo "  - Version: ${DG_VER}"
       echo "  - Extra packages: ${DG_PKGS:-none}"
       case "$DG_NPM" in
-        ok) echo "  - npm: ok" ;;
-        broken) echo "  - npm: BROKEN (a runner self-update can flatten the externals symlinks; docs/runbook.md, \"Runner updates\")" ;;
+        ok) echo "  - npm: $(color_wrap 1 ok)" ;;
+        broken) echo "  - npm: $(color_wrap 3 "BROKEN") (a runner self-update can flatten the externals symlinks; docs/runbook.md, \"Runner updates\")" ;;
         *) echo "  - npm: unknown (could not ask the VM)" ;;
       esac
     else
@@ -2593,23 +2650,23 @@ dg_render_human() {
   n=${#PF_NAME[@]}
   for ((i = 0; i < n; i++)); do
     case "${PF_LEVEL[i]}" in
-      ok) printf '  - %-6s%s\n' OK "${PF_MSG[i]}" ;;
-      warn) printf '  - %-6s%s\n' WARN "${PF_MSG[i]}" ;;
-      *) printf '  - %-6s%s\n' FAIL "${PF_MSG[i]}" ;;
+      ok) printf '  - %s%-6s%s%s\n' "$(hf_color 1)" OK "$(hf_color 0)" "${PF_MSG[i]}" ;;
+      warn) printf '  - %s%-6s%s%s\n' "$(hf_color 2)" WARN "$(hf_color 0)" "${PF_MSG[i]}" ;;
+      *) printf '  - %s%-6s%s%s\n' "$(hf_color 3)" FAIL "$(hf_color 0)" "${PF_MSG[i]}" ;;
     esac
   done
   echo ""
   n=${#DG_P_MSG[@]}
   if [ "$n" -eq 0 ]; then
     if [ "${#DG_WARN[@]}" -eq 0 ]; then
-      echo "Summary: healthy."
+      printf '%s\n' "$(color_wrap 1 "Summary: healthy.")"
     else
-      echo "Summary: healthy as far as it could be checked."
+      printf '%s\n' "$(color_wrap 1 "Summary: healthy as far as it could be checked.")"
     fi
   else
-    if [ "$n" -eq 1 ]; then echo "Summary: 1 problem found."; else echo "Summary: ${n} problems found."; fi
+    if [ "$n" -eq 1 ]; then printf '%s\n' "$(color_wrap 3 "Summary: 1 problem found.")"; else printf '%s\n' "$(color_wrap 3 "Summary: ${n} problems found.")"; fi
     for ((i = 0; i < n; i++)); do
-      echo "  $((i + 1)). ${DG_P_MSG[i]}"
+      printf '  %d. %s\n' "$((i + 1))" "$(color_wrap 3 "${DG_P_MSG[i]}")"
       [ -z "${DG_P_FIX[i]}" ] || echo "     Fix: ${DG_P_FIX[i]}"
     done
   fi
@@ -3257,7 +3314,7 @@ ADOPT_GUARDS=0
 ADOPT_ROUTED=""
 ADOPT_WORKFLOWS=0
 
-adopt_warn() { echo "homefield: warning: $*" >&2; }
+adopt_warn() { echo "homefield: warning: $(color_wrap 2 "$*")" >&2; }
 
 # adopt_repository <owner/repo>: sets ADOPT_REPO_ID, ADOPT_BRANCH and
 # ADOPT_OWNER_TYPE. Only private repositories may reach the runner.
@@ -3687,8 +3744,8 @@ ADOPT_VERIFY_ROWS=""
 
 # adopt_verify_commands <owner/repo>: the check, for someone who does it by hand.
 adopt_verify_commands() {
-  log "to check that the jobs land on the local runner (docs/adopting.md, step 6), re-run the latest pull-request run and read each job's runner:"
-  echo "  gh run list --repo $1 --event pull_request --limit 1"
+  log "to check that the jobs land on the local runner (docs/adopting.md, step 6), re-run the latest pull-request run of a workflow other than the routing guard (\"HomeField routing\": hosted by design) and read each job's runner:"
+  echo "  gh run list --repo $1 --event pull_request --limit 15"
   echo "  gh run rerun <run-id> --repo $1"
 }
 
@@ -3822,7 +3879,7 @@ adopt_verify() {
     esac
   fi
 
-  gh run list --repo "$repo" --event pull_request --limit 1 --json databaseId,status,url,displayTitle >"$ADOPT_TMP/v.json" 2>"$ADOPT_TMP/v.err" </dev/null || {
+  gh run list --repo "$repo" --event pull_request --limit 1 --json databaseId,status,url,displayTitle,workflowName >"$ADOPT_TMP/v.json" 2>"$ADOPT_TMP/v.err" </dev/null || {
     adopt_warn "could not verify: gh could not list the runs of ${repo}: $(head -1 "$ADOPT_TMP/v.err")"
     return 0
   }
@@ -3830,11 +3887,31 @@ adopt_verify() {
     adopt_warn "could not verify: gh gave a list of runs that this tool cannot read ($(head -1 "$ADOPT_TMP/v.err"))"
     return 0
   }
+  IFS="$ADOPT_FS" read -r tag id jstatus url title <<<"$row"
+  if [ "$tag" = "guard-only" ]; then
+    # The newest pull-request run is the routing guard's own, which is hosted
+    # by design (routing_workflow, tools/adopt.py): re-running it would prove
+    # nothing and end in the hosted warning whatever the routing does. A run
+    # of a real workflow may sit below it, which one row cannot show: fetch a
+    # wider window before concluding there is nothing to re-run.
+    gh run list --repo "$repo" --event pull_request --limit 15 --json databaseId,status,url,displayTitle,workflowName >"$ADOPT_TMP/v.json" 2>"$ADOPT_TMP/v.err" </dev/null || {
+      adopt_warn "could not verify: gh could not list the runs of ${repo}: $(head -1 "$ADOPT_TMP/v.err")"
+      return 0
+    }
+    row="$(python3 -I "$ROOT/tools/adopt.py" verify-run <"$ADOPT_TMP/v.json" 2>"$ADOPT_TMP/v.err")" || {
+      adopt_warn "could not verify: gh gave a list of runs that this tool cannot read ($(head -1 "$ADOPT_TMP/v.err"))"
+      return 0
+    }
+    IFS="$ADOPT_FS" read -r tag id jstatus url title <<<"$row"
+  fi
   if [ -z "$row" ]; then
     log "verify: ${repo} has no pull-request run yet, so there is nothing to re-run. Open a pull request and look at where its jobs run (docs/adopting.md, step 6)"
     return 0
   fi
-  IFS="$ADOPT_FS" read -r id jstatus url title <<<"$row"
+  if [ "$tag" = "guard-only" ]; then
+    log "verify: the newest pull-request runs are all the routing guard's own (hosted by design), so there is nothing to re-run. Open a pull request on the repository and look at where its jobs run (docs/adopting.md, step 6)"
+    return 0
+  fi
   if [ "$jstatus" != completed ]; then
     log "verify: run ${id} (${title}) is still ${jstatus}, and a run can only be re-run once it has completed. Later: gh run rerun ${id} --repo ${repo}"
     return 0
@@ -4510,10 +4587,14 @@ cmd_version() {
 # ── Main ────────────────────────────────────────────────────────────────────
 # --instance may come before or after the command.
 main() {
-  local cmd="" rest=()
+  local cmd="" rest=() color_opt=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --instance) INSTANCE="${2:?--instance needs a value}"; shift 2 ;;
+      # --color is global, accepted before or after the command, and never
+      # reaches a command's own parser: the emitters read HF_ANSI_OFF, which
+      # color_init sets before any output.
+      --color=*) color_opt="$1"; shift ;;
       *)
         if [ -z "$cmd" ]; then cmd="$1"; else rest+=("$1"); fi
         shift
@@ -4521,6 +4602,7 @@ main() {
     esac
   done
   [ -n "$cmd" ] || { usage >&2; exit 1; }
+  color_init ${color_opt:+"$color_opt"} "$cmd" "$@"
   # Only the commands that act on the VM: preflight, route, adopt, report and
   # version never use it, so a stale HOMEFIELD_INSTANCE does not stop them.
   case "$cmd" in setup | install | upgrade | status | diagnose | uninstall | reset | memory) check_instance ;; esac

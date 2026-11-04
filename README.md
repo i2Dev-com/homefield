@@ -196,6 +196,13 @@ Homebrew goes on, and the preflight it then hands over to (`setup`) reports a
 missing `gh` with the command to run, so a failed preflight check stops it
 before the VM is created. `HOMEFIELD_YES=1` installs both without asking.
 
+The level markers (`OK`, `WARN`, `FAIL`), the summaries and errors are
+colored — green, yellow, red — when the output goes to a terminal. Piped
+output stays plain, so scripts and `grep` keep working; `HOMEFIELD_COLOR=always`
+colors a pipe, `NO_COLOR` (the no-color.org convention) turns color off
+everywhere, and `--color=never` beats both. Every colored marker keeps its
+plain word, so text around the colors reads the same either way.
+
 #### When something goes wrong
 
 `homefield diagnose` (`--json` for scripts) reads everything in one report: the
