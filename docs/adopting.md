@@ -48,9 +48,10 @@ Keep hosted:
   the Mac being awake, and a deploy gated on CI can queue behind it.
 
 The [parity table](runbook.md#what-the-vm-has-compared-with-a-hosted-runner)
-in the runbook lists what `ubuntu-latest` has that the VM does not —
-privileges, apt packages, CLI tools, browsers, language versions — and says
-whether provisioning closes each gap or the job must stay hosted.
+in the runbook lists the eight dimensions where a hosted runner and the VM
+differ — privileges, apt packages, CLI tools, browsers, languages,
+architecture, state between jobs, versions — and what to do for each:
+provision it, use a setup action, or keep the job hosted.
 
 ## 2. Route them
 
