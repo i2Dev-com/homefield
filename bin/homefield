@@ -4092,8 +4092,9 @@ adopt_setup() {
     [ -z "$ADOPT_FLAG_EVENTS" ] || opts+=(--events "$ADOPT_FLAG_EVENTS")
     [ -z "$ADOPT_FLAG_DEPENDABOT" ] || opts+=(--dependabot "$ADOPT_FLAG_DEPENDABOT")
   else
-    [ -z "$ADOPT_FLAG_EVENTS" ] || [ -z "$ADOPT_FLAG_DEPENDABOT" ] ||
+    if [ -n "$ADOPT_FLAG_EVENTS" ] || [ -n "$ADOPT_FLAG_DEPENDABOT" ]; then
       die "adopt: --events and --dependabot have no effect in simple mode, which routes every event; drop them, or pass --guards for the guarded expression"
+    fi
     expr="$(python3 -I "$ROOT/routing-guard/routing_guard.py" --print-expression --mode simple --label "$label" \
       --fallback "${ADOPT_FLAG_FALLBACK:-ubuntu-latest}" 2>&1)" ||
       die "adopt: the routing options cannot be routed on: $(printf '%s' "$expr" | sed $'s/\033\\[[0-9;]*m//g')"

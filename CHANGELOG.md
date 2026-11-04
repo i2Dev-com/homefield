@@ -40,7 +40,11 @@ changes.
   (its default `guards` keeps every existing step byte for byte); in simple
   mode it also accepts the guarded expression, so a repository can move
   between the shapes or mix them, and it refuses `events`/`dependabot`
-  (there), which would have no effect — every event routes.
+  (there), which would have no effect — every event routes. Until the
+  release carrying simple mode is cut, `adopt --setup` and `guard-snippet`
+  refuse it: the guard step they write pins this copy's release, whose
+  checker has no `--mode` and would fail the workflows on their first pull
+  request; `--guards` is the way until then.
 
 ### Fixed
 

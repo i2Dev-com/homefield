@@ -65,8 +65,13 @@ the same labels — run it when touching either.
 
 - **Mandatory guards**, in every variant: the `vars.CI_RUNNER == 'local'`
   switch, a hosted fallback (`fallback` must be a bare GitHub-hosted image
-  name), and fork pull requests hosted. Private repositories only is the
-  runner group's job, enforced by `adopt`.
+  name), and fork pull requests hosted — except in simple mode
+  (`--mode simple`), which deliberately keeps only the switch and the
+  fallback: it routes every event, Dependabot's and forks' pull requests
+  included, and is for a private repository whose every contributor may use
+  the Mac. What keeps strangers off the runner there is that the repository
+  is private; private repositories only is the runner group's job, enforced
+  by `adopt`.
 - **Options with defaults**: `events` (default `pull_request` only),
   `dependabot` (default `hosted`) and `fallback` (default `ubuntu-latest`).
   They exist on the action, on `routing_guard.py` and on `homefield adopt` and

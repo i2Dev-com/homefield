@@ -531,8 +531,13 @@ run_fn() {
   done
   shift
   : >"$calls"
+  # The suites exercise this checkout, whose RELEASE is the one before the
+  # release that carries --mode: let simple mode through unless a case asks
+  # for the refusal by passing HOMEFIELD_MODE_RELEASE= (empty, so adopt.py
+  # falls back to its own threshold).
   # shellcheck disable=SC2016  # the -c script is expanded by the inner bash
-  out="$(env -i HOME="$work" PATH="$stubs" TMPDIR="$work/tmp" CALLS="$calls" HOMEFIELD_SOURCE_ONLY=1 "${envs[@]+"${envs[@]}"}" \
+  out="$(env -i HOME="$work" PATH="$stubs" TMPDIR="$work/tmp" CALLS="$calls" HOMEFIELD_SOURCE_ONLY=1 \
+    HOMEFIELD_MODE_RELEASE="${HOMEFIELD_MODE_RELEASE:-v0.3.2}" "${envs[@]+"${envs[@]}"}" \
     "$BASH" -c '. "$1"; shift; "$@"' _ "$ROOT/bin/homefield" "$@" 2>&1 </dev/null)"
   rc=$?
 }
@@ -746,9 +751,21 @@ record "a guard with events pull_request_target: not ready, with the guard's rea
 adopt GH_WF="$work/wf-noguard" -- --events 'push,schedule' --dependabot local --fallback ubuntu-24.04-arm
 record "no guard yet, --events/--dependabot without --guards: refused (simple routes every event)" "nonzero/yes" \
   "$(nonzero "$rc")/$(has "$out" 'have no effect in simple mode')"
+adopt GH_WF="$work/wf-noguard" -- --events push
+record "...either flag alone is refused too" "nonzero/yes/0" \
+  "$(nonzero "$rc")/$(has "$out" 'have no effect in simple mode')/$(called 'variable set')"
+adopt GH_WF="$work/wf-noguard" -- --dependabot local
+record "...dependabot alone likewise" "nonzero/yes" \
+  "$(nonzero "$rc")/$(has "$out" 'have no effect in simple mode')"
 adopt GH_WF="$work/wf-noguard" -- --guards --events 'push,schedule' --dependabot local --fallback ubuntu-24.04-arm
 record "no guard yet with --guards: the expression and the snippet carry the options" "nonzero/yes/yes/yes/yes/no" \
   "$(nonzero "$rc")/$(has "$out" "runs-on: $expr_combo")/$(has "$out" '          events: push, schedule')/$(has "$out" '          dependabot: local')/$(has "$out" '          fallback: ubuntu-24.04-arm')/$(has "$out" 'label:')"
+adopt GH_WF="$work/wf-noguard" -- --setup --events push
+record "--setup with --events alone, no --guards: refused" "nonzero/yes/0" \
+  "$(nonzero "$rc")/$(has "$out" 'have no effect in simple mode')/$(called 'X POST')"
+adopt GH_WF="$work/wf-noguard" -- --setup --dependabot local
+record "--setup with --dependabot alone: refused" "nonzero/yes/0" \
+  "$(nonzero "$rc")/$(has "$out" 'have no effect in simple mode')/$(called 'X POST')"
 adopt GH_WF="$work/wf-noguard" --
 record "...the defaults are not written into the guard" "no/no/no" \
   "$(has "$out" 'events:')/$(has "$out" 'dependabot:')/$(has "$out" 'fallback:')"
@@ -1544,6 +1561,12 @@ adopt GH_WF="$work/wf-simple" -- --guards --setup
 record "--setup --guards, no guard: the guarded expression, and no mode input" "yes/no" \
   "$(payload ci.yml | grep -qF "runs-on: $expr" && echo yes || echo no)/$(payload homefield-routing.yml | grep -q '          mode:' && echo yes || echo no)"
 rm -f "$work/branch-homefield_route-to-local"
+# Before the release that carries --mode is cut, a checkout of main refuses
+# to write simple mode: the guard step it writes pins the release, whose
+# checker would fail the workflows on their first pull request.
+run_fn HOMEFIELD_MODE_RELEASE= GH_GROUPS="$work/groups-selected" GH_MEMBERS="$work/members-other" GH_WF="$work/wf-simple" -- cmd_adopt --repo acme/app --setup
+record "--setup simple before the mode release exists: refused, --guards named" "nonzero/yes/0" \
+  "$(nonzero "$rc")/$(has "$out" 'is not cut yet; pass --guards')/$(called 'X POST')"
 
 # A repository already on the guarded expression but with no guard yet: simple
 # mode lists the jobs as they are (grandfathered), and rewrites nothing.

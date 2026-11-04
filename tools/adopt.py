@@ -92,6 +92,14 @@ DEFAULT_FALLBACK = "ubuntu-latest"
 # CI_RUNNER switch. A guard step without a mode input is guards: the input
 # arrived when the action learned --mode.
 DEFAULT_MODE = "guards"
+# The first release that carries --mode (mode: simple). The guard step setup
+# writes pins this copy's release (ACTION below), and the checker at a
+# release before this one has no mode input: it would fail the very workflows
+# setup writes, on their first pull request. So simple mode is refused until
+# RELEASE itself moves here, which the release commit does; until then
+# --guards is the way. The environment overrides the threshold for the test
+# suites, which exercise this checkout before the release exists.
+MODE_RELEASE = "v0.4.0"
 # The architecture the guard defaults to, which is the VM adopt sets up:
 # bin/homefield refuses a step whose arch is anything else, and checks with the
 # step's own value, so what it reports is what CI runs.
@@ -805,6 +813,30 @@ def routable_jobs(info, expression, accept_switch=False):
     return out
 
 
+def release_key(text):
+    """A release tag as a comparable tuple: v0.10.1 sorts after v0.9.0."""
+    return tuple(int(p) for p in text.lstrip("v").split("."))
+
+
+def mode_release_problem(mode):
+    """Why `mode` cannot be written yet, or "" when it can: a simple-mode
+    guard step only checks as written once the release it pins carries
+    --mode, and the step setup writes or keeps pins this copy's release
+    (ACTION) unless the repository's own guard already carries another one.
+    The threshold is MODE_RELEASE, overridable for the test suites."""
+    if mode != "simple":
+        return ""
+    threshold = os.environ.get("HOMEFIELD_MODE_RELEASE") or MODE_RELEASE
+    if release_key(RELEASE) >= release_key(threshold):
+        return ""
+    return (
+        f"simple mode writes a guard step pinned to {ACTION}, and the action at"
+        f" that release has no mode input: its check would fail the workflows"
+        f" this writes. The release carrying simple mode ({MODE_RELEASE}) is not"
+        " cut yet; pass --guards, or cut the release first"
+    )
+
+
 def setup_plan(directory, out, expression, label, events, dependabot, fallback, only, mode=DEFAULT_MODE):
     """Stage the `homefield adopt --setup` rewrite of the workflows in DIR into
     OUT: every job of a workflow that runs on pull requests that today asks
@@ -842,6 +874,9 @@ def setup_plan(directory, out, expression, label, events, dependabot, fallback, 
         )
     if usable:
         check_guard_options(usable[0], label, events, dependabot, fallback, mode)
+    problem = mode_release_problem(mode)
+    if problem:
+        raise SetupError(problem)
 
     routed = []
     edits = {}
@@ -1065,6 +1100,10 @@ def main():
             return 1
         if args.mode == "simple" and (args.events != DEFAULT_EVENTS or args.dependabot != DEFAULT_DEPENDABOT):
             print("adopt.py: events and dependabot have no effect in simple mode, which routes every event", file=sys.stderr)
+            return 1
+        problem = mode_release_problem(args.mode)
+        if problem:
+            print(f"adopt.py: {problem}", file=sys.stderr)
             return 1
         print(guard_snippet(args.label, [j for j in re.split(r"[\s,]+", args.jobs) if j], args.events, args.dependabot, args.fallback, args.mode))
     elif args.cmd == "setup":
