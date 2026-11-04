@@ -11,8 +11,12 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ## Unreleased
 
-Compatible with v0.3.2 (workflows unchanged; output colors are off when it
-matters — piped or captured — so nothing reading homefield's output changes).
+Bumps the minor from v0.3.2: `homefield adopt --setup` now routes a
+repository without a guard with the simple expression unless `--guards` is
+given (a default change, though no workflow that passes v0.3.2's guard fails
+now — the simple-mode check accepts both shapes). Output colors are off when
+it matters — piped or captured — so nothing reading homefield's output
+changes.
 
 ### Added
 
@@ -25,6 +29,18 @@ matters — piped or captured — so nothing reading homefield's output changes)
   before or after the command) beats the variable. A colored marker still
   carries its plain word, so `--color=never` output is identical to
   v0.3.2's.
+- Simple `runs-on` mode: the one-clause expression
+  `${{ vars.CI_RUNNER == 'local' && 'homefield-ci' || 'ubuntu-latest' }}`
+  whose only guardrail is the `CI_RUNNER` switch (which stays the rollback,
+  `homefield route hosted`). It routes every event, so it is for a private
+  repository whose every contributor may use the Mac. `homefield adopt
+  --setup` writes it for a repository without a guard; `--guards` opts into
+  the guarded multi-clause expression, and a guard already in the repository
+  keeps its own shape either way. The guard learns `--mode`/`mode: simple`
+  (its default `guards` keeps every existing step byte for byte); in simple
+  mode it also accepts the guarded expression, so a repository can move
+  between the shapes or mix them, and it refuses `events`/`dependabot`
+  (there), which would have no effect — every event routes.
 
 ### Fixed
 
