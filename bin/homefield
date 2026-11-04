@@ -267,8 +267,10 @@ adopt:
   exits 1, having changed nothing. Adding the repository to the group needs
   admin:org; without it, it says so and goes on. --setup stops earlier: it
   opens the routing pull request and changes nothing else (unless --wait
-  carries on after the merge; with --dry-run it waits for nothing). Needs gh and
-  python3. Does not need the VM.
+  carries on after the merge; with --dry-run it waits for nothing). Writing
+  .github/workflows/ needs the workflow scope of a classic PAT; without it,
+  --setup stops before anything is created, naming `gh auth refresh -s
+  workflow`. Needs gh and python3. Does not need the VM.
 
 memory:
   --days N           how many days to show (default 7)
@@ -401,8 +403,11 @@ pf_add() {
 # status comes through: with --json it exits 0 when nobody is logged in, so a
 # non-zero status means the question could not be answered (a gh too old for
 # --json, a broken install), which is not the same as "not logged in".
+# GitHub reports the scopes comma-space separated ("repo, workflow"); the
+# spaces are stripped here, so a caller's `,scope,` match works whichever
+# order the scopes come back in.
 gh_active_account() {
-  gh auth status --json hosts --jq '.hosts["github.com"] // [] | map(select(.active)) | (.[0] // {}) | "\(.login // "")|\(.scopes // "")"' 2>/dev/null </dev/null
+  gh auth status --json hosts --jq '.hosts["github.com"] // [] | map(select(.active)) | (.[0] // {}) | "\(.login // "")|\(.scopes // "" | gsub(" "; ""))"' 2>/dev/null </dev/null
 }
 preflight_collect() {
   local version major minor login scopes whoami py_version
@@ -432,6 +437,11 @@ preflight_collect() {
     whoami="$(gh_active_account)" || whoami="|"
     login="${whoami%%|*}"
     scopes="${whoami#*|}"
+    # GitHub reports scopes comma-space separated ("repo, admin:org"); the
+    # spaces come off here, so the `,scope,` match works whichever order they
+    # come back in (gh_active_account strips them too; an override in a test
+    # may not).
+    scopes="${scopes// /}"
     if [ -z "$login" ]; then
       pf_add gh fail "gh not logged in: run 'gh auth login'"
     elif [ -z "$scopes" ]; then
@@ -4187,6 +4197,49 @@ adopt_setup_exit() {
   exit "$ADOPT_EXIT_OPEN"
 }
 
+# adopt_workflow_scope: whether the token gh will use may write files under
+# .github/workflows/. GitHub requires a classic PAT's workflow scope for
+# Contents writes there and answers a bare 404 without it (#165): the same
+# token writes everywhere else in the repository, so the failure reads as
+# "not found" when it means "not allowed". Only a scope list GitHub reports
+# proves anything; a login whose scopes are not reported (an App or
+# fine-grained token), an env-var token, or a gh that cannot answer cannot be
+# judged, and must not be read as "missing". 0 = proven present, 1 = proven
+# absent, 2 = cannot tell.
+adopt_workflow_scope() {
+  local account scopes
+  if [ -n "${GITHUB_TOKEN:-}${GH_TOKEN:-}" ]; then
+    # gh uses the variable instead of its stored login, and gh's status does
+    # not answer for it; what the token may do is told by the write itself.
+    return 2
+  fi
+  account="$(gh_active_account)" || return 2
+  scopes="${account#*|}"
+  [ -n "$scopes" ] || return 2
+  case ",$scopes," in
+    *,workflow,*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# adopt_write_denied <name> <repo> <errfile>: the message for a failed
+# Contents write. A 404 here means "not allowed": GitHub answers one when the
+# token lacks the workflow scope, which Contents writes under
+# .github/workflows/ need, though the same token writes everywhere else
+# (#165) — the preflight above catches a scope it can see missing, this
+# catches the tokens it cannot (an env-var token, one that reports no
+# scopes). The branch goes back through the EXIT trap. This is a plain
+# message, not a block on the write: a `cmd || { ... }` here defers the
+# pending INT trap past die, and a Ctrl-C mid-write would end the run
+# without its interrupted note (the adopt.sh interrupt tests caught it).
+adopt_write_denied() {
+  if grep -q 404 "$3"; then
+    printf 'adopt: setup: GitHub refused to write .github/workflows/%s (404): the token gh is using most likely lacks the workflow scope, which Contents writes under .github/workflows/ need. Add it to gh%s login: gh auth refresh -h github.com -s workflow (a GITHUB_TOKEN or GH_TOKEN must carry the scope itself)\n' "$1" "'"
+  else
+    printf 'adopt: setup: could not write .github/workflows/%s to %s on %s: %s\n' "$1" "${SETUP_BRANCH}" "$2" "$(head -1 "$3")"
+  fi
+}
+
 # adopt_setup <owner/repo> <label> <jobs> <dry>: the --setup path, the
 # workflow edits of docs/adopting.md steps 1-4 opened as a pull request. The
 # plan comes from tools/adopt.py setup over the same downloaded workflows a
@@ -4203,7 +4256,7 @@ adopt_setup_exit() {
 # every event, so they are refused there.
 adopt_setup() {
   local repo="$1" label="$2" jobs="$3" dry="$4"
-  local setup="$ADOPT_TMP/setup" plan kind value name enc sha head_sha url body check line
+  local setup="$ADOPT_TMP/setup" plan kind value name enc sha head_sha url body check line ws
   local opts=(--label "$label") gopts mode expr routed="" files=""
   if [ "$ADOPT_FLAG_GUARDS" = 1 ]; then
     mode=guards
@@ -4266,6 +4319,17 @@ adopt_setup() {
     return 0
   fi
 
+  # The Contents writes below need the workflow scope of a classic PAT, and
+  # GitHub answers a bare 404 without it (#165): the same token writes
+  # everywhere else. A scope proven absent stops here, before the branch
+  # exists; one that cannot be told goes on, and the write's own 404 below
+  # says so.
+  ws=0
+  adopt_workflow_scope || ws=$?
+  if [ "$ws" = 1 ]; then
+    die "adopt: setup: gh's active login has no workflow scope, and writing .github/workflows/ needs it (a bare 404 is all GitHub says): gh auth refresh -h github.com -s workflow, then run this again"
+  fi
+
   head_sha="$(gh api "repos/${repo}/commits/${ADOPT_BRANCH}" --jq .sha 2>"$ADOPT_TMP/err")" ||
     die "adopt: setup: could not read ${ADOPT_BRANCH} on ${repo}: $(head -1 "$ADOPT_TMP/err")"
   if gh api "repos/${repo}/git/ref/heads/${SETUP_BRANCH}" --jq .object.sha >/dev/null 2>&1; then
@@ -4292,8 +4356,8 @@ adopt_setup() {
     sha="$(gh api -X GET "repos/${repo}/contents/.github/workflows/${enc}" -f ref="$SETUP_BRANCH" --jq .sha 2>/dev/null)" || sha=""
     python3 -I "$ROOT/tools/adopt.py" contents-payload "$setup/$name" "${sha:-none}" "$SETUP_MSG" "$SETUP_BRANCH" \
       >"$ADOPT_TMP/put.json" || die "adopt: setup: could not stage .github/workflows/${name}"
-    gh api -X PUT "repos/${repo}/contents/.github/workflows/${enc}" --input "$ADOPT_TMP/put.json" >/dev/null ||
-      die "adopt: setup: could not write .github/workflows/${name} to ${SETUP_BRANCH} on ${repo}"
+    gh api -X PUT "repos/${repo}/contents/.github/workflows/${enc}" --input "$ADOPT_TMP/put.json" >/dev/null 2>"$ADOPT_TMP/err" ||
+      die "$(adopt_write_denied "$name" "$repo" "$ADOPT_TMP/err")"
     log "setup: wrote .github/workflows/${name}"
   done <<<"$files"
 

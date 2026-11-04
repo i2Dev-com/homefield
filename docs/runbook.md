@@ -179,6 +179,17 @@ unchecked, and without a terminal it stops. If you created and checked the
 group by hand, pass `--group-exists` to go on without asking (registration
 fails if the group is missing).
 
+**The `workflow` scope.** Writing `.github/workflows/` through the Contents
+API needs it — a classic PAT's `workflow` scope — and GitHub answers a bare
+404 without it, though the same token writes everywhere else in the
+repository. `homefield adopt --setup` checks the scope of gh's active login
+first and stops before anything is created when it is missing; a token whose
+scopes GitHub does not report (a fine-grained or App token) or an env-var
+token cannot be checked, and the write's own 404 says the likely cause. To
+add the scope to gh's stored login: `gh auth refresh -h github.com -s
+workflow`. `GITHUB_TOKEN`/`GH_TOKEN` must carry the scope themselves; gh's
+`auth refresh` cannot add it to them.
+
 ## Setup (once per machine)
 
 `homefield setup` is the whole first-time setup in one command: it runs the

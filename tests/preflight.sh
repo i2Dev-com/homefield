@@ -278,6 +278,19 @@ case_gh_scope_warn() {
   fi
 }
 
+# case_gh_scope_order: GitHub reports the scopes comma-space separated, and
+# the order is its own ("repo, admin:org" was seen). The check must match
+# admin:org wherever it sits in the string, not only first (#165).
+case_gh_scope_order() {
+  local d="$work/gh-order"; ok_stub "$d"
+  preflight "$d" GH_JQ_OUT='person|repo, admin:org, workflow'
+  if [ "$pf_rc" -eq 0 ] && has "$pf_out" "OK    gh authenticated as person (admin:org scope)"; then
+    record "gh admin:org not first in the scopes: OK, exit 0" "$pf_rc" "0"
+  else
+    record "gh admin:org not first in the scopes: OK, exit 0" "$pf_rc" "0 (got: $pf_out)"
+  fi
+}
+
 # case_mixed: Lima and gh both fail → 2 failures, exit 1.
 case_mixed() {
   local d="$work/mixed"; ok_stub "$d"
@@ -346,6 +359,7 @@ case_gh_logged_out_terminal
 case_gh_uses_helper
 case_gh_app_token
 case_gh_scope_warn
+case_gh_scope_order
 case_missing "python3 missing" python3 "FAIL  python3 not found: run 'brew install python'"
 case_broken_python
 case_missing "brew missing" brew "FAIL  brew not found: install Homebrew from https://brew.sh"

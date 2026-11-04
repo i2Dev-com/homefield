@@ -48,6 +48,9 @@ It has three parts:
 - **Private** repositories. A public one is refused.
 - For an organization, an owner's `gh` login (it asks for the `admin:org`
   scope), or a registration token you paste. A repository URL needs neither.
+- `homefield adopt --setup` opens its routing pull request with `gh`, and
+  writing `.github/workflows/` needs the `workflow` scope of a classic PAT
+  ([runbook: scopes](docs/runbook.md#the-adminorg-scope)).
 - For an organization on the **Free** plan, `--group Default` at the end of the
   command below: custom runner groups need Team or Enterprise, and `setup`
   stops at the group step without it. Read
