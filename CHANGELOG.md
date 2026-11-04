@@ -11,6 +11,18 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ## Unreleased
 
+### Changed
+
+- `adopt --setup` no longer dies with a bare `gh: Not Found (HTTP 404)` when
+  gh's active login cannot write `.github/workflows/`: the `workflow` scope of
+  a classic PAT is checked before the branch is created and a missing one
+  stops the run with `gh auth refresh -h github.com -s workflow` (#165). A
+  token whose scopes GitHub does not report (fine-grained, App, an env-var
+  `GITHUB_TOKEN`/`GH_TOKEN`) cannot be checked, and the write's own 404 then
+  names the likely cause. `gh auth status` scopes are read with the spaces
+  GitHub reports them with stripped, so the `admin:org` preflight matches
+  whichever order they come back in.
+
 ### Added
 
 - `homefield start`: boots a stopped VM, then reports whether its runner is

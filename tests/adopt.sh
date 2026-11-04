@@ -52,6 +52,16 @@ hang() {
 hang "${GH_HANG:-}" "" "${GH_HANG_SECS:-30}"
 hang "${GH_HANG2:-}" 2 "${GH_HANG2_SECS:-30}"
 case "$*" in
+  # gh auth status (gh_active_account): GH_AUTH is "login|scopes" the way the
+  # real gh answers, empty when nobody is logged in, GH_AUTH_FAIL a gh that
+  # cannot answer at all.
+  "auth status"*)
+    if [ -n "${GH_AUTH_FAIL:-}" ]; then echo "gh: (github.com) could not be asked" >&2; exit 1; fi
+    # Like the real gh with --jq applied: the scopes' spaces are gone
+    # (gh_active_account's gsub strips them), so the helper's `,scope,`
+    # match runs on the same shape the real gh produces.
+    if [ -n "${GH_AUTH:-}" ]; then printf '%s\n' "$GH_AUTH" | tr -d ' '; fi
+    ;;
   "variable get CI_RUNNER"*)
     if [ -n "${GH_CI_RUNNER:-}" ]; then echo "$GH_CI_RUNNER"; else echo "variable not found" >&2; exit 1; fi
     ;;
@@ -87,6 +97,7 @@ case "$*" in
     cat "$GH_RUN"
     ;;
   *"-X PUT"*)
+    if [ -n "${GH_PUT_404:-}" ]; then echo "gh: Not Found (HTTP 404)" >&2; exit 1; fi
     if [ -n "${GH_PUT_FAIL:-}" ]; then echo "gh: HTTP 403" >&2; exit 1; fi
     # a Contents PUT records its JSON body, so a test can check the sha the
     # update carried (none means create mode).
@@ -1533,6 +1544,33 @@ rm -f "$work/branch-homefield_route-to-local"
 adopt GH_PUT_FAIL=1 -- --setup
 record "--setup failing mid-write: the branch is taken back, nothing is left" "nonzero/yes/1/gone" \
   "$(nonzero "$rc")/$(has "$out" 'could not write')/$(called 'X DELETE repos/acme/app/git/refs/heads/homefield/route-to-local')/$([ -f "$work/branch-homefield_route-to-local" ] && echo present || echo gone)"
+
+# The workflow scope (#165): GitHub requires a classic PAT's workflow scope to
+# write .github/workflows/ and answers a bare 404 without it, though the same
+# token writes everywhere else. Only a reported scope list proves the answer;
+# one that is not reported must go on and be told by the write itself.
+adopt GH_AUTH='user|repo, gist' -- --setup
+record "--setup, scope proven absent: stopped before the branch, with the fix" "nonzero/yes/0/1" \
+  "$(nonzero "$rc")/$(has "$out" 'no workflow scope')/$(called 'X POST')/$(called 'auth status')"
+adopt GH_AUTH='user|repo, workflow, admin:org' -- --setup
+record "--setup, scope present: goes on to branch and pull request" "0/1/yes" \
+  "$rc/$(called 'X POST repos/acme/app/git/refs')/$(has "$out" 'created pull request')"
+rm -f "$work/branch-homefield_route-to-local"
+adopt GH_AUTH='user|admin:org, repo, workflow' -- --setup
+record "--setup, scopes in another order: the match still hits" "0/1" \
+  "$rc/$(called 'X POST repos/acme/app/git/refs')"
+rm -f "$work/branch-homefield_route-to-local"
+adopt GH_AUTH='user|' -- --setup
+record "--setup, no scopes reported (an App token): cannot tell, goes on" "0/1/no" \
+  "$rc/$(called 'X POST repos/acme/app/git/refs')/$(has "$out" 'workflow scope')"
+rm -f "$work/branch-homefield_route-to-local"
+adopt GH_AUTH_FAIL=1 -- --setup
+record "--setup, gh cannot be asked: cannot tell, goes on" "0/1" \
+  "$rc/$(called 'X POST repos/acme/app/git/refs')"
+rm -f "$work/branch-homefield_route-to-local"
+adopt GITHUB_TOKEN=stubtoken GH_PUT_404=1 -- --setup
+record "--setup, an env token whose write 404s: the failure names the scope, the branch goes back" "nonzero/yes/yes/gone/0" \
+  "$(nonzero "$rc")/$(has "$out" 'lacks the workflow scope')/$(has "$out" 'gh auth refresh')/$([ -f "$work/branch-homefield_route-to-local" ] && echo present || echo gone)/$(called 'auth status')"
 adopt GH_WF="$work/wf-noguard" -- --setup
 record "--setup without a guard: the pull request adds homefield-routing.yml" "0/yes/1/1" \
   "$rc/$(has "$out" 'setup: changes .github/workflows/homefield-routing.yml')/$(called 'X PUT repos/acme/app/contents/.github/workflows/homefield-routing.yml')/$(called 'X POST repos/acme/app/pulls')"
