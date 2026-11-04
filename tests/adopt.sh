@@ -62,7 +62,15 @@ case "$*" in
   # one repeats) and the run object (GH_RUN).
   "run list"*)
     if [ -n "${GH_RUNLIST_FAIL:-}" ]; then echo "gh: HTTP 500" >&2; exit 1; fi
-    cat "$GH_RUNLIST"
+    # --limit N: the real gh fetches at most N runs. Slicing here is what keeps
+    # the guard-skip cases honest: a fixture with more rows than the limit must
+    # not leak rows the real call would never see.
+    limit="$(printf '%s' "$*" | sed -n 's/.*--limit \([0-9]*\).*/\1/p')"
+    if [ -n "$limit" ]; then
+      jq -c ".[:$limit]" "$GH_RUNLIST" 2>/dev/null || cat "$GH_RUNLIST"
+    else
+      cat "$GH_RUNLIST"
+    fi
     ;;
   "run rerun"*)
     if [ -n "${GH_RERUN_FAIL:-}" ]; then echo "gh: HTTP 403: cannot re-run this workflow" >&2; exit 1; fi
@@ -189,7 +197,7 @@ case "$*" in
 esac
 EOF
 chmod +x "$work/gh"
-for t in awk basename cat dirname git grep head ls mkdir mktemp rm sed sleep tr wc; do ln -s "$(command -v "$t")" "$stubs/$t"; done
+for t in awk basename cat dirname git grep head ls mkdir mktemp rm sed sleep tr wc jq; do [ -x "$stubs/$t" ] || ln -sf "$(command -v "$t")" "$stubs/$t"; done
 # mktemp -d without a template puts the directory in TMPDIR on Linux but not on
 # macOS; the explicit template makes both land in $TMPDIR, where a test can
 # look for what a run left behind.
@@ -1107,20 +1115,30 @@ record "a run still in progress: not re-run, with the command for later" "0/yes/
 # The guard workflow's own run ("HomeField routing") is hosted by design: the
 # newest pull-request run can be exactly that (the adopt --setup PR creates
 # one, and if nothing else ran since it is the newest). Re-running it proves
-# nothing and always ends in the hosted warning, which is noise (#166).
+# nothing and always ends in the hosted warning, which is noise (#166). The
+# stub honors --limit, so these fixtures exercise exactly what a real gh
+# returns for each fetch.
 echo '[{"databaseId":7001,"status":"completed","url":"https://github.com/acme/app/actions/runs/7001","displayTitle":"Route CI jobs to the local HomeField runner","workflowName":"HomeField routing"}]' >"$work/runlist-guard"
 verify GH_RUNLIST="$work/runlist-guard" -- --verify
 record "the newest pull-request run is the guard's own: not re-run, said so, pointer to verify by hand" "0/0/yes/yes" \
   "$rc/$(rerun_n)/$(has "$out" 'the routing guard')/$(has "$out" 'Open a pull request on the repository')"
+record "...it looked below the newest one before concluding (the wider fetch ran)" "1" \
+  "$(called '^gh run list --repo acme/app --event pull_request --limit 15 --json databaseId,status,url,displayTitle,workflowName$')"
 record "...no hosted warning from the guard's hosted job" "no" "$(has "$out" 'warning:')"
-# A guard run older than a real CI run: the real one is picked.
+# A guard run newest, a real CI run below it: only the wider fetch can see the
+# CI run, and it is the one re-run.
 echo '[{"databaseId":7001,"status":"completed","url":"https://github.com/acme/app/actions/runs/7001","displayTitle":"Route CI jobs to the local HomeField runner","workflowName":"HomeField routing"},{"databaseId":9001,"status":"completed","url":"https://github.com/acme/app/actions/runs/9001","displayTitle":"Fix the thing","workflowName":"CI"}]' >"$work/runlist-guard-plus"
 verify GH_RUNLIST="$work/runlist-guard-plus" -- --verify
 record "the guard run first in the list: the CI run after it is the one re-run" "0/1/0/yes" \
   "$rc/$(called '^gh run rerun 9001 --repo acme/app$')/$(called '^gh run rerun 7001')/$(has "$out" 'verify: lint: ran on the local runner homefield-1 (success)')"
-# A run without workflowName (an older gh): picked as before, no crash.
+record "...exactly two run-list fetches: the wide one only after the newest was the guard's" "2/1" \
+  "$(called '^gh run list --repo acme/app')/$(called '^gh run list --repo acme/app --event pull_request --limit 15')"
+# A run without workflowName (an older gh): picked as before, no crash, and
+# one fetch only (nothing looks like a guard run, so no wider fetch).
 verify GH_RUNLIST="$work/runlist-done" -- --verify
 record "a run list without workflowName fields: re-runs as before" "1" "$(rerun_n)"
+record "...a single fetch: the wide one is not needed when the newest is not the guard's" "1" \
+  "$(called '^gh run list --repo acme/app')"
 
 verify -- --verify --no-verify
 record "--verify with --no-verify: refused before anything is read" "nonzero/yes/0" "$(nonzero "$rc")/$(has "$out" '--verify and --no-verify contradict each other')/$(called gh)"
@@ -1134,7 +1152,7 @@ record "...also on a terminal: no question" "0/0/no" "$rc/$(runs_n)/$(has "$out"
 
 verify --
 record "no terminal and no --verify: nothing asked, nothing re-run, the commands printed" "0/no/0/yes/yes" \
-  "$rc/$(has "$out" 'uses CI minutes')/$(runs_n)/$(has "$out" '  gh run list --repo acme/app --event pull_request --limit 1')/$(has "$out" '  gh run rerun <run-id> --repo acme/app')"
+  "$rc/$(has "$out" 'uses CI minutes')/$(runs_n)/$(has "$out" '  gh run list --repo acme/app --event pull_request --limit 15')/$(has "$out" '  gh run rerun <run-id> --repo acme/app')"
 record "...and the last line keeps the pointer to steps 6 and 7" "yes" "$(has "$out" 'docs/adopting.md, steps 6 and 7')"
 
 verify_tty y --

@@ -3744,8 +3744,8 @@ ADOPT_VERIFY_ROWS=""
 
 # adopt_verify_commands <owner/repo>: the check, for someone who does it by hand.
 adopt_verify_commands() {
-  log "to check that the jobs land on the local runner (docs/adopting.md, step 6), re-run the latest pull-request run and read each job's runner:"
-  echo "  gh run list --repo $1 --event pull_request --limit 1"
+  log "to check that the jobs land on the local runner (docs/adopting.md, step 6), re-run the latest pull-request run of a workflow other than the routing guard (\"HomeField routing\": hosted by design) and read each job's runner:"
+  echo "  gh run list --repo $1 --event pull_request --limit 15"
   echo "  gh run rerun <run-id> --repo $1"
 }
 
@@ -3887,16 +3887,29 @@ adopt_verify() {
     adopt_warn "could not verify: gh gave a list of runs that this tool cannot read ($(head -1 "$ADOPT_TMP/v.err"))"
     return 0
   }
+  IFS="$ADOPT_FS" read -r tag id jstatus url title <<<"$row"
+  if [ "$tag" = "guard-only" ]; then
+    # The newest pull-request run is the routing guard's own, which is hosted
+    # by design (routing_workflow, tools/adopt.py): re-running it would prove
+    # nothing and end in the hosted warning whatever the routing does. A run
+    # of a real workflow may sit below it, which one row cannot show: fetch a
+    # wider window before concluding there is nothing to re-run.
+    gh run list --repo "$repo" --event pull_request --limit 15 --json databaseId,status,url,displayTitle,workflowName >"$ADOPT_TMP/v.json" 2>"$ADOPT_TMP/v.err" </dev/null || {
+      adopt_warn "could not verify: gh could not list the runs of ${repo}: $(head -1 "$ADOPT_TMP/v.err")"
+      return 0
+    }
+    row="$(python3 -I "$ROOT/tools/adopt.py" verify-run <"$ADOPT_TMP/v.json" 2>"$ADOPT_TMP/v.err")" || {
+      adopt_warn "could not verify: gh gave a list of runs that this tool cannot read ($(head -1 "$ADOPT_TMP/v.err"))"
+      return 0
+    }
+    IFS="$ADOPT_FS" read -r tag id jstatus url title <<<"$row"
+  fi
   if [ -z "$row" ]; then
     log "verify: ${repo} has no pull-request run yet, so there is nothing to re-run. Open a pull request and look at where its jobs run (docs/adopting.md, step 6)"
     return 0
   fi
-  IFS="$ADOPT_FS" read -r tag id jstatus url title <<<"$row"
   if [ "$tag" = "guard-only" ]; then
-    # The only pull-request run is the routing guard's own, which is hosted by
-    # design (routing_workflow, tools/adopt.py): re-running it would prove
-    # nothing and end in the hosted warning whatever the routing does.
-    log "verify: the newest pull-request run is the routing guard's own (hosted by design), so there is nothing to re-run. Open a pull request on the repository and look at where its jobs run (docs/adopting.md, step 6)"
+    log "verify: the newest pull-request runs are all the routing guard's own (hosted by design), so there is nothing to re-run. Open a pull request on the repository and look at where its jobs run (docs/adopting.md, step 6)"
     return 0
   fi
   if [ "$jstatus" != completed ]; then
