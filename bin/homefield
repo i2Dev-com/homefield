@@ -12,7 +12,7 @@
 #   bin/homefield uninstall [--keep-vm]
 #   bin/homefield reset [--keep-vm] [--keep-group] [--remove-tool]
 #   bin/homefield route <hosted|local> --repo <owner>/<repo> [--repo ...]
-#   bin/homefield adopt --repo <owner>/<repo> [--jobs "ci.yml:lint,..."] [--setup [--wait [--wait-timeout MIN]]] [--events E] [--dependabot hosted|local] [--fallback IMAGE] [--no-switch] [--dry-run]
+#   bin/homefield adopt --repo <owner>/<repo> [--jobs "ci.yml:lint,..."] [--setup [--wait [--wait-timeout MIN]]] [--guards] [--events E] [--dependabot hosted|local] [--fallback IMAGE] [--no-switch] [--dry-run]
 #   bin/homefield memory [--days N]
 #   bin/homefield report --repo <owner>/<repo> [--repo ...] [--since DATE]
 #   bin/homefield version
@@ -175,16 +175,28 @@ adopt:
   --repo OWNER/REPO  the repository to adopt (required, one)
   --label LABEL      routing label (default homefield-ci; a routing-guard step
                      with another label in the workflows is used as it is)
+  --guards           generate and check the guarded (multi-clause) expression.
+                     Without it, a repository without a guard gets simple
+                     mode — the one-clause expression
+                     \${{ vars.CI_RUNNER == 'local' && 'homefield-ci' || 'ubuntu-latest' }}
+                     whose only guardrail is the CI_RUNNER switch: it routes
+                     every event, so it assumes everyone who can open a pull
+                     request is trusted with the Mac, and `homefield route
+                     hosted` rolls it back. A guard already in the repository
+                     keeps its own shape either way; simple mode also accepts
+                     the guarded expression, so a mixed repository passes
   --events "E,..."   events whose jobs are routed (default pull_request; also
-                     push, workflow_dispatch, schedule). Like
+                     push, workflow_dispatch, schedule). Needs --guards in
+                     simple mode, which routes every event. Like
                      --label: shapes the printed expression when there is no
                      guard yet, and must equal the guard's `events` when there
                      is one. Jobs on push, workflow_dispatch and schedule wait
                      for the Mac: a deploy gated on CI can queue behind it
   --dependabot hosted|local
                      keep Dependabot's jobs hosted (default) or route them
-                     too; same rules as --events. Dependabot's install
-                     scripts then run on a VM that is not thrown away
+                     too; needs --guards in simple mode. Same rules as
+                     --events. Dependabot's install scripts then run on a VM
+                     that is not thrown away
   --fallback IMAGE   hosted image used when CI_RUNNER is not local (default
                      ubuntu-latest; ubuntu-*, windows-* or macos-*); same
                      rules as --events
@@ -3499,7 +3511,7 @@ adopt_events_key() {
 # (tools/adopt.py says which are).
 adopt_routing_check() {
   local dir="$1" label="$2" label_given="$3" rows where gstatus glabel gblocks gwarns gjobs out rc lines
-  local gevents gdependabot gfallback garch gmatch opts
+  local gevents gdependabot gfallback garch gmode gmatch opts
   local candidates=0 deferred="" routed routedjob
   ADOPT_READY=1
   ADOPT_REASONS=""
@@ -3509,10 +3521,17 @@ adopt_routing_check() {
   ADOPT_EVENTS="${ADOPT_FLAG_EVENTS:-pull_request}"
   ADOPT_DEPENDABOT="${ADOPT_FLAG_DEPENDABOT:-hosted}"
   ADOPT_FALLBACK="${ADOPT_FLAG_FALLBACK:-ubuntu-latest}"
+  # The expression's shape: --guards asks for the guarded one; without it, an
+  # existing guard keeps its own shape and a repository without one gets
+  # simple, the shape a personal repository reads at a glance.
+  ADOPT_MODE=guards
+  if [ "$ADOPT_FLAG_GUARDS" = 0 ]; then
+    ADOPT_MODE=simple
+  fi
   ADOPT_GUARDS=0
   ADOPT_ROUTED=""
   rows="$(python3 -I "$ROOT/tools/adopt.py" guards "$dir")" || die "adopt: could not read the downloaded workflows"
-  while IFS=$'\t' read -r where gstatus glabel gblocks gwarns gevents gdependabot gfallback garch gjobs; do
+  while IFS=$'\t' read -r where gstatus glabel gblocks gwarns gevents gdependabot gfallback garch gmode gjobs; do
     [ -n "$where" ] || continue
     candidates=$((candidates + 1))
     case "$gstatus" in
@@ -3532,6 +3551,7 @@ adopt_routing_check() {
       [ -n "$ADOPT_FLAG_EVENTS" ] || ADOPT_EVENTS="$gevents"
       [ -n "$ADOPT_FLAG_DEPENDABOT" ] || ADOPT_DEPENDABOT="$gdependabot"
       [ -n "$ADOPT_FLAG_FALLBACK" ] || ADOPT_FALLBACK="$gfallback"
+      [ "$ADOPT_FLAG_GUARDS" = 1 ] || ADOPT_MODE="$gmode"
     fi
     ADOPT_GUARDS=$((ADOPT_GUARDS + 1))
     adopt_each adopt_note "$gwarns"
@@ -3556,7 +3576,11 @@ adopt_routing_check() {
       gmatch=0
       adopt_reason "the routing-guard step at ${where} uses arch ${garch}, but adopt sets up an arm64 VM; a guard step for another architecture routes its jobs to a runner this Mac does not have (docs/adopting.md, step 3)"
     fi
-    opts=(--label "$glabel" --events "$gevents" --dependabot "$gdependabot" --fallback "$gfallback" --arch "$garch")
+    if [ "$ADOPT_FLAG_GUARDS" = 1 ] && [ "$gmode" != guards ]; then
+      gmatch=0
+      adopt_reason "the routing-guard step at ${where} uses mode ${gmode}, but --guards is given: simple mode is the one-clause expression whose only guardrail is CI_RUNNER, and it cannot check the guarded one's clauses; drop --guards, or edit the guard (docs/adopting.md, step 3)"
+    fi
+    opts=(--label "$glabel" --events "$gevents" --dependabot "$gdependabot" --fallback "$gfallback" --arch "$garch" --mode "$gmode")
     # Collect the jobs routed under this guard's label and options. A
     # repository can carry several routing-guard steps; jobs routed under any
     # of them count, not only the first guard's — unless a flag picked a
@@ -3584,6 +3608,7 @@ adopt_routing_check() {
         ADOPT_OK_EVENTS="$gevents"
         ADOPT_OK_DEPENDABOT="$gdependabot"
         ADOPT_OK_FALLBACK="$gfallback"
+        ADOPT_OK_MODE="$gmode"
       fi
       continue
     fi
@@ -3593,6 +3618,9 @@ adopt_routing_check() {
     adopt_reason "the routing-guard step at ${where} would fail:"
     ADOPT_REASONS="${ADOPT_REASONS}$(printf '%s\n' "$lines" | sed 's/^ */      /')"$'\n'
   done <<<"$rows"
+  if [ "$ADOPT_MODE" = simple ] && [ -n "$ADOPT_FLAG_EVENTS$ADOPT_FLAG_DEPENDABOT" ]; then
+    die "adopt: --events and --dependabot have no effect in simple mode, which routes every event; drop them, or pass --guards for the guarded expression"
+  fi
   if [ "$ADOPT_GUARDS" = 0 ]; then
     adopt_each adopt_reason "${deferred:--}"
     if [ "$candidates" = 0 ]; then
@@ -3602,15 +3630,23 @@ adopt_routing_check() {
     fi
     # No guard to say which label applies; look with the expected one, as before.
     # The options were checked above, so a failure here is the script not
-    # running, not "no jobs": an empty list would hide it.
-    ADOPT_ROUTED="$(python3 -I "$ROOT/routing-guard/routing_guard.py" --workflows-dir "$dir" --label "$ADOPT_LABEL" \
-      --events "$ADOPT_EVENTS" --dependabot "$ADOPT_DEPENDABOT" --fallback "$ADOPT_FALLBACK" --list 2>/dev/null)" ||
-      die "adopt: routing_guard.py could not list the routed jobs; run it by hand on the workflows to see why"
+    # running, not "no jobs": an empty list would hide it. The shape is the
+    # resolved one — simple without --guards, the guarded one with it.
+    if [ "$ADOPT_MODE" = guards ]; then
+      ADOPT_ROUTED="$(python3 -I "$ROOT/routing-guard/routing_guard.py" --workflows-dir "$dir" --label "$ADOPT_LABEL" \
+        --events "$ADOPT_EVENTS" --dependabot "$ADOPT_DEPENDABOT" --fallback "$ADOPT_FALLBACK" --list 2>/dev/null)" ||
+        die "adopt: routing_guard.py could not list the routed jobs; run it by hand on the workflows to see why"
+    else
+      ADOPT_ROUTED="$(python3 -I "$ROOT/routing-guard/routing_guard.py" --workflows-dir "$dir" --label "$ADOPT_LABEL" \
+        --mode simple --fallback "$ADOPT_FALLBACK" --list 2>/dev/null)" ||
+        die "adopt: routing_guard.py could not list the routed jobs; run it by hand on the workflows to see why"
+    fi
   elif [ -n "$ADOPT_LABEL_OK" ]; then
     ADOPT_LABEL="$ADOPT_LABEL_OK"
     ADOPT_EVENTS="$ADOPT_OK_EVENTS"
     ADOPT_DEPENDABOT="$ADOPT_OK_DEPENDABOT"
     ADOPT_FALLBACK="$ADOPT_OK_FALLBACK"
+    ADOPT_MODE="$ADOPT_OK_MODE"
   fi
   if [ -z "$ADOPT_ROUTED" ]; then
     adopt_reason "no job uses the routing expression for label ${ADOPT_LABEL} (docs/adopting.md, step 2)"
@@ -3678,13 +3714,19 @@ adopt_cache_keys() {
 }
 
 # adopt_snippets <label> <jobs>: what to add to the workflows, with the
-# options in ADOPT_EVENTS, ADOPT_DEPENDABOT and ADOPT_FALLBACK. The expression
-# and the guard step come from the same code that checks them.
+# options in ADOPT_MODE, ADOPT_EVENTS, ADOPT_DEPENDABOT and ADOPT_FALLBACK.
+# The expression and the guard step come from the same code that checks them.
 adopt_snippets() {
   local label="$1" jobs="$2" expr
-  expr="$(python3 -I "$ROOT/routing-guard/routing_guard.py" --print-expression --label "$label" \
-    --events "$ADOPT_EVENTS" --dependabot "$ADOPT_DEPENDABOT" --fallback "$ADOPT_FALLBACK")" ||
-    die "adopt: the routing options cannot be routed on (label ${label}, events ${ADOPT_EVENTS}, dependabot ${ADOPT_DEPENDABOT}, fallback ${ADOPT_FALLBACK})"
+  if [ "$ADOPT_MODE" = guards ]; then
+    expr="$(python3 -I "$ROOT/routing-guard/routing_guard.py" --print-expression --label "$label" \
+      --events "$ADOPT_EVENTS" --dependabot "$ADOPT_DEPENDABOT" --fallback "$ADOPT_FALLBACK")" ||
+      die "adopt: the routing options cannot be routed on (label ${label}, events ${ADOPT_EVENTS}, dependabot ${ADOPT_DEPENDABOT}, fallback ${ADOPT_FALLBACK})"
+  else
+    expr="$(python3 -I "$ROOT/routing-guard/routing_guard.py" --print-expression --mode simple --label "$label" \
+      --fallback "$ADOPT_FALLBACK")" ||
+      die "adopt: the routing options cannot be routed on (label ${label}, fallback ${ADOPT_FALLBACK})"
+  fi
   echo
   echo "Replace each job's runs-on with this expression, verbatim (docs/adopting.md, step 2):"
   echo
@@ -3693,8 +3735,13 @@ adopt_snippets() {
   echo "Add the guard to a job that runs on every pull request, after checkout (step 3),"
   echo "listing every job you routed:"
   echo
-  python3 -I "$ROOT/tools/adopt.py" guard-snippet --label "$label" --jobs "$jobs" \
-    --events "$ADOPT_EVENTS" --dependabot "$ADOPT_DEPENDABOT" --fallback "$ADOPT_FALLBACK"
+  if [ "$ADOPT_MODE" = guards ]; then
+    python3 -I "$ROOT/tools/adopt.py" guard-snippet --label "$label" --jobs "$jobs" \
+      --events "$ADOPT_EVENTS" --dependabot "$ADOPT_DEPENDABOT" --fallback "$ADOPT_FALLBACK"
+  else
+    python3 -I "$ROOT/tools/adopt.py" guard-snippet --label "$label" --jobs "$jobs" \
+      --mode simple --fallback "$ADOPT_FALLBACK"
+  fi
   echo
 }
 
@@ -4012,7 +4059,7 @@ adopt_setup_exit() {
   exit "$ADOPT_EXIT_OPEN"
 }
 
-# adopt_setup <owner/repo> <label> <expr> <jobs> <dry>: the --setup path, the
+# adopt_setup <owner/repo> <label> <jobs> <dry>: the --setup path, the
 # workflow edits of docs/adopting.md steps 1-4 opened as a pull request. The
 # plan comes from tools/adopt.py setup over the same downloaded workflows a
 # normal adopt checks; it is verified with routing_guard.py before anything
@@ -4020,13 +4067,46 @@ adopt_setup_exit() {
 # opened with POST /pulls. Nothing here touches the runner group or CI_RUNNER:
 # that is step 5, after the pull request is merged. Needs gh with write access
 # to the repository; needs no VM.
+#
+# The expression's shape (--mode): --guards asks for the guarded one; without
+# it, a guard already in the repository keeps its own shape and a repository
+# without one gets simple — the shape a personal repository reads at a
+# glance. events and dependabot have no effect in simple mode, which routes
+# every event, so they are refused there.
 adopt_setup() {
-  local repo="$1" label="$2" expr="$3" jobs="$4" dry="$5"
+  local repo="$1" label="$2" jobs="$3" dry="$4"
   local setup="$ADOPT_TMP/setup" plan kind value name enc sha head_sha url body check line
-  local opts=(--label "$label") routed="" files=""
-  [ -z "$ADOPT_FLAG_EVENTS" ] || opts+=(--events "$ADOPT_FLAG_EVENTS")
-  [ -z "$ADOPT_FLAG_DEPENDABOT" ] || opts+=(--dependabot "$ADOPT_FLAG_DEPENDABOT")
+  local opts=(--label "$label") gopts mode expr routed="" files=""
+  if [ "$ADOPT_FLAG_GUARDS" = 1 ]; then
+    mode=guards
+  else
+    mode="$(python3 -I "$ROOT/tools/adopt.py" guards "$ADOPT_TMP/workflows" |
+      awk -F'\t' '$2 == "ok" { print $10; exit }')"
+    mode="${mode:-simple}"
+  fi
+  if [ "$mode" = guards ]; then
+    expr="$(python3 -I "$ROOT/routing-guard/routing_guard.py" --print-expression --label "$label" \
+      --events "${ADOPT_FLAG_EVENTS:-pull_request}" --dependabot "${ADOPT_FLAG_DEPENDABOT:-hosted}" \
+      --fallback "${ADOPT_FLAG_FALLBACK:-ubuntu-latest}" 2>&1)" ||
+      die "adopt: the routing options cannot be routed on: $(printf '%s' "$expr" | sed $'s/\033\\[[0-9;]*m//g')"
+    [ -z "$ADOPT_FLAG_EVENTS" ] || opts+=(--events "$ADOPT_FLAG_EVENTS")
+    [ -z "$ADOPT_FLAG_DEPENDABOT" ] || opts+=(--dependabot "$ADOPT_FLAG_DEPENDABOT")
+  else
+    [ -z "$ADOPT_FLAG_EVENTS" ] || [ -z "$ADOPT_FLAG_DEPENDABOT" ] ||
+      die "adopt: --events and --dependabot have no effect in simple mode, which routes every event; drop them, or pass --guards for the guarded expression"
+    expr="$(python3 -I "$ROOT/routing-guard/routing_guard.py" --print-expression --mode simple --label "$label" \
+      --fallback "${ADOPT_FLAG_FALLBACK:-ubuntu-latest}" 2>&1)" ||
+      die "adopt: the routing options cannot be routed on: $(printf '%s' "$expr" | sed $'s/\033\\[[0-9;]*m//g')"
+  fi
   [ -z "$ADOPT_FLAG_FALLBACK" ] || opts+=(--fallback "$ADOPT_FLAG_FALLBACK")
+  opts+=(--mode "$mode")
+  # The guard check runs the way the generated step will: with the mode, and
+  # without events/dependabot in simple mode, which refuses them.
+  gopts=(--label "$label" --mode "$mode")
+  if [ "$mode" = guards ]; then
+    gopts+=(--events "${ADOPT_FLAG_EVENTS:-pull_request}" --dependabot "${ADOPT_FLAG_DEPENDABOT:-hosted}")
+  fi
+  gopts+=(--fallback "${ADOPT_FLAG_FALLBACK:-ubuntu-latest}")
   ADOPT_SETUP_REPO="$repo"
 
   plan="$(python3 -I "$ROOT/tools/adopt.py" setup "$ADOPT_TMP/workflows" "$setup" \
@@ -4047,7 +4127,7 @@ adopt_setup() {
   done <<<"$files"
   # The staged files are checked with the very script the guard step runs, so
   # merging what we generate cannot fail CI on routing.
-  check="$(python3 -I "$ROOT/routing-guard/routing_guard.py" --workflows-dir "$setup" "${opts[@]}" --jobs "$routed" 2>&1)" || {
+  check="$(python3 -I "$ROOT/routing-guard/routing_guard.py" --workflows-dir "$setup" "${gopts[@]}" --jobs "$routed" 2>&1)" || {
     printf '%s\n' "$check" | sed $'s/\033\\[[0-9;]*m//g' |
       grep -v -e PASS -e '^self-hosted runner routing' -e ' passed, ' -e '^$' >&2 || true
     die "adopt: setup: the generated workflows would fail the routing guard; nothing was sent to ${repo}"
@@ -4239,7 +4319,7 @@ cmd_adopt() {
   local repo="" nrepo=0 label="homefield-ci" label_given=0 group="homefield-ci" jobs="" switch=1 dry=0 setup=0 entry out
   local verify=ask
   local wait_timeout="" wait_minutes=60
-  ADOPT_FLAG_EVENTS="" ADOPT_FLAG_DEPENDABOT="" ADOPT_FLAG_FALLBACK=""
+  ADOPT_FLAG_EVENTS="" ADOPT_FLAG_DEPENDABOT="" ADOPT_FLAG_FALLBACK="" ADOPT_FLAG_GUARDS=0
   ADOPT_WAIT=0 ADOPT_WAIT_MERGED=0 ADOPT_SWITCH_DONE=0 ADOPT_HANDLER=0
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -4248,6 +4328,7 @@ cmd_adopt() {
       --events) ADOPT_FLAG_EVENTS="${2:?--events needs a value}"; shift 2 ;;
       --dependabot) ADOPT_FLAG_DEPENDABOT="${2:?--dependabot needs a value}"; shift 2 ;;
       --fallback) ADOPT_FLAG_FALLBACK="${2:?--fallback needs a value}"; shift 2 ;;
+      --guards) ADOPT_FLAG_GUARDS=1; shift ;;
       --group) group="${2:?--group needs a value}"; shift 2 ;;
       --jobs) jobs="${2:?--jobs needs a value}"; shift 2 ;;
       --setup) setup=1; shift ;;
@@ -4282,11 +4363,19 @@ cmd_adopt() {
   command -v gh >/dev/null || die "adopt needs gh (https://cli.github.com)"
   command -v python3 >/dev/null || die "adopt needs python3"
   # The same label and option rules as the guard, and a message from it when
-  # they fail.
-  out="$(python3 -I "$ROOT/routing-guard/routing_guard.py" --print-expression --label "$label" \
-    --events "${ADOPT_FLAG_EVENTS:-pull_request}" --dependabot "${ADOPT_FLAG_DEPENDABOT:-hosted}" \
+  # they fail. The shape is resolved later — an existing guard's own mode wins
+  # over the default — so both validators run here: the simple one always
+  # (it checks the label and the fallback), the guards one when --events or
+  # --dependabot was given (their syntax is checked there too).
+  out="$(python3 -I "$ROOT/routing-guard/routing_guard.py" --print-expression --mode simple --label "$label" \
     --fallback "${ADOPT_FLAG_FALLBACK:-ubuntu-latest}" 2>&1)" ||
     die "adopt: the routing options cannot be routed on: $(printf '%s' "$out" | sed $'s/\033\\[[0-9;]*m//g')"
+  if [ -n "$ADOPT_FLAG_EVENTS$ADOPT_FLAG_DEPENDABOT" ]; then
+    out="$(python3 -I "$ROOT/routing-guard/routing_guard.py" --print-expression --label "$label" \
+      --events "${ADOPT_FLAG_EVENTS:-pull_request}" --dependabot "${ADOPT_FLAG_DEPENDABOT:-hosted}" \
+      --fallback "${ADOPT_FLAG_FALLBACK:-ubuntu-latest}" 2>&1)" ||
+      die "adopt: the routing options cannot be routed on: $(printf '%s' "$out" | sed $'s/\033\\[[0-9;]*m//g')"
+  fi
   [ "$dry" = 0 ] || log "dry run: nothing will be changed"
 
   ADOPT_TMP="$(mktemp -d)"
@@ -4308,7 +4397,7 @@ cmd_adopt() {
     # --wait that run follows in this process once the pull request is merged:
     # the workflows are read again, at the default branch, and everything
     # below is what a plain adopt does.
-    adopt_setup "$repo" "$label" "$out" "$jobs" "$dry"
+    adopt_setup "$repo" "$label" "$jobs" "$dry"
     if [ "$ADOPT_WAIT" = 0 ]; then
       return 0
     elif [ "$dry" = 1 ]; then
