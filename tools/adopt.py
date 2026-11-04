@@ -103,6 +103,9 @@ ACTION_DIR = "./.github/workflows/"
 # The workflow `homefield adopt --setup` writes the guard step into when the
 # repository has none yet.
 SETUP_FILE = "homefield-routing.yml"
+# The name the generated guard workflow carries (routing_workflow below); the
+# verify step never re-runs its runs: it is the check, not a routed job.
+GUARD_WORKFLOW_NAME = "HomeField routing"
 # A GitHub-hosted image name as routing_guard.py's HOSTED reads it (keep the
 # two in step): what a job must ask for today to be routable by setup.
 HOSTED_RUNS = re.compile(
@@ -924,15 +927,26 @@ def json_documents(text):
 
 
 def verify_run(text):
+    """The run to re-run: the newest one that is not the routing guard's own
+    workflow (hosted by design, so re-running it proves nothing and always
+    ends in a hosted warning). Rows are newest first, as gh prints them; a row
+    without workflowName (an older gh) is a candidate as before."""
     runs = json.loads(text)
     if not isinstance(runs, list):
         raise ValueError("not a list of runs")
-    if not runs:
-        return None
-    run = runs[0]
-    if not isinstance(run.get("databaseId"), int):
-        raise ValueError("a run without a databaseId")
-    return SEP.join(clean(run.get(key)) for key in ("databaseId", "status", "url", "displayTitle"))
+    guard_skipped = False
+    for run in runs:
+        if not isinstance(run.get("databaseId"), int):
+            raise ValueError("a run without a databaseId")
+        if run.get("workflowName") == GUARD_WORKFLOW_NAME:
+            guard_skipped = True
+            continue
+        row = SEP.join(clean(run.get(key)) for key in ("databaseId", "status", "url", "displayTitle"))
+        return ("1" if guard_skipped else "") + SEP + row
+    if runs:
+        # Every row was the guard's own workflow.
+        return "guard-only" + SEP + SEP.join(clean(runs[0].get(key)) for key in ("databaseId", "status", "url", "displayTitle"))
+    return None
 
 
 def verify_attempt(text):

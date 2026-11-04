@@ -1104,6 +1104,24 @@ verify GH_RUNLIST="$work/runlist-running" -- --verify
 record "a run still in progress: not re-run, with the command for later" "0/yes/yes/0" \
   "$rc/$(has "$out" 'run 9001 (Fix the thing) is still in_progress')/$(has "$out" 'gh run rerun 9001 --repo acme/app')/$(rerun_n)"
 
+# The guard workflow's own run ("HomeField routing") is hosted by design: the
+# newest pull-request run can be exactly that (the adopt --setup PR creates
+# one, and if nothing else ran since it is the newest). Re-running it proves
+# nothing and always ends in the hosted warning, which is noise (#166).
+echo '[{"databaseId":7001,"status":"completed","url":"https://github.com/acme/app/actions/runs/7001","displayTitle":"Route CI jobs to the local HomeField runner","workflowName":"HomeField routing"}]' >"$work/runlist-guard"
+verify GH_RUNLIST="$work/runlist-guard" -- --verify
+record "the newest pull-request run is the guard's own: not re-run, said so, pointer to verify by hand" "0/0/yes/yes" \
+  "$rc/$(rerun_n)/$(has "$out" 'the routing guard')/$(has "$out" 'Open a pull request on the repository')"
+record "...no hosted warning from the guard's hosted job" "no" "$(has "$out" 'warning:')"
+# A guard run older than a real CI run: the real one is picked.
+echo '[{"databaseId":7001,"status":"completed","url":"https://github.com/acme/app/actions/runs/7001","displayTitle":"Route CI jobs to the local HomeField runner","workflowName":"HomeField routing"},{"databaseId":9001,"status":"completed","url":"https://github.com/acme/app/actions/runs/9001","displayTitle":"Fix the thing","workflowName":"CI"}]' >"$work/runlist-guard-plus"
+verify GH_RUNLIST="$work/runlist-guard-plus" -- --verify
+record "the guard run first in the list: the CI run after it is the one re-run" "0/1/0/yes" \
+  "$rc/$(called '^gh run rerun 9001 --repo acme/app$')/$(called '^gh run rerun 7001')/$(has "$out" 'verify: lint: ran on the local runner homefield-1 (success)')"
+# A run without workflowName (an older gh): picked as before, no crash.
+verify GH_RUNLIST="$work/runlist-done" -- --verify
+record "a run list without workflowName fields: re-runs as before" "1" "$(rerun_n)"
+
 verify -- --verify --no-verify
 record "--verify with --no-verify: refused before anything is read" "nonzero/yes/0" "$(nonzero "$rc")/$(has "$out" '--verify and --no-verify contradict each other')/$(called gh)"
 verify -- --no-verify --verify

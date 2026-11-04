@@ -3891,7 +3891,14 @@ adopt_verify() {
     log "verify: ${repo} has no pull-request run yet, so there is nothing to re-run. Open a pull request and look at where its jobs run (docs/adopting.md, step 6)"
     return 0
   fi
-  IFS="$ADOPT_FS" read -r id jstatus url title <<<"$row"
+  IFS="$ADOPT_FS" read -r tag id jstatus url title <<<"$row"
+  if [ "$tag" = "guard-only" ]; then
+    # The only pull-request run is the routing guard's own, which is hosted by
+    # design (routing_workflow, tools/adopt.py): re-running it would prove
+    # nothing and end in the hosted warning whatever the routing does.
+    log "verify: the newest pull-request run is the routing guard's own (hosted by design), so there is nothing to re-run. Open a pull request on the repository and look at where its jobs run (docs/adopting.md, step 6)"
+    return 0
+  fi
   if [ "$jstatus" != completed ]; then
     log "verify: run ${id} (${title}) is still ${jstatus}, and a run can only be re-run once it has completed. Later: gh run rerun ${id} --repo ${repo}"
     return 0
