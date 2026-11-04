@@ -53,8 +53,8 @@ hang "${GH_HANG:-}" "" "${GH_HANG_SECS:-30}"
 hang "${GH_HANG2:-}" 2 "${GH_HANG2_SECS:-30}"
 case "$*" in
   # gh auth status (gh_active_account): GH_AUTH is "login|scopes" the way the
-  # real gh answers (spaces stripped by the helper, not here), empty when
-  # nobody is logged in, GH_AUTH_FAIL a gh that cannot answer at all.
+  # real gh answers, empty when nobody is logged in, GH_AUTH_FAIL a gh that
+  # cannot answer at all.
   "auth status"*)
     if [ -n "${GH_AUTH_FAIL:-}" ]; then echo "gh: (github.com) could not be asked" >&2; exit 1; fi
     # Like the real gh with --jq applied: the scopes' spaces are gone

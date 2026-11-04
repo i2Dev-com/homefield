@@ -269,8 +269,8 @@ adopt:
   opens the routing pull request and changes nothing else (unless --wait
   carries on after the merge; with --dry-run it waits for nothing). Writing
   .github/workflows/ needs the workflow scope of a classic PAT; without it,
-  --setup stops before anything is created, naming `gh auth refresh -s
-  workflow`. Needs gh and python3. Does not need the VM.
+  --setup stops before anything is created, naming `gh auth refresh -s workflow`.
+  Needs gh and python3. Does not need the VM.
 
 memory:
   --days N           how many days to show (default 7)
