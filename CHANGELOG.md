@@ -11,6 +11,24 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ## Unreleased
 
+### Added
+
+- Shipped presets close the hosted-parity gaps that adopting used to copy by
+  hand (#175): `homefield upgrade --preset browsers` adds the twelve Chromium
+  OS libraries on Ubuntu 24.04, and `--preset hosted` adds those plus noble's
+  `gh`, `shellcheck`, `sqlite3`, `xvfb` and `rsync`, a hook installing AWS CLI
+  v2 (noble has no `awscli`) and one installing Node at the major
+  `ubuntu-24.04` carries. The flag also works on `install`/`setup`, is
+  repeatable, and **adds** to `/etc/homefield/extra-packages` instead of
+  replacing it, so a repository's earlier extras survive. Only plain
+  `--packages` still replaces the list; it now warns when that drops names a
+  preset installed (its hooks stay in place until removed by hand). The sets
+  live in `vm/presets/`, with preset hook files copied into
+  `/etc/homefield/provision.d/` and re-run on every provisioning run. Versions
+  track upstream at provision time, as the hosted image rebuilds weekly; a job
+  whose version matters still pins it. An unknown or malformed preset stops
+  before anything is stopped or created. Compatible: opt-in only.
+
 ### Changed
 
 - The VM's `runner` user now has general passwordless `sudo`, as a

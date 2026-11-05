@@ -260,8 +260,16 @@ it, then run `homefield adopt` to switch the repository on, or add `--wait`
 waits for your merge, then carries on and switches the repository on. A fresh
 `setup` on a terminal offers to do exactly that for you at its end.
 
-`homefield help` lists the options (`--label`, `--packages`, `--cpus`,
-...). [`docs/runbook.md`](docs/runbook.md) covers operating it.
+`homefield help` lists the options (`--label`, `--packages`, `--preset`,
+`--cpus`, ...). [`docs/runbook.md`](docs/runbook.md) covers operating it.
+
+`--preset browsers|hosted` closes a common parity gap in one command and adds
+to what the VM already has instead of replacing the saved list: `browsers` is
+the twelve Chromium OS libraries on Ubuntu 24.04; `hosted` includes them plus
+`gh`, `shellcheck`, `sqlite3`, `xvfb` and `rsync`, an AWS CLI v2 hook and a
+Node major matching the hosted image. Presets copy their hooks into
+`/etc/homefield/provision.d/`, tracked upstream at provision time; jobs whose
+versions matter still pin them ([runbook: Adding tools](docs/runbook.md#adding-tools)).
 
 ## Requirements and limitations
 
@@ -302,7 +310,7 @@ waits for your merge, then carries on and switches the repository on. A fresh
   those registrations is its own VM
   ([runbook: Runner group](docs/runbook.md#runner-group)).
 - **Less software than `ubuntu-latest`.** The VM starts small. Add what your
-  jobs need with `--packages` or a hook
+  jobs need with `--preset`, `--packages` or a hook
   ([runbook: Adding tools](docs/runbook.md#adding-tools)).
 
 ## Security model
