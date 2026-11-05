@@ -49,11 +49,18 @@ stub cp 'if [ "${FAIL_AT:-}" = backup ] && [ $# = 2 ] && case "$1" in */.env) tr
 fi
 exec /bin/cp "$@"'
 stub visudo '[ "${FAIL_AT:-}" != visudo ] || { echo "visudo: injected failure" >&2; exit 1; }'
-# install [-o u] [-g g] [-m mode] <src> <dst>: a copy; FAIL_AT=env fails the
-# one onto the runner's .env.
-stub install 'while [ $# -gt 2 ]; do case "$1" in -o|-g|-m) shift 2 ;; *) shift ;; esac; done
+# install [-o u] [-g g] [-m mode] <src> <dst>: a copy, the mode applied, and
+# every mode-bearing call logged; FAIL_AT=env fails the one onto .env.
+stub install 'mode=""
+while [ $# -gt 2 ]; do case "$1" in
+  -o|-g) shift 2 ;;
+  -m) mode="$2"; shift 2 ;;
+  *) shift ;;
+esac; done
 [ "${FAIL_AT:-}" = env ] && case "$2" in */.env) echo "install: injected failure" >&2; exit 1 ;; esac
-cp "$1" "$2"'
+printf "%s %s\n" "${mode:-none}" "$2" >>"$STATE.installs"
+cp "$1" "$2"
+[ -z "$mode" ] || chmod "$mode" "$2"'
 # sudo [-n] [-u user] [--preserve-env=...] <command...>: the command, as this user.
 # FAIL_AT=prove fails the runner's own `sudo -n true`, proving its general rule.
 stub sudo 'while [ $# -gt 0 ]; do case "$1" in -u) shift 2 ;; -n|--preserve-env=*) shift ;; *) break ;; esac; done
@@ -174,6 +181,9 @@ unit_present() { [ -f "$work/systemd/$unit" ] && echo present || echo absent; }
 # 0 when nothing ran at all, so there is no log.
 calls() { [ -f "$work/state.log" ] || { echo 0; return; }; grep -c "^systemctl $1 " "$work/state.log" || true; }
 svc_calls() { grep -c "^svc $1" "$work/state.log" 2>/dev/null || true; }
+# perms <file>: its rwx bits, so an install's -m can be asserted.
+# shellcheck disable=SC2012  # one known file, no odd names
+perms() { ls -l "$1" 2>/dev/null | awk 'NR==1{p=substr($1,2,10); gsub(/[@+]/,"",p); print p}'; }
 
 # The version in provision.sh, so every case replaces the binary (old) or none.
 current="$(sed -n 's/^RUNNER_VERSION="\(.*\)"$/\1/p' "$ROOT/vm/provision.sh")"
@@ -189,6 +199,8 @@ record "...records the new version" "$current" "$(cat "$work/runner/.provisioned
 record "...and leaves no temp files (#89)" "0" "$(leftovers)"
 record "...the runner's general sudo rule is installed (#176)" "runner ALL=(ALL) NOPASSWD: ALL" "$(cat "$work/sudoers.d/homefield-runner")"
 record "...beside the hook's narrow one, which is still there" "1" "$(grep -cF 'runner ALL=(root) NOPASSWD: ' "$work/sudoers.d/homefield-workspace-owner")"
+record "...both are installed with mode 440" "yes/yes" "$(grep -qxF "440 $work/sudoers.d/homefield-runner" "$work/state.installs" && echo yes || echo no)/$(grep -qxF "440 $work/sudoers.d/homefield-workspace-owner" "$work/state.installs" && echo yes || echo no)"
+record "...so others cannot read or write them" "r--r-----/r--r-----" "$(perms "$work/sudoers.d/homefield-runner")/$(perms "$work/sudoers.d/homefield-workspace-owner")"
 
 for at in tar chown visudo env; do
   fresh 2.0.0 active
@@ -198,6 +210,12 @@ for at in tar chown visudo env; do
   record "...and the runner is running again" "running" "$(running)"
   record "...and leaves no temp files (#89)" "0" "$(leftovers)"
 done
+
+fresh 2.0.0 active
+run prove
+rc=$?
+record "the runner's general sudo proof fails with the runner stopped: provisioning fails" "1" "$rc"
+record "...and the trap restarts it" "running/1" "$(running)/$(calls restart)"
 
 fresh 2.0.0 active
 run start

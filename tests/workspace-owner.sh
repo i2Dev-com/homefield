@@ -43,7 +43,11 @@ record "sudoers allows that script, with no arguments" "yes" "$(has "$prov" "run
 record "the runner also has general passwordless sudo, as a hosted runner has (#176)" "yes" "$(has "$prov" 'runner ALL=(ALL) NOPASSWD: ALL')"
 record "...in its own drop-in, leaving the hook's narrow one beside it" "yes" "$(has "$prov" '/etc/sudoers.d/homefield-runner')"
 # shellcheck disable=SC2016  # the $ values are matched literally in provision.sh
-record "...validated before it is installed" "yes" "$(grep -q 'visudo -cqf "$runner_sudoers"' "$prov" && echo yes || echo no)"
+visudo_line="$(grep -n 'visudo -cqf "$runner_sudoers"' "$prov" | cut -d: -f1)"
+install_line="$(grep -n '/etc/sudoers.d/homefield-runner' "$prov" | cut -d: -f1)"
+record "...validated before it is installed" "yes" "$([ -n "$visudo_line" ] && [ -n "$install_line" ] && [ "$visudo_line" -lt "$install_line" ] && echo yes || echo no)"
+# shellcheck disable=SC2016  # the $ values are matched literally in provision.sh
+record "...installed with mode 440" "yes" "$(has "$prov" 'install -m 440 "$runner_sudoers"')"
 # shellcheck disable=SC2016  # the $ values are matched literally in provision.sh
 record "...and proved as runner, so a bad rule fails the provision" "yes" "$(has "$prov" 'sudo -u "$RUNNER_USER" sudo -n true')"
 record "the runner's .env names the hook" "yes" "$(has "$prov" 'hook_line="ACTIONS_RUNNER_HOOK_JOB_STARTED=/usr/local/sbin/homefield-job-started.sh"')"
