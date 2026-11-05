@@ -16,9 +16,42 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Pinned and checksum-verified (the asset's digest in the GitHub release
+      # API), so the lint does not drift with the runner image, and — as for
+      # actionlint below — nothing in this CI executes a download that has not
+      # been verified. A new shellcheck version is a deliberate bump of both
+      # values.
       - name: Shellcheck
+        env:
+          SHELLCHECK_VERSION: 0.11.0
+          SHELLCHECK_SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
         run: |
-          shellcheck bin/homefield install.sh vm/provision.sh routing-guard/tests/run.sh tests/*.sh
+          set -euo pipefail
+          tarball="shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+          curl -fsSL -o "$tarball" \
+            "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/${tarball}"
+          echo "${SHELLCHECK_SHA256}  ${tarball}" | sha256sum -c -
+          tar -xJf "$tarball" "shellcheck-v${SHELLCHECK_VERSION}/shellcheck" --strip-components=1
+          ./shellcheck bin/homefield install.sh vm/provision.sh routing-guard/tests/run.sh tests/*.sh
+
+      # Pinned and hash-verified, as actionlint and shellcheck above: the wheel
+      # is downloaded, its sha256 checked, and only then installed and run.
+      # A new ruff version is a deliberate bump of both values (the wheel's
+      # sha256 in the PyPI JSON API, pypi.org/pypi/ruff/json; the manylinux
+      # x86_64 wheel — ubuntu-latest is x86_64, and the wheel is py3-none).
+      - name: Lint the Python tools
+        env:
+          RUFF_VERSION: 0.17.3
+          RUFF_SHA256: 7fa4b0f931cdbcb8a52044f370a3eb429fb42eb88807b0e800fcaa98dd42b24e
+        run: |
+          set -euo pipefail
+          python3 -m pip download --quiet --no-deps --only-binary :all: \
+            -d ruff-wheel "ruff==${RUFF_VERSION}"
+          wheel="ruff-wheel/ruff-${RUFF_VERSION}-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
+          echo "${RUFF_SHA256}  ${wheel}" | sha256sum -c -
+          python3 -m pip install --quiet --no-index --find-links ruff-wheel "ruff==${RUFF_VERSION}"
+          python3 -m py_compile tools/*.py routing-guard/routing_guard.py
+          python3 -m ruff check tools/ routing-guard/
 
       # Pinned and checksum-verified. Other repositories run this repository's
       # action to guard their routing, so nothing in its CI executes a download
