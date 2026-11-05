@@ -89,10 +89,19 @@ the same labels — run it when touching either.
   **never moved**. While we are in 0.x, a change that makes a previously
   passing workflow fail (new guard, new default) bumps the **minor**;
   compatible changes bump the patch. Merged changes wait on `main`, under
-  *Unreleased* in `CHANGELOG.md`, until the owner cuts a release. There are
-  no tag moves: a release is a new tag the owner creates, so don't ask for
-  one after each merge. Say in the PR whether a change is compatible;
-  `CHANGELOG.md` explains the upgrade.
+  *Unreleased* in `CHANGELOG.md`, until a release PR cuts them. There are no
+  tag moves.
+- **After a release PR is approved and merged, cut the tag and publish the
+  GitHub release yourself**; do not hand the owner a tag command or ask them
+  to tag — they should not have to say so again. The owner's explicit
+  approval is still what ends the PR; only that approval, or an explicit
+  "I'll tag it myself", decides who tags. Then, in the same turn: tag the
+  squash-merge commit on `main` (never a moved or re-pointed tag), publish the
+  release with the tag as name and title, the version's `CHANGELOG.md`
+  section as the body byte for byte, not a draft, not a prerelease, marked
+  Latest, and verify the release fields plus the raw one-liner URL at the tag.
+  Say in the PR whether a change is compatible; `CHANGELOG.md` explains the
+  upgrade.
 - A release bumps the version in `install.sh` (`REF` default and header),
   `bin/homefield` (`update_command`), `tools/adopt.py` (`RELEASE`), the README
   and `docs/`. Before tagging, run `routing-guard/routing_guard.py` over the
