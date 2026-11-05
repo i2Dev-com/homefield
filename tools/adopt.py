@@ -155,7 +155,12 @@ def read_lines(path):
 
 
 def workflow_files(directory):
-    return sorted(n for n in os.listdir(directory) if n.endswith((".yml", ".yaml")))
+    # A directory named like a workflow is not one; read_lines would die on it.
+    return sorted(
+        n
+        for n in os.listdir(directory)
+        if n.endswith((".yml", ".yaml")) and os.path.isfile(os.path.join(directory, n))
+    )
 
 
 def indent_of(line):
@@ -827,6 +832,8 @@ def mode_release_problem(mode):
     if mode != "simple":
         return ""
     threshold = os.environ.get("HOMEFIELD_MODE_RELEASE") or MODE_RELEASE
+    if not re.fullmatch(r"v\d+\.\d+\.\d+", threshold):
+        return f"HOMEFIELD_MODE_RELEASE is not a vX.Y.Z release: {threshold!r}"
     if release_key(RELEASE) >= release_key(threshold):
         return ""
     return (

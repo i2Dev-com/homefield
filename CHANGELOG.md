@@ -13,6 +13,15 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ### Fixed
 
+- The tools refuse malformed input with a message, not a traceback (#190):
+  a report fixture job whose `started_at`, `completed_at` or `created_at`
+  does not parse as `%Y-%m-%dT%H:%M:%SZ` (a fractional-seconds timestamp
+  included) is named in a one-line refusal, like the missing fields; an
+  `adopt.py guards`/`setup` directory containing a directory named like a
+  workflow skips it instead of dying on the open; and
+  `HOMEFIELD_MODE_RELEASE=abc` is refused as not a vX.Y.Z release where
+  it was an int() traceback mid-setup.
+
 - Preset hooks are no longer add-only (#188): `copy_preset_hooks` writes a
   manifest (`/etc/homefield/preset-hooks`, one name per line) of the hooks it
   installed, and the next copy removes the ones the current preset set no
