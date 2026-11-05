@@ -9,6 +9,23 @@ fail, such as a new guard in the routing expression, bumps the minor version
 (0.1 to 0.2). Compatible changes bump the patch. Merged changes wait on
 `main`, under *Unreleased*, until a release is cut.
 
+## Unreleased
+
+### Changed
+
+- The VM's `runner` user now has general passwordless `sudo`, as a
+  GitHub-hosted Linux runner does (#176): a job that installs OS packages or
+  starts a service at job time (`playwright install --with-deps`, `sudo
+  apt-get install ...`, `sudo systemctl ...`) no longer fails for a password.
+  `provision.sh` installs a second sudoers drop-in beside the
+  workspace-owner's narrow rule, validates it with `visudo -c` and proves it
+  as `runner`, so a bad rule fails provisioning rather than a job's first
+  step. It adds no reach: `runner` is already root-equivalent inside the
+  guest through the `docker` group, so the VM remains the boundary. A VM
+  provisioned before this gets it by running `homefield upgrade` while idle.
+  A job that failed now passes, so this is compatible (patch). The runbook's
+  trust, parity, browsers and failure rows, and the adopting notes, follow.
+
 ## v0.4.1 (2026-11-04)
 
 Bumps the patch from v0.4.0: the routing expression and the provisioner are

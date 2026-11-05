@@ -54,7 +54,7 @@ every job holding cloud or production credentials.
 | Production | The VM holds no cloud credentials. Deploy jobs stay hosted and get their credentials through OIDC. |
 | Secrets in jobs | Jobs on the runner receive the secrets their workflow passes, on same-repo PRs. Push-only secrets never reach it by default, because pushes run hosted; they do when `events` includes `push`, `workflow_dispatch` or `schedule`. |
 | Across repositories | Every allowed repository's PR jobs share one VM, one after another. Workspaces are per repository, but anything a job leaves in the guest (Docker images, `/tmp`) is visible to the next job from another repository. Allow only repositories you would trust with each other's PR code. |
-| Inside the VM | Jobs run as user `runner`, which is in the `docker` group and therefore root-equivalent **inside the guest**. The VM is the boundary, not the user. `runner` may also run one script as root through sudo, `homefield-workspace-owner` (see Maintenance); that grants nothing the `docker` group doesn't. |
+| Inside the VM | Jobs run as user `runner`, which is in the `docker` group and therefore root-equivalent **inside the guest**, and has passwordless `sudo` as a hosted Linux runner does. The VM is the boundary, not the user: neither adds reach the other did not give. |
 
 **Access checklist.** Check these when something changes (a repository added,
 an owner left, a Mac replaced) and now and then regardless. The first two
@@ -378,10 +378,10 @@ passes hosted but fails locally.
 
 | What | On the hosted Ubuntu 24.04 image | In the VM | What to do |
 |---|---|---|---|
-| Privileges | passwordless `sudo` | `runner` may run one helper as root, `homefield-workspace-owner` ([Trust boundary](#trust-boundary)); no general `sudo` | A job that apt-installs OS packages through `sudo` fails here, including Playwright's `--with-deps` ([Failure modes](#failure-modes)). Pre-provision what it needs ([Adding tools](#adding-tools), [Browsers](#browsers)) or keep the job hosted |
+| Privileges | passwordless `sudo` | passwordless `sudo`, as a hosted Linux runner has; `runner` is already root-equivalent through the `docker` group ([Trust boundary](#trust-boundary)) | Nothing to do: a job's `sudo apt-get install`, `sudo systemctl` and `playwright install --with-deps` work. Pre-provisioning still makes a large set faster and saves network ([Adding tools](#adding-tools)) |
 | Apt packages | dozens, including `shellcheck`, `sqlite3`, `xvfb`, `rsync` | a small base set ([Packages](../vm/provision.sh)) | Add to `RUNNER_EXTRA_PACKAGES`, or a hook for what apt cannot supply ([Adding tools](#adding-tools)) |
 | CLI tools | AWS CLI, Azure CLI, Google Cloud CLI, SAM CLI, GitHub CLI | none installed | Hook or apt (`gh` is in noble, older than the image's). `awscli` has no noble candidate, so the AWS CLI v2 bundle comes in by hook. Azure, gcloud and SAM are usually easier through their own actions |
-| Browsers | Chrome, Chromium, Firefox and Edge, with drivers and OS libraries | no browser binary; libraries only if pre-provisioned | Playwright and Puppeteer download their own browser; pre-provision the libraries, or install the browser without the packages ([Browsers](#browsers)). Jobs that drive Chrome, Firefox or Edge directly stay hosted |
+| Browsers | Chrome, Chromium, Firefox and Edge, with drivers and OS libraries | no browser binary; OS libraries at job time through `--with-deps`, or pre-provisioned | Playwright and Puppeteer download their own browser, and `--with-deps` installs the OS libraries now that `runner` has sudo ([Browsers](#browsers)); pre-provision them to save time or network. Jobs that drive Chrome, Firefox or Edge directly stay hosted |
 | Languages | Node, Python, Java, Ruby, PHP, Rust and more, each pinned by the image | `python3` 3.12 (same as Ubuntu 24.04); no Node, Java, Ruby, PHP or Rust | Setup actions (`actions/setup-node`, `setup-*`) work here and give the job its version. A job that assumes a bare `node`, `npm` or `java` needs it provisioned (noble's `nodejs` is 18.19, against the image's Node 22), or stays hosted |
 | Architecture | x86-64 by default; `ubuntu-24.04-arm` is a hosted image too | arm64 | x86-64 image builds stay hosted ([#21](https://github.com/i2Dev-com/homefield/issues/21)); arm jobs can point `fallback` at `ubuntu-24.04-arm` ([routing options](adopting.md#routing-options)) |
 | State between jobs | a fresh VM for every job | one VM, used in turn by every allowed repository ([Trust boundary](#trust-boundary)) | Cleanup and workspace ownership keep it usable, not clean. Anything a job leaves is visible to the next ([Maintenance](#maintenance)) |
@@ -442,10 +442,11 @@ credentials out of hooks.
 
 ### Browsers
 
-A job that installs a browser's OS packages (`playwright install --with-deps chromium`)
-fails on the VM and not on a hosted runner, because the tool calls `sudo` and
-`runner` has no passwordless sudo ([Trust boundary](#trust-boundary)).
-Pre-provision the libraries and install the browser alone.
+`playwright install --with-deps chromium` works on the VM as on a hosted
+runner, because `runner` has passwordless `sudo`
+([Trust boundary](#trust-boundary)). The libraries it apt-installs at job time
+cost network and time; pre-provision them in `RUNNER_EXTRA_PACKAGES` where
+either matters, and install the browser alone.
 
 For Chromium on noble, these names go in `RUNNER_EXTRA_PACKAGES`. Five of the
 twelve are `t64`-suffixed on 24.04, and the plain names have no candidate:
@@ -463,9 +464,10 @@ bin/homefield upgrade --instance homefield --packages "libatk1.0-0t64 libatk-bri
 ```
 
 With those installed, `npx playwright install --only-shell chromium` (no
-`--with-deps`) succeeds as `runner`. An action that keeps `--with-deps` where
-passwordless sudo exists and falls back to this sudo-less install where it does
-not works on both ([ranacseruet/snapdrift#229](https://github.com/ranacseruet/snapdrift/pull/229)).
+`--with-deps`) succeeds as `runner`, and is faster. An action that keeps
+`--with-deps` where passwordless sudo exists and falls back to this sudo-less
+install where it does not works on both ([ranacseruet/snapdrift#229](https://github.com/ranacseruet/snapdrift/pull/229));
+its fallback is now needed only on a VM provisioned before #176.
 Chrome, Firefox and Edge themselves are not in the VM: a job that drives one
 of those directly stays hosted, or installs it with a hook.
 
@@ -523,7 +525,7 @@ non-default VM.
 | Waiting forever although the runner is online and idle, and the repository is in the group | The label in the expression is not one of the runner's labels. For example, an expression that uses the default label `homefield-ci` while the runner was registered with another label | Same as above | Add the label to the runner (*Settings → Actions → Runners →* the runner *→ Labels*), or pass the runner's label to `routing-guard` as `label:` and use it in the expression |
 | A PR job waits while another runs | One runner runs one job at a time, across all repositories | Serialised, not failed | Accept it, switch the less urgent repository to hosted, or add a runner ([More runners](#more-runners)) |
 | Job fails only on the local runner | Toolchain or arch gap between the VM and `ubuntu-latest` (arm64 vs x86-64) | Red check | Re-run hosted to confirm. Then add the tool ("Adding tools") or keep that job hosted |
-| A job installing a browser or an OS package fails: `sudo: a terminal is required to read the password` or `sudo: a password is required`, then e.g. `Failed to install browsers` | The tool apt-installs at job time through `sudo` (`playwright install --with-deps`, a plain `sudo apt-get`). `runner` has no passwordless sudo by design, only the `homefield-workspace-owner` helper ([Trust boundary](#trust-boundary)) | Red check in one job that would pass hosted | Pre-provision the package ([Adding tools](#adding-tools)) or the browser libraries ([Browsers](#browsers)) and install the browser alone, or keep that job hosted |
+| A job installing a browser or an OS package fails: `sudo: a terminal is required to read the password` or `sudo: a password is required`, then e.g. `Failed to install browsers` | The VM was provisioned before `runner` got general passwordless sudo, so only the `homefield-workspace-owner` helper is allowed ([Trust boundary](#trust-boundary)) | Red check in one job that would pass hosted | `bin/homefield upgrade --instance <name>` grants it (run it while idle); until then pre-provision the package ([Adding tools](#adding-tools)) or the browser libraries ([Browsers](#browsers)) and install the browser alone, or keep that job hosted |
 | `No space left on device` in the VM | Docker images and old workspaces | Red check | `limactl shell homefield sudo /usr/local/sbin/homefield-cleanup` |
 | Checkout fails with `EACCES: permission denied` deleting files in `_work` | A `container:` job ran as root and left root-owned files, and the runner predates the job-started hook that gives them back (#54) | Red check, on every later job in that repository's workspace | `bin/homefield upgrade` installs the hook, which also fixes the files left so far |
 | `pnpm/action-setup` (or another JS action) fails with `Cannot find module '../lib/cli.js'` from `externals.*<version>/node*/bin/npm` | A runner self-update extracted its externals with symlinks followed ([actions/runner#2094](https://github.com/actions/runner/issues/2094), #110), leaving npm, npx and corepack as flattened regular files | With the repairing hook installed, never: the next job's hook relinks them first. On a runner without it, red check on every PR job within ~15 s | `bin/homefield upgrade` installs the repairing hook and verifies npm. Until then, by hand inside the VM, from `/opt/actions-runner`: for each `externals.*/node*/bin`, `ln -sf ../lib/node_modules/npm/bin/npm-cli.js npm`, `ln -sf ../lib/node_modules/npm/bin/npx-cli.js npx`, `ln -sf ../lib/node_modules/corepack/dist/corepack.js corepack` |
@@ -598,8 +600,9 @@ nothing, which is easy to misread as "no containers".
   `/opt/actions-runner/.env`) runs `/usr/local/sbin/homefield-workspace-owner`
   through sudo, which gives anything in `_work` not owned by `runner` back to
   it, and also repairs the runner's npm when a self-update has flattened the
-  externals symlinks (#110, "Runner updates" above); sudo allows that one
-  script, with no arguments, and nothing else.
+  externals symlinks (#110, "Runner updates" above); the narrow rule still
+  allows that one script, with no arguments, and `runner` also has general
+  passwordless sudo (#176), so a job's own `sudo` works.
   The hook's output is in the job log, under "Set up runner". A job whose npm
   the hook could not repair fails right there, with the reason, instead of
   deeper in the job.
