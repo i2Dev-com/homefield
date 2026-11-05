@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The job-started hook that repairs the runner's npm (#110) and gives _work
-# back to the runner user after a container job (#54), both embedded in
-# provision.sh: lint the two scripts as extracted, check that the hook, the
+# back to the runner user after a container job (#54), as vm/guest files that
+# provision.sh installs: lint the two scripts, check that the hook, the
 # sudo rule and the runner's .env name the same paths, run the npm repair
 # against a fake externals tree, and the ownership fix against a scratch _work.
 #
@@ -17,17 +17,11 @@ set -uo pipefail
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 prov="$ROOT/vm/provision.sh"
+guest="$ROOT/vm/guest"
 
-# extract <path>: the heredoc that writes <path>, between its opening line and
-# its terminator.
-extract() {
-  sed -n "\\|^cat > $1 <<'EOF'\$|,/^EOF\$/p" "$prov" | sed '1d;$d'
-}
-owner="$work/homefield-workspace-owner"
-hook="$work/homefield-job-started.sh"
-extract /usr/local/sbin/homefield-workspace-owner >"$owner"
-extract /usr/local/sbin/homefield-job-started.sh >"$hook"
-record "extracted both scripts" "yes/yes" "$([ -s "$owner" ] && echo yes || echo no)/$([ -s "$hook" ] && echo yes || echo no)"
+owner="$guest/homefield-workspace-owner"
+hook="$guest/homefield-job-started.sh"
+record "both scripts are vm/guest files" "yes/yes" "$([ -s "$owner" ] && echo yes || echo no)/$([ -s "$hook" ] && echo yes || echo no)"
 
 if command -v shellcheck >/dev/null; then
   record "shellcheck" "clean" "$(shellcheck "$owner" "$hook" >/dev/null 2>&1 && echo clean || echo findings)"

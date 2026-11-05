@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# The MEMWATCH_* variables exist for tests/memwatch.sh; the service sets none.
+set -u
+dir="${MEMWATCH_DIR:-/var/log/homefield}"
+interval="${MEMWATCH_INTERVAL:-2}"
+period="${MEMWATCH_PERIOD:-60}"
+meminfo="${MEMWATCH_MEMINFO:-/proc/meminfo}"
+vmstat="${MEMWATCH_VMSTAT:-/proc/vmstat}"
+stat="${MEMWATCH_STAT:-/proc/stat}"
+job_file="${MEMWATCH_JOB_FILE:-}"
+mkdir -p "$dir"
+chmod 755 "$dir"
+
+# A job is running if the runner has a worker process. A test points
+# MEMWATCH_JOB_FILE at a file instead, because the machine it runs on may
+# itself be a runner.
+job_running() {
+  if [ -n "$job_file" ]; then
+    [ -e "$job_file" ]
+  else
+    pgrep -f Runner.Worker >/dev/null
+  fi
+}
+
+oom_kills() {
+  local key value
+  while read -r key value; do
+    if [ "$key" = oom_kill ]; then
+      echo "$value"
+      return
+    fi
+  done <"$vmstat"
+  echo 0
+}
+
+# The epoch of this boot; 0 when /proc/stat cannot be read, which the
+# summary then treats as "boot unknown", the pre-#91 case.
+boot_time() {
+  local key value
+  [ -r "$stat" ] || { echo 0; return; }
+  while read -r key value; do
+    if [ "$key" = btime ]; then
+      echo "$value"
+      return
+    fi
+  done <"$stat"
+  echo 0
+}
+
+now=0
+printf -v now '%(%s)T' -1
+slot=$((now / period))
+n=0 sum=0 max=0 min_avail=-1 job=0 total=0
+
+emit() {
+  local file day stamp
+  printf -v day '%(%F)T' $((slot * period))
+  printf -v stamp '%(%Y-%m-%dT%H:%M:%S%z)T' $((slot * period))
+  file="$dir/memwatch-${day}.csv"
+  if [ ! -e "$file" ]; then
+    echo "ts,samples,total_mib,used_avg_mib,used_max_mib,avail_min_mib,oom_kills,job,boot" >"$file"
+    chmod 644 "$file"
+    find "$dir" -name 'memwatch-*.csv' -mtime +90 -delete
+  fi
+  # A day's file created before the boot column keeps its 8-column header
+  # when an upgrade appends 9-column rows mid-day; the summary reads NF 8/9.
+  echo "${stamp},${n},$((total / 1024)),$((sum / n / 1024)),$((max / 1024)),$((min_avail / 1024)),$(oom_kills),${job},$(boot_time)" >>"$file"
+}
+
+while :; do
+  {
+    read -r _ total _
+    read -r _ _ _
+    read -r _ avail _
+  } <"$meminfo"
+  used=$((total - avail))
+  n=$((n + 1))
+  sum=$((sum + used))
+  [ "$used" -gt "$max" ] && max=$used
+  if [ "$min_avail" -lt 0 ] || [ "$avail" -lt "$min_avail" ]; then min_avail=$avail; fi
+  if job_running; then job=1; fi
+  sleep "$interval"
+  printf -v now '%(%s)T' -1
+  if [ $((now / period)) -ne "$slot" ]; then
+    emit
+    slot=$((now / period))
+    n=0 sum=0 max=0 min_avail=-1 job=0
+  fi
+done

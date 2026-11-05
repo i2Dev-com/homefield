@@ -32,7 +32,7 @@ jobs:
             "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/${tarball}"
           echo "${SHELLCHECK_SHA256}  ${tarball}" | sha256sum -c -
           tar -xJf "$tarball" "shellcheck-v${SHELLCHECK_VERSION}/shellcheck" --strip-components=1
-          ./shellcheck bin/homefield install.sh vm/provision.sh routing-guard/tests/run.sh tests/*.sh
+          ./shellcheck bin/homefield install.sh vm/provision.sh vm/guest/* routing-guard/tests/run.sh tests/*.sh
 
       # Pinned and hash-verified, as actionlint and shellcheck above: the wheel
       # is downloaded, its sha256 checked, and only then installed and run.

@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+unit="$(cat /opt/actions-runner/.service)"
+if pgrep -f Runner.Worker >/dev/null; then
+  echo "homefield-maintenance: job in progress, skipping until tomorrow"
+  exit 0
+fi
+systemctl stop "$unit"
+# Whatever happens below, the runner comes back up.
+trap 'systemctl start "$unit"' EXIT
+export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a
+apt-get update -q
+apt-get upgrade -y -q --with-new-pkgs \
+  -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold
+apt-get autoremove -y -q --purge
+# A kernel or libc update asks for a reboot. The runner is still stopped, so
+# reboot now rather than start it and give it a job to lose. Its service is
+# enabled, so it comes back on boot. A guest reboot keeps the VM running
+# under Lima's vz backend (verified with Lima 2.2.0).
+if [ -f /var/run/reboot-required ]; then
+  echo "homefield-maintenance: rebooting to finish the upgrade"
+  trap - EXIT
+  systemctl reboot || systemctl start "$unit"
+fi

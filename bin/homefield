@@ -29,6 +29,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LIMA_YAML="$ROOT/vm/lima.yaml"
 PROVISION="$ROOT/vm/provision.sh"
+# The guest helpers provision.sh installs, staged beside it (see run_provision).
+GUEST_DIR="$ROOT/vm/guest"
 DEFAULT_INSTANCE="homefield"
 INSTANCE="${HOMEFIELD_INSTANCE:-$DEFAULT_INSTANCE}"
 # 1 when --instance (or HOMEFIELD_INSTANCE) named one VM. Commands that can
@@ -1855,6 +1857,10 @@ run_provision() {
   stage="$(guest_stage_dir)"
   trap 'guest_unstage "$stage"' RETURN
   limactl copy "$PROVISION" "${INSTANCE}:${stage}/provision.sh"
+  # The guest helpers provision.sh installs from its own directory (vm/guest/).
+  # The uninstall path stages provision.sh alone and runs ensure-service, which
+  # needs none of them.
+  limactl copy -r "$GUEST_DIR" "${INSTANCE}:${stage}/guest"
   printf '%s' "$input" | guest_stdin sudo "$@" bash "${stage}/provision.sh"
   guest_unstage "$stage"
   trap - RETURN

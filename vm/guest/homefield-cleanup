@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# An empty _work (before the first job) must not iterate the literal glob.
+shopt -s nullglob
+job_running() { pgrep -f Runner.Worker >/dev/null; }
+if job_running; then
+  echo "homefield-cleanup: job in progress, skipping"
+  exit 0
+fi
+docker system prune --force --filter "until=24h"
+for dir in /opt/actions-runner/_work/*/; do
+  case "$(basename "$dir")" in _*) continue ;; esac
+  if [ -z "$(find "$dir" -newermt '-7 days' -print -quit)" ]; then
+    # Checked again right before deleting: a job may have started since the
+    # top of the script, and an idle-for-a-week workspace is exactly the one
+    # the first job after a long absence would be using.
+    if job_running; then
+      echo "homefield-cleanup: job started, leaving $dir"
+      exit 0
+    fi
+    echo "homefield-cleanup: removing idle workspace $dir"
+    rm -rf "$dir"
+  fi
+done

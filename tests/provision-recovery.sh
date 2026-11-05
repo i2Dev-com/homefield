@@ -110,6 +110,16 @@ sed -n '1,/^# ── Cleanup timer/p' "$ROOT/vm/provision.sh" |
     -e "s|new_tmp /tmp/actions-runner.XXXXXX.tar.gz|new_tmp $work/tarball.XXXXXX|" \
     -e "s|^\( *\)new_tmp\$|\1new_tmp $work/tmp/tmp.XXXXXX|" \
     >"$work/provision.sh"
+# The cut script installs the guest helpers from its own directory; the run
+# reaches the workspace-owner install, so the staged tree carries them, with
+# the same absolute paths rewritten as the script's own.
+mkdir -p "$work/guest"
+for f in "$ROOT"/vm/guest/*; do
+  sed -e "s|/opt/actions-runner|$work/runner|g" \
+    -e "s|/usr/local/sbin|$work/sbin|g" \
+    -e "s|/var/log/homefield|$work/varlog|g" \
+    "$f" >"$work/guest/${f##*/}"
+done
 record "the script was cut at its cleanup timer" "yes" "$(grep -q '^# ── Cleanup timer' "$work/provision.sh" && echo yes || echo no)"
 record "every temp file gets a template in the scratch tree" "4/0" "$(grep -c '^ *new_tmp /' "$work/provision.sh")/$(grep -c '^ *new_tmp$' "$work/provision.sh")"
 
