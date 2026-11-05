@@ -105,6 +105,17 @@ def fixture_runs(repo, fixture):
             for field in ("name", "created_at"):
                 if not job.get(field):
                     die(f"the fixture {fixture} has a job without {field} in {repo} (run {run.get('id')})")
+            for field in ("created_at", "started_at", "completed_at"):
+                value = job.get(field)
+                if value:
+                    try:
+                        dt.datetime.strptime(value, TIME_FORMAT)
+                    except ValueError:
+                        die(
+                            f"the fixture {fixture} has a job with a {field} that is not"
+                            f" {TIME_FORMAT} in {repo} (job {job.get('id')}, run {run.get('id')}):"
+                            f" {value!r}"
+                        )
     return data[repo]
 
 

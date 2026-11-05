@@ -1499,6 +1499,13 @@ record "quote: spaces and slashes are encoded" "a%20b%2Fc.yml" "$(python3 -I "$R
 out="$(python3 -I "$ROOT/tools/adopt.py" guards "$work/not-there" 2>&1)"; rc=$?
 record "guards: a missing directory is refused, not a traceback" "nonzero/yes/no" \
   "$(nonzero "$rc")/$(has "$out" 'not a directory')/$(has "$out" Traceback)"
+mkdir -p "$work/dir-named-yml/ci.yml"
+out="$(python3 -I "$ROOT/tools/adopt.py" guards "$work/dir-named-yml" 2>&1)"; rc=$?
+record "guards: a directory named like a workflow is skipped, not a traceback" "0/no" \
+  "$rc/$(has "$out" Traceback)"
+out="$(HOMEFIELD_MODE_RELEASE=abc python3 -I "$ROOT/tools/adopt.py" guard-snippet --mode simple 2>&1)"; rc=$?
+record "a malformed HOMEFIELD_MODE_RELEASE is refused, not a traceback" "nonzero/yes/no" \
+  "$(nonzero "$rc")/$(has "$out" 'HOMEFIELD_MODE_RELEASE is not a vX.Y.Z release')/$(has "$out" Traceback)"
 
 # ── adopt --setup ──────────────────────────────────────────────────────────
 echo "setup"

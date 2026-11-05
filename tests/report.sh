@@ -152,6 +152,12 @@ bad_fixture "a fixture job without created_at is refused, not a traceback" \
 bad_fixture "a fixture job with a null created_at is refused, not a traceback" \
   '{"acme/app": [{"id": 1, "jobs": [{"id": 11, "name": "checks", "created_at": null, "status": "completed", "conclusion": "success", "started_at": "2026-10-01T10:00:30Z", "completed_at": "2026-10-01T10:02:10Z"}]}]}' \
   'without created_at'
+bad_fixture "a fixture job with a malformed started_at is refused, not a traceback" \
+  '{"acme/app": [{"id": 1, "jobs": [{"id": 11, "name": "checks", "created_at": "2026-10-01T10:00:00Z", "started_at": "not-a-date", "completed_at": "2026-10-01T10:02:10Z", "status": "completed", "conclusion": "success"}]}]}' \
+  'started_at that is not'
+bad_fixture "a fixture job with a fractional-seconds completed_at is refused, not a traceback" \
+  '{"acme/app": [{"id": 1, "jobs": [{"id": 11, "name": "checks", "created_at": "2026-10-01T10:00:00Z", "started_at": "2026-10-01T10:00:30Z", "completed_at": "2026-10-01T10:02:10.500Z", "status": "completed", "conclusion": "success"}]}]}' \
+  'completed_at that is not'
 bad_fixture "a fixture that is not keyed by repository is refused" \
   '[]' 'not an object keyed by repository'
 bad_fixture "a fixture that is not UTF-8 text is refused, not a traceback" \
