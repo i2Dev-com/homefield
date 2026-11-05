@@ -251,5 +251,8 @@ record "a tampered manifest line is not a rm path: skipped, nothing removed" "0"
 srun MODE=upgrade SAVED="" GUEST_HAVE="50-awscli.sh" -- cmd_upgrade --preset hosted
 record "a manifest missing a current hook: the hook is reinstalled, the manifest rewritten" "2/1/0" \
   "$(called '^guest sudo install -D -m 0755')/$(called 'sudo tee /etc/homefield/preset-hooks')/$(called 'sudo rm -f')"
+srun MODE=install SAVED="" -- cmd_install --preset browsers
+record "a hookless preset on a fresh install: the manifest directory is made, the manifest written" "1/1/0/0" \
+  "$(called 'sudo install -d')/$(called 'sudo tee /etc/homefield/preset-hooks')/$(called '^guest sudo install -D -m 0755')/$(called 'sudo rm -f')"
 
 summary
