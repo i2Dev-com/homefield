@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Provision the local GitHub Actions runner inside the Lima VM.
 #
-# Runs inside the guest as root. Copy it in and run it; see docs/runbook.md
-# for the full sequence:
+# Runs inside the guest as root. Copy it in — with the vm/guest/ helpers
+# beside it, which it installs from its own directory — and run it; see
+# docs/runbook.md for the full sequence:
 #
 #   limactl copy vm/provision.sh homefield:/tmp/provision.sh
+#   limactl copy -r vm/guest homefield:/tmp/guest
 #   printf 'RUNNER_TOKEN=%s\n' "$TOKEN" |
 #     limactl shell homefield sudo RUNNER_URL=https://github.com/<org> \
 #       bash /tmp/provision.sh

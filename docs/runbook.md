@@ -332,6 +332,7 @@ limactl shell homefield -- sh -c 'mount | grep -Ec "virtiofs|9p|sshfs|reverse-ss
 #    name. A name that is already registered is refused: remove that
 #    registration on the runners page first.
 limactl copy vm/provision.sh homefield:/tmp/provision.sh
+limactl copy -r vm/guest homefield:/tmp/guest   # the helpers provision.sh installs
 printf 'RUNNER_TOKEN=%s\n' "$TOKEN" |
   limactl shell homefield sudo RUNNER_URL=https://github.com/<org> \
     RUNNER_NAME="$(scutil --get LocalHostName | tr '[:upper:]' '[:lower:]')-homefield" \
@@ -433,6 +434,7 @@ touched, as it does in the variable.
 bin/homefield upgrade --instance homefield --packages "libpq-dev shellcheck"
 # by hand:
 limactl copy vm/provision.sh homefield:/tmp/provision.sh
+limactl copy -r vm/guest homefield:/tmp/guest   # the helpers provision.sh installs
 limactl shell homefield sudo RUNNER_EXTRA_PACKAGES="libpq-dev shellcheck" bash /tmp/provision.sh
 ```
 
@@ -861,6 +863,7 @@ runner before anything else.
 
 ```bash
 limactl copy vm/provision.sh homefield:/tmp/provision.sh
+limactl copy -r vm/guest homefield:/tmp/guest   # the helpers provision.sh installs
 printf 'RUNNER_REMOVE_TOKEN=%s\nRUNNER_TOKEN=%s\n' "$REMOVE" "$TOKEN" |
   limactl shell homefield sudo RUNNER_REREGISTER=1 \
     RUNNER_URL=https://github.com/<new-scope> RUNNER_NAME=<name> RUNNER_LABEL=<label> \
@@ -907,7 +910,8 @@ first. If GitHub then refuses the removal (a rejected token, no network), or
 `svc.sh uninstall` stops partway, `bin/homefield uninstall` gives the service
 back and starts it, so the runner keeps taking jobs; run it again once the
 cause is fixed. By hand, `provision.sh` does that and works out what the
-uninstall left behind:
+uninstall left behind (this one needs only the script, not the `vm/guest/`
+helpers):
 
 ```bash
 limactl copy vm/provision.sh homefield:/tmp/provision.sh
