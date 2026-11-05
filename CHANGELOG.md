@@ -9,7 +9,15 @@ fail, such as a new guard in the routing expression, bumps the minor version
 (0.1 to 0.2). Compatible changes bump the patch. Merged changes wait on
 `main`, under *Unreleased*, until a release is cut.
 
-## Unreleased
+## v0.4.1 (2026-11-04)
+
+Bumps the patch from v0.4.0: the routing expression and the provisioner are
+unchanged, and every change either adds a command or clarifies existing
+output, so no workflow that passes v0.4.0's guard fails now. To upgrade, run
+the README's one-liner again, which replaces the installed copy; the VM is
+untouched, so no `homefield upgrade` is needed. Bump `routing-guard@v0.4.0`
+pins to `@v0.4.1` before running `homefield adopt` (it counts only its own
+release); the checker itself is unchanged, so a v0.4.0 pin keeps passing.
 
 ### Changed
 
