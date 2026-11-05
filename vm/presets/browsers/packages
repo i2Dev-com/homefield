@@ -1,0 +1,20 @@
+# Chromium's OS libraries on Ubuntu 24.04 (noble), the set
+# `playwright install --with-deps chromium` would apt-install, so a job that
+# pre-provisions them can run the browser download alone (`--only-shell`, no
+# --with-deps) and skip an apt-get update and install in every job.
+#
+# Five are t64-suffixed on noble; the plain names have no candidate there.
+# libnss3, libnspr4, libdrm2 and libxkbcommon0 already arrive with Lima's
+# Ubuntu image and need no entry (a trimmed image would).
+libatk1.0-0t64
+libatk-bridge2.0-0t64
+libcups2t64
+libatspi2.0-0t64
+libasound2t64
+libxcomposite1
+libxdamage1
+libxfixes3
+libxrandr2
+libgbm1
+libpango-1.0-0
+libcairo2

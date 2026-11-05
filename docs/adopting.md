@@ -413,8 +413,10 @@ Default group, needs nothing here. Then set the variable:
 2. **Find toolchain gaps by running, not by reading.** The VM has what
    [`vm/provision.sh`](../vm/provision.sh) installs, which is less than
    `ubuntu-latest`, and grepping the workflows for the commands they call
-   misses things. If a job fails locally but passes hosted, add what is
-   missing through `RUNNER_EXTRA_PACKAGES` or a hook ("Adding tools" in
+   misses things. If a job fails locally but passes hosted, close the common
+   gap with `homefield upgrade --preset hosted` (browser libraries, `gh`,
+   `shellcheck`, `sqlite3`, `xvfb`, `rsync`, AWS CLI v2 and Node), add anything
+   else through `RUNNER_EXTRA_PACKAGES` or a hook ("Adding tools" in
    [`runbook.md`](runbook.md)), or keep that job hosted. Only propose a change
    to the base set in `provision.sh` for something nearly every repository
    needs.

@@ -143,12 +143,20 @@ install (and setup, which takes the same options):
                      list the groups, instead of asking. Registration still
                      fails if the group is missing
   --packages "A B"   extra apt packages (RUNNER_EXTRA_PACKAGES)
+  --preset NAME      add a shipped preset's apt packages and hooks on top of
+                     what the VM has; repeatable. Shipped: browsers, hosted.
+                     Unlike --packages it never replaces the saved list
+                     (docs/runbook.md, "Adding tools")
   --cpus N           VM CPUs, when creating it (default: vm/lima.yaml)
   --memory GIB       VM memory in GiB, when creating it (default: vm/lima.yaml)
   --no-autostart     do not start the VM at login
 
 upgrade:
   --packages "A B"   replace the saved extra packages
+  --preset NAME      add a shipped preset's apt packages and hooks on top of
+                     what the VM has; repeatable. Shipped: browsers, hosted.
+                     Unlike --packages it never replaces the saved list
+                     (docs/runbook.md, "Adding tools")
   --force            upgrade even while a job is running (the job is cancelled)
 
 diagnose:
@@ -2023,8 +2031,138 @@ cmd_setup() {
   cmd_install "$@"
 }
 
+# ── Presets ─────────────────────────────────────────────────────────────────
+# Shipped sets for closing a hosted-parity gap in one command (#175): each is
+# vm/presets/<name>/, with `packages` (apt names, one or more per line; blank
+# lines and # comments allowed) and any *.sh files beside it, which are hooks
+# copied into the guest's /etc/homefield/provision.d/ for provision.sh to run.
+# A preset may be another's superset: `include <name>` on its own line pulls in
+# that preset's packages and hooks. Presets ADD to what a VM already has; only
+# plain --packages replaces the saved list (and then says so).
+PRESETS="$ROOT/vm/presets"
+GUEST_HOOKS="/etc/homefield/provision.d"
+
+# preset_list: the shipped presets, for messages.
+preset_list() {
+  local d names=""
+  for d in "$PRESETS"/*/; do
+    [ -f "$d/packages" ] || continue
+    d="${d%/}"
+    names="$names ${d##*/}"
+  done
+  printf '%s' "${names# }"
+}
+
+# _preset_load <name>: the work behind load_presets. Recursive so that an
+# `include` puts the other preset's packages where it is written, and a name
+# already loaded (an include cycle) is skipped rather than followed again.
+SEEN_PRESETS=""
+HOOK_NAMES=" "
+_preset_load() {
+  local name="$1" dir line words pkg f base
+  case "$SEEN_PRESETS" in *" $name "*) return ;; esac
+  SEEN_PRESETS="$SEEN_PRESETS$name "
+  dir="$PRESETS/$name"
+  [ -f "$dir/packages" ] || die "--preset $name: no such preset; shipped presets are $(preset_list)"
+  while IFS= read -r line || [ -n "$line" ]; do
+    # Trim, then skip blank lines and comments.
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    case "$line" in '' | '#'*) continue ;; esac
+    read -ra words <<<"$line"
+    if [ "${words[0]}" = include ]; then
+      [ ${#words[@]} -eq 2 ] || die "--preset $name: $dir/packages: 'include' takes one preset name, got: $line"
+      _preset_load "${words[1]}"
+      continue
+    fi
+    for pkg in "${words[@]}"; do
+      # The same rule provision.sh applies to the names it hands apt-get.
+      [[ "$pkg" =~ ^[a-z0-9][a-z0-9+.-]+$ ]] ||
+        die "--preset $name: $dir/packages: not a package name: $pkg"
+      case " $PRESET_PKGS " in *" $pkg "*) continue ;; esac
+      PRESET_PKGS="${PRESET_PKGS:+$PRESET_PKGS }$pkg"
+    done
+  done <"$dir/packages"
+  for f in "$dir"/*.sh; do
+    [ -e "$f" ] || continue
+    base="${f##*/}"
+    case "$HOOK_NAMES" in *" $base "*) die "--preset: two hooks named $base (one is $f); a preset set cannot carry both into ${GUEST_HOOKS}" ;; esac
+    HOOK_NAMES="$HOOK_NAMES$base "
+    PRESET_HOOKS+=("$f")
+  done
+}
+
+# load_presets <name>...: validates the names and everything they include, then
+# sets PRESET_PKGS (apt names, space-separated, first-seen order) and
+# PRESET_HOOKS (absolute hook paths). Dies before anything is stopped or
+# created on an unknown preset, a bad name, an ambiguous include, or two hooks
+# with the same file name.
+load_presets() {
+  local name
+  SEEN_PRESETS=""
+  HOOK_NAMES=" "
+  PRESET_PKGS=""
+  PRESET_HOOKS=()
+  for name in "$@"; do _preset_load "$name"; done
+}
+
+# merge_packages <space-separated list>...: the lists joined, first-seen order,
+# duplicates dropped. Presets and --packages both feed it; a preset never drops
+# what is already there.
+merge_packages() {
+  local out="" seen=" " arg pkg
+  for arg in "$@"; do
+    set -f
+    # shellcheck disable=SC2086  # the lists are space-separated words by design
+    for pkg in $arg; do
+      case "$seen" in *" $pkg "*) continue ;; esac
+      seen="$seen$pkg "
+      out="${out:+$out }$pkg"
+    done
+    set +f
+  done
+  printf '%s' "$out"
+}
+
+# copy_preset_hooks: puts PRESET_HOOKS in the guest's provision.d, so this and
+# every later provisioning run executes them (a plain `upgrade` keeps them).
+copy_preset_hooks() {
+  local f base tmp
+  for f in ${PRESET_HOOKS[@]+"${PRESET_HOOKS[@]}"}; do
+    base="${f##*/}"
+    tmp="/tmp/homefield-preset-${base}"
+    limactl copy "$f" "${INSTANCE}:${tmp}" </dev/null ||
+      die "could not copy preset hook ${base} into VM ${INSTANCE}; nothing was stopped"
+  done
+  for f in ${PRESET_HOOKS[@]+"${PRESET_HOOKS[@]}"}; do
+    base="${f##*/}"
+    guest_stdin sudo install -D -m 0755 "/tmp/homefield-preset-${base}" "${GUEST_HOOKS}/${base}" </dev/null ||
+      die "could not install preset hook ${base} in VM ${INSTANCE}; nothing was stopped"
+  done
+}
+
+# preset_saved_drops <replacement>: names from any shipped preset that are in
+# the VM's saved list but not in the replacement --packages value. Plain
+# --packages replaces the whole list, so these would stop being reinstalled.
+preset_saved_drops() {
+  local replacement=" $1 " d name pkg drops="" tops=()
+  for d in "$PRESETS"/*/; do
+    [ -f "$d/packages" ] || continue
+    d="${d%/}"
+    tops+=("${d##*/}")
+  done
+  load_presets ${tops[@]+"${tops[@]}"}
+  for pkg in $PRESET_PKGS; do
+    case " $(runner_extra_packages) " in *" $pkg "*) ;; *) continue ;; esac
+    case "$replacement" in *" $pkg "*) continue ;; esac
+    drops="${drops:+$drops }$pkg"
+  done
+  printf '%s' "$drops"
+}
+
 cmd_install() {
   local url="" label="" name="" group="" packages="" packages_set=0 cpus="" memory="" autostart=1 replace=0 cmd=install
+  local presets=()
   [ "$SETUP" != 1 ] || cmd=setup
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -2033,6 +2171,7 @@ cmd_install() {
       --name) name="${2:?--name needs a value}"; shift 2 ;;
       --group) group="${2:?--group needs a value}"; shift 2 ;;
       --packages) packages="${2?--packages needs a value (may be empty)}"; packages_set=1; shift 2 ;;
+      --preset) presets+=("${2:?--preset needs a value}"); shift 2 ;;
       --cpus) cpus="${2:?--cpus needs a value}"; shift 2 ;;
       --memory) memory="${2:?--memory needs a value}"; shift 2 ;;
       --no-autostart) autostart=0; shift ;;
@@ -2047,6 +2186,8 @@ cmd_install() {
       *) die "${cmd}: unknown option $1 (see bin/homefield help)" ;;
     esac
   done
+  # A preset that does not exist stops here: nothing has been created yet.
+  [ ${#presets[@]} -eq 0 ] || load_presets ${presets[@]+"${presets[@]}"}
   # The readiness report comes first, before anything is created, and install
   # then gates on its own subset of it — macOS, arm64, Lima — which check_host
   # is: gh, python3 and brew are what the tool needs elsewhere (adopt, report,
@@ -2087,6 +2228,8 @@ cmd_install() {
     log "${INSTANCE} is already registered; upgrading instead (registration settings are kept)"
     local args=()
     [ "$packages_set" = 1 ] && args+=(--packages "$packages")
+    local p
+    for p in ${presets[@]+"${presets[@]}"}; do args+=(--preset "$p"); done
     cmd_upgrade "${args[@]+"${args[@]}"}"
     [ "$SETUP" != 1 ] || setup_upgrade_summary
     return
@@ -2096,7 +2239,16 @@ cmd_install() {
   local env=(RUNNER_URL="$url" RUNNER_NAME="$name")
   [ -n "$label" ] && env+=(RUNNER_LABEL="$label")
   [ -n "$group" ] && env+=(RUNNER_GROUP="$group")
-  [ "$packages_set" = 1 ] && env+=(RUNNER_EXTRA_PACKAGES="$packages")
+  if [ ${#presets[@]} -gt 0 ]; then
+    # Presets add to whatever the VM already had, and --packages adds to both.
+    local extra="" merged=""
+    [ "$packages_set" = 1 ] && extra="$packages"
+    merged="$(merge_packages "$(runner_extra_packages)" "$extra" "$PRESET_PKGS")"
+    env+=(RUNNER_EXTRA_PACKAGES="$merged")
+    copy_preset_hooks
+  elif [ "$packages_set" = 1 ]; then
+    env+=(RUNNER_EXTRA_PACKAGES="$packages")
+  fi
 
   local token
   token="$(get_token registration "$url")"
@@ -2119,14 +2271,16 @@ cmd_install() {
 }
 
 cmd_upgrade() {
-  local packages="" packages_set=0 force=0
+  local packages="" packages_set=0 force=0 presets=()
   while [ $# -gt 0 ]; do
     case "$1" in
       --packages) packages="${2?--packages needs a value (may be empty)}"; packages_set=1; shift 2 ;;
+      --preset) presets+=("${2:?--preset needs a value}"); shift 2 ;;
       --force) force=1; shift ;;
       *) die "upgrade: unknown option $1 (see bin/homefield help)" ;;
     esac
   done
+  [ ${#presets[@]} -eq 0 ] || load_presets ${presets[@]+"${presets[@]}"}
   check_host
   vm_lookup
   [ -n "$VM_STATUS" ] || die "no VM ${INSTANCE}; run bin/homefield install"
@@ -2144,9 +2298,30 @@ cmd_upgrade() {
   if is_job_running && [ "$force" != 1 ]; then
     die "a job is running on ${INSTANCE}; try again when it is idle, or pass --force"
   fi
+  # Presets add to the saved list (and to any --packages), so nothing a VM had
+  # stops being reinstalled. Plain --packages still replaces the whole list;
+  # say which preset names that takes out of it.
+  local merged=""
+  if [ ${#presets[@]} -gt 0 ]; then
+    copy_preset_hooks
+    local extra="" saved=""
+    [ "$packages_set" = 1 ] && extra="$packages"
+    saved="$(runner_extra_packages)"
+    merged="$(merge_packages "$saved" "$extra" "$PRESET_PKGS")"
+  elif [ "$packages_set" = 1 ]; then
+    local dropped=""
+    dropped="$(preset_saved_drops "$packages")"
+    if [ -n "$dropped" ]; then
+      log "warning: --packages replaces the saved list; preset packages not in it will stop being reinstalled (hooks stay): $dropped"
+    fi
+  fi
   stop_runner
   local env=()
-  [ "$packages_set" = 1 ] && env+=(RUNNER_EXTRA_PACKAGES="$packages")
+  if [ ${#presets[@]} -gt 0 ]; then
+    env+=(RUNNER_EXTRA_PACKAGES="$merged")
+  elif [ "$packages_set" = 1 ]; then
+    env+=(RUNNER_EXTRA_PACKAGES="$packages")
+  fi
   log "upgrading ${INSTANCE}"
   # provision.sh starts the service again at the end, and waits until it is
   # listening for jobs.

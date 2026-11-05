@@ -1,0 +1,16 @@
+# The parity set: what a job can reasonably expect to find on ubuntu-24.04
+# and the VM lacks, minus what setup actions give per job (actions/setup-node,
+# setup-python, ...). Version-critical jobs still pin with those actions; this
+# tracks noble's packages at provision time.
+#
+# Browsers are included through the other preset rather than copied here, so
+# the twelve t64 names live in one file. The hooks beside this manifest add
+# what apt cannot supply: AWS CLI v2 (noble has no awscli) and Node 22 (apt's
+# nodejs is older; see docs/runbook.md "What the VM has").
+include browsers
+
+gh
+shellcheck
+sqlite3
+xvfb
+rsync

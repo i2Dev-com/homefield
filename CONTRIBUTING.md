@@ -26,7 +26,8 @@ bash tests/account-type.sh         # `bin/homefield install`: personal account o
 bash tests/setup.sh                # `bin/homefield setup`: the preflight gate, the summary, the next steps, the routing pull request offer
 bash tests/adopt.sh                # `bin/homefield adopt`
 bash tests/preflight.sh            # `bin/homefield preflight`, the pre-install readiness check
-shellcheck bin/homefield install.sh vm/provision.sh routing-guard/tests/run.sh tests/*.sh
+bash tests/preset.sh               # `--preset`: shipped sets, merges, hook copies, refusals
+shellcheck bin/homefield install.sh vm/provision.sh routing-guard/tests/run.sh vm/presets/*/*.sh tests/*.sh
 actionlint
 ```
 

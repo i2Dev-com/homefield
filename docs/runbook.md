@@ -379,10 +379,10 @@ passes hosted but fails locally.
 | What | On the hosted Ubuntu 24.04 image | In the VM | What to do |
 |---|---|---|---|
 | Privileges | passwordless `sudo` | passwordless `sudo`, as a hosted Linux runner has; `runner` is already root-equivalent through the `docker` group ([Trust boundary](#trust-boundary)) | Nothing to do on a current VM: a job's `sudo apt-get install`, `sudo systemctl` and `playwright install --with-deps` work. A VM provisioned before #176 upgrades first (update the tool, then `bin/homefield upgrade`, [Failure modes](#failure-modes)). Pre-provisioning still makes a large set faster and saves network ([Adding tools](#adding-tools)) |
-| Apt packages | dozens, including `shellcheck`, `sqlite3`, `xvfb`, `rsync` | a small base set ([Packages](../vm/provision.sh)) | Add to `RUNNER_EXTRA_PACKAGES`, or a hook for what apt cannot supply ([Adding tools](#adding-tools)) |
-| CLI tools | AWS CLI, Azure CLI, Google Cloud CLI, SAM CLI, GitHub CLI | none installed | Hook or apt (`gh` is in noble, older than the image's). `awscli` has no noble candidate, so the AWS CLI v2 bundle comes in by hook. Azure, gcloud and SAM are usually easier through their own actions |
+| Apt packages | dozens, including `shellcheck`, `sqlite3`, `xvfb`, `rsync` | a small base set ([Packages](../vm/provision.sh)) | Add to `RUNNER_EXTRA_PACKAGES`, or a hook for what apt cannot supply; `--preset hosted` adds the common ones at once ([Adding tools](#adding-tools)) |
+| CLI tools | AWS CLI, Azure CLI, Google Cloud CLI, SAM CLI, GitHub CLI | none installed | Hook or apt (`gh` is in noble, older than the image's). `awscli` has no noble candidate, so the AWS CLI v2 bundle comes in by hook; `--preset hosted` installs both. Azure, gcloud and SAM are usually easier through their own actions |
 | Browsers | Chrome, Chromium, Firefox and Edge, with drivers and OS libraries | no browser binary; OS libraries at job time through `--with-deps`, or pre-provisioned | Playwright and Puppeteer download their own browser, and `--with-deps` installs the OS libraries now that `runner` has sudo ([Browsers](#browsers)). Pre-provisioning them saves time and network only for a tool that then installs without `--with-deps`. Jobs that drive Chrome, Firefox or Edge directly stay hosted |
-| Languages | Node, Python, Java, Ruby, PHP, Rust and more, each pinned by the image | `python3` 3.12 (same as Ubuntu 24.04); no Node, Java, Ruby, PHP or Rust | Setup actions (`actions/setup-node`, `setup-*`) work here and give the job its version. A job that assumes a bare `node`, `npm` or `java` needs it provisioned (noble's `nodejs` is 18.19, against the image's Node 22), or stays hosted |
+| Languages | Node, Python, Java, Ruby, PHP, Rust and more, each pinned by the image | `python3` 3.12 (same as Ubuntu 24.04); no Node, Java, Ruby, PHP or Rust | Setup actions (`actions/setup-node`, `setup-*`) work here and give the job its version. A job that assumes a bare `node`, `npm` or `java` needs it provisioned (noble's `nodejs` is 18.19, against the image's Node 22; `--preset hosted` installs that major), or stays hosted |
 | Architecture | x86-64 by default; `ubuntu-24.04-arm` is a hosted image too | arm64 | x86-64 image builds stay hosted ([#21](https://github.com/i2Dev-com/homefield/issues/21)); arm jobs can point `fallback` at `ubuntu-24.04-arm` ([routing options](adopting.md#routing-options)) |
 | State between jobs | a fresh VM for every job | one VM, used in turn by every allowed repository ([Trust boundary](#trust-boundary)) | Cleanup and workspace ownership keep it usable, not clean. Anything a job leaves is visible to the next, including what it does through `sudo`: a package it apt-installs stays, and the daily maintenance upgrades it with the rest, and a service it enables starts on every boot. The VM drifts from `RUNNER_EXTRA_PACKAGES` that way ([Maintenance](#maintenance)) |
 | Versions | the image is rebuilt weekly | apt packages upgrade in the daily maintenance, and the runner self-updates ([Maintenance](#maintenance)) | Anything whose version matters: pin it with a setup action or an explicit install, on both sides |
@@ -394,6 +394,27 @@ The VM starts with a small base set (see "Packages" in
 "what the VM has" above maps the difference. Add what your jobs need without
 editing the script. Per-job toolchains (`actions/setup-node`,
 `setup-python`, ...) need nothing here.
+
+**Presets: the common gaps in one command.** These are shipped with the tool
+(`vm/presets/`) and add, never replace:
+
+```bash
+bin/homefield upgrade --instance homefield --preset browsers   # the twelve Chromium OS libraries below
+bin/homefield upgrade --instance homefield --preset hosted     # browsers + CLI tools + Node, all of it
+```
+
+`hosted` is `browsers`, then noble's `gh`, `shellcheck`, `sqlite3`, `xvfb` and
+`rsync`, plus two hooks from the same set: AWS CLI v2 (official bundle; noble
+has no `awscli`) and Node at the major `ubuntu-24.04` carries (`setup-node`
+still wins for a job that installs its own). Its packages join what is saved
+in `/etc/homefield/extra-packages`, and any `--packages` on the same command;
+only plain `--packages` replaces the list, and it warns when that drops names
+a preset installed; the preset's hooks stay, and are removed by hand only
+(`rm /etc/homefield/provision.d/<file>`, as for any hook). The hooks run on
+every provisioning run, so what they installed survives later upgrades. They
+install whatever upstream serves at provision time (the hosted image rebuilds
+weekly), so anything version-critical still pins itself with a setup action or
+an explicit install.
 
 **Apt packages:** pass `RUNNER_EXTRA_PACKAGES` when provisioning. The list is
 saved in the guest (`/etc/homefield/extra-packages`), so upgrade runs keep it
@@ -433,8 +454,9 @@ limactl shell homefield sudo bash /tmp/provision.sh   # runs it now
 `awscli` is the case that needs a hook: noble has no `awscli` apt package (it
 was removed from the archive in February 2024), so `RUNNER_EXTRA_PACKAGES`
 cannot supply it and provisioning stops in apt with no candidate. The hook
-installs the official AWS CLI v2 bundle instead. `gh`, `shellcheck` and
-`sqlite3` are apt packages, so they need no hook.
+installs the official AWS CLI v2 bundle instead; `--preset hosted` copies that
+same hook, arch-aware and idempotent. `gh`, `shellcheck` and `sqlite3` are apt
+packages, so they need no hook.
 
 Provision while the runner is idle, as for any upgrade (see "Maintenance").
 Everything added here is available to every repository's jobs, so keep
@@ -449,16 +471,19 @@ install in every job, which costs network and time. Where either matters,
 pre-provision the libraries in `RUNNER_EXTRA_PACKAGES` and install the browser
 alone; that helps only a workflow that then leaves out `--with-deps`.
 
-For Chromium on noble, these names go in `RUNNER_EXTRA_PACKAGES`. Five of the
-twelve are `t64`-suffixed on 24.04, and the plain names have no candidate:
+The shipped `browsers` preset adds exactly this set:
+`bin/homefield upgrade --instance homefield --preset browsers`. By hand, these
+names go in `RUNNER_EXTRA_PACKAGES`, and the hook and by-hand recipes below stay
+the reference. Five of the twelve are `t64`-suffixed on 24.04, and the plain
+names have no candidate:
 
 `libatk1.0-0t64 libatk-bridge2.0-0t64 libcups2t64 libatspi2.0-0t64 libasound2t64 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libpango-1.0-0 libcairo2`
 
 `libnss3`, `libnspr4`, `libdrm2` and `libxkbcommon0` already arrive with the
 Lima Ubuntu image (a base-only VM has them), so they need no entry; a trimmed
-or different image would. Passing `--packages` *replaces* the saved list, so
-include anything already there — `bin/homefield status` prints
-`extra packages:`:
+or different image would. Passing plain `--packages` *replaces* the saved list,
+so include anything already there — `bin/homefield status` prints
+`extra packages:`. A preset never replaces it:
 
 ```bash
 bin/homefield upgrade --instance homefield --packages "libatk1.0-0t64 libatk-bridge2.0-0t64 libcups2t64 libatspi2.0-0t64 libasound2t64 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libpango-1.0-0 libcairo2"
