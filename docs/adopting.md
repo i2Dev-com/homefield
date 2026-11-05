@@ -47,6 +47,12 @@ Keep hosted:
   can be routed ([routing options](#routing-options)), but then they depend on
   the Mac being awake, and a deploy gated on CI can queue behind it.
 
+The [parity table](runbook.md#what-the-vm-has-compared-with-a-hosted-runner)
+in the runbook lists the eight dimensions where a hosted runner and the VM
+differ — privileges, apt packages, CLI tools, browsers, languages,
+architecture, state between jobs, versions — and what to do for each:
+provision it, use a setup action, or keep the job hosted.
+
 ## 2. Route them
 
 Replace each chosen job's `runs-on` with the routing expression, verbatim.

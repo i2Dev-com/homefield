@@ -13,6 +13,18 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ### Changed
 
+- Docs only: the runbook now compares what the VM has with a hosted runner
+  before "Adding tools" — privileges, apt packages, CLI tools, browsers,
+  languages, architecture, state between jobs, versions — pinned to
+  `ubuntu-24.04`, the release the VM runs, because `ubuntu-latest` is moving
+  to 26.04. A new failure-modes row resolves a job that fails on a job-time
+  `sudo` install (`playwright install --with-deps`) to the new "Browsers"
+  recipe. That recipe gives the noble `t64` library names, the fact that
+  `libnss3`, `libnspr4`, `libdrm2` and `libxkbcommon0` come with the Lima
+  image, and the sudo-less install that a job can use once they are there.
+  "Adding tools" also says noble has no `awscli` apt candidate, so the AWS CLI
+  v2 bundle comes in by hook (#169), and `docs/adopting.md` step 1 points at
+  the table. No routing or behaviour change (#170).
 - `adopt --setup` no longer dies with a bare `gh: Not Found (HTTP 404)` when
   gh's active login cannot write `.github/workflows/`: the `workflow` scope of
   a classic PAT is checked before the branch is created and a missing one
