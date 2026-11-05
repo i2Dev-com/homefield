@@ -48,10 +48,10 @@ Keep hosted:
   the Mac being awake, and a deploy gated on CI can queue behind it.
 
 The [parity table](runbook.md#what-the-vm-has-compared-with-a-hosted-runner)
-in the runbook lists the eight dimensions where a hosted runner and the VM
-differ — privileges, apt packages, CLI tools, browsers, languages,
-architecture, state between jobs, versions — and what to do for each:
-provision it, use a setup action, or keep the job hosted.
+in the runbook compares eight dimensions — privileges, apt packages, CLI tools,
+browsers, languages, architecture, state between jobs, versions — and says what
+to do for any that differ: provision it, use a setup action, or keep the job
+hosted.
 
 ## 2. Route them
 

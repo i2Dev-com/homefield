@@ -9,6 +9,38 @@ fail, such as a new guard in the routing expression, bumps the minor version
 (0.1 to 0.2). Compatible changes bump the patch. Merged changes wait on
 `main`, under *Unreleased*, until a release is cut.
 
+## Unreleased
+
+### Changed
+
+- The VM's `runner` user now has general passwordless `sudo`, as a
+  GitHub-hosted Linux runner does (#176): a job that installs OS packages or
+  starts a service at job time (`playwright install --with-deps`, `sudo
+  apt-get install ...`, `sudo systemctl ...`) no longer fails for a password.
+  `provision.sh` installs a second sudoers drop-in beside the
+  workspace-owner's narrow rule, validates it with `visudo -cqf` and proves it
+  as `runner`, so a bad rule fails provisioning rather than a job's first
+  step. It adds no reach: `runner` is already root-equivalent inside the
+  guest through the `docker` group, so the VM remains the boundary. A VM
+  provisioned before this gets it after updating the tool (the README's
+  one-liner again) and running `homefield upgrade` while idle: `upgrade`
+  re-runs the `provision.sh` in the installed tool, so the tool comes first.
+  Two guards come with it, because jobs now run apt themselves. A
+  needrestart drop-in (`/etc/needrestart/conf.d/50-homefield.conf`) makes a
+  job's apt list the services that use an upgraded library instead of
+  restarting them, and never restart the runner, whose restart killed the job
+  (the #8 failure); `homefield-maintenance` still restarts the others. And
+  `apt-daily.timer` and `apt-daily-upgrade.timer` are disabled, as on a hosted
+  image: they held apt's lists lock at random times, and a job's `sudo apt-get
+  update` fails at once on it. Maintenance refreshes the lists daily instead.
+  A job that failed now passes, so this is compatible (patch). A workflow
+  that probes `sudo -n true` (snapdrift's browser actions) now takes its
+  `--with-deps` branch, the hosted one, instead of the pre-provisioned
+  fallback: it passes, and runs `apt-get update` and an apt install in every
+  job, so pre-provisioned browser libraries no longer save it that step. The
+  runbook's trust, parity, browsers, failure and maintenance rows, and the
+  adopting notes, follow.
+
 ## v0.4.1 (2026-11-04)
 
 Bumps the patch from v0.4.0: the routing expression and the provisioner are

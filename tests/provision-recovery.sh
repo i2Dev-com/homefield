@@ -48,14 +48,33 @@ stub cp 'if [ "${FAIL_AT:-}" = backup ] && [ $# = 2 ] && case "$1" in */.env) tr
   : >"$2"; echo "cp: injected failure" >&2; exit 1
 fi
 exec /bin/cp "$@"'
-stub visudo '[ "${FAIL_AT:-}" != visudo ] || { echo "visudo: injected failure" >&2; exit 1; }'
-# install [-o u] [-g g] [-m mode] <src> <dst>: a copy; FAIL_AT=env fails the
-# one onto the runner's .env.
-stub install 'while [ $# -gt 2 ]; do case "$1" in -o|-g|-m) shift 2 ;; *) shift ;; esac; done
+# visudo -cqf <file>: FAIL_AT=visudo fails every check, so it trips on the
+# narrow rule first; FAIL_AT=visudo-general fails only the general rule.
+stub visudo '[ "${FAIL_AT:-}" != visudo ] || { echo "visudo: injected failure" >&2; exit 1; }
+[ "${FAIL_AT:-}" = visudo-general ] && grep -q "NOPASSWD: ALL" "${@: -1}" && { echo "visudo: injected failure" >&2; exit 1; }
+exit 0'
+# install [-o u] [-g g] [-m mode] <src> <dst>: a copy, the mode applied, and
+# every mode-bearing call logged; FAIL_AT=env fails the one onto .env.
+# install -d [-m mode] <dir>...: the directories, and not logged.
+stub install 'if [ "$1" = -d ]; then
+  shift
+  while [ $# -gt 0 ]; do case "$1" in -m) shift 2 ;; *) mkdir -p "$1"; shift ;; esac; done
+  exit 0
+fi
+mode=""
+while [ $# -gt 2 ]; do case "$1" in
+  -o|-g) shift 2 ;;
+  -m) mode="$2"; shift 2 ;;
+  *) shift ;;
+esac; done
 [ "${FAIL_AT:-}" = env ] && case "$2" in */.env) echo "install: injected failure" >&2; exit 1 ;; esac
-cp "$1" "$2"'
+printf "%s %s\n" "${mode:-none}" "$2" >>"$STATE.installs"
+cp "$1" "$2"
+[ -z "$mode" ] || chmod "$mode" "$2"'
 # sudo [-n] [-u user] [--preserve-env=...] <command...>: the command, as this user.
+# FAIL_AT=prove fails the runner's own `sudo -n true`, proving its general rule.
 stub sudo 'while [ $# -gt 0 ]; do case "$1" in -u) shift 2 ;; -n|--preserve-env=*) shift ;; *) break ;; esac; done
+[ "${FAIL_AT:-}" = prove ] && [ "$*" = "true" ] && { echo "sudo: injected failure" >&2; exit 1; }
 exec "$@"'
 stub systemctl 'echo "systemctl $*" >>"$STATE.log"
 case "$1" in
@@ -87,6 +106,7 @@ sed -n '1,/^# ── Cleanup timer/p' "$ROOT/vm/provision.sh" |
     -e "s|/etc/sudoers.d|$work/sudoers.d|g" \
     -e "s|/etc/systemd/system|$work/systemd|g" \
     -e "s|/etc/homefield|$work/etc|g" \
+    -e "s|/etc/needrestart|$work/needrestart|g" \
     -e "s|new_tmp /tmp/actions-runner.XXXXXX.tar.gz|new_tmp $work/tarball.XXXXXX|" \
     -e "s|^\( *\)new_tmp\$|\1new_tmp $work/tmp/tmp.XXXXXX|" \
     >"$work/provision.sh"
@@ -96,7 +116,7 @@ record "every temp file gets a template in the scratch tree" "4/0" "$(grep -c '^
 unit="actions.runner.test.service"
 # fresh <version> <active|stopped>: a registered runner at that version.
 fresh() {
-  rm -rf "${work:?}/runner" "${work:?}/sbin" "${work:?}/sudoers.d" "${work:?}/etc" "${work:?}/systemd" "${work:?}"/state* "${work:?}/tmp"
+  rm -rf "${work:?}/runner" "${work:?}/sbin" "${work:?}/sudoers.d" "${work:?}/etc" "${work:?}/needrestart" "${work:?}/systemd" "${work:?}"/state* "${work:?}/tmp"
   mkdir -p "$work/runner/bin" "$work/sbin" "$work/sudoers.d" "$work/etc" "$work/systemd" "$work/tmp"
   printf '#!/bin/sh\nexit 0\n' >"$work/runner/bin/installdependencies.sh"
   chmod +x "$work/runner/bin/installdependencies.sh"
@@ -172,6 +192,19 @@ unit_present() { [ -f "$work/systemd/$unit" ] && echo present || echo absent; }
 # 0 when nothing ran at all, so there is no log.
 calls() { [ -f "$work/state.log" ] || { echo 0; return; }; grep -c "^systemctl $1 " "$work/state.log" || true; }
 svc_calls() { grep -c "^svc $1" "$work/state.log" 2>/dev/null || true; }
+# perms <file>: its rwx bits, so an install's -m can be asserted.
+# shellcheck disable=SC2012  # one known file, no odd names
+perms() { ls -l "$1" 2>/dev/null | awk 'NR==1{print substr($1,2,9)}'; }
+
+# nrconf <file>: the drop-in evaluated as Perl, the way needrestart reads its
+# conf.d files. Prints the restart mode, then 1 if the runner's unit matches an
+# override_rc entry that sets 0 (never restart), then 1 if docker's does. A file
+# that is missing or does not compile prints nothing.
+nrconf() {
+  perl -e 'our %nrconf; do $ARGV[0]; die $@ if $@;
+    my $hit = sub { my $unit = shift; scalar grep { $unit =~ $_ && $nrconf{override_rc}{$_} == 0 } keys %{$nrconf{override_rc}} };
+    print "$nrconf{restart} ", $hit->("actions.runner.acme-repo.host.service") ? 1 : 0, " ", $hit->("docker.service") ? 1 : 0' "$1" 2>/dev/null
+}
 
 # The version in provision.sh, so every case replaces the binary (old) or none.
 current="$(sed -n 's/^RUNNER_VERSION="\(.*\)"$/\1/p' "$ROOT/vm/provision.sh")"
@@ -185,6 +218,11 @@ record "...the runner is running" "running" "$(running)"
 record "...stopped once to replace the binary, then restarted once" "1/1" "$(calls stop)/$(calls restart)"
 record "...records the new version" "$current" "$(cat "$work/runner/.provisioned-version")"
 record "...and leaves no temp files (#89)" "0" "$(leftovers)"
+record "...the runner's general sudo rule is installed (#176)" "runner ALL=(ALL) NOPASSWD: ALL" "$(cat "$work/sudoers.d/homefield-runner")"
+record "...beside the hook's narrow one, which is still there" "1" "$(grep -cF 'runner ALL=(root) NOPASSWD: ' "$work/sudoers.d/homefield-workspace-owner")"
+record "...both are installed with mode 440" "yes/yes" "$(grep -qxF "440 $work/sudoers.d/homefield-runner" "$work/state.installs" && echo yes || echo no)/$(grep -qxF "440 $work/sudoers.d/homefield-workspace-owner" "$work/state.installs" && echo yes || echo no)"
+record "...so others cannot read or write them" "r--r-----/r--r-----" "$(perms "$work/sudoers.d/homefield-runner")/$(perms "$work/sudoers.d/homefield-workspace-owner")"
+record "...a job's apt only lists the restarts it needs, and never restarts the runner's unit or docker's (#176)" "l 1 0" "$(nrconf "$work/needrestart/conf.d/50-homefield.conf")"
 
 for at in tar chown visudo env; do
   fresh 2.0.0 active
@@ -194,6 +232,22 @@ for at in tar chown visudo env; do
   record "...and the runner is running again" "running" "$(running)"
   record "...and leaves no temp files (#89)" "0" "$(leftovers)"
 done
+
+# The drop-in that keeps a job's apt from restarting the runner is written
+# before the general rule, so a rule that fails its check leaves it in place.
+fresh 2.0.0 active
+run visudo-general
+rc=$?
+record "the general sudo rule fails its check: provisioning fails" "1" "$rc"
+record "...with no general rule installed, and the needrestart drop-in already there" "absent/l 1 0" "$([ -e "$work/sudoers.d/homefield-runner" ] && echo present || echo absent)/$(nrconf "$work/needrestart/conf.d/50-homefield.conf")"
+record "...the runner is running again" "running" "$(running)"
+record "...and leaves no temp files (#89)" "0" "$(leftovers)"
+
+fresh 2.0.0 active
+run prove
+rc=$?
+record "the runner's general sudo proof fails with the runner stopped: provisioning fails" "1" "$rc"
+record "...and the trap restarts it" "running/1" "$(running)/$(calls restart)"
 
 fresh 2.0.0 active
 run start
@@ -318,6 +372,11 @@ rc=$?
 record "the workspace hook's sudo rule fails: provisioning fails" "1" "$rc"
 record "...before registering, so no registration is left without a service" "0/unregistered" "$(grep -c '^config ' "$work/state.log")/$(registration)"
 fresh "$current" stopped
+run_first prove
+rc=$?
+record "the runner's general sudo rule fails its proof: provisioning fails" "1" "$rc"
+record "...before registering, so no registration is left without a service" "0/unregistered" "$(grep -c '^config ' "$work/state.log")/$(registration)"
+fresh "$current" stopped
 run_first env
 rc=$?
 record "writing .env fails after registering: provisioning fails" "1" "$rc"
@@ -369,6 +428,12 @@ for args in --strt "--start extra"; do
   record "ensure-service $args: refused with exit 2, saying so" "2/yes" "$rc/$(grep -q 'takes only --start' "$work/out" && echo yes || echo no)"
   record "...and runs nothing: no svc.sh, systemctl or config.sh call" "0/stopped" "$(if [ -f "$work/state.log" ]; then wc -l <"$work/state.log" | tr -d ' '; else echo 0; fi)/$(running)"
 done
+
+# The OS updates section comes after the cut, so the run above never reaches
+# it: check the script itself.
+echo "the apt-daily timers (#176):"
+record "provision.sh disables both, so a job's apt-get update finds the lists lock free" "yes" \
+  "$(grep -qx 'systemctl disable --now apt-daily.timer apt-daily-upgrade.timer' "$ROOT/vm/provision.sh" && echo yes || echo no)"
 
 echo "the final report (#89):"
 # The last lines of provision.sh, with its runner_setting, against a .runner

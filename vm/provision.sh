@@ -353,8 +353,9 @@ fi
 systemctl enable --now docker
 
 # ── Runner user ─────────────────────────────────────────────────────────────
-# Not the Lima login user, which has passwordless sudo. Docker group membership
-# is root-equivalent inside the guest; the VM, not this user, is the boundary.
+# Not the Lima login user; the runner is its own user, with its own
+# passwordless sudo installed below. Docker group membership is root-equivalent
+# inside the guest; the VM, not this user, is the boundary.
 if ! id "$RUNNER_USER" >/dev/null 2>&1; then
   useradd --create-home --shell /bin/bash "$RUNNER_USER"
 fi
@@ -510,18 +511,62 @@ cat > /usr/local/sbin/homefield-job-started.sh <<'EOF'
 exec sudo -n /usr/local/sbin/homefield-workspace-owner
 EOF
 chmod 755 /usr/local/sbin/homefield-job-started.sh
-new_tmp
-sudoers="$tmp"
-echo 'runner ALL=(root) NOPASSWD: /usr/local/sbin/homefield-workspace-owner ""' >"$sudoers"
-visudo -cqf "$sudoers"
-install -m 440 "$sudoers" /etc/sudoers.d/homefield-workspace-owner
-rm -f "$sudoers"
+# install_sudoers <dest> <rule>: writes the rule to a temp file, has visudo
+# check it, and only then installs it at <dest> with mode 440. A rule visudo
+# rejects never reaches /etc/sudoers.d, where it would break sudo for everyone.
+install_sudoers() {
+  local dest="$1" rule="$2"
+  new_tmp
+  echo "$rule" >"$tmp"
+  visudo -cqf "$tmp"
+  install -m 440 "$tmp" "$dest"
+  rm -f "$tmp"
+}
+install_sudoers /etc/sudoers.d/homefield-workspace-owner \
+  'runner ALL=(root) NOPASSWD: /usr/local/sbin/homefield-workspace-owner ""'
 # Run it once now, as the hook will: this proves the sudo rule works before
 # any job depends on it, fixes what earlier container jobs left, and repairs
 # and verifies the runner's npm (#110) — including in a tree the runner
 # self-updated in place, which the tar block above only replaces on a version
 # bump. A tree it cannot repair fails the provision here, not the first job.
 sudo -u "$RUNNER_USER" /usr/local/sbin/homefield-job-started.sh
+
+# ── General passwordless sudo ───────────────────────────────────────────────
+# A GitHub-hosted Linux runner's user has passwordless sudo, and a repository
+# expects its existing workflow to keep running unchanged after a switch (#176):
+# `playwright install --with-deps`, `sudo apt-get install ...` and
+# `sudo systemctl ...` are common at job time. This grants the same to `runner`.
+# It adds no reach: the docker group already makes `runner` root-equivalent
+# inside the guest, so a job could already do anything as root — this only lets
+# it use the root it has for those commands instead of failing for a password.
+# The VM, not the user, stays the boundary.
+#
+# A job's `sudo apt-get` must never restart the runner. On Ubuntu, apt's hook
+# runs needrestart, and with no restart mode set it restarts services on its
+# own, including actions.runner.*.service, which kills the running job. That is
+# the failure of homefield#8 again, this time from the job itself (#176).
+# `restart = 'l'` only lists what needs a restart. The override_rc line keeps
+# the runner's unit out of any restart, whatever mode is asked for. A job that
+# sets NEEDRESTART_MODE=a itself gets that mode, except for the runner.
+# homefield-maintenance also sets NEEDRESTART_MODE=a, so it still restarts the
+# other services (Docker among them); it stops the runner before it upgrades
+# and starts it after, so leaving the runner out costs it nothing. The file is
+# written before the general rule is installed, so a partial provision never
+# leaves general sudo without it. An image without needrestart ignores it.
+install -d -m 755 /etc/needrestart/conf.d
+cat > /etc/needrestart/conf.d/50-homefield.conf <<'EOF'
+# homefield#8, #176: a job's `sudo apt-get` must not restart the runner.
+$nrconf{restart} = 'l';
+$nrconf{override_rc}{qr(^actions\.runner\.)} = 0;
+EOF
+# The narrow rule above is kept so the job-started hook does not depend on
+# the general grant. While the general rule is present, it adds no restriction:
+# any command, with any arguments, already matches the general rule.
+install_sudoers /etc/sudoers.d/homefield-runner 'runner ALL=(ALL) NOPASSWD: ALL'
+# Prove it as a job will use it: a bad rule must fail the provision here, not
+# the job's first `sudo`. The outer sudo is root's; the inner one is judged
+# against `runner`'s own rules.
+sudo -u "$RUNNER_USER" sudo -n true
 
 # ── Registration + service ──────────────────────────────────────────────────
 # config.sh reads `--token` from ACTIONS_RUNNER_INPUT_TOKEN when the flag is
@@ -723,13 +768,19 @@ EOF
 # The idle check and the stop are two steps, so a job the runner picks up in
 # the moment between them is cancelled. That window is a fraction of a second.
 # The window it replaces was the whole upgrade, roughly three minutes of
-# service restarts. The package lists are still refreshed daily, and
-# "unattended-upgrades" stays installed but inert, so `apt-config` shows the
-# override in effect.
+# service restarts. "unattended-upgrades" stays installed but inert, so
+# `apt-config` shows the override in effect.
 cat > /etc/apt/apt.conf.d/52homefield-no-unattended-upgrade <<'EOF'
 // homefield#8: upgrades run from homefield-maintenance.timer, only while idle.
 APT::Periodic::Unattended-Upgrade "0";
 EOF
+# The package lists are refreshed by homefield-maintenance's own `apt-get
+# update`, not by Ubuntu's apt-daily timers. Those refresh the lists twice a
+# day at random times and hold the lists lock while they do, so a job's
+# `sudo apt-get update` then fails at once with "Could not get lock" (#176).
+# A GitHub-hosted image turns them off for the same reason. Only the timers
+# need disabling: the .service units they start are static.
+systemctl disable --now apt-daily.timer apt-daily-upgrade.timer
 
 cat > /usr/local/sbin/homefield-maintenance <<'EOF'
 #!/usr/bin/env bash

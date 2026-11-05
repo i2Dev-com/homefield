@@ -312,8 +312,9 @@ credentials are not reachable from inside: no mounts (`mounts: []` plus
 `--mount-none`, and `bin/homefield` refuses to continue if it finds any), no
 SSH-agent forwarding and no host SSH keys. Services started by a job are not
 forwarded to the Mac's `localhost`. Inside the guest, jobs are
-root-equivalent (the `docker` group), which is why the VM and not a user
-account is the boundary.
+root-equivalent (the `docker` group) and have passwordless `sudo`, as on a
+hosted runner; the sudo adds no reach beyond the group's root. That is why
+the VM and not a user account is the boundary.
 
 **The network is partly isolated.** Jobs can reach the internet and your
 LAN. `vm/lima.yaml` asks Lima to stop mapping `host.lima.internal` onto

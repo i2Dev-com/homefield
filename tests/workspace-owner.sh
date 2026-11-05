@@ -7,7 +7,7 @@
 #
 # The runs use the real find, cmp and ln with chown stubbed, so they need no
 # root and run the same everywhere, including on a HomeField runner, where
-# runner may sudo only the script itself.
+# runner may sudo the script itself, and generally everything (#176).
 #
 # Run:  bash tests/workspace-owner.sh
 set -uo pipefail
@@ -39,7 +39,22 @@ fi
 has() { grep -qF -- "$2" "$1" && echo yes || echo no; }
 in_run() { has "$work/run.out" "$1"; }
 record "the hook runs the script through sudo, without a prompt" "yes" "$(has "$hook" 'exec sudo -n /usr/local/sbin/homefield-workspace-owner')"
-record "sudoers allows that script, with no arguments" "yes" "$(has "$prov" "runner ALL=(root) NOPASSWD: /usr/local/sbin/homefield-workspace-owner \"\"")"
+# install_sudoers <dest> <rule> is how both rules reach /etc/sudoers.d.
+helper="$(sed -n '/^install_sudoers() {/,/^}/p' "$prov")"
+in_helper() { printf '%s\n' "$helper" | grep -nF -- "$1" | head -1 | cut -d: -f1; }
+record "sudoers allows that script, with no arguments" "yes" "$(has "$prov" "'runner ALL=(root) NOPASSWD: /usr/local/sbin/homefield-workspace-owner \"\"'")"
+record "...through the helper that validates a rule before installing it" "yes" "$(has "$prov" 'install_sudoers /etc/sudoers.d/homefield-workspace-owner')"
+record "the runner also has general passwordless sudo, as a hosted runner has (#176)" "yes" "$(has "$prov" "install_sudoers /etc/sudoers.d/homefield-runner 'runner ALL=(ALL) NOPASSWD: ALL'")"
+record "...in its own drop-in, leaving the hook's narrow one beside it" "yes" "$(has "$prov" '/etc/sudoers.d/homefield-runner')"
+# shellcheck disable=SC2016  # the $ values are matched literally in provision.sh
+visudo_line="$(in_helper 'visudo -cqf "$tmp"')"
+# shellcheck disable=SC2016  # the $ values are matched literally in provision.sh
+install_line="$(in_helper 'install -m 440 "$tmp" "$dest"')"
+record "...the helper validates a rule before it installs it" "yes" "$([ -n "$visudo_line" ] && [ -n "$install_line" ] && [ "$visudo_line" -lt "$install_line" ] && echo yes || echo no)"
+record "...with mode 440" "yes" "$([ -n "$install_line" ] && echo yes || echo no)"
+record "both rules go through the helper" "2" "$(grep -c '^install_sudoers /etc/sudoers.d/' "$prov")"
+# shellcheck disable=SC2016  # the $ values are matched literally in provision.sh
+record "...and proved as runner, so a bad rule fails the provision" "yes" "$(has "$prov" 'sudo -u "$RUNNER_USER" sudo -n true')"
 record "the runner's .env names the hook" "yes" "$(has "$prov" 'hook_line="ACTIONS_RUNNER_HOOK_JOB_STARTED=/usr/local/sbin/homefield-job-started.sh"')"
 
 # The runs: the real find, cmp and ln against a scratch tree, with chown

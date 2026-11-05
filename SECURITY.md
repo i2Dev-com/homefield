@@ -44,8 +44,10 @@ These are documented and not treated as vulnerabilities; see the
 - **Public repositories are not supported.** A pull request runs its own
   workflow files, so anyone who can open one can change `runs-on`. Only
   private repositories may reach the runner.
-- **Inside the VM, jobs are root-equivalent**, and repositories sharing the
-  runner can see what earlier jobs left behind.
+- **Inside the VM, jobs are root-equivalent** (the `docker` group), and use
+  passwordless `sudo` as on a hosted runner; neither adds reach the other did
+  not give. Repositories sharing the runner can see what earlier jobs left
+  behind.
 
 ## Supported versions
 
