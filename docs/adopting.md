@@ -88,7 +88,12 @@ repository's docs. A reusable workflow's job counts too: the check applies to
 the file the `runs-on` line is in. Write the job in the plain form, `job-id:`
 on a line of its own with `runs-on: ...` on the line below: the guard reads
 workflows line by line and fails on syntax it cannot read (a quoted
-`"runs-on"` key, a job written as a `{...}` mapping, a `<<` merge key).
+`"runs-on"` key, a `runs-on` key with a tag or anchor, a job written as a
+`{...}` mapping, a `<<` merge key). A job that calls a reusable workflow in
+*another* repository is refused: the called workflow's jobs evaluate
+`runs-on` in this repository's context, and the called file is not here to
+check. Call a local workflow (`uses: ./.github/workflows/<file>`) and route
+its jobs in that file.
 
 ## 3. Add the guard
 
