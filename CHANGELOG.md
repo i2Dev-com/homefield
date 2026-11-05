@@ -9,14 +9,29 @@ fail, such as a new guard in the routing expression, bumps the minor version
 (0.1 to 0.2). Compatible changes bump the patch. Merged changes wait on
 `main`, under *Unreleased*, until a release is cut.
 
-## Unreleased
+## v0.5.0 (2026-11-05)
 
-The next release bumps the minor version to 0.5.0: commands that act on a VM
-now cover every HomeField VM on this Mac by default, so their output — and what
-an unqualified command acts on — changes for anyone with more than one. The
-routing guard also gains two refusals (below): a workflow that passed an older
-release through a tagged `runs-on` key or a remote reusable-workflow call
-fails from this release on.
+Bumps the minor from v0.4.2, and it is breaking for consumers of the routing
+guard: two workflows that passed v0.4.2's check fail from this release on —
+one with a `runs-on` key carrying a tag or an anchor, one calling a reusable
+workflow in another repository. Both were bypasses: a workflow written that
+way reached the runner with none of the guards. Found by this repository's
+code audit, verified against v0.4.2, and fixed in the checker. A workflow that
+starts failing with "a tagged or anchored runs-on key" is rewritten by writing
+the key plainly; one failing with "a job calling a reusable workflow in
+another repository" has no guarded spelling — call a local workflow
+(`./.github/workflows/<file>`) and route its jobs there. A workflow that
+passes v0.5.0's check ran guarded before. Bump `routing-guard@v0.4.2` pins to
+`@v0.5.0`: a v0.4.2 pin keeps passing the two bypass forms, so the pin is the
+fix. The check also stops failing a matrix dimension named `runs-on` and a
+`jobs:` line with a value anchor.
+
+On a Mac with more than one HomeField VM, the commands that act on a VM now
+cover every one by default (below), and `uninstall`/`reset` refuse to guess.
+To upgrade, run the README's one-liner again (it replaces the installed copy),
+then `homefield upgrade --instance <name>` while idle on each VM: it re-runs
+the *installed* tool's `provision.sh`, so the tool has to come first for a VM
+to get the staged provisioning files and the pinned AWS CLI.
 
 ### Security
 
