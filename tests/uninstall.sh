@@ -60,7 +60,11 @@ esac'
 # other steps fail without doing their part.
 fresh() {
   rm -rf "${work:?}/runner" "$units" "$work/log"
-  mkdir -p "$home" "$units"
+  mkdir -p "$home" "$units" "$work/stage"
+  # What the tool's copy places in the guest: provision.sh with its paths in
+  # the scratch tree, at the staged path (HOMEFIELD_STAGE_DIR, #185).
+  sed -e "s|/opt/actions-runner|$home|g" -e "s|/etc/systemd/system|$units|g" \
+    "$ROOT/vm/provision.sh" >"$work/stage/provision.sh"
   : >"$home/.runner"
   echo "$unit" >"$home/.service"
   : >"$units/$unit"
@@ -102,9 +106,9 @@ EOF
 }
 
 # The restore is provision.sh's ensure-service, with its paths in the scratch
-# tree; cmd_uninstall's copy of it into the guest is the limactl stub's no-op.
-sed -e "s|/opt/actions-runner|$home|g" -e "s|/etc/systemd/system|$units|g" \
-  "$ROOT/vm/provision.sh" >"$work/provision.sh"
+# tree. It is staged where the tool stages it (HOMEFIELD_STAGE_DIR, #185);
+# fresh() places it there per case, as the tool's copy does, and the limactl
+# stub's copy is a no-op.
 
 # run: cmd_uninstall, in a shell of its own so its EXIT trap runs. It keeps the
 # VM unless UNINSTALL_ARGS is set (to nothing, to delete it). The guest answers
@@ -115,7 +119,7 @@ cat >"$work/harness.sh" <<EOF
 HOMEFIELD_SOURCE_ONLY=1
 . "$ROOT/bin/homefield"
 RUNNER_HOME="$home"
-GUEST_PROVISION="$work/provision.sh"
+HOMEFIELD_STAGE_DIR="$work/stage"
 check_host() { :; }
 vm_status() { echo Running; }
 runner_setting() { [ -n "\${NO_SETTINGS:-}" ] || printf '%s\\n' https://github.com/acme 42; }

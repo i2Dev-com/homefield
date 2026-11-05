@@ -85,7 +85,11 @@ printf 'Default\tall\tfalse\t1\nHomeField-CI\tselected\tfalse\t7\n' >"$work/grou
 # installed and the runner registered (as tests/uninstall.sh).
 fresh() {
   rm -rf "${work:?}/runner" "$units" "$state" "$work/log" "$work/pgrep-n"
-  mkdir -p "$home" "$units"
+  mkdir -p "$home" "$units" "$work/stage"
+  # What the tool's copy places in the guest: provision.sh with its paths in
+  # the scratch tree, at the staged path (HOMEFIELD_STAGE_DIR, #185).
+  sed -e "s|/opt/actions-runner|$home|g" -e "s|/etc/systemd/system|$units|g" \
+    "$ROOT/vm/provision.sh" >"$work/stage/provision.sh"
   : >"$home/.runner"
   echo "$unit" >"$home/.service"
   : >"$units/$unit"
@@ -117,8 +121,10 @@ EOF
   chmod +x "$home/svc.sh" "$home/config.sh"
   : >"$work/log"
 }
-sed -e "s|/opt/actions-runner|$home|g" -e "s|/etc/systemd/system|$units|g" \
-  "$ROOT/vm/provision.sh" >"$work/provision.sh"
+# The restore is provision.sh's ensure-service with its paths in the scratch
+# tree, staged where the tool stages it (HOMEFIELD_STAGE_DIR, #185); fresh()
+# places it there per case, as the tool's copy does, and the limactl stub's
+# copy is a no-op.
 
 # set_state <org/name/id>: install's record that it created the group.
 set_state() {
@@ -134,7 +140,7 @@ cat >"$work/harness.sh" <<'EOF'
 HOMEFIELD_SOURCE_ONLY=1
 . "$ROOT_DIR/bin/homefield"
 RUNNER_HOME="$HOME_DIR"
-GUEST_PROVISION="$WORK/provision.sh"
+HOMEFIELD_STAGE_DIR="$WORK/stage"
 check_host() { :; }
 vm_status() { case "${VM:-Running}" in none) ;; *) echo "${VM:-Running}" ;; esac; }
 runner_setting() { printf '%s\n' https://github.com/acme 42; }
