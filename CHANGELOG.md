@@ -51,6 +51,18 @@ fails from this release on.
   whatever AWS had published that day. Bumping means the version and both
   digests together, documented in the hook.
 
+### Fixed
+
+- Three failure paths in `bin/homefield` ended the command with no message
+  (#184): `adopt --setup` died silently when the downloaded workflows could
+  not be read (the `${mode:-simple}` fallback on the next line was never
+  reached), and the workflow-name quoting in `adopt` and `adopt --setup`, and
+  the memory-log read in `memory`, ended the run with a bare `exit 1` past
+  `die`. Each now prints the tool, the state and the fix, like every
+  neighboring failure.
+
+### Changed
+
 - CI lints the Python tools (#191): `ruff check` (pinned 0.17.3, the wheel's
   sha256 verified before it is installed, as actionlint and shellcheck are)
   plus `python3 -m py_compile` over `tools/` and `routing-guard/` — the ~2,000

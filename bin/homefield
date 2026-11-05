@@ -4055,7 +4055,8 @@ adopt_fetch_workflows() {
       *) continue ;;
     esac
     # A name may have spaces or other characters a URL path cannot carry.
-    enc="$(python3 -I "$ROOT/tools/adopt.py" quote "$name" </dev/null)" || exit 1
+    enc="$(python3 -I "$ROOT/tools/adopt.py" quote "$name" </dev/null)" ||
+      die "adopt: could not quote the workflow name ${name}"
     gh api -X GET "repos/${repo}/contents/.github/workflows/${enc}" -f ref="$branch" \
       -H 'Accept: application/vnd.github.raw' >"$dir/$name" 2>"$ADOPT_TMP/err" </dev/null ||
       die "adopt: could not download .github/workflows/${name} from ${repo}: $(head -1 "$ADOPT_TMP/err")"
@@ -4732,7 +4733,8 @@ adopt_setup() {
     mode=guards
   else
     mode="$(python3 -I "$ROOT/tools/adopt.py" guards "$ADOPT_TMP/workflows" |
-      awk -F'\t' '$2 == "ok" { print $10; exit }')"
+      awk -F'\t' '$2 == "ok" { print $10; exit }')" ||
+    die "adopt: setup: could not read the downloaded workflows"
     mode="${mode:-simple}"
   fi
   if [ "$mode" = guards ]; then
@@ -4819,7 +4821,8 @@ adopt_setup() {
 
   while IFS= read -r name; do
     [ -n "$name" ] || continue
-    enc="$(python3 -I "$ROOT/tools/adopt.py" quote "$name" </dev/null)" || exit 1
+    enc="$(python3 -I "$ROOT/tools/adopt.py" quote "$name" </dev/null)" ||
+      die "adopt: setup: could not quote the workflow name ${name}"
     # A workflow that does not exist on the branch yet (the new guard file)
     # has no sha to update, and the Contents API creates it. -X GET matters:
     # -f alone would switch gh api to POST, which never answers this lookup.
@@ -5184,7 +5187,8 @@ memory_single() {
   [ "${HOMEFIELD_ONE_OF_MANY:-}" != 1 ] || echo "VM ${INSTANCE}: Running"
   # BSD date, as on macOS: today minus (days - 1), so --days 1 is today.
   cutoff="$(date -v-"$((days - 1))"d +%F)"
-  rows="$(guest sh -c 'cat /var/log/homefield/memwatch-*.csv 2>/dev/null; true')" || exit 1
+  rows="$(guest sh -c 'cat /var/log/homefield/memwatch-*.csv 2>/dev/null; true')" ||
+    die "memory: could not read the memory log from VM ${INSTANCE}"
   [ -n "$rows" ] || die "memory: no samples in ${INSTANCE} yet; the sampler is installed by bin/homefield upgrade"
   # The same instant as an epoch, for comparing the CSV's boot column
   # (#91): midnight at the start of the cutoff day, measured in the guests
