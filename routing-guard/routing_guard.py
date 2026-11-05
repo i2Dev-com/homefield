@@ -386,16 +386,20 @@ def main() -> int:
                 # quoted key missed below would credit its runs-on to the
                 # previous job.
                 top = re.match(r"""^(['"]?)([A-Za-z0-9_-]+)\1:""", code)
-                if code.strip() and not code[0].isspace():
-                    # Every top-level line is a plain `key:`. Anything else
-                    # (`jobs :`, `? jobs`, a flow mapping's closing brace)
-                    # could hide the jobs from this scan.
-                    if code.strip() not in ("---", "...") and not PLAIN_KEY.match(code):
-                        fail(f"{name}:{lineno}: unreadable top-level line; {HOW}")
-                        in_jobs = False
-                        job = None
-                        job_indent = None
-                        continue
+                # Every top-level line is a plain `key:`. Anything else
+                # (`jobs :`, `? jobs`, a flow mapping's closing brace, the
+                # document markers) could hide the jobs from this scan.
+                if (
+                    code.strip()
+                    and not code[0].isspace()
+                    and code.strip() not in ("---", "...")
+                    and not PLAIN_KEY.match(code)
+                ):
+                    fail(f"{name}:{lineno}: unreadable top-level line; {HOW}")
+                    in_jobs = False
+                    job = None
+                    job_indent = None
+                    continue
                 if top:
                     in_jobs = top.group(2) == "jobs"
                     job = None

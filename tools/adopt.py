@@ -549,7 +549,7 @@ def guards(directory):
             path, _, ref = value.partition("@")
             values, flow = with_values(lines, *step_bounds(lines, at))
             jobs = [e for e in re.split(r"[\s,]+", values.get("jobs", "")) if e]
-            label = values["label"] if "label" in values else DEFAULT_LABEL
+            label = values.get("label", DEFAULT_LABEL)
             sha = SHA_REF.fullmatch(ref) is not None
             if path.lower() != ACTION_PATH.lower() or not (sha or ref == RELEASE):
                 reason = f"the routing-guard step at {where} uses {value}, but adopt recognizes {ACTION}, the release this copy of homefield checks with, or a full commit SHA (docs/adopting.md, step 3)"
