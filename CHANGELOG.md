@@ -18,13 +18,18 @@ fail, such as a new guard in the routing expression, bumps the minor version
   starts a service at job time (`playwright install --with-deps`, `sudo
   apt-get install ...`, `sudo systemctl ...`) no longer fails for a password.
   `provision.sh` installs a second sudoers drop-in beside the
-  workspace-owner's narrow rule, validates it with `visudo -c` and proves it
+  workspace-owner's narrow rule, validates it with `visudo -cqf` and proves it
   as `runner`, so a bad rule fails provisioning rather than a job's first
   step. It adds no reach: `runner` is already root-equivalent inside the
   guest through the `docker` group, so the VM remains the boundary. A VM
-  provisioned before this gets it by running `homefield upgrade` while idle.
-  A job that failed now passes, so this is compatible (patch). The runbook's
-  trust, parity, browsers and failure rows, and the adopting notes, follow.
+  provisioned before this gets it after updating the tool (the README's
+  one-liner again) and running `homefield upgrade` while idle: `upgrade`
+  re-runs the `provision.sh` in the installed tool, so the tool comes first.
+  A job that failed now passes, so this is compatible (patch); a workflow
+  that probes `sudo -n true` (snapdrift's browser actions) takes its
+  `--with-deps` branch instead of the pre-provisioned fallback, which is the
+  hosted branch. The runbook's trust, parity, browsers and failure rows, and
+  the adopting notes, follow.
 
 ## v0.4.1 (2026-11-04)
 
