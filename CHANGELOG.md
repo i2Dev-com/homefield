@@ -9,6 +9,18 @@ fail, such as a new guard in the routing expression, bumps the minor version
 (0.1 to 0.2). Compatible changes bump the patch. Merged changes wait on
 `main`, under *Unreleased*, until a release is cut.
 
+## Unreleased
+
+### Fixed
+
+- `route` no longer abandons the repositories after the one that failed
+  (#186): a failed `CI_RUNNER` switch, a failed stuck-runs listing, a failed
+  cancel, status read or re-run warns naming the repository, the state and
+  the manual step, and goes on to the next repository — like every other
+  multi-target command. The command's exit status is the aggregate, and a
+  partial `route hosted` (some repositories switched, some not) is visible
+  per repository instead of silent.
+
 ## v0.5.0 (2026-11-05)
 
 Bumps the minor from v0.4.2, and it is breaking for consumers of the routing

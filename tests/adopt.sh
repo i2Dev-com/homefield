@@ -65,7 +65,22 @@ case "$*" in
   "variable get CI_RUNNER"*)
     if [ -n "${GH_CI_RUNNER:-}" ]; then echo "$GH_CI_RUNNER"; else echo "variable not found" >&2; exit 1; fi
     ;;
-  "variable set"*) ;;
+  "variable set"*)
+    n=$(($(cat "$state/varset-n" 2>/dev/null || echo 0) + 1))
+    echo "$n" >"$state/varset-n"
+    if [ -n "${GH_VARSET_FAIL:-}" ]; then echo "gh: HTTP 422 (variable set)" >&2; exit 1; fi
+    # GH_VARSET_FAIL_FIRST=<n>: the first n variable set calls fail, the rest
+    # succeed — how a route across repositories fails on some, not all.
+    if [ -n "${GH_VARSET_FAIL_FIRST:-}" ] && [ "$n" -le "$GH_VARSET_FAIL_FIRST" ]; then echo "gh: HTTP 422 (variable set $n)" >&2; exit 1; fi
+    ;;
+  # route: the status of a run being cancelled (GH_RUN_STATUS), and the cancel.
+  "run view"*)
+    if [ -n "${GH_RUNVIEW_FAIL:-}" ]; then echo "gh: HTTP 502" >&2; exit 1; fi
+    echo "${GH_RUN_STATUS:-completed}"
+    ;;
+  "run cancel"*)
+    if [ -n "${GH_CANCEL_FAIL:-}" ]; then echo "gh: HTTP 409" >&2; exit 1; fi
+    ;;
   # adopt --verify: the latest pull-request run (GH_RUNLIST, a JSON array),
   # the re-run, the jobs of the run (GH_JOBS is a directory of pages as
   # `gh api --paginate` prints them, one file per call: 1, 2, ...; the last
@@ -108,6 +123,16 @@ case "$*" in
       prev="$a"
     done
     if [ -n "$in" ] && [ -n "$cname" ]; then cat "$in" >"$state/put-$cname.json"; fi
+    ;;
+  # route: the active-runs listing (stuck_runs). GH_RUN is what the call's
+  # --jq prints: one run id per line. A run has one status, so the in_progress
+  # listing answers GH_RUN_IN_PROGRESS (empty: nothing) unless set.
+  *"actions/runs?status="*)
+    if [ -n "${GH_RUN_FAIL:-}" ]; then echo "gh: HTTP 500" >&2; exit 1; fi
+    case "$*" in
+      *"status=queued"*) cat "$GH_RUN" ;;
+      *"status=in_progress"*) cat "${GH_RUN_IN_PROGRESS:-/dev/null}" ;;
+    esac
     ;;
   *"/contents/.github/workflows/"*)
     for a in "$@"; do case "$a" in repos/*/contents/.github/workflows/*) name="${a##*/}" ;; esac; done
@@ -572,6 +597,22 @@ adopt() {
 }
 put_path="orgs/acme/actions/runner-groups/42/repositories/555"
 
+# route <env...> -- <route args>: a cmd_route run with the stuck-run fixtures:
+# GH_RUN is what `--jq '.workflow_runs[].id'` prints (run 9001 is active) and
+# the GH_JOBS page is what the jobs --jq prints (job 551 of it is queued on the
+# label), so run 9001 is stuck. An empty page means nothing is stuck.
+route() {
+  local envs=()
+  while [ $# -gt 0 ] && [ "$1" != -- ]; do
+    envs+=("$1")
+    shift
+  done
+  shift
+  rm -f "$work/jobs-n" "$work/varset-n"
+  run_fn GH_RUN="$work/route-runs" GH_JOBS="$work/route-jobs" \
+    "${envs[@]+"${envs[@]}"}" -- cmd_route "$@"
+}
+
 # ── Arguments ──────────────────────────────────────────────────────────────
 echo "arguments"
 run_fn -- cmd_adopt
@@ -975,6 +1016,59 @@ record "already local: nothing written" "0/0/0" "$rc/$(called 'X PUT')/$(called 
 record "...and the dry run says so up front" "yes" "$(has "$out" 'dry run: nothing will be changed')"
 adopt GH_GROUPS="$work/groups-all" -- --dry-run
 record "no gh call of a write kind in any dry run" "0" "$(called_any 'X POST' 'X PUT' 'X PATCH' 'X DELETE' 'variable set' 'run cancel' 'run rerun')"
+
+# ── Route ──────────────────────────────────────────────────────────────────
+# The command across repositories: one failed repository warns and the rest
+# go on, and the exit status is the aggregate.
+echo "route"
+mkdir -p "$work/route-jobs"
+printf '9001\n' >"$work/route-runs"
+printf '551\n' >"$work/route-jobs/1"
+route -- local --repo acme/app --repo acme/other
+record "two repositories, both switched to local, exit 0" "0/1/1" \
+  "$rc/$(called 'variable set CI_RUNNER --repo acme/app --body local')/$(called 'variable set CI_RUNNER --repo acme/other --body local')"
+route GH_VARSET_FAIL_FIRST=1 -- local --repo acme/app --repo acme/other
+record "the first variable set fails: a warning naming the repo and the manual step" "nonzero/yes/yes" \
+  "$(nonzero "$rc")/$(has "$out" 'acme/app: could not set CI_RUNNER to local')/$(has "$out" 'gh variable set CI_RUNNER --repo acme/app --body local')"
+record "...and the second repository is still switched" "1" "$(called 'variable set CI_RUNNER --repo acme/other --body local')"
+route GH_VARSET_FAIL_FIRST=2 -- local --repo acme/app --repo acme/other
+record "both variable sets fail: two warnings, exit nonzero" "nonzero/2" \
+  "$(nonzero "$rc")/$(printf '%s\n' "$out" | grep -c 'could not set CI_RUNNER')"
+route GH_VARSET_FAIL=1 -- hosted --repo acme/app
+record "a failed set on hosted: warned, and no stuck-run listing for that repo" "nonzero/yes/0" \
+  "$(nonzero "$rc")/$(has "$out" 'acme/app: could not set CI_RUNNER to hosted')/$(called 'actions/runs?status=queued')"
+route GH_RUN_FAIL=1 -- hosted --repo acme/app --repo acme/other
+record "the stuck-run listing fails: a warning, and the next repository is listed" "nonzero/yes/1" \
+  "$(nonzero "$rc")/$(has "$out" 'acme/app: could not list its runs with gh')/$(called 'variable set CI_RUNNER --repo acme/other --body hosted')"
+route -- hosted --repo acme/app
+record "a stuck run: cancelled and re-run, exit 0" "0/1/1/yes" \
+  "$rc/$(called 'run cancel 9001')/$(called 'run rerun 9001')/$(has "$out" 'acme/app: run 9001 re-run')"
+route -- hosted --repo acme/app --dry-run
+record "a dry run: the stuck run is reported, nothing written" "0/yes/0" \
+  "$rc/$(has "$out" 'run 9001 has jobs waiting for homefield-ci; would cancel and re-run it')/$(called_any 'run cancel' 'run rerun')"
+route GH_CANCEL_FAIL=1 -- hosted --repo acme/app
+record "the cancel fails: a warning naming the manual re-run, and no re-run call" "nonzero/yes/0" \
+  "$(nonzero "$rc")/$(has "$out" 'run 9001: the cancel failed; re-run it yourself: gh run rerun 9001 --repo acme/app')/$(called 'run rerun')"
+route GH_RUNVIEW_FAIL=1 -- hosted --repo acme/app
+record "the status read fails: a warning, no re-run, exit nonzero" "nonzero/yes/0" \
+  "$(nonzero "$rc")/$(has "$out" 'run 9001: could not read its status with gh')/$(called 'run rerun')"
+route GH_RUN_STATUS=in_progress ROUTE_TRIES=2 ROUTE_INTERVAL=0 -- hosted --repo acme/app
+record "the cancel does not land in a minute: said, with the manual re-run" "0/yes" \
+  "$rc/$(has "$out" 'run 9001 is still in_progress after a minute; re-run it yourself: gh run rerun 9001 --repo acme/app')"
+route GH_RERUN_FAIL=1 -- hosted --repo acme/app
+record "the re-run is refused: a warning, exit nonzero" "nonzero/yes" \
+  "$(nonzero "$rc")/$(has "$out" 'run 9001: the re-run was refused; run it yourself: gh run rerun 9001 --repo acme/app')"
+printf '551\n' >"$work/route-jobs/1"
+: >"$work/route-jobs/2"
+printf '9001\n9002\n' >"$work/route-runs-alt"
+route GH_RUN="$work/route-runs-alt" -- hosted --repo acme/app
+record "two active runs, only the first stuck: one cancel and one re-run" "0/1/1" \
+  "$rc/$(called 'run cancel 9001')/$(called 'run rerun 9001')"
+record "...and the second run is not touched" "0" "$(called 'run cancel 9002')"
+: >"$work/route-jobs/1"
+route -- hosted --repo acme/app
+record "nothing stuck: the switch is the whole job, exit 0" "0/1/0" \
+  "$rc/$(called 'variable set CI_RUNNER --repo acme/app --body hosted')/$(called_any 'run cancel' 'run rerun')"
 
 # ── Verify ─────────────────────────────────────────────────────────────────
 # The re-run of the latest pull-request run, and the report of where its jobs

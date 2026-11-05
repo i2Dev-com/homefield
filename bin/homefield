@@ -114,6 +114,9 @@ Commands:
   route      Switch repositories' routed jobs to hosted or local
              (the CI_RUNNER variable). Switching to hosted also cancels and
              re-runs runs whose jobs are stuck waiting for the local runner.
+             A repository that cannot be switched is warned about and skipped;
+             the others are still routed. Exits 0 only when every repository
+             was routed.
   preflight  Check prerequisites for a fresh install: macOS, Apple Silicon,
               Lima, gh, python3, brew. Exits 0 when all pass, 1
               otherwise (with messages pointing to the exact fix command).
@@ -3884,10 +3887,10 @@ stuck_runs() {
   # active runs, or of jobs in a run. With --paginate, --jq runs per page,
   # so both filters emit one line per match and a match on any page counts.
   for status in queued in_progress; do
-    ids="$(gh api --paginate "repos/${repo}/actions/runs?status=${status}&per_page=100" --jq '.workflow_runs[].id')" || exit 1
+    ids="$(gh api --paginate "repos/${repo}/actions/runs?status=${status}&per_page=100" --jq '.workflow_runs[].id')" || return 1
     for id in $ids; do
       waiting="$(gh api --paginate "repos/${repo}/actions/runs/${id}/jobs?per_page=100" \
-        --jq ".jobs[] | select(.status == \"queued\" and ((.labels | map(ascii_downcase)) | index(\"${label}\"))) | .id")" || exit 1
+        --jq ".jobs[] | select(.status == \"queued\" and ((.labels | map(ascii_downcase)) | index(\"${label}\"))) | .id")" || return 1
       [ -n "$waiting" ] && echo "$id"
     done
   done
@@ -3895,7 +3898,7 @@ stuck_runs() {
 }
 
 cmd_route() {
-  local target="${1:-}" label="homefield-ci" dry=0 repos=() repo current stuck id status tries
+  local target="${1:-}" label="homefield-ci" dry=0 repos=() repo current stuck id status tries rc=0
   [ $# -gt 0 ] && shift
   case "$target" in
     hosted | local) ;;
@@ -3919,7 +3922,8 @@ cmd_route() {
     if [ "$dry" = 1 ]; then
       log "${repo}: CI_RUNNER ${current} -> ${target} (dry run)"
     else
-      gh variable set CI_RUNNER --repo "$repo" --body "$target" >/dev/null
+      gh variable set CI_RUNNER --repo "$repo" --body "$target" >/dev/null ||
+        { rc=1; log "${repo}: could not set CI_RUNNER to ${target}; set it by hand: gh variable set CI_RUNNER --repo ${repo} --body ${target}" >&2; continue; }
       log "${repo}: CI_RUNNER ${current} -> ${target}"
     fi
     [ "$target" = hosted ] || continue
@@ -3928,32 +3932,39 @@ cmd_route() {
     # local runner whatever the variable says now. Cancel and re-run them;
     # the re-run is routed afresh, to hosted.
     # A failed lookup must not read as "nothing stuck".
-    stuck="$(stuck_runs "$repo" "$label")" || die "${repo}: could not list its runs with gh"
+    stuck="$(stuck_runs "$repo" "$label")" ||
+      { rc=1; log "${repo}: could not list its runs with gh; look for stuck jobs by hand: gh run list --repo ${repo} --status queued" >&2; continue; }
     for id in $stuck; do
       if [ "$dry" = 1 ]; then
         log "${repo}: run ${id} has jobs waiting for ${label}; would cancel and re-run it"
         continue
       fi
       log "${repo}: run ${id} has jobs waiting for ${label}; cancelling and re-running it"
-      gh run cancel "$id" --repo "$repo" >/dev/null
+      gh run cancel "$id" --repo "$repo" >/dev/null ||
+        { rc=1; log "${repo}: run ${id}: the cancel failed; re-run it yourself: gh run rerun ${id} --repo ${repo}" >&2; continue; }
       # Up to a minute for the cancel to land; a re-run is refused before.
       # A shell counter, so nothing outside bash can make the wait vanish.
+      # ROUTE_TRIES and ROUTE_INTERVAL are seams for the tests, as the
+      # verify loop's ADOPT_VERIFY_TRIES and ADOPT_VERIFY_INTERVAL are.
       status=""
       tries=0
-      while [ "$tries" -lt 30 ]; do
-        status="$(gh run view "$id" --repo "$repo" --json status --jq .status)" || exit 1
+      while [ "$tries" -lt "${ROUTE_TRIES:-30}" ]; do
+        status="$(gh run view "$id" --repo "$repo" --json status --jq .status)" ||
+          { rc=1; log "${repo}: run ${id}: could not read its status with gh; re-run it yourself: gh run rerun ${id} --repo ${repo}" >&2; status=""; break; }
         [ "$status" = completed ] && break
-        sleep 2
+        adopt_nap "${ROUTE_INTERVAL:-2}"
         tries=$((tries + 1))
       done
-      if [ "$status" != completed ]; then
+      if [ "$status" = completed ]; then
+        gh run rerun "$id" --repo "$repo" >/dev/null ||
+          { rc=1; log "${repo}: run ${id}: the re-run was refused; run it yourself: gh run rerun ${id} --repo ${repo}" >&2; continue; }
+        log "${repo}: run ${id} re-run"
+      elif [ -n "$status" ]; then
         log "${repo}: run ${id} is still ${status} after a minute; re-run it yourself: gh run rerun ${id} --repo ${repo}" >&2
-        continue
       fi
-      gh run rerun "$id" --repo "$repo" >/dev/null
-      log "${repo}: run ${id} re-run"
     done
   done
+  return "$rc"
 }
 
 # ── adopt ───────────────────────────────────────────────────────────────────
