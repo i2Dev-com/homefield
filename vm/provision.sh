@@ -353,8 +353,9 @@ fi
 systemctl enable --now docker
 
 # ── Runner user ─────────────────────────────────────────────────────────────
-# Not the Lima login user, which has passwordless sudo. Docker group membership
-# is root-equivalent inside the guest; the VM, not this user, is the boundary.
+# Not the Lima login user; the runner is its own user, with its own
+# passwordless sudo installed below. Docker group membership is root-equivalent
+# inside the guest; the VM, not this user, is the boundary.
 if ! id "$RUNNER_USER" >/dev/null 2>&1; then
   useradd --create-home --shell /bin/bash "$RUNNER_USER"
 fi
@@ -522,6 +523,28 @@ rm -f "$sudoers"
 # self-updated in place, which the tar block above only replaces on a version
 # bump. A tree it cannot repair fails the provision here, not the first job.
 sudo -u "$RUNNER_USER" /usr/local/sbin/homefield-job-started.sh
+
+# ── General passwordless sudo ───────────────────────────────────────────────
+# A GitHub-hosted Linux runner's user has passwordless sudo, and a repository
+# expects its existing workflow to keep running unchanged after a switch (#176):
+# `playwright install --with-deps`, `sudo apt-get install ...` and
+# `sudo systemctl ...` are common at job time. This grants the same to `runner`.
+# It adds no reach: the docker group already makes `runner` root-equivalent
+# inside the guest, so a job could already do anything as root — this only lets
+# it use the root it has for those commands instead of failing for a password.
+# The VM, not the user, stays the boundary. It is a second drop-in, so the
+# workspace-owner rule above keeps its narrow, argument-less line; sudo applies
+# the last matching rule, so that one still governs its own command.
+new_tmp
+runner_sudoers="$tmp"
+echo 'runner ALL=(ALL) NOPASSWD: ALL' >"$runner_sudoers"
+visudo -cqf "$runner_sudoers"
+install -m 440 "$runner_sudoers" /etc/sudoers.d/homefield-runner
+rm -f "$runner_sudoers"
+# Prove it as a job will use it: a bad rule must fail the provision here, not
+# the job's first `sudo`. The outer sudo is root's; the inner one is judged
+# against `runner`'s own rules.
+sudo -u "$RUNNER_USER" sudo -n true
 
 # ── Registration + service ──────────────────────────────────────────────────
 # config.sh reads `--token` from ACTIONS_RUNNER_INPUT_TOKEN when the flag is

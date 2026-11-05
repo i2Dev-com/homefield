@@ -7,7 +7,7 @@
 #
 # The runs use the real find, cmp and ln with chown stubbed, so they need no
 # root and run the same everywhere, including on a HomeField runner, where
-# runner may sudo only the script itself.
+# runner may sudo the script itself, and generally everything (#176).
 #
 # Run:  bash tests/workspace-owner.sh
 set -uo pipefail
@@ -40,6 +40,12 @@ has() { grep -qF -- "$2" "$1" && echo yes || echo no; }
 in_run() { has "$work/run.out" "$1"; }
 record "the hook runs the script through sudo, without a prompt" "yes" "$(has "$hook" 'exec sudo -n /usr/local/sbin/homefield-workspace-owner')"
 record "sudoers allows that script, with no arguments" "yes" "$(has "$prov" "runner ALL=(root) NOPASSWD: /usr/local/sbin/homefield-workspace-owner \"\"")"
+record "the runner also has general passwordless sudo, as a hosted runner has (#176)" "yes" "$(has "$prov" 'runner ALL=(ALL) NOPASSWD: ALL')"
+record "...in its own drop-in, leaving the hook's narrow one beside it" "yes" "$(has "$prov" '/etc/sudoers.d/homefield-runner')"
+# shellcheck disable=SC2016  # the $ values are matched literally in provision.sh
+record "...validated before it is installed" "yes" "$(grep -q 'visudo -cqf "$runner_sudoers"' "$prov" && echo yes || echo no)"
+# shellcheck disable=SC2016  # the $ values are matched literally in provision.sh
+record "...and proved as runner, so a bad rule fails the provision" "yes" "$(has "$prov" 'sudo -u "$RUNNER_USER" sudo -n true')"
 record "the runner's .env names the hook" "yes" "$(has "$prov" 'hook_line="ACTIONS_RUNNER_HOOK_JOB_STARTED=/usr/local/sbin/homefield-job-started.sh"')"
 
 # The runs: the real find, cmp and ln against a scratch tree, with chown

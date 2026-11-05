@@ -55,7 +55,9 @@ stub install 'while [ $# -gt 2 ]; do case "$1" in -o|-g|-m) shift 2 ;; *) shift 
 [ "${FAIL_AT:-}" = env ] && case "$2" in */.env) echo "install: injected failure" >&2; exit 1 ;; esac
 cp "$1" "$2"'
 # sudo [-n] [-u user] [--preserve-env=...] <command...>: the command, as this user.
+# FAIL_AT=prove fails the runner's own `sudo -n true`, proving its general rule.
 stub sudo 'while [ $# -gt 0 ]; do case "$1" in -u) shift 2 ;; -n|--preserve-env=*) shift ;; *) break ;; esac; done
+[ "${FAIL_AT:-}" = prove ] && [ "$*" = "true" ] && { echo "sudo: injected failure" >&2; exit 1; }
 exec "$@"'
 stub systemctl 'echo "systemctl $*" >>"$STATE.log"
 case "$1" in
@@ -91,7 +93,7 @@ sed -n '1,/^# ── Cleanup timer/p' "$ROOT/vm/provision.sh" |
     -e "s|^\( *\)new_tmp\$|\1new_tmp $work/tmp/tmp.XXXXXX|" \
     >"$work/provision.sh"
 record "the script was cut at its cleanup timer" "yes" "$(grep -q '^# ── Cleanup timer' "$work/provision.sh" && echo yes || echo no)"
-record "every temp file gets a template in the scratch tree" "4/0" "$(grep -c '^ *new_tmp /' "$work/provision.sh")/$(grep -c '^ *new_tmp$' "$work/provision.sh")"
+record "every temp file gets a template in the scratch tree" "5/0" "$(grep -c '^ *new_tmp /' "$work/provision.sh")/$(grep -c '^ *new_tmp$' "$work/provision.sh")"
 
 unit="actions.runner.test.service"
 # fresh <version> <active|stopped>: a registered runner at that version.
@@ -185,6 +187,8 @@ record "...the runner is running" "running" "$(running)"
 record "...stopped once to replace the binary, then restarted once" "1/1" "$(calls stop)/$(calls restart)"
 record "...records the new version" "$current" "$(cat "$work/runner/.provisioned-version")"
 record "...and leaves no temp files (#89)" "0" "$(leftovers)"
+record "...the runner's general sudo rule is installed (#176)" "runner ALL=(ALL) NOPASSWD: ALL" "$(cat "$work/sudoers.d/homefield-runner")"
+record "...beside the hook's narrow one, which is still there" "1" "$(grep -cF 'runner ALL=(root) NOPASSWD: ' "$work/sudoers.d/homefield-workspace-owner")"
 
 for at in tar chown visudo env; do
   fresh 2.0.0 active
@@ -316,6 +320,11 @@ fresh "$current" stopped
 run_first visudo
 rc=$?
 record "the workspace hook's sudo rule fails: provisioning fails" "1" "$rc"
+record "...before registering, so no registration is left without a service" "0/unregistered" "$(grep -c '^config ' "$work/state.log")/$(registration)"
+fresh "$current" stopped
+run_first prove
+rc=$?
+record "the runner's general sudo rule fails its proof: provisioning fails" "1" "$rc"
 record "...before registering, so no registration is left without a service" "0/unregistered" "$(grep -c '^config ' "$work/state.log")/$(registration)"
 fresh "$current" stopped
 run_first env
