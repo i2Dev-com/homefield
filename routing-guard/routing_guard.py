@@ -407,17 +407,21 @@ def main() -> int:
                 # quoted key missed below would credit its runs-on to the
                 # previous job.
                 top = re.match(r"""^(['"]?)([A-Za-z0-9_-]+)\1:""", code)
-                if code.strip() and not code[0].isspace():
-                    # Every top-level line is a plain `key:`. Anything else
-                    # (`jobs :`, `? jobs`, a flow mapping's closing brace)
-                    # could hide the jobs from this scan.
-                    if code.strip() not in ("---", "...") and not PLAIN_KEY.match(code):
-                        fail(f"{name}:{lineno}: unreadable top-level line; {HOW}")
-                        in_jobs = False
-                        job = None
-                        job_indent = None
-                        body_indent = None
-                        continue
+# Every top-level line is a plain `key:`. Anything else
+                # (`jobs :`, `? jobs`, a flow mapping's closing brace, the
+                # document markers) could hide the jobs from this scan.
+                if (
+                    code.strip()
+                    and not code[0].isspace()
+                    and code.strip() not in ("---", "...")
+                    and not PLAIN_KEY.match(code)
+                ):
+                    fail(f"{name}:{lineno}: unreadable top-level line; {HOW}")
+                    in_jobs = False
+                    job = None
+                    job_indent = None
+                    body_indent = None
+                    continue
                 if top:
                     in_jobs = top.group(2) == "jobs"
                     job = None
@@ -477,17 +481,22 @@ def main() -> int:
                 # is scanned like any other file here. A step-level `uses:`
                 # (actions/checkout@v4) sits deeper, under `steps:`.
                 m_uses = re.match(r"^\s*uses:\s*(.*?)\s*$", code)
-                if in_jobs and m_uses and not in_scalar and body_key:
-                    if not re.match(r"""^['"]?\./""", m_uses.group(1)):
-                        fail(
-                            f"{where}: a job calling a reusable workflow in"
-                            " another repository is refused: the called"
-                            " workflow's jobs evaluate runs-on in this"
-                            " repository's context, so its routing cannot be"
-                            " checked; call a local workflow"
-                            " (./.github/workflows/<file>) that carries the"
-                            " routing expression"
-                        )
+                if (
+                    in_jobs
+                    and m_uses
+                    and not in_scalar
+                    and body_key
+                    and not re.match(r"""^['"]?\./""", m_uses.group(1))
+                ):
+                    fail(
+                        f"{where}: a job calling a reusable workflow in"
+                        " another repository is refused: the called"
+                        " workflow's jobs evaluate runs-on in this"
+                        " repository's context, so its routing cannot be"
+                        " checked; call a local workflow"
+                        " (./.github/workflows/<file>) that carries the"
+                        " routing expression"
+                    )
                 if not in_jobs or not m or not body_key:
                     continue
                 value = m.group(1)

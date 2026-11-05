@@ -63,6 +63,17 @@ fails from this release on.
 
 ### Changed
 
+- CI lints the Python tools (#191): `ruff check` (pinned 0.17.3, the wheel's
+  sha256 verified before it is installed, as actionlint and shellcheck are)
+  plus `python3 -m py_compile` over `tools/` and `routing-guard/` — the ~2,000
+  lines of Python the repo's CI never linted. `ruff.toml` pins target-version
+  py39 (the tools run on the host's `python3`, which macOS ships as 3.9) and
+  turns TRY004 off (the ValueError sites are input validation the callers
+  catch as ValueError). Two files that carried shebangs without the executable
+  bit are now `+x`. And shellcheck is pinned (0.11.0, asset digest verified)
+  where it floated with the runner image — the drift actionlint's pin already
+  prevented for it.
+
 - Commands that act on a VM no longer report only the `homefield` instance when
   this Mac runs several (#182): `status`, `upgrade`, `start`, `stop`,
   `diagnose` and `memory` cover every HomeField VM, in Lima's order with one

@@ -298,8 +298,10 @@ def render(data, first, last, label):
     lines = [
         f"Jobs from {first} to {last} (UTC), label {label}",
         "",
-        f"{'repo':<8} {'workflow / job':<50} {'where':<6} {'jobs':>5} {'wait p50':>9} "
-        f"{'p95':>8} {'max':>8} {'>5m':>4} {'avg run':>8} {'minutes':>8} {'failed':>6} {'cancel':>6}",
+        (
+            f"{'repo':<8} {'workflow / job':<50} {'where':<6} {'jobs':>5} {'wait p50':>9} "
+            f"{'p95':>8} {'max':>8} {'>5m':>4} {'avg run':>8} {'minutes':>8} {'failed':>6} {'cancel':>6}"
+        ),
     ]
     for item in data["jobs"]:
         name = f"{item['workflow']} / {item['job']}"
