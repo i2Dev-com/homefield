@@ -2320,12 +2320,17 @@ copy_preset_hooks() {
       die "could not copy preset hook ${base} into VM ${INSTANCE}; nothing was stopped"
     names="${names:+$names }$base"
   done
+  # Only a plain file name of a hook this manifest installed: the manifest
+  # sits in the guest, so a tampered line must not become a root rm path.
+  # set -f: unquoted $have splits the manifest's lines, and a glob line must
+  # not expand against this directory before the check runs.
+  set -f
+  # shellcheck disable=SC2086  # the manifest is newline-separated words by design
   for base in $have; do
-    # Only a plain file name of a hook this manifest installed: the manifest
-    # sits in the guest, so a tampered line must not become a root rm path.
     [[ "$base" =~ ^[A-Za-z0-9._-]+$ ]] || continue
     case " $names " in *" $base "*) ;; *) removed="${removed:+$removed }$base" ;; esac
   done
+  set +f
   for f in ${PRESET_HOOKS[@]+"${PRESET_HOOKS[@]}"}; do
     base="${f##*/}"
     guest_stdin sudo install -D -m 0755 "${stage}/${base}" "${GUEST_HOOKS}/${base}" </dev/null ||

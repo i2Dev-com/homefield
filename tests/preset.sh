@@ -248,6 +248,10 @@ srun MODE=upgrade SAVED="" GUEST_HAVE="../ssh/sshd_config
 50-awscli.sh
 60-nodejs.sh" -- cmd_upgrade --preset hosted
 record "a tampered manifest line is not a rm path: skipped, nothing removed" "0" "$(called 'sudo rm -f')"
+srun MODE=upgrade SAVED="" GUEST_HAVE="*.sh
+50-awscli.sh
+60-nodejs.sh" -- cmd_upgrade --preset hosted
+record "a glob line in the manifest is read literally, not expanded" "0" "$(called 'sudo rm -f')"
 srun MODE=upgrade SAVED="" GUEST_HAVE="50-awscli.sh" -- cmd_upgrade --preset hosted
 record "a manifest missing a current hook: the hook is reinstalled, the manifest rewritten" "2/1/0" \
   "$(called '^guest sudo install -D -m 0755')/$(called 'sudo tee /etc/homefield/preset-hooks')/$(called 'sudo rm -f')"
