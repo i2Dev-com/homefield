@@ -61,7 +61,19 @@ run_provision() {
   shift
   printf 'provision %s\n' "$*" >>"$CALLS"
 }
-guest_stdin() { printf 'guest %s\n' "$*" >>"$CALLS"; }
+guest_stdin() {
+  printf 'guest %s\n' "$*" >>"$CALLS"
+  # The manifest read is answered from GUEST_MANIFEST_EXISTS (the test -f:
+  # a missing manifest is a first copy) and GUEST_HAVE (the cat: the names,
+  # newline-separated). GUEST_CAT_FAIL makes the read of an existing
+  # manifest fail, the transient case.
+  case "$*" in
+    *"test -f /etc/homefield/preset-hooks"*) [ -n "${GUEST_MANIFEST_EXISTS:-}" ] ;;
+    *"cat /etc/homefield/preset-hooks"*)
+      if [ -n "${GUEST_CAT_FAIL:-}" ]; then echo "cat: read error" >&2; exit 1; fi
+      printf '%s\n' "${GUEST_HAVE:-}" ;;
+  esac
+}
 runner_extra_packages() { printf '%s' "${SAVED:-}"; }
 preflight_collect() {
   PF_NAME=(lima)
@@ -93,9 +105,9 @@ srun() {
   done
   shift
   : >"$calls"
-  # MODE defaults to upgrade; pkgs/merge/usage drive the harness's own actions.
+  mkdir -p "$work/stage"
   out="$(env -i HOME="$work/home" PATH="$stubs" CALLS="$calls" ROOT_DIR="$ROOT" \
-    HOMEFIELD_STATE_DIR="$work/state" "${envs[@]+"${envs[@]}"}" \
+    HOMEFIELD_STATE_DIR="$work/state" HOMEFIELD_STAGE_DIR="$work/stage" "${envs[@]+"${envs[@]}"}" \
     "$BASH" "$work/harness.sh" "$@" 2>&1 </dev/null)"
   rc=$?
 }
@@ -183,9 +195,9 @@ srun MODE=upgrade SAVED="libpq-dev shellcheck" -- cmd_upgrade --preset hosted
 record "hosted on a VM with extras: saved first, its own names added once each" \
   "$(printf 'ok/libpq-dev shellcheck %s' "$browser_libs gh sqlite3 xvfb rsync")" \
   "$([ "$rc" -eq 0 ] && echo ok)/$(envline)"
-record "...both hooks copied and installed in provision.d before the stop, once each" \
-  "2/2/before/yes/2" \
-  "$(grep -c 'limactl copy.*vm/presets/hosted' "$calls" || true)/$(called '^guest sudo install -D')/$(
+record "...both hooks copied and installed in provision.d before the stop, once each, with the manifest" \
+  "2/2/1/before/yes/2" \
+  "$(grep -c 'limactl copy.*vm/presets/hosted' "$calls" || true)/$(called '^guest sudo install -D')/$(called 'sudo tee /etc/homefield/preset-hooks')/$(
     awk '/stop_runner/{s=NR} /limactl copy/{c=NR} END{print (c && s && c < s) ? "before" : "after"}' "$calls")/$(has "$out" 'upgrading homefield')/$(called '^guest sudo install -D')"
 
 srun MODE=upgrade SAVED="libpq-dev shellcheck" -- cmd_upgrade --preset browsers
@@ -220,7 +232,43 @@ echo
 echo "install --preset on an already registered instance"
 srun MODE=install SAVED="libpq-dev" -- cmd_install --preset hosted
 record "hands the preset to upgrade, which adds it beside what was saved" \
-  "$(printf 'yes/libpq-dev %s' "$browser_libs gh shellcheck sqlite3 xvfb rsync")/2" \
-  "$(has "$out" 'upgrading instead')/$(envline)/$(called '^guest sudo install -D')"
+  "$(printf 'yes/libpq-dev %s' "$browser_libs gh shellcheck sqlite3 xvfb rsync")/2/1" \
+  "$(has "$out" 'upgrading instead')/$(envline)/$(called '^guest sudo install -D')/$(called 'sudo tee /etc/homefield/preset-hooks')"
+
+echo
+echo "the preset hook manifest (#188): a hook the preset no longer ships is removed"
+srun MODE=upgrade SAVED="" -- cmd_upgrade --preset hosted
+record "a first copy: both hooks installed, the manifest written, nothing removed" "2/1/0" \
+  "$(called '^guest sudo install -D -m 0755')/$(called 'sudo tee /etc/homefield/preset-hooks')/$(called 'sudo rm -f')"
+srun MODE=upgrade SAVED="" GUEST_MANIFEST_EXISTS=1 GUEST_HAVE="50-awscli.sh
+60-nodejs.sh" -- cmd_upgrade --preset hosted
+record "a manifest naming the current hooks: the same set is reinstalled, nothing removed" "2/1/0" \
+  "$(called '^guest sudo install -D -m 0755')/$(called 'sudo tee /etc/homefield/preset-hooks')/$(called 'sudo rm -f')"
+srun MODE=upgrade SAVED="" GUEST_MANIFEST_EXISTS=1 GUEST_HAVE="40-old.sh
+50-awscli.sh
+60-nodejs.sh" -- cmd_upgrade --preset hosted
+record "a manifest with a retired hook: it is removed, and said so" "1/yes/2" \
+  "$(called 'sudo rm -f /etc/homefield/provision.d/40-old.sh')/$(has "$out" 'removed preset hook 40-old.sh; the preset no longer ships it')/$(called '^guest sudo install -D -m 0755')"
+srun MODE=upgrade SAVED="" GUEST_MANIFEST_EXISTS=1 GUEST_HAVE="../ssh/sshd_config
+50-awscli.sh
+60-nodejs.sh" -- cmd_upgrade --preset hosted
+record "a tampered manifest line is not a rm path: skipped, nothing removed" "0" "$(called 'sudo rm -f')"
+srun MODE=upgrade SAVED="" GUEST_MANIFEST_EXISTS=1 GUEST_HAVE="*.sh
+50-awscli.sh
+60-nodejs.sh" -- cmd_upgrade --preset hosted
+record "a glob line in the manifest is read literally, not expanded" "0" "$(called 'sudo rm -f')"
+srun MODE=upgrade SAVED="" GUEST_MANIFEST_EXISTS=1 GUEST_HAVE="50-awscli.sh" -- cmd_upgrade --preset hosted
+record "a manifest missing a current hook: the hook is reinstalled, the manifest rewritten" "2/1/0" \
+  "$(called '^guest sudo install -D -m 0755')/$(called 'sudo tee /etc/homefield/preset-hooks')/$(called 'sudo rm -f')"
+srun MODE=upgrade SAVED="" GUEST_MANIFEST_EXISTS=1 GUEST_CAT_FAIL=1 -- cmd_upgrade --preset hosted
+record "the read of an existing manifest fails: refused before any hook changes" \
+  "nonzero/yes/0/0/0" \
+  "$(nonzero "$rc")/$(has "$out" 'could not read the preset hook manifest')/$(called '^guest sudo install -D -m 0755')/$(called 'sudo tee /etc/homefield/preset-hooks')/$(called 'sudo rm -f')"
+srun MODE=upgrade SAVED="" GUEST_MANIFEST_EXISTS=1 GUEST_HAVE="" -- cmd_upgrade --preset hosted
+record "an existing empty manifest: hooks installed, manifest rewritten, nothing removed" "2/1/0" \
+  "$(called '^guest sudo install -D -m 0755')/$(called 'sudo tee /etc/homefield/preset-hooks')/$(called 'sudo rm -f')"
+srun MODE=install SAVED="" -- cmd_install --preset browsers
+record "a hookless preset on a fresh install: the manifest directory is made, the manifest written" "1/1/0/0" \
+  "$(called 'sudo install -d')/$(called 'sudo tee /etc/homefield/preset-hooks')/$(called '^guest sudo install -D -m 0755')/$(called 'sudo rm -f')"
 
 summary
