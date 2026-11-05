@@ -42,8 +42,14 @@ fails from this release on.
   `runs-on` line — the only line that routes — is checked as before. A
   `jobs:` line carrying a value anchor (`jobs: &jobs`) is accepted, where it
   was misread as inline jobs.
-
-### Changed
+- The hosted preset's AWS CLI hook pins the version and the zip's SHA256 for
+  each architecture (#187), as `provision.sh` pins the runner: the one
+  root-executed download in the provisioning layer that had neither. A
+  provision now installs exactly 2.39.4 from the versioned URL, skips when
+  that version is already installed, and refuses a download whose digest does
+  not match — the unversioned "latest" URL made every provision install
+  whatever AWS had published that day. Bumping means the version and both
+  digests together, documented in the hook.
 
 - CI lints the Python tools (#191): `ruff check` (pinned 0.17.3, the wheel's
   sha256 verified before it is installed, as actionlint and shellcheck are)
