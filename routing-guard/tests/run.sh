@@ -93,6 +93,27 @@ case_ "spaced top-level jobs key"        fail "$EXPECTED" "" "s/^jobs:\$/jobs :/
 case_ "quoted key left open on its line"  fail "$EXPECTED" "" "$(printf '  unsafe:\n    "runs-\\\n    on": self-hosted')"
 case_ "? key split by a trailing \\"     fail "$EXPECTED" "" "$(printf '  unsafe:\n    ? "runs-\\\n      on"\n    : self-hosted')"
 case_ "single-quoted key left open"     fail "$EXPECTED" "" "$(printf "  unsafe:\n    'runs-\n    on': self-hosted")"
+case_ "tagged runs-on key"              fail "$EXPECTED" "" "$(printf '  unsafe:\n    !!str runs-on: self-hosted\n    steps:\n      - run: echo unsafe')"
+case_ "anchored runs-on key"            fail "$EXPECTED" "" "$(printf '  unsafe:\n    &a runs-on: self-hosted\n    steps:\n      - run: echo unsafe')"
+case_ "anchored and quoted runs-on key" fail "$EXPECTED" "" "$(printf '  unsafe:\n    &a "runs-on": self-hosted\n    steps:\n      - run: echo unsafe')"
+# A node property on its own line under the job id: the job's real keys are
+# indented under it, and taking the property's depth for theirs would leave a
+# deeper runs-on unchecked.
+case_ "standalone anchor under a job id"  fail "$EXPECTED" "" "$(printf '  unsafe:\n    &body\n      runs-on: self-hosted\n      steps:\n        - run: echo unsafe')"
+case_ "standalone anchor and tag"         fail "$EXPECTED" "" "$(printf '  unsafe:\n    &body !!map\n      runs-on: self-hosted\n      steps:\n        - run: echo unsafe')"
+# A reusable workflow call to another repository cannot be checked: its jobs
+# evaluate runs-on in this repository's context, and the called file is not
+# here to scan.
+case_ "remote reusable workflow call"            fail "$EXPECTED" "" "$(printf '  call:\n    uses: evil/repo/.github/workflows/wf.yml@v1')"
+case_ "remote reusable workflow call, expected"  fail "$EXPECTED ci.yml:call" "" "$(printf '  call:\n    uses: evil/repo/.github/workflows/wf.yml@v1')"
+# The spellings of the `uses` key the line scan cannot read — a call written
+# that way is refused, remote call included.
+case_ "quoted uses key, remote"        fail "$EXPECTED" "" "$(printf '  call:\n    "uses": evil/repo/.github/workflows/wf.yml@v1')"
+case_ "single-quoted uses key, remote" fail "$EXPECTED" "" "$(printf "  call:\n    'uses': evil/repo/.github/workflows/wf.yml@v1")"
+case_ "tagged uses key, remote"        fail "$EXPECTED" "" "$(printf '  call:\n    !!str uses: evil/repo/.github/workflows/wf.yml@v1')"
+case_ "anchored uses key, remote"      fail "$EXPECTED" "" "$(printf '  call:\n    &a uses: evil/repo/.github/workflows/wf.yml@v1')"
+case_ "space before the colon of uses" fail "$EXPECTED" "" "$(printf '  call:\n    uses : evil/repo/.github/workflows/wf.yml@v1')"
+case_ "quoted uses key, local"         fail "$EXPECTED" "" "$(printf '  call:\n    "uses": ./.github/workflows/other.yml')"
 # Plain forms around them that must keep passing.
 # Text under a block scalar is not YAML syntax: a script line may start with ?, a
 # bracket or an open quote (regression in v0.2.0, found on real workflows).
@@ -433,6 +454,137 @@ else
   echo "  FAIL a runs-on key under on: is not routing: wanted pass, got fail"; fail=$((fail + 1))
 fi
 rm -rf "$dispatch"
+
+# A local reusable workflow call is scanned like any other file here: the
+# called workflow's jobs evaluate runs-on in the caller's context, so a local
+# path keeps passing (the called file is in this repository) while a remote
+# one is refused (fixtures above). A step-level `uses:` is not a call.
+local_uses="$(mktemp -d)"
+printf '%s\n' \
+  'on: [pull_request]' \
+  'jobs:' \
+  '  call:' \
+  '    uses: ./.github/workflows/other.yml' >"$local_uses/ci.yml"
+if python3 "$SCRIPT" --workflows-dir "$local_uses" --jobs "" >/dev/null 2>&1; then
+  echo "  ok   a local reusable workflow call passes (pass)"; pass=$((pass + 1))
+else
+  echo "  FAIL a local reusable workflow call: wanted pass, got fail"; fail=$((fail + 1))
+fi
+rm -rf "$local_uses"
+local_uses="$(mktemp -d)"
+printf '%s\n' \
+  'on: [pull_request]' \
+  'jobs:' \
+  '  call:' \
+  '    uses: "./.github/workflows/other.yml"' >"$local_uses/ci.yml"
+if python3 "$SCRIPT" --workflows-dir "$local_uses" --jobs "" >/dev/null 2>&1; then
+  echo "  ok   a quoted local reusable workflow call passes (pass)"; pass=$((pass + 1))
+else
+  echo "  FAIL a quoted local reusable workflow call: wanted pass, got fail"; fail=$((fail + 1))
+fi
+rm -rf "$local_uses"
+step_uses="$(mktemp -d)"
+printf '%s\n' \
+  'on: [pull_request]' \
+  'jobs:' \
+  '  build:' \
+  "    runs-on: ${base_expr}" \
+  '    steps:' \
+  '      - uses: actions/checkout@v4' \
+  '      - run: echo build' >"$step_uses/ci.yml"
+if python3 "$SCRIPT" --workflows-dir "$step_uses" --jobs "ci.yml:build" >/dev/null 2>&1; then
+  echo "  ok   a step-level uses: is not a reusable call (pass)"; pass=$((pass + 1))
+else
+  echo "  FAIL a step-level uses:: wanted pass, got fail"; fail=$((fail + 1))
+fi
+rm -rf "$step_uses"
+
+# A matrix dimension named `runs-on` is data, not routing: the job's own
+# runs-on line is what routes, and a reference to the dimension
+# (`${{ matrix.runs-on }}`) is not on the allowlist, so the dimension can be
+# left alone. A dimension whose value is `self-hosted` is the same: the job
+# above it decides.
+matrix="$(mktemp -d)"
+printf '%s\n' \
+  'on: [pull_request]' \
+  'jobs:' \
+  '  build:' \
+  '    strategy:' \
+  '      matrix:' \
+  '        runs-on: [ubuntu-latest, macos-latest]' \
+  "    runs-on: ${base_expr}" \
+  '    steps:' \
+  '      - run: echo build' >"$matrix/ci.yml"
+check "a matrix dimension named runs-on is data" "ci.yml:build" \
+  "$(python3 "$SCRIPT" --workflows-dir "$matrix" --list)"
+if python3 "$SCRIPT" --workflows-dir "$matrix" --jobs "ci.yml:build" >/dev/null 2>&1; then
+  echo "  ok   a matrix dimension named runs-on checks clean (pass)"; pass=$((pass + 1))
+else
+  echo "  FAIL a matrix dimension named runs-on: wanted pass, got fail"; fail=$((fail + 1))
+fi
+rm -rf "$matrix"
+matrix="$(mktemp -d)"
+printf '%s\n' \
+  'on: [pull_request]' \
+  'jobs:' \
+  '  build:' \
+  '    strategy:' \
+  '      matrix:' \
+  '        runs-on: self-hosted' \
+  "    runs-on: ${base_expr}" \
+  '    steps:' \
+  '      - run: echo build' >"$matrix/ci.yml"
+if python3 "$SCRIPT" --workflows-dir "$matrix" --jobs "ci.yml:build" >/dev/null 2>&1; then
+  echo "  ok   a self-hosted matrix dimension is data (pass)"; pass=$((pass + 1))
+else
+  echo "  FAIL a self-hosted matrix dimension: wanted pass, got fail"; fail=$((fail + 1))
+fi
+rm -rf "$matrix"
+
+# `jobs: &jobs` — an anchor on the value, not inline jobs.
+anchored_jobs="$(mktemp -d)"
+printf '%s\n' \
+  'on: [pull_request]' \
+  'jobs: &jobs' \
+  '  build:' \
+  "    runs-on: ${base_expr}" \
+  '    steps:' \
+  '      - run: echo build' >"$anchored_jobs/ci.yml"
+if python3 "$SCRIPT" --workflows-dir "$anchored_jobs" --jobs "ci.yml:build" >/dev/null 2>&1; then
+  echo "  ok   jobs: with a value anchor checks clean (pass)"; pass=$((pass + 1))
+else
+  echo "  FAIL jobs: with a value anchor: wanted pass, got fail"; fail=$((fail + 1))
+fi
+rm -rf "$anchored_jobs"
+
+# A .yaml file is scanned like a .yml one: the extension filter must not
+# become a way to hide a job.
+yaml_ext="$(mktemp -d)"
+cp "${HERE}/base/ci.yml" "$yaml_ext/ci.yml"
+printf '%s\n' \
+  'on: [pull_request]' \
+  'jobs:' \
+  '  hidden:' \
+  '    runs-on: self-hosted' \
+  '    steps:' \
+  '      - run: echo hidden' >"$yaml_ext/extra.yaml"
+if python3 "$SCRIPT" --workflows-dir "$yaml_ext" --jobs "$EXPECTED" >/dev/null 2>&1; then
+  echo "  FAIL a .yaml file is scanned: wanted fail, got pass"; fail=$((fail + 1))
+else
+  echo "  ok   a .yaml file is scanned like a .yml one (fail)"; pass=$((pass + 1))
+fi
+rm -rf "$yaml_ext"
+
+# CRLF line endings: GitHub workflows may carry them; the scan reads the same
+# lines.
+crlf="$(mktemp -d)"
+sed 's/$/\r/' "${HERE}/base/ci.yml" >"$crlf/ci.yml"
+if python3 "$SCRIPT" --workflows-dir "$crlf" --jobs "$EXPECTED" >/dev/null 2>&1; then
+  echo "  ok   CRLF line endings check clean (pass)"; pass=$((pass + 1))
+else
+  echo "  FAIL CRLF line endings: wanted pass, got fail"; fail=$((fail + 1))
+fi
+rm -rf "$crlf"
 
 # A workflow indented four spaces: --list and the expected list must still
 # name its job, not "None".

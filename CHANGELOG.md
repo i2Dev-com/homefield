@@ -13,7 +13,35 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 The next release bumps the minor version to 0.5.0: commands that act on a VM
 now cover every HomeField VM on this Mac by default, so their output — and what
-an unqualified command acts on — changes for anyone with more than one.
+an unqualified command acts on — changes for anyone with more than one. The
+routing guard also gains two refusals (below): a workflow that passed an older
+release through a tagged `runs-on` key or a remote reusable-workflow call
+fails from this release on.
+
+### Security
+
+- `routing-guard` fails a `runs-on` key that carries a tag or an anchor —
+  `!!str runs-on: self-hosted`, `&a runs-on: self-hosted`, `&a "runs-on":
+  self-hosted` are valid YAML whose key is `runs-on`, and a workflow written
+  that way passed every earlier release with an unguarded job. They now fail
+  with the unreadable-syntax message, like the quoted-key spellings
+  (GHSA-4795-jpw2-47v2) already do.
+- `routing-guard` refuses a job that calls a reusable workflow in another
+  repository (`uses: owner/repo/.github/workflows/wf.yml@v1`): the called
+  file is not in this repository to scan, and its jobs evaluate `runs-on` in
+  the caller's context, so a remote workflow with `runs-on: [self-hosted]`
+  reached the runner with none of the guards. A local call
+  (`./.github/workflows/<file>`) keeps passing — the called file is scanned
+  like any other. A step-level `uses:` (`actions/checkout@v4`) is not a call
+  and is not affected.
+
+### Changed
+
+- The guard no longer fails a workflow whose `strategy.matrix` has a
+  dimension named `runs-on`: the dimension is data, and the job's own
+  `runs-on` line — the only line that routes — is checked as before. A
+  `jobs:` line carrying a value anchor (`jobs: &jobs`) is accepted, where it
+  was misread as inline jobs.
 
 ### Fixed
 
