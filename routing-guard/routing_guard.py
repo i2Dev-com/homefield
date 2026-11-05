@@ -241,6 +241,11 @@ UNREAD = (
     # A key with a tag or anchor (`!!str runs-on:`, `&a runs-on:`, `&a "runs-on":`)
     # parses with runs-on as the key, so the plain-key scan below never sees it.
     (re.compile(r"""^\s*[&!]\S*\s+["']?runs-on["']?\s*:"""), "a tagged or anchored runs-on key"),
+    # A line that is only a node property — an anchor, a tag, or both
+    # (`&body` alone under a job id): the job's real keys are indented under
+    # it, and taking the property's depth for theirs would leave a deeper
+    # runs-on unchecked.
+    (re.compile(r"""^\s*[&!]\S*(\s+[&!]\S*)*\s*$"""), "a standalone anchor or tag"),
     (re.compile(r"""^\s*\?(\s|$)"""), "a ? complex key"),
     (re.compile(r"""^\s*["']?<<["']?\s*:"""), "a << merge key"),
     (re.compile(r"""^\s*-?\s*"[^"]*\\[^"]*"\s*:"""), "a double-quoted key with an escape"),

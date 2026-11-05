@@ -96,6 +96,11 @@ case_ "single-quoted key left open"     fail "$EXPECTED" "" "$(printf "  unsafe:
 case_ "tagged runs-on key"              fail "$EXPECTED" "" "$(printf '  unsafe:\n    !!str runs-on: self-hosted\n    steps:\n      - run: echo unsafe')"
 case_ "anchored runs-on key"            fail "$EXPECTED" "" "$(printf '  unsafe:\n    &a runs-on: self-hosted\n    steps:\n      - run: echo unsafe')"
 case_ "anchored and quoted runs-on key" fail "$EXPECTED" "" "$(printf '  unsafe:\n    &a "runs-on": self-hosted\n    steps:\n      - run: echo unsafe')"
+# A node property on its own line under the job id: the job's real keys are
+# indented under it, and taking the property's depth for theirs would leave a
+# deeper runs-on unchecked.
+case_ "standalone anchor under a job id"  fail "$EXPECTED" "" "$(printf '  unsafe:\n    &body\n      runs-on: self-hosted\n      steps:\n        - run: echo unsafe')"
+case_ "standalone anchor and tag"         fail "$EXPECTED" "" "$(printf '  unsafe:\n    &body !!map\n      runs-on: self-hosted\n      steps:\n        - run: echo unsafe')"
 # A reusable workflow call to another repository cannot be checked: its jobs
 # evaluate runs-on in this repository's context, and the called file is not
 # here to scan.
