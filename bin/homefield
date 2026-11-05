@@ -2365,7 +2365,7 @@ cmd_install() {
     [ "$packages_set" = 1 ] && args+=(--packages "$packages")
     local p
     for p in ${presets[@]+"${presets[@]}"}; do args+=(--preset "$p"); done
-    cmd_upgrade "${args[@]+"${args[@]}"}"
+    upgrade_registered "${args[@]+"${args[@]}"}"
     [ "$SETUP" != 1 ] || setup_upgrade_summary
     return
   fi
@@ -2569,6 +2569,17 @@ status_single() {
   [ -n "$url" ] && echo "labels: see $(runners_page "$url") (not stored in the VM)"
   [ "$removed" = 0 ] || return 1
   return "$unknown"
+}
+
+# upgrade_registered <upgrade args...>: the fallback install/setup take on an
+# instance that is already registered. It upgrades THAT VM only — never every
+# VM on the Mac, which a default `homefield upgrade` covers (#182 review): the
+# packages and presets given to install belong to its own instance.
+upgrade_registered() {
+  local saved="$EXPLICIT_INSTANCE"
+  EXPLICIT_INSTANCE=1
+  cmd_upgrade "$@"
+  EXPLICIT_INSTANCE="$saved"
 }
 
 cmd_status() {

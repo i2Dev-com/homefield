@@ -64,6 +64,21 @@ case "$1" in
     vm_instances() { printf '%b\n' "${NAMES-homefield}"; }
     vm_dispatch status fn
     ;;
+  upgrade_registered)
+    # install/setup's fallback on an already-registered instance upgrades that
+    # VM only, even when the Mac has several (#182 review).
+    EXPLICIT_INSTANCE=0
+    INSTANCE=homefield
+    vm_instances() { printf '%b\n' "${NAMES-homefield}"; }
+    upgrade_single() { printf 'single %s %s\n' "$INSTANCE" "$*"; }
+    instance_command() {
+      local name="$1"
+      shift
+      printf 'child %s: %s\n' "$name" "$*"
+    }
+    upgrade_registered --packages xvfb
+    echo "explicit=$EXPLICIT_INSTANCE"
+    ;;
   start_many) EXPLICIT_INSTANCE=0; vm_instances() { printf '%b\n' "${NAMES-homefield}"; }; cmd_start ;;
   stop_many) EXPLICIT_INSTANCE=0; vm_instances() { printf '%b\n' "${NAMES-homefield}"; }; cmd_stop ;;
   uninstall_refuse)
@@ -161,6 +176,11 @@ record "upgrade --bogus: refused before any VM is stopped or asked" "1/yes/no" \
 run upgrade_bad_preset NAMES='homefield\ncodesamplez'
 record "upgrade --preset nope: refused before any VM is stopped or asked" "1/yes/no" \
   "$rc/$(has "$out" 'nope')/$(has "$out" 'child ')"
+
+run upgrade_registered NAMES='homefield\ncodesamplez'
+record "install/setup's registered fallback: its own instance only, not both" \
+  "single homefield --packages xvfb/0/no" \
+  "$(printf '%s' "$out" | head -n 1)/$rc/$(has "$out" 'child ')"
 
 echo "start and stop cover every VM by default"
 run start_many NAMES='homefield\ncodesamplez'
