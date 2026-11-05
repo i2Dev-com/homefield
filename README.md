@@ -105,8 +105,10 @@ something stops.
   image it stops with "nothing to route". To keep some jobs hosted, see
   [`docs/adopting.md`](docs/adopting.md#1-choose-the-jobs).
 - **Another runner**, when jobs wait for each other: `homefield setup
-  --instance homefield-2 --url https://github.com/<org>` on the same Mac, or
-  the same one-liner on another Mac. Repositories and routing do not change,
+  --instance homefield-2 --url https://github.com/<org>` on the same Mac — after
+  that, `status`, `upgrade`, `start`, `stop`, `diagnose` and `memory` cover every
+  VM unless `--instance` names one; `uninstall`/`reset` never guess — or run the
+  same one-liner on another Mac. Repositories and routing do not change,
   so at the end answer **n** (or press Enter at the organization's question) to
   the offer to open a routing pull request. Use the same `--label`, `--group`
   and `--packages` as the first runner
@@ -168,7 +170,7 @@ offer).
 does not stop on it, and ends with its own short advice. Running the one-liner
 again upgrades the tool and leaves an existing VM alone; `homefield upgrade`
 updates the VM, `homefield version` says when a newer release exists, and
-`homefield status` shows the runner and whether GitHub still lists it.
+`homefield status` shows each VM's runner and whether GitHub still lists it.
 `homefield start` boots a stopped VM and then says whether its runner is
 actually taking jobs: registered, its service running and GitHub listing it
 online — booted and online are separate facts, and it exits 1 with the fix

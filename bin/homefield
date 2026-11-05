@@ -30,7 +30,15 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LIMA_YAML="$ROOT/vm/lima.yaml"
 PROVISION="$ROOT/vm/provision.sh"
 GUEST_PROVISION="/tmp/provision.sh"
-INSTANCE="${HOMEFIELD_INSTANCE:-homefield}"
+DEFAULT_INSTANCE="homefield"
+INSTANCE="${HOMEFIELD_INSTANCE:-$DEFAULT_INSTANCE}"
+# 1 when --instance (or HOMEFIELD_INSTANCE) named one VM. Commands that can
+# report every VM on this Mac then act on just the one named; otherwise they
+# cover all of them (#182).
+EXPLICIT_INSTANCE=0
+[ -z "${HOMEFIELD_INSTANCE:-}" ] || EXPLICIT_INSTANCE=1
+# The --color= option as typed, forwarded to the per-VM runs of vm_dispatch.
+COLOR_ARG=""
 RUNNER_HOME="/opt/actions-runner"
 # Seconds runner_on_github waits for gh before calling the answer "not
 # checked" (#103): gh has no timeout flag, and on a black-holed network a
@@ -41,6 +49,10 @@ case "$GH_TIMEOUT" in ''|*[!0-9]*) GH_TIMEOUT=15 ;; esac
 usage() {
   cat <<'EOF'
 Usage: bin/homefield <command> [options]
+
+Every command that acts on a VM covers every HomeField VM on this Mac by
+default; --instance (or $HOMEFIELD_INSTANCE) narrows it to the one named.
+install and setup create/register exactly the instance they are given.
 
 Commands:
   setup      The whole first-time setup in one command: preflight must pass in
@@ -64,33 +76,42 @@ Commands:
              already registered, this is an upgrade. The lower-level command
              setup runs: it reports preflight but does not stop on it.
   upgrade    Re-run provisioning on a registered runner: packages, hooks,
-             runner binary. Refuses while a job is running, unless --force.
-             Also refuses when the VM cannot be asked whether one is.
-  status     Show the VM, the registration (and whether GitHub still lists
-             it) and whether a job is running.
-  start      Boot the VM, then report whether its runner is taking jobs:
-             booted and online are separate facts. Exits 0 when the runner
+             runner binary. A VM with a job running is refused and skipped,
+             unless --force; the others are still upgraded. A VM that cannot
+             be asked whether one is is skipped too. Exits 0 only when every
+             VM was upgraded.
+  status     Show each VM, its registration (and whether GitHub still lists
+             it) and whether a job is running. One block per VM; exits 0 only
+             when every one of them answered well.
+  start      Boot each VM, then report whether its runner is taking jobs:
+             booted and online are separate facts. Exits 0 when every runner
              is online (service running, GitHub lists it online), 1 otherwise
-             with the fix. A VM that does not exist stops naming install.
-  stop       Stop the VM, so its runner takes no jobs until it starts again.
-             Refuses while a job is running (that job would be cancelled) and
-             when the VM cannot be asked whether one is; leaves autostart as
-             it was, so a reboot starts the VM again. Stopping a VM that is
-             already stopped is not an error.
-  diagnose   One read-only report for when something went wrong: the VM
+             with the fix per VM; a failure on one never skips the next.
+  stop       Stop each VM, so its runner takes no jobs until it starts again.
+             A VM with a job running is refused (that job would be cancelled)
+             and skipped, as is one that cannot be asked whether it has one;
+             the others are still stopped. Autostart stays as it was, so a
+             reboot starts them again; stopping an already stopped VM is not
+             an error. Exits 0 only when every VM reached Stopped.
+  diagnose   One read-only report per VM for when something went wrong: the VM
              (created, isolated, registered, listed on GitHub, service,
              version, npm), the runner group on GitHub's side (its access and
-             which repositories are in it) and the prerequisites, ending in a
-             summary that names the command fixing each problem. Exits 0 when
-             healthy, 1 when it found a problem. Starts and changes nothing:
-             a VM that is not running is reported, not started.
-  uninstall  Deregister the runner and delete the VM.
+             which repositories are in it) and — once, before the VMs by
+             default — the prerequisites. Each report ends in a summary that
+             names the command fixing each problem; --json wraps them as
+             instances/healthy/prerequisites/vms. Exits 0 when every VM is
+             healthy, 1 otherwise. Starts and changes nothing: a VM that is not
+             running is reported, not started.
+  uninstall  Deregister the runner and delete one VM. With more than one on
+             this Mac, or with its only VM under another name, it refuses until
+             --instance names which: deleting every runner is never a default.
   reset      Roll back an install, complete or half-finished: deregister the
              runner if it registered, delete the VM, and delete the runner
              group if this install created it (and nothing else is in it).
              Lists what it will remove and asks first; HOMEFIELD_YES=1 answers
              yes. Nothing to undo is not an error. Unlike uninstall it does
-             not need a VM to exist.
+             not need a VM to exist. Refuses as uninstall does when the VM is
+             not named and this Mac has more than one, or only another name.
   route      Switch repositories' routed jobs to hosted or local
              (the CI_RUNNER variable). Switching to hosted also cancels and
              re-runs runs whose jobs are stuck waiting for the local runner.
@@ -102,15 +123,20 @@ Commands:
   adopt      Prepare a repository to use the runner: check that its routing is
              merged, and only then give it access to the runner group and
              switch it to local. Refuses a public repository.
-  memory     Show the VM's memory use from its per-minute log: average and
-             peak per day, and out-of-memory kills.
+  memory     Show every VM's memory use from its per-minute log: average and
+             peak per day, and out-of-memory kills. A VM that is not running,
+             or has no samples yet, fails as it did before; the others are
+             still reported.
   report     Queue wait, duration and minutes of the jobs in repositories,
              local against hosted, from the GitHub API.
   version    Show which version of this tool is installed, and whether a
              newer one is available (checked with gh).
 
 Options:
-  --instance NAME    Lima instance (default homefield, or $HOMEFIELD_INSTANCE)
+  --instance NAME    Lima instance: one VM instead of every HomeField VM on
+                     this Mac. Defaults to all of them for the commands that act
+                     on a VM, and install/setup create "homefield";
+                     $HOMEFIELD_INSTANCE names one as if it were passed.
 
 install (and setup, which takes the same options):
   --url URL          https://github.com/<org> or https://github.com/<owner>/<repo>
@@ -545,6 +571,113 @@ vm_status() {
   done <<<"$rows"
   return 0
 }
+# The line every HomeField VM's stored Lima config starts with: lima.yaml is
+# copied from vm/lima.yaml when the VM is created, comments included, and it has
+# carried this header since v0.1.0. Other Lima instances on a dev Mac do not,
+# so listing all of them would report VMs HomeField never made.
+HF_VM_MARKER='# Lima VM for the local GitHub Actions runner.'
+
+# is_homefield_vm <name>: whether that instance's stored config carries it.
+is_homefield_vm() {
+  local f="${LIMA_HOME:-$HOME/.lima}/$1/lima.yaml" first=""
+  [ -f "$f" ] || return 1
+  IFS= read -r first <"$f" || true
+  [ "$first" = "$HF_VM_MARKER" ]
+}
+
+# vm_instances: every HomeField VM on this Mac, one name per line, in Lima's
+# order. The default instance counts even without the marker (a config edited by
+# hand), because install creates it under that name. Returns 1 when Lima is not
+# installed or cannot list; a command then falls back to its single-instance path.
+vm_instances() {
+  local rows name status found=""
+  command -v limactl >/dev/null || return 1
+  rows="$(limactl list --format '{{.Name}} {{.Status}}' 2>/dev/null)" || return 1
+  while read -r name status; do
+    [ -n "$name" ] || continue
+    if is_homefield_vm "$name" || [ "$name" = "$DEFAULT_INSTANCE" ]; then
+      found="${found}${name}"$'\n'
+    fi
+  done <<<"$rows"
+  printf '%s' "$found"
+}
+
+# instance_command <name> [command args...]: this tool, one VM, as its own
+# process. A single-instance run keeps its errexit and die semantics intact,
+# and a failure on one VM cannot change the state of the next.
+HF_SELF="$ROOT/bin/homefield"
+instance_command() {
+  local name="$1"; shift
+  # The shell running this script, so a PATH without bash (a test's stub-only
+  # one) still works: the shebang would need /usr/bin/env to find it.
+  "${BASH:-bash}" "$HF_SELF" ${COLOR_ARG:+"$COLOR_ARG"} --instance "$name" "$@" </dev/null
+}
+
+# vm_dispatch <command> <function> [args...]: the single-instance implementation
+# for one VM. With --instance (or HOMEFIELD_INSTANCE) that is INSTANCE; by
+# default it covers every HomeField VM on this Mac, each as its own process,
+# continuing after a failure and returning 0 only when every run did. No VMs at
+# all, or a Lima that cannot be asked, falls back to the single-instance path
+# for INSTANCE (the default name), whose messages then stand.
+vm_dispatch() {
+  local cmd="$1" fn="$2"; shift 2
+  if [ "$EXPLICIT_INSTANCE" = 1 ]; then
+    "$fn" "$@"
+    return
+  fi
+  local list="" name n=0 first=1 rc=0
+  if ! list="$(vm_instances)"; then
+    "$fn" "$@"
+    return
+  fi
+  while IFS= read -r name; do
+    [ -z "$name" ] || n=$((n + 1))
+  done <<<"$list"
+  case "$n" in
+    0)
+      # Nothing found: INSTANCE's own report ("not created", or the command's
+      # refusal) says what to do, as it did before this default.
+      "$fn" "$@"
+      return
+      ;;
+    1)
+      while IFS= read -r name; do [ -z "$name" ] || break; done <<<"$list"
+      INSTANCE="$name"
+      "$fn" "$@"
+      return
+      ;;
+  esac
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    [ "$first" = 1 ] || echo ""
+    first=0
+    # The child's own lines mostly start with its VM's name (status, start,
+    # stop); memory's table does not, so it heads the block when told.
+    HOMEFIELD_ONE_OF_MANY=1 instance_command "$name" "$cmd" "$@" || rc=1
+  done <<<"$list"
+  return "$rc"
+}
+
+# refuse_unnamed_vm <command>: destructive commands never act on a VM the user
+# did not name when this Mac has another one, or when its only HomeField VM is
+# not the default instance. They list what is there and stop instead (#182).
+refuse_unnamed_vm() {
+  [ "$EXPLICIT_INSTANCE" = 0 ] || return 0
+  local cmd="$1" list="" names="" name n=0 only=""
+  if ! list="$(vm_instances)"; then return 0; fi
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    n=$((n + 1))
+    only="$name"
+    names="${names:+${names}, }${name}"
+  done <<<"$list"
+  case "$n" in
+    0) return 0 ;;
+    1) [ "$only" = "$INSTANCE" ] && return 0 ;;
+  esac
+  die "${cmd}: this Mac has HomeField VMs (${names}); name the one to act on with --instance <name>"
+}
+
 # vm_lookup: vm_status into VM_STATUS (empty: no VM), for the commands that act
 # on "no VM": create one, or report that there is none. A Lima that could not be
 # asked ends the command (install would otherwise register a runner group and
@@ -2272,7 +2405,8 @@ cmd_install() {
   fi
 }
 
-cmd_upgrade() {
+# upgrade_single: one VM's upgrade; vm_dispatch runs it for every VM by default.
+upgrade_single() {
   local packages="" packages_set=0 force=0 presets=()
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -2331,7 +2465,30 @@ cmd_upgrade() {
   runner_back
 }
 
-cmd_status() {
+cmd_upgrade() {
+  # The options are validated once here: an unknown one, or a malformed preset,
+  # fails before any VM is stopped and does not repeat per instance (#182).
+  local opts=("$@") packages_set=0 presets=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --packages)
+        [ $# -ge 2 ] || die "--packages needs a value (may be empty)"
+        shift 2
+        ;;
+      --preset)
+        presets+=("${2:?--preset needs a value}")
+        shift 2
+        ;;
+      --force) shift ;;
+      *) die "upgrade: unknown option $1 (see bin/homefield help)" ;;
+    esac
+  done
+  [ ${#presets[@]} -eq 0 ] || load_presets "${presets[@]+"${presets[@]}"}"
+  vm_dispatch upgrade upgrade_single "${opts[@]+"${opts[@]}"}"
+}
+
+# status_single: one VM's report; vm_dispatch runs it for every VM by default.
+status_single() {
   [ $# -eq 0 ] || die "status takes no options besides --instance"
   command -v limactl >/dev/null || die "Lima is not installed"
   local status
@@ -2414,6 +2571,11 @@ cmd_status() {
   return "$unknown"
 }
 
+cmd_status() {
+  [ $# -eq 0 ] || die "status takes no options besides --instance"
+  vm_dispatch status status_single
+}
+
 # ── start / stop ────────────────────────────────────────────────────────────
 # The VM lifecycle the failure mode needs. Until now only install, upgrade,
 # uninstall and reset started or stopped a VM internally (ensure_vm,
@@ -2425,7 +2587,8 @@ cmd_status() {
 # (runner_service_state, runner_on_github) and its GH_TIMEOUT bounds the GitHub
 # ask; install's 90 s wait (wait_online) is not used here: start reports now,
 # not after a poll. Read-only in the guest: nothing is provisioned or changed.
-cmd_start() {
+# start_single / stop_single: one VM; vm_dispatch runs them for every VM by default.
+start_single() {
   [ $# -eq 0 ] || die "start takes no options besides --instance"
   check_host
   vm_lookup
@@ -2510,7 +2673,7 @@ cmd_start() {
   return 0
 }
 
-cmd_stop() {
+stop_single() {
   [ $# -eq 0 ] || die "stop takes no options besides --instance"
   command -v limactl >/dev/null || die "Lima is not installed: brew install lima"
   vm_lookup
@@ -2531,6 +2694,16 @@ cmd_stop() {
   limactl stop "$INSTANCE" </dev/null ||
     die "could not stop VM ${INSTANCE} (Lima failed; docs/runbook.md, \"Failure modes\")"
   echo "VM ${INSTANCE}: Stopped"
+}
+
+cmd_start() {
+  [ $# -eq 0 ] || die "start takes no options besides --instance"
+  vm_dispatch start start_single
+}
+
+cmd_stop() {
+  [ $# -eq 0 ] || die "stop takes no options besides --instance"
+  vm_dispatch stop stop_single
 }
 
 # ── diagnose ────────────────────────────────────────────────────────────────
@@ -2862,10 +3035,41 @@ dg_collect_group() {
 # checks and is not a problem, as in preflight.
 dg_collect_prerequisites() {
   local i
+  # In a run over several VMs the prerequisites are collected and printed once,
+  # by the parent: they do not differ per instance (#182).
+  [ "${HOMEFIELD_DIAGNOSE_SKIP_PREREQS:-}" != 1 ] || return 0
   preflight_collect
   for ((i = 0; i < ${#PF_NAME[@]}; i++)); do
     [ "${PF_LEVEL[i]}" != fail ] || dg_problem "prerequisite:${PF_NAME[i]}" "${PF_MSG[i]}" ""
   done
+}
+
+# dg_render_prereqs: the Prerequisites section, between two blank lines as in
+# the single-VM report; a multi-VM run prints it once before its VM blocks.
+dg_render_prereqs() {
+  local i n=${#PF_NAME[@]}
+  echo ""
+  echo "Prerequisites:"
+  for ((i = 0; i < n; i++)); do
+    case "${PF_LEVEL[i]}" in
+      ok) printf '  - %s%-6s%s%s\n' "$(hf_color 1)" OK "$(hf_color 0)" "${PF_MSG[i]}" ;;
+      warn) printf '  - %s%-6s%s%s\n' "$(hf_color 2)" WARN "$(hf_color 0)" "${PF_MSG[i]}" ;;
+      *) printf '  - %s%-6s%s%s\n' "$(hf_color 3)" FAIL "$(hf_color 0)" "${PF_MSG[i]}" ;;
+    esac
+  done
+  echo ""
+}
+
+# dg_json_prereqs: the prerequisites array alone, for both JSON forms.
+dg_json_prereqs() {
+  local i n=${#PF_NAME[@]} first=1
+  printf '['
+  for ((i = 0; i < n; i++)); do
+    [ "$first" = 1 ] || printf ','
+    first=0
+    printf '\n    {"name": %s, "status": %s, "message": %s}' "$(json_str "${PF_NAME[i]}")" "$(json_str "${PF_LEVEL[i]}")" "$(json_str "${PF_MSG[i]}")"
+  done
+  printf '\n  ]'
 }
 
 # dg_gh_text: the "On GitHub" line.
@@ -2972,17 +3176,7 @@ dg_render_human() {
       ;;
     *) echo "  - Group: skipped (${DG_GROUP_WHY:-${why}})" ;;
   esac
-  echo ""
-  echo "Prerequisites:"
-  n=${#PF_NAME[@]}
-  for ((i = 0; i < n; i++)); do
-    case "${PF_LEVEL[i]}" in
-      ok) printf '  - %s%-6s%s%s\n' "$(hf_color 1)" OK "$(hf_color 0)" "${PF_MSG[i]}" ;;
-      warn) printf '  - %s%-6s%s%s\n' "$(hf_color 2)" WARN "$(hf_color 0)" "${PF_MSG[i]}" ;;
-      *) printf '  - %s%-6s%s%s\n' "$(hf_color 3)" FAIL "$(hf_color 0)" "${PF_MSG[i]}" ;;
-    esac
-  done
-  echo ""
+  [ "${HOMEFIELD_DIAGNOSE_SKIP_PREREQS:-}" = 1 ] || dg_render_prereqs
   n=${#DG_P_MSG[@]}
   if [ "$n" -eq 0 ]; then
     if [ "${#DG_WARN[@]}" -eq 0 ]; then
@@ -3044,15 +3238,11 @@ dg_render_json() {
   if [ "$DG_GROUP_VIS" = selected ] && [ "$DG_GROUP" = checked ]; then json_lines "$DG_REPOS"; else printf null; fi
   printf ', "detail": %s}\n' "$(json_nstr "$DG_GROUP_WHY")"
   printf '  },\n'
-  printf '  "prerequisites": ['
-  n=${#PF_NAME[@]}
-  first=1
-  for ((i = 0; i < n; i++)); do
-    [ "$first" = 1 ] || printf ','
-    first=0
-    printf '\n    {"name": %s, "status": %s, "message": %s}' "$(json_str "${PF_NAME[i]}")" "$(json_str "${PF_LEVEL[i]}")" "$(json_str "${PF_MSG[i]}")"
-  done
-  printf '\n  ],\n'
+  if [ "${HOMEFIELD_DIAGNOSE_SKIP_PREREQS:-}" != 1 ]; then
+    printf '  "prerequisites": '
+    dg_json_prereqs
+    printf ',\n'
+  fi
   printf '  "problems": ['
   n=${#DG_P_MSG[@]}
   first=1
@@ -3082,7 +3272,9 @@ dg_render_json() {
   printf ']\n}\n'
 }
 
-cmd_diagnose() {
+# diagnose_single: one VM's report, prerequisites included; cmd_diagnose runs it
+# for every VM by default and prints the prerequisites once instead.
+diagnose_single() {
   local json=0
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -3096,6 +3288,94 @@ cmd_diagnose() {
   dg_collect_group
   if [ "$json" = 1 ]; then dg_render_json; else dg_render_human; fi
   [ "${#DG_P_MSG[@]}" -eq 0 ]
+}
+
+# diagnose_many <names> <json>: every VM on this Mac, each its own report as
+# its own process (so one cannot affect the next), with the prerequisites
+# collected and printed once because they do not differ per instance. The JSON
+# form wraps the single-VM objects: instances, healthy, prerequisites, vms.
+diagnose_many() {
+  local names="$1" json="$2" name rc=0 first=1 i fails=0 out child_rc=0
+  preflight_collect
+  for ((i = 0; i < ${#PF_NAME[@]}; i++)); do
+    [ "${PF_LEVEL[i]}" != fail ] || fails=$((fails + 1))
+  done
+  if [ "$json" = 1 ]; then
+    printf '{\n'
+    printf '  "instances": ['
+    first=1
+    while IFS= read -r name; do
+      [ -n "$name" ] || continue
+      [ "$first" = 1 ] || printf ', '
+      first=0
+      json_str "$name"
+    done <<<"$names"
+    printf '],\n'
+    # healthy needs every run's answer, so collect their objects first.
+    local vms="" sep=""
+    while IFS= read -r name; do
+      [ -n "$name" ] || continue
+      child_rc=0
+      out="$(HOMEFIELD_DIAGNOSE_SKIP_PREREQS=1 instance_command "$name" diagnose --json)" || child_rc=$?
+      [ "$child_rc" = 0 ] || rc=1
+      vms="${vms}${sep}${out}"
+      sep=",
+"
+    done <<<"$names"
+    if [ "$fails" != 0 ]; then rc=1; fi
+    printf '  "healthy": %s,\n' "$([ "$rc" = 0 ] && echo true || echo false)"
+    printf '  "prerequisites": '
+    dg_json_prereqs
+    printf ',\n'
+    printf '  "vms": [\n%s\n  ]\n}\n' "$vms"
+    return "$rc"
+  fi
+  dg_render_prereqs
+  first=1
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    [ "$first" = 1 ] || echo ""
+    first=0
+    HOMEFIELD_DIAGNOSE_SKIP_PREREQS=1 instance_command "$name" diagnose || rc=1
+  done <<<"$names"
+  if [ "$fails" != 0 ]; then
+    echo "homefield: ${fails} prerequisite check(s) failed above; they affect every VM on this Mac." >&2
+    rc=1
+  fi
+  return "$rc"
+}
+
+cmd_diagnose() {
+  local json=0 opts=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --json) json=1; opts+=(--json); shift ;;
+      *) die "diagnose: unknown option $1 (see bin/homefield help)" ;;
+    esac
+  done
+  local list="" name n=0
+  if [ "$EXPLICIT_INSTANCE" = 0 ] && list="$(vm_instances)"; then
+    while IFS= read -r name; do
+      [ -z "$name" ] || n=$((n + 1))
+    done <<<"$list"
+    case "$n" in
+      0)
+        diagnose_single "${opts[@]+"${opts[@]}"}"
+        return
+        ;;
+      1)
+        while IFS= read -r name; do [ -z "$name" ] || break; done <<<"$list"
+        INSTANCE="$name"
+        diagnose_single "${opts[@]+"${opts[@]}"}"
+        return
+        ;;
+    esac
+    diagnose_many "$list" "$json"
+    return
+  fi
+  # Explicit --instance, or a Lima that cannot be asked: the single report,
+  # whose own messages stand (and include the prerequisites).
+  diagnose_single "${opts[@]+"${opts[@]}"}"
 }
 
 # deregister_script: what uninstall runs in the guest, as root, with the remove
@@ -3170,6 +3450,7 @@ cmd_uninstall() {
       *) die "uninstall: unknown option $1 (see bin/homefield help)" ;;
     esac
   done
+  refuse_unnamed_vm uninstall
   check_host
   local status
   vm_lookup
@@ -3399,6 +3680,7 @@ cmd_reset() {
       *) die "reset: unknown option $1 (see bin/homefield help)" ;;
     esac
   done
+  refuse_unnamed_vm reset
   check_host
   local vm wrappers="" dir="" plan=() line
   # Not vm_lookup: a VM Lima cannot describe is the usual half-built one, and
@@ -4872,7 +5154,8 @@ END {
   printf "\nVM memory %d MiB. Over %d minutes: average %d MiB, highest minute %d MiB (%d%%) on %s at %s, %d out-of-memory kills.\n", total, tn, tsum / tn, tpeak, tpeak * 100 / total, tday, tat, allOom
 }'
 
-cmd_memory() {
+# memory_single: one VM's table; vm_dispatch runs it for every VM by default.
+memory_single() {
   local days=7 cutoff rows rc cutoff_epoch
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -4886,6 +5169,8 @@ cmd_memory() {
   check_host
   vm_lookup
   [ "$VM_STATUS" = "Running" ] || die "memory: VM ${INSTANCE} is not running"
+  # The table has no instance in it, so a run over several VMs heads its block.
+  [ "${HOMEFIELD_ONE_OF_MANY:-}" != 1 ] || echo "VM ${INSTANCE}: Running"
   # BSD date, as on macOS: today minus (days - 1), so --days 1 is today.
   cutoff="$(date -v-"$((days - 1))"d +%F)"
   rows="$(guest sh -c 'cat /var/log/homefield/memwatch-*.csv 2>/dev/null; true')" || exit 1
@@ -4898,6 +5183,26 @@ cmd_memory() {
   printf '%s\n' "$rows" | awk -v cutoff="$cutoff" -v cutoff_epoch="$cutoff_epoch" "$MEMORY_AWK" || rc=$?
   [ "$rc" -ne 3 ] || die "memory: no samples since ${cutoff}"
   [ "$rc" -eq 0 ] || exit "$rc"
+}
+
+cmd_memory() {
+  # The options are validated once here, so a bad one fails before any VM is
+  # asked and does not repeat for each of them (#182).
+  local days=7 opts=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --days)
+        days="${2:?--days needs a value}"
+        opts+=("--days" "${2}")
+        shift 2
+        ;;
+      *) die "memory: unknown option $1 (see bin/homefield help)" ;;
+    esac
+  done
+  if ! [[ "$days" =~ ^[0-9]+$ ]] || [ "$days" -lt 1 ]; then
+    die "memory: --days must be a positive number"
+  fi
+  vm_dispatch memory memory_single "${opts[@]+"${opts[@]}"}"
 }
 
 cmd_report() {
@@ -5046,14 +5351,18 @@ cmd_version() {
 # ── Main ────────────────────────────────────────────────────────────────────
 # --instance may come before or after the command.
 main() {
-  local cmd="" rest=() color_opt=""
+  local cmd="" rest=()
   while [ $# -gt 0 ]; do
     case "$1" in
-      --instance) INSTANCE="${2:?--instance needs a value}"; shift 2 ;;
+      --instance)
+        INSTANCE="${2:?--instance needs a value}"
+        EXPLICIT_INSTANCE=1
+        shift 2
+        ;;
       # --color is global, accepted before or after the command, and never
       # reaches a command's own parser: the emitters read HF_ANSI_OFF, which
       # color_init sets before any output.
-      --color=*) color_opt="$1"; shift ;;
+      --color=*) COLOR_ARG="$1"; shift ;;
       *)
         if [ -z "$cmd" ]; then cmd="$1"; else rest+=("$1"); fi
         shift
@@ -5061,7 +5370,7 @@ main() {
     esac
   done
   [ -n "$cmd" ] || { usage >&2; exit 1; }
-  color_init ${color_opt:+"$color_opt"} "$cmd" "$@"
+  color_init ${COLOR_ARG:+"$COLOR_ARG"} "$cmd" "$@"
   # Only the commands that act on the VM: preflight, route, adopt, report and
   # version never use it, so a stale HOMEFIELD_INSTANCE does not stop them.
   case "$cmd" in setup | install | upgrade | status | start | stop | diagnose | uninstall | reset | memory) check_instance ;; esac

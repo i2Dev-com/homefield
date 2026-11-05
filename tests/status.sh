@@ -22,6 +22,15 @@ cat >"$work/harness.sh" <<EOF
 HOMEFIELD_SOURCE_ONLY=1
 . "$ROOT/bin/homefield"
 command() { return 0; }
+# The VMs this Mac has (INSTANCES, default homefield), so the suite never reads
+# the real Lima list. One VM keeps cmd_status on its single-instance path.
+vm_instances() { printf '%b\n' "\${INSTANCES-homefield}"; }
+instance_command() {
+  local name="\$1"
+  shift
+  echo "VM \${name}: Running (\$*)"
+  return "\${CHILD_RC:-0}"
+}
 vm_status() { echo Running; }
 registered() { return \${REG_RC:-0}; }
 job_running() { return \${JOB_RC:-1}; }
@@ -155,5 +164,17 @@ record "not registered: exits 0 and says so" "0/yes/no" "$rc/$(has "$out" 'runne
 status REG_RC=2
 record "the VM cannot be asked: exits 1" "1" "$rc"
 record "...says unknown, not that it is unregistered, and stops there" "yes/no/no" "$(has "$out" 'runner: unknown')/$(has "$out" 'not registered')/$(has "$out" 'service:')"
+
+# Every VM on this Mac by default (#182): one block per instance, each its own
+# run; a failure in any makes the command exit 1 but never hides the others.
+echo "every VM on this Mac:"
+status INSTANCES='codesamplez\nhomefield'
+record "two VMs: both reported" "yes/yes" "$(has "$out" 'VM codesamplez: Running')/$(has "$out" 'VM homefield: Running')"
+record "...one blank line between the blocks, and no other" "1" "$(printf '%s\n' "$out" | grep -c '^$')"
+record "...each run gets its instance as --instance" "yes/yes" \
+  "$(has "$out" '(status)')/$(has "$out" 'VM homefield: Running (status)')"
+record "...exits 0 when every VM is fine" "0" "$rc"
+status INSTANCES='codesamplez\nhomefield' CHILD_RC=1
+record "one run fails: the other still reported, exit 1" "1/yes" "$rc/$(has "$out" 'VM codesamplez: Running')"
 
 summary

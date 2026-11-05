@@ -9,6 +9,41 @@ fail, such as a new guard in the routing expression, bumps the minor version
 (0.1 to 0.2). Compatible changes bump the patch. Merged changes wait on
 `main`, under *Unreleased*, until a release is cut.
 
+## Unreleased
+
+The next release bumps the minor version to 0.5.0: commands that act on a VM
+now cover every HomeField VM on this Mac by default, so their output — and what
+an unqualified command acts on — changes for anyone with more than one.
+
+### Changed
+
+- Commands that act on a VM no longer report only the `homefield` instance when
+  this Mac runs several (#182): `status`, `upgrade`, `start`, `stop`,
+  `diagnose` and `memory` cover every HomeField VM, in Lima's order with one
+  block per instance separated by a blank line, each run as its own process so
+  one failure never skips or changes the next. The exit status is nonzero when
+  any of them failed; the single-VM output stays byte for byte what it was.
+  `--instance NAME` (or `HOMEFIELD_INSTANCE`) narrows a command to that VM, as
+  before; `install` and `setup` still create/register exactly one. A Mac whose
+  only VM is under another name now reports that one instead of "VM homefield:
+  not created". Instances are found by the marker line every HomeField VM's
+  stored `~/.lima/<name>/lima.yaml` starts with (copied from `vm/lima.yaml`
+  since v0.1.0), so other Lima VMs on a dev Mac stay out; a config edited to
+  lose that header is only seen when named, and the default instance counts even
+  without it because `install` creates it under that name.
+- `uninstall` and `reset` never guess which VM was meant (#182): with more than
+  one HomeField VM on this Mac — or its only one under a non-default name —
+  they list what is there and stop until `--instance NAME` names the target,
+  instead of deleting `homefield`. Nothing to undo, or exactly the default
+  instance, behaves as before.
+- `diagnose --json` with several VMs wraps the per-VM reports:
+  `{"instances": [...], "healthy": bool, "prerequisites": [...], "vms":
+  [<single-VM report>, ...]}`, each entry exactly what one VM's report holds
+  minus its own prerequisites. The human form prints the prerequisites once,
+  before the VM blocks. A failed prerequisite fails every run and says so.
+- Options are validated once, before any VM is asked: `memory --days`,
+  `upgrade`'s options and its presets fail without a per-instance repeat.
+
 ## v0.4.2 (2026-11-05)
 
 Bumps the patch from v0.4.1: both entries are compatible. The presets are

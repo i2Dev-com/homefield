@@ -7,9 +7,10 @@ GitHub-hosted runners; GitHub is still where CI is triggered, where logs live
 and where checks report. Which jobs a repository routes is documented in that
 repository. To add one, follow [`adopting.md`](adopting.md).
 
-Commands below use the default VM name, `homefield`. If you installed with
-`--instance NAME`, use that name instead (for `bin/homefield`, pass
-`--instance NAME`). `<org>`, `<owner>` and `<repo>` are yours.
+Commands below act on every HomeField VM on the Mac by default, or on one when
+you pass `--instance NAME` (or set `HOMEFIELD_INSTANCE`) — for a first install,
+that is also how you pick its instance name (`homefield` unless given).
+`<org>`, `<owner>` and `<repo>` are yours.
 
 ---
 
@@ -541,8 +542,9 @@ runner group and the prerequisites in one read-only pass, and ends with
 never starts the VM or changes anything, and it skips the checks inside a
 stopped VM (saying so). It exits 0 when healthy and 1 on any problem;
 `bin/homefield diagnose --json` prints only JSON on stdout, with a `healthy`
-boolean and a `problems` array, for scripts. Add `--instance <name>` for a
-non-default VM.
+boolean and a `problems` array, for scripts; with several VMs it wraps them as
+`instances`, `healthy`, `prerequisites` (once) and `vms`. Add `--instance <name>`
+for one VM.
 
 | Symptom | Cause | What happens | Recovery |
 |---|---|---|---|
@@ -718,9 +720,12 @@ an organization's "Repository to route first" question. Answering yes runs
 It is named `<local hostname>-homefield-2`. An instance name follows Lima's
 rule (letters and digits, with a single `.`, `_` or `-` between them, at most
 76 characters, not ending in `.yml` or `.yaml`), and homefield refuses any
-other. `status`, `upgrade`, `memory` and
-`uninstall` act on one instance (`--instance`, or `HOMEFIELD_INSTANCE`), so run
-them for each; `route` and `adopt` act on repositories and cover every runner.
+other. `status`, `upgrade`, `start`, `stop`, `diagnose` and `memory` cover every
+HomeField VM on the Mac by default — one block per instance, each run as its own
+process, exiting nonzero if any failed; add `--instance <name>` (or set
+`HOMEFIELD_INSTANCE`) to narrow them to one. `uninstall` and `reset` never guess:
+with more than one VM they refuse until `--instance` names the one to remove.
+`route` and `adopt` act on repositories and cover every runner.
 If the first runner was installed with a `--label`, `--group` or `--packages`
 other than the defaults, pass the same ones.
 
@@ -818,9 +823,10 @@ stored in the VM, so pass `install` the same `--label`, `--group` and `--name`
 as the first time if they were not the defaults.
 
 **Upgrade them.** On each Mac: `homefield version`, the README's one-liner
-again, then `homefield upgrade --instance <name>` for each VM on it.
-`upgrade` refuses while a job is running and takes the runner down until it is
-done, so do one runner at a time; the others keep taking jobs. Runners on
+again, then `homefield upgrade` — it covers every VM there in turn (pass
+`--instance <name>` for just one). It takes a runner down until that VM is done,
+so a VM with a job running is refused and skipped; the others keep taking jobs.
+Runners on
 different versions work together, because each takes jobs on its own and the
 routing guard lives in the repositories' workflows. But a fix to the VM only
 reaches a runner when `upgrade` runs on it (the job-started hook, #54, is one),
@@ -910,8 +916,8 @@ registered, whether a job is running, or whether it has a service, `uninstall`
 and `upgrade` stop before anything is stopped or deleted, `--force` included,
 and `install` stops too; `status` says "runner: unknown" or "job: unknown" and
 exits 1. The same holds when Lima itself cannot say whether the VM exists
-(`limactl list` fails): the commands stop with "could not ask Lima", and
-`status` says "VM ...: unknown".
+(`limactl list` fails): the commands fall back to reporting just `homefield`
+and say it cannot ask Lima, as `status` does with "VM homefield: unknown".
 Check that the VM is running (`limactl list`) and run the command again.
 
 If the VM is already gone, delete the stale registration on the runners page.
@@ -922,7 +928,8 @@ If the VM is already gone, delete the stale registration on the runners page.
 never registered, or the runner group was created and nothing after it
 worked. `uninstall` needs a VM that exists, and never touches the runner
 group. `bin/homefield reset` rolls back whatever there is, complete or half
-finished (add `--instance <name>` for a non-default VM):
+finished; with more than one HomeField VM on the Mac it refuses until
+`--instance <name>` names the target (as does `uninstall`):
 
 ```bash
 bin/homefield reset                  # asks first, after listing what it will do
