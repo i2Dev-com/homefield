@@ -13,9 +13,66 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 The next release bumps the minor version to 0.5.0: commands that act on a VM
 now cover every HomeField VM on this Mac by default, so their output — and what
-an unqualified command acts on — changes for anyone with more than one.
+an unqualified command acts on — changes for anyone with more than one. The
+routing guard also gains two refusals (below): a workflow that passed an older
+release through a tagged `runs-on` key or a remote reusable-workflow call
+fails from this release on.
+
+### Security
+
+- `routing-guard` fails a `runs-on` key that carries a tag or an anchor —
+  `!!str runs-on: self-hosted`, `&a runs-on: self-hosted`, `&a "runs-on":
+  self-hosted` are valid YAML whose key is `runs-on`, and a workflow written
+  that way passed every earlier release with an unguarded job. They now fail
+  with the unreadable-syntax message, like the quoted-key spellings
+  (GHSA-4795-jpw2-47v2) already do.
+- `routing-guard` refuses a job that calls a reusable workflow in another
+  repository (`uses: owner/repo/.github/workflows/wf.yml@v1`): the called
+  file is not in this repository to scan, and its jobs evaluate `runs-on` in
+  the caller's context, so a remote workflow with `runs-on: [self-hosted]`
+  reached the runner with none of the guards. A local call
+  (`./.github/workflows/<file>`) keeps passing — the called file is scanned
+  like any other. A step-level `uses:` (`actions/checkout@v4`) is not a call
+  and is not affected.
 
 ### Changed
+
+- The guard no longer fails a workflow whose `strategy.matrix` has a
+  dimension named `runs-on`: the dimension is data, and the job's own
+  `runs-on` line — the only line that routes — is checked as before. A
+  `jobs:` line carrying a value anchor (`jobs: &jobs`) is accepted, where it
+  was misread as inline jobs.
+- The hosted preset's AWS CLI hook pins the version and the zip's SHA256 for
+  each architecture (#187), as `provision.sh` pins the runner: the one
+  root-executed download in the provisioning layer that had neither. A
+  provision now installs exactly 2.39.4 from the versioned URL, skips when
+  that version is already installed, and refuses a download whose digest does
+  not match — the unversioned "latest" URL made every provision install
+  whatever AWS had published that day. Bumping means the version and both
+  digests together, documented in the hook.
+
+### Fixed
+
+- Three failure paths in `bin/homefield` ended the command with no message
+  (#184): `adopt --setup` died silently when the downloaded workflows could
+  not be read (the `${mode:-simple}` fallback on the next line was never
+  reached), and the workflow-name quoting in `adopt` and `adopt --setup`, and
+  the memory-log read in `memory`, ended the run with a bare `exit 1` past
+  `die`. Each now prints the tool, the state and the fix, like every
+  neighboring failure.
+
+### Changed
+
+- CI lints the Python tools (#191): `ruff check` (pinned 0.17.3, the wheel's
+  sha256 verified before it is installed, as actionlint and shellcheck are)
+  plus `python3 -m py_compile` over `tools/` and `routing-guard/` — the ~2,000
+  lines of Python the repo's CI never linted. `ruff.toml` pins target-version
+  py39 (the tools run on the host's `python3`, which macOS ships as 3.9) and
+  turns TRY004 off (the ValueError sites are input validation the callers
+  catch as ValueError). Two files that carried shebangs without the executable
+  bit are now `+x`. And shellcheck is pinned (0.11.0, asset digest verified)
+  where it floated with the runner image — the drift actionlint's pin already
+  prevented for it.
 
 - Commands that act on a VM no longer report only the `homefield` instance when
   this Mac runs several (#182): `status`, `upgrade`, `start`, `stop`,

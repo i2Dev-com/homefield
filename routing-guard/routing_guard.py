@@ -46,9 +46,14 @@ on one line, or keep the job on a hosted image name.
 
 The file is read line by line, with no YAML parser, so it can only vouch for
 the plain block style. Valid YAML that says the same thing another way (a
-quoted `"runs-on"` key, a job written as a `{...}` mapping, a `<<` merge key,
-`? runs-on`, a top-level key the scan cannot read) would pass unseen. Those
-fail too, with a message that says how to write them plainly.
+quoted `"runs-on"` key, a `runs-on` key carrying a tag or anchor, a job
+written as a `{...}` mapping, a `<<` merge key, `? runs-on`, a top-level key
+the scan cannot read) would pass unseen. Those fail too, with a message that
+says how to write them plainly. A job that calls a reusable workflow in
+another repository is refused as well: the called workflow's jobs evaluate
+`runs-on` in the caller's context, so its routing cannot be checked from this
+repository — call a local workflow, which this check then reads like any
+other.
 
 The set of opted-in jobs must equal --jobs exactly, so routing a job to the
 local runner is always a deliberate, reviewed change.
@@ -222,17 +227,32 @@ def guards(events: list, dependabot: str, fallback: str) -> list:
 
 # This check reads workflows line by line, with no YAML parser, so it can only
 # vouch for the plain block style GitHub's own examples use. Valid YAML that
-# says the same thing another way (a quoted `"runs-on"` key, a job written as a
-# `{...}` mapping, a `<<` merge key, `? runs-on`) would pass unseen, so these
-# fail instead, and the message says how to write it.
+# says the same thing another way (a quoted `"runs-on"` key, a `runs-on` key
+# with a tag or anchor, a job written as a `{...}` mapping, a `<<` merge key,
+# `? runs-on`) would pass unseen, so these fail instead, and the message says
+# how to write it.
 PLAIN_KEY = re.compile(r"""^(['"]?)[A-Za-z0-9_-]+\1:(\s|$)""")
 UNREAD = (
     (re.compile(r"""^\s*(-\s+)?["']runs-on["']\s*:"""), "a quoted runs-on key"),
     # A line that opens a {...} or [...] and names runs-on. A plain job body
     # never starts a line with a bracket.
     (re.compile(r"""^\s*[{,\[].*runs-on"""), "runs-on inside a {...} mapping"),
-    (re.compile(r"""^\s*\?(\s|$)"""), "a ? complex key"),
     (re.compile(r"""^\s*runs-on\s+:"""), "a space before the colon of runs-on"),
+    # A key with a tag or anchor (`!!str runs-on:`, `&a runs-on:`, `&a "runs-on":`)
+    # parses with runs-on as the key, so the plain-key scan below never sees it.
+    (re.compile(r"""^\s*[&!]\S*\s+["']?runs-on["']?\s*:"""), "a tagged or anchored runs-on key"),
+    # The same spellings of a `uses` key: a job-level call this scan cannot
+    # read is refused, remote calls included (a quoted `"uses":`, a tag or
+    # anchor on the key, a space before the colon).
+    (re.compile(r"""^\s*(-\s+)?["']uses["']\s*:"""), "a quoted uses key"),
+    (re.compile(r"""^\s*uses\s+:"""), "a space before the colon of uses"),
+    (re.compile(r"""^\s*[&!]\S*\s+["']?uses["']?\s*:"""), "a tagged or anchored uses key"),
+    # A line that is only a node property — an anchor, a tag, or both
+    # (`&body` alone under a job id): the job's real keys are indented under
+    # it, and taking the property's depth for theirs would leave a deeper
+    # runs-on unchecked.
+    (re.compile(r"""^\s*[&!]\S*(\s+[&!]\S*)*\s*$"""), "a standalone anchor or tag"),
+    (re.compile(r"""^\s*\?(\s|$)"""), "a ? complex key"),
     (re.compile(r"""^\s*["']?<<["']?\s*:"""), "a << merge key"),
     (re.compile(r"""^\s*-?\s*"[^"]*\\[^"]*"\s*:"""), "a double-quoted key with an escape"),
     # A key whose quote is still open at the end of the line: a double-quoted
@@ -354,6 +374,7 @@ def main() -> int:
         job = None
         in_jobs = False
         job_indent = None
+        body_indent = None
         scalar_col = None
         path = os.path.join(args.workflows_dir, name)
         with open(path) as fh:
@@ -386,23 +407,33 @@ def main() -> int:
                 # quoted key missed below would credit its runs-on to the
                 # previous job.
                 top = re.match(r"""^(['"]?)([A-Za-z0-9_-]+)\1:""", code)
-                if code.strip() and not code[0].isspace():
-                    # Every top-level line is a plain `key:`. Anything else
-                    # (`jobs :`, `? jobs`, a flow mapping's closing brace)
-                    # could hide the jobs from this scan.
-                    if code.strip() not in ("---", "...") and not PLAIN_KEY.match(code):
-                        fail(f"{name}:{lineno}: unreadable top-level line; {HOW}")
-                        in_jobs = False
-                        job = None
-                        job_indent = None
-                        continue
+# Every top-level line is a plain `key:`. Anything else
+                # (`jobs :`, `? jobs`, a flow mapping's closing brace, the
+                # document markers) could hide the jobs from this scan.
+                if (
+                    code.strip()
+                    and not code[0].isspace()
+                    and code.strip() not in ("---", "...")
+                    and not PLAIN_KEY.match(code)
+                ):
+                    fail(f"{name}:{lineno}: unreadable top-level line; {HOW}")
+                    in_jobs = False
+                    job = None
+                    job_indent = None
+                    body_indent = None
+                    continue
                 if top:
                     in_jobs = top.group(2) == "jobs"
                     job = None
                     job_indent = None
-                    if in_jobs and code[top.end():].strip():
+                    body_indent = None
+                    # `jobs: &jobs` — the value's anchor, not inline jobs. A
+                    # tag (`jobs: !!mapping`) is the same shape.
+                    rest = re.sub(r"^[&!]\S*(\s+|$)", "", code[top.end():].strip())
+                    if in_jobs and rest:
                         fail(f"{name}:{lineno}: jobs: has its jobs on the same line; {HOW}")
                 m = re.match(r"""^(\s*)(['"]?)([A-Za-z0-9_-]+)\2:\s*$""", code)
+                body_key = False
                 if in_jobs and code.strip() and not top and not in_scalar:
                     indent = len(code) - len(code.lstrip())
                     if job_indent is None:
@@ -412,26 +443,61 @@ def main() -> int:
                     if indent == job_indent:
                         if m:
                             job = m.group(3)
+                            body_indent = None
                         else:
                             job = None
                             fail(f"{name}:{lineno}: unreadable job id; {HOW}")
                             continue
                     elif indent < job_indent:
                         fail(f"{name}:{lineno}: unreadable indentation under jobs; {HOW}")
+                    else:
+                        # The job's own keys (runs-on, needs, steps, uses, ...)
+                        # sit at one depth; keys deeper than that belong to
+                        # them (a step, a matrix dimension) and are data, not
+                        # routing.
+                        if body_indent is None:
+                            body_indent = indent
+                        body_key = indent == body_indent
                 where = f"{name}:{lineno} (job {job})"
                 m = re.match(r"^\s*runs-on:\s*(.*?)\s*$", code)
                 # Only runs-on lines inside `jobs:` matter: a key named
                 # `runs-on:` under `on:` (a workflow_dispatch input, say) is
-                # not routing. Every one is checked against the allowlist
-                # below, and a multi-line runs-on already fails on its first
-                # line, so the label appearing elsewhere (a step name, a docs
-                # URL in a run string) is not routing.
+                # not routing. Every one at the job's own key depth is checked
+                # against the allowlist below, and a multi-line runs-on
+                # already fails on its first line, so the label appearing
+                # elsewhere (a step name, a docs URL in a run string) is not
+                # routing. A deeper `runs-on:` is a matrix dimension (data the
+                # job's own runs-on would have to reference, and that
+                # reference is not on the allowlist), so it is not checked.
                 if in_jobs and not m and not in_scalar:
                     for pattern, what in UNREAD:
                         if pattern.search(code):
                             fail(f"{where}: {what} is not read by this check; {HOW}")
                             break
-                if not in_jobs or not m:
+                # A job-level `uses:` that calls a reusable workflow in
+                # another repository cannot be checked: the called file is not
+                # in this repository, and its jobs evaluate runs-on in the
+                # caller's context. A local call (`./.github/workflows/...`)
+                # is scanned like any other file here. A step-level `uses:`
+                # (actions/checkout@v4) sits deeper, under `steps:`.
+                m_uses = re.match(r"^\s*uses:\s*(.*?)\s*$", code)
+                if (
+                    in_jobs
+                    and m_uses
+                    and not in_scalar
+                    and body_key
+                    and not re.match(r"""^['"]?\./""", m_uses.group(1))
+                ):
+                    fail(
+                        f"{where}: a job calling a reusable workflow in"
+                        " another repository is refused: the called"
+                        " workflow's jobs evaluate runs-on in this"
+                        " repository's context, so its routing cannot be"
+                        " checked; call a local workflow"
+                        " (./.github/workflows/<file>) that carries the"
+                        " routing expression"
+                    )
+                if not in_jobs or not m or not body_key:
                     continue
                 value = m.group(1)
                 if HOSTED.match(value):

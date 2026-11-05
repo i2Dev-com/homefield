@@ -1,0 +1,10 @@
+# Ruff's default rules, for tools/ and routing-guard/. The tools run on the
+# host's `python3`, which macOS ships as 3.9, so target-version pins that:
+# suggestions that need a newer interpreter (itertools.pairwise, dt.UTC) then
+# do not fire. TRY004 is off: its sites raise ValueError on purpose — input
+# validation the callers catch as ValueError to print a one-line refusal —
+# and a TypeError there would change that contract.
+target-version = "py39"
+
+[lint]
+ignore = ["TRY004"]
