@@ -2214,6 +2214,9 @@ cmd_setup() {
 # plain --packages replaces the saved list (and then says so).
 PRESETS="$ROOT/vm/presets"
 GUEST_HOOKS="/etc/homefield/provision.d"
+# The manifest of the preset hooks this VM's provision.d got, one name per
+# line: what copy_preset_hooks prunes retired hooks against (#188).
+GUEST_MANIFEST="/etc/homefield/preset-hooks"
 
 # preset_list: the shipped presets, for messages.
 preset_list() {
@@ -2304,19 +2307,41 @@ merge_packages() {
 # Staged through a private directory (#185): each hook is installed by root
 # from the guest's /tmp, and a fixed name there is a live job's to pre-plant.
 copy_preset_hooks() {
-  local f base stage
+  local f base stage have removed="" names=""
   stage="$(guest_stage_dir)"
   trap 'guest_unstage "$stage"' RETURN
+  # The manifest from the last copy names what this VM's provision.d got from
+  # presets: a hook the current set no longer ships is removed, so a retired
+  # hook does not keep running as root on every provision run (#188).
+  have="$(guest_stdin sudo cat "$GUEST_MANIFEST" </dev/null 2>/dev/null || :)"
   for f in ${PRESET_HOOKS[@]+"${PRESET_HOOKS[@]}"}; do
     base="${f##*/}"
     limactl copy "$f" "${INSTANCE}:${stage}/${base}" </dev/null ||
       die "could not copy preset hook ${base} into VM ${INSTANCE}; nothing was stopped"
+    names="${names:+$names }$base"
+  done
+  for base in $have; do
+    # Only a plain file name of a hook this manifest installed: the manifest
+    # sits in the guest, so a tampered line must not become a root rm path.
+    [[ "$base" =~ ^[A-Za-z0-9._-]+$ ]] || continue
+    case " $names " in *" $base "*) ;; *) removed="${removed:+$removed }$base" ;; esac
   done
   for f in ${PRESET_HOOKS[@]+"${PRESET_HOOKS[@]}"}; do
     base="${f##*/}"
     guest_stdin sudo install -D -m 0755 "${stage}/${base}" "${GUEST_HOOKS}/${base}" </dev/null ||
       die "could not install preset hook ${base} in VM ${INSTANCE}; nothing was stopped"
   done
+  for base in $removed; do
+    guest_stdin sudo rm -f "${GUEST_HOOKS}/${base}" </dev/null ||
+      die "could not remove retired preset hook ${base} in VM ${INSTANCE}; nothing was stopped"
+    log "${INSTANCE}: removed preset hook ${base}; the preset no longer ships it"
+  done
+  # The manifest is what the next copy prunes against: the names this copy
+  # installed, one per line.
+  # shellcheck disable=SC2086  # unquoted: word splitting puts each name on its own line
+  printf '%s\n' $names >"$stage/preset-hooks"
+  guest_stdin sudo install -D -m 0644 "${stage}/preset-hooks" "$GUEST_MANIFEST" </dev/null ||
+    die "could not write the preset hook manifest in VM ${INSTANCE}; nothing was stopped"
   guest_unstage "$stage"
   trap - RETURN
 }

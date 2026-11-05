@@ -13,6 +13,14 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ### Fixed
 
+- Preset hooks are no longer add-only (#188): `copy_preset_hooks` writes a
+  manifest (`/etc/homefield/preset-hooks`, one name per line) of the hooks it
+  installed, and the next copy removes the ones the current preset set no
+  longer ships — a hook retired upstream had kept running as root on every
+  provision run of every VM that ever got it. A hand-added hook is never
+  touched (the manifest names only preset hooks), and a tampered manifest
+  line is skipped, not turned into a root `rm` path.
+
 - `route` no longer abandons the repositories after the one that failed
   (#186): a failed `CI_RUNNER` switch, a failed stuck-runs listing, a failed
   cancel, status read or re-run warns naming the repository, the state and

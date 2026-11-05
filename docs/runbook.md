@@ -410,8 +410,11 @@ has no `awscli`) and Node at the major `ubuntu-24.04` carries (`setup-node`
 still wins for a job that installs its own). Its packages join what is saved
 in `/etc/homefield/extra-packages`, and any `--packages` on the same command;
 only plain `--packages` replaces the list, and it warns when that drops names
-a preset installed; the preset's hooks stay, and are removed by hand only
-(`rm /etc/homefield/provision.d/<file>`, as for any hook). The hooks run on
+a preset installed; the preset's hooks stay, a hook the preset no longer
+ships is removed at the next copy (a manifest at
+`/etc/homefield/preset-hooks` names what the VM got), and a hook you added by
+hand is never touched (`rm /etc/homefield/provision.d/<file>`, as for any
+hook). The hooks run on
 every provisioning run, so what they installed survives later upgrades. They
 install whatever upstream serves at provision time (the hosted image rebuilds
 weekly), so anything version-critical still pins itself with a setup action or
