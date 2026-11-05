@@ -16,6 +16,7 @@ bash tests/loopback-probe.sh       # the #18 host-loopback probe: closed, open a
 bash tests/provision-recovery.sh   # provision.sh restarts a runner it stopped, when it fails
 bash tests/uninstall.sh            # `bin/homefield uninstall` gives the service back when removal fails
 bash tests/reset.sh                # `bin/homefield reset`: rolls back an install, guards the runner-group delete, `--remove-tool`
+bash tests/instances.sh            # every VM on this Mac by default: discovery, per-VM runs, uninstall/reset refusals
 bash tests/status.sh               # `bin/homefield status` reports on when the runner's settings can't be read, and whether GitHub lists the runner
 bash tests/diagnose.sh             # `bin/homefield diagnose [--json]`: the read-only report, its problems and fixes
 bash tests/memory-summary.sh       # `bin/homefield memory` summary

@@ -44,6 +44,7 @@ case "$1" in
     if [ -n "${LIMA_LIST_FAIL:-}" ]; then echo "limactl: list failed" >&2; exit 1; fi
     echo "other-vm Stopped"
     [ -z "${LIMA_STATUS:-}" ] || echo "homefield ${LIMA_STATUS}"
+    [ -z "${LIMA_SECOND:-}" ] || echo "${LIMA_SECOND} Running"
     ;;
   start | stop | create | delete | edit) echo "limactl stub: $1 must never be called by diagnose" >&2; exit 98 ;;
   shell)
@@ -496,5 +497,35 @@ guest_fs
 diag "${healthy[@]}" --
 record "diagnose piped: no ANSI anywhere" "no" \
   "$(printf '%s' "$out" | grep -qF "${esc}" && echo yes || echo no)"
+
+# Every VM on this Mac by default (#182): a second HomeField instance is found
+# through its stored lima.yaml's header, the prerequisites are printed once,
+# and each VM gets its own report as its own process.
+echo "every VM on this Mac:"
+mkdir -p "$home/.lima/codesamplez"
+printf '%s\n' '# Lima VM for the local GitHub Actions runner.' >"$home/.lima/codesamplez/lima.yaml"
+guest_fs
+diag "${healthy[@]}" LIMA_SECOND=codesamplez --
+record "two VMs: both reported" "yes/yes/no" "$(has "$out" 'VM homefield:')/$(has "$out" 'VM codesamplez:')/$(has "$out" 'other-vm')"
+record "...the prerequisites once, before the VM blocks" "1/first" \
+  "$(printf '%s\n' "$out" | grep -c 'Prerequisites:')/$(case "$(printf '%s\n' "$out" | awk '/^VM /{print NR; exit}')x" in x) echo none ;; *) printf '%s\n' "$out" | awk '/Prerequisites:/{p=NR} /^VM /{if (p && p < NR) print "first"; exit}' ;; esac)"
+record "...each VM's own summary, so two" "2" "$(printf '%s\n' "$out" | grep -c 'Summary: healthy.')"
+record "...exits 0 when both are fine" "0" "$rc"
+
+diag "${healthy[@]}" LIMA_SECOND=codesamplez -- --json
+record "--json: one object with the instances, prerequisites and vms keys" "yes/1/1" \
+  "$(has "$out" '"instances": ["homefield", "codesamplez"]')/$(printf '%s\n' "$out" | grep -cF '"prerequisites": ')/$(printf '%s\n' "$out" | grep -cF '"vms": [')"
+record "...one entry per VM, each a single-VM report without its own prerequisites key" "2/1" \
+  "$(printf '%s\n' "$out" | grep -cE '"instance": "(codesamplez|homefield)"')/$(printf '%s\n' "$out" | grep -cF '"prerequisites"')"
+record "...healthy, and it ends with the closing brace" "yes/yes" \
+  "$(has "$out" '"healthy": true')/$(case "$(printf '%s\n' "$out" | tail -n 1)" in \}) echo yes ;; *) echo no ;; esac)"
+
+# A prerequisite that fails is printed once and fails the command, while every
+# VM's own report still runs.
+guest_fs
+diag "${healthy[@]}" LIMA_SECOND=codesamplez FAKE_UNAME_S=Linux --
+record "a failed prerequisite: exit 1, said to affect every VM" "1/yes" \
+  "$rc/$(has "$err" 'prerequisite check(s) failed above')"
+record "...and both reports still printed" "yes/yes" "$(has "$out" 'VM homefield:')/$(has "$out" 'VM codesamplez:')"
 
 summary

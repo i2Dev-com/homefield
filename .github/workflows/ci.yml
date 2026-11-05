@@ -67,6 +67,9 @@ jobs:
       - name: homefield reset rolls back an install
         run: bash tests/reset.sh
 
+      - name: Every VM on this Mac by default
+        run: bash tests/instances.sh
+
       - name: homefield status without the runner's settings
         run: bash tests/status.sh
 
