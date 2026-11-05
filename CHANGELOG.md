@@ -42,9 +42,6 @@ fails from this release on.
   `runs-on` line — the only line that routes — is checked as before. A
   `jobs:` line carrying a value anchor (`jobs: &jobs`) is accepted, where it
   was misread as inline jobs.
-
-### Changed
-
 - The hosted preset's AWS CLI hook pins the version and the zip's SHA256 for
   each architecture (#187), as `provision.sh` pins the runner: the one
   root-executed download in the provisioning layer that had neither. A
