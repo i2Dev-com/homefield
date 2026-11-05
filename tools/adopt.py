@@ -79,7 +79,7 @@ import urllib.parse
 # The release the snippet adopt prints pins, and that docs/adopting.md and the
 # README tell consumers to pin; tests/adopt.sh checks that the docs still say
 # it. Bump it when a release is cut.
-RELEASE = "v0.4.1"
+RELEASE = "v0.4.2"
 ACTION_PATH = "i2Dev-com/homefield/routing-guard"
 ACTION = f"{ACTION_PATH}@{RELEASE}"
 DEFAULT_LABEL = "homefield-ci"
@@ -96,7 +96,7 @@ DEFAULT_MODE = "guards"
 # writes pins this copy's release (ACTION below), and the checker at a
 # release before this one has no mode input: it would fail the very workflows
 # setup writes, on their first pull request. So simple mode is refused while
-# RELEASE is below this threshold; at v0.4.1 it is above, so the refusal is
+# RELEASE is below this threshold; at v0.4.2 it is above, so the refusal is
 # lifted. The environment overrides the threshold for the test suites, which
 # exercise this checkout before the release exists.
 MODE_RELEASE = "v0.4.0"
