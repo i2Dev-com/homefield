@@ -11,6 +11,19 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ## Unreleased
 
+### Changed
+
+- The five guest helpers provision.sh used to carry as heredocs are
+  `vm/guest/` files now (#189): homefield-workspace-owner, the job-started
+  hook, homefield-cleanup, homefield-maintenance and homefield-memwatch are
+  individually reviewable, diffable and shellcheckable, and CI lints them.
+  `bin/homefield` stages the directory beside provision.sh; the uninstall
+  path still stages provision.sh alone, so `ensure-service` stays
+  self-contained. The two helpers the suites extracted from the heredocs are
+  read as files now, and the two most subtle ones — the cleanup's
+  workspace-age rule and the maintenance stop/trap/reboot dance — have a
+  suite of their own, `tests/guest-scripts.sh`.
+
 ### Fixed
 
 - The tools refuse malformed input with a message, not a traceback (#190):

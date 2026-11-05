@@ -67,6 +67,13 @@
 # uninstall copies this script in and runs that when deregistering fails.
 set -euo pipefail
 
+# The guest helpers this script installs live beside it (vm/guest/, staged by
+# bin/homefield next to provision.sh): each one reviewable, diffable and
+# lintable on its own. ensure-service must not need them — the
+# uninstall path stages this script alone — so the early exit below stays
+# above the first install.
+script_dir="$(cd "$(dirname "$0")" && pwd)"
+
 RUNNER_VERSION="2.338.0"
 RUNNER_SHA256="628b4a7258487b80c1d3c221095a7ded349f5ae0175fd3dfab708d07428f041b"
 RUNNER_URL="${RUNNER_URL:-}"
@@ -445,72 +452,9 @@ chown -R "$RUNNER_USER:$RUNNER_USER" "$RUNNER_HOME"
 # nothing new: the docker group already makes runner root-equivalent in the
 # guest. None of it needs the registration, so it runs before it: a failure
 # here must not leave a newly registered runner with no service (#83).
-cat > /usr/local/sbin/homefield-workspace-owner <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-# HOMEFIELD_RUNNER_HOME exists for tests/workspace-owner.sh; the hook sets none.
-runner_home="${HOMEFIELD_RUNNER_HOME:-/opt/actions-runner}"
-work="$runner_home/_work"
-
-relink() { # relink <bin dir> <name> <link target>
-  local dest="$1/$2"
-  # Only the artifact: a regular file, never a proper link or a missing name.
-  [ -f "$dest" ] && [ ! -L "$dest" ] || return 0
-  if cmp -s "$dest" "$1/$3"; then
-    ln -sf "$3" "$dest"
-    echo "homefield-workspace-owner: relinked $2 in $1 (the runner self-update flattened it, actions/runner#2094)"
-  else
-    echo "homefield-workspace-owner: $dest is a regular file, but not the flattened artifact; leaving it alone" >&2
-  fi
-}
-
-# externals is a real directory on a fresh install; the first self-update
-# turns it into a symlink to the versioned externals.<version> beside it.
-# Both spellings are swept, but never the same directory twice through the
-# symlink. node20 and node24 are today's copies; the glob takes any others.
-shopt -s nullglob
-for bin in "$runner_home"/externals*/node*/bin; do
-  case "$bin" in
-    "$runner_home"/externals/*) [ -L "$runner_home/externals" ] && continue ;;
-  esac
-  relink "$bin" npm ../lib/node_modules/npm/bin/npm-cli.js
-  relink "$bin" npx ../lib/node_modules/npm/bin/npx-cli.js
-  relink "$bin" corepack ../lib/node_modules/corepack/dist/corepack.js
-done
-
-# npm must not merely look right but run, so any other form of the breakage
-# is caught here rather than in a job's first step. Only the active tree (the
-# `externals` name, real directory or symlink) is checked: the older
-# externals.<version> directories are not used by jobs. Only node20 and
-# node24 are checked, deliberately not every node* directory: a musl-linked
-# alpine build, if a version ships one, can never run on this glibc guest and
-# would fail every job here. `cd /` keeps a project .npmrc out of the check.
-for n in node20 node24; do
-  d="$runner_home/externals/$n/bin"
-  [ -x "$d/node" ] && [ -e "$d/npm" ] || continue
-  if ! out="$(cd / && "$d/node" "$d/npm" --version 2>&1)"; then
-    echo "homefield-workspace-owner: npm for $n under $runner_home/externals is broken and the repair did not hold:" >&2
-    printf '%s\n' "$out" >&2
-    echo "homefield-workspace-owner: failing this job here; see docs/runbook.md, \"Runner updates\"" >&2
-    exit 1
-  fi
-done
-
-# A missing _work (before the first job) ends here, after the npm repair,
-# which must run whether or not a workspace exists yet.
-[ -d "$work" ] || exit 0
-# find does not follow symlinks and chown -h changes the link itself, so a
-# job's symlink to a file outside _work never hands that file to runner.
-find "$work" -xdev ! -user runner -exec chown -h runner:runner {} +
-EOF
-chmod 755 /usr/local/sbin/homefield-workspace-owner
+install -m 755 "$script_dir/guest/homefield-workspace-owner" /usr/local/sbin/homefield-workspace-owner
 # The runner picks the interpreter by extension, so the hook needs ".sh".
-cat > /usr/local/sbin/homefield-job-started.sh <<'EOF'
-#!/usr/bin/env bash
-# The runner's job-started hook (ACTIONS_RUNNER_HOOK_JOB_STARTED), run as runner.
-exec sudo -n /usr/local/sbin/homefield-workspace-owner
-EOF
-chmod 755 /usr/local/sbin/homefield-job-started.sh
+install -m 755 "$script_dir/guest/homefield-job-started.sh" /usr/local/sbin/homefield-job-started.sh
 # install_sudoers <dest> <rule>: writes the rule to a temp file, has visudo
 # check it, and only then installs it at <dest> with mode 440. A rule visudo
 # rejects never reaches /etc/sudoers.d, where it would break sudo for everyone.
@@ -707,33 +651,7 @@ fi
 # A workspace is removed only if nothing *inside* it changed for 7 days. The
 # top-level directory's own mtime moves only when direct entries change, so
 # the checkout reused by every job would look stale after a week of daily use.
-cat > /usr/local/sbin/homefield-cleanup <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-# An empty _work (before the first job) must not iterate the literal glob.
-shopt -s nullglob
-job_running() { pgrep -f Runner.Worker >/dev/null; }
-if job_running; then
-  echo "homefield-cleanup: job in progress, skipping"
-  exit 0
-fi
-docker system prune --force --filter "until=24h"
-for dir in /opt/actions-runner/_work/*/; do
-  case "$(basename "$dir")" in _*) continue ;; esac
-  if [ -z "$(find "$dir" -newermt '-7 days' -print -quit)" ]; then
-    # Checked again right before deleting: a job may have started since the
-    # top of the script, and an idle-for-a-week workspace is exactly the one
-    # the first job after a long absence would be using.
-    if job_running; then
-      echo "homefield-cleanup: job started, leaving $dir"
-      exit 0
-    fi
-    echo "homefield-cleanup: removing idle workspace $dir"
-    rm -rf "$dir"
-  fi
-done
-EOF
-chmod 755 /usr/local/sbin/homefield-cleanup
+install -m 755 "$script_dir/guest/homefield-cleanup" /usr/local/sbin/homefield-cleanup
 
 cat > /etc/systemd/system/homefield-cleanup.service <<'EOF'
 [Unit]
@@ -782,33 +700,7 @@ EOF
 # need disabling: the .service units they start are static.
 systemctl disable --now apt-daily.timer apt-daily-upgrade.timer
 
-cat > /usr/local/sbin/homefield-maintenance <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-unit="$(cat /opt/actions-runner/.service)"
-if pgrep -f Runner.Worker >/dev/null; then
-  echo "homefield-maintenance: job in progress, skipping until tomorrow"
-  exit 0
-fi
-systemctl stop "$unit"
-# Whatever happens below, the runner comes back up.
-trap 'systemctl start "$unit"' EXIT
-export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a
-apt-get update -q
-apt-get upgrade -y -q --with-new-pkgs \
-  -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold
-apt-get autoremove -y -q --purge
-# A kernel or libc update asks for a reboot. The runner is still stopped, so
-# reboot now rather than start it and give it a job to lose. Its service is
-# enabled, so it comes back on boot. A guest reboot keeps the VM running
-# under Lima's vz backend (verified with Lima 2.2.0).
-if [ -f /var/run/reboot-required ]; then
-  echo "homefield-maintenance: rebooting to finish the upgrade"
-  trap - EXIT
-  systemctl reboot || systemctl start "$unit"
-fi
-EOF
-chmod 755 /usr/local/sbin/homefield-maintenance
+install -m 755 "$script_dir/guest/homefield-maintenance" /usr/local/sbin/homefield-maintenance
 
 cat > /etc/systemd/system/homefield-maintenance.service <<'EOF'
 [Unit]
@@ -850,98 +742,7 @@ EOF
 # counter began and lets `bin/homefield memory` tell a first row that holds
 # only in-window kills from one that also holds earlier ones (#91). Files
 # older than 90 days are deleted. Read it with `bin/homefield memory`.
-cat > /usr/local/sbin/homefield-memwatch <<'EOF'
-#!/usr/bin/env bash
-# The MEMWATCH_* variables exist for tests/memwatch.sh; the service sets none.
-set -u
-dir="${MEMWATCH_DIR:-/var/log/homefield}"
-interval="${MEMWATCH_INTERVAL:-2}"
-period="${MEMWATCH_PERIOD:-60}"
-meminfo="${MEMWATCH_MEMINFO:-/proc/meminfo}"
-vmstat="${MEMWATCH_VMSTAT:-/proc/vmstat}"
-stat="${MEMWATCH_STAT:-/proc/stat}"
-job_file="${MEMWATCH_JOB_FILE:-}"
-mkdir -p "$dir"
-chmod 755 "$dir"
-
-# A job is running if the runner has a worker process. A test points
-# MEMWATCH_JOB_FILE at a file instead, because the machine it runs on may
-# itself be a runner.
-job_running() {
-  if [ -n "$job_file" ]; then
-    [ -e "$job_file" ]
-  else
-    pgrep -f Runner.Worker >/dev/null
-  fi
-}
-
-oom_kills() {
-  local key value
-  while read -r key value; do
-    if [ "$key" = oom_kill ]; then
-      echo "$value"
-      return
-    fi
-  done <"$vmstat"
-  echo 0
-}
-
-# The epoch of this boot; 0 when /proc/stat cannot be read, which the
-# summary then treats as "boot unknown", the pre-#91 case.
-boot_time() {
-  local key value
-  [ -r "$stat" ] || { echo 0; return; }
-  while read -r key value; do
-    if [ "$key" = btime ]; then
-      echo "$value"
-      return
-    fi
-  done <"$stat"
-  echo 0
-}
-
-now=0
-printf -v now '%(%s)T' -1
-slot=$((now / period))
-n=0 sum=0 max=0 min_avail=-1 job=0 total=0
-
-emit() {
-  local file day stamp
-  printf -v day '%(%F)T' $((slot * period))
-  printf -v stamp '%(%Y-%m-%dT%H:%M:%S%z)T' $((slot * period))
-  file="$dir/memwatch-${day}.csv"
-  if [ ! -e "$file" ]; then
-    echo "ts,samples,total_mib,used_avg_mib,used_max_mib,avail_min_mib,oom_kills,job,boot" >"$file"
-    chmod 644 "$file"
-    find "$dir" -name 'memwatch-*.csv' -mtime +90 -delete
-  fi
-  # A day's file created before the boot column keeps its 8-column header
-  # when an upgrade appends 9-column rows mid-day; the summary reads NF 8/9.
-  echo "${stamp},${n},$((total / 1024)),$((sum / n / 1024)),$((max / 1024)),$((min_avail / 1024)),$(oom_kills),${job},$(boot_time)" >>"$file"
-}
-
-while :; do
-  {
-    read -r _ total _
-    read -r _ _ _
-    read -r _ avail _
-  } <"$meminfo"
-  used=$((total - avail))
-  n=$((n + 1))
-  sum=$((sum + used))
-  [ "$used" -gt "$max" ] && max=$used
-  if [ "$min_avail" -lt 0 ] || [ "$avail" -lt "$min_avail" ]; then min_avail=$avail; fi
-  if job_running; then job=1; fi
-  sleep "$interval"
-  printf -v now '%(%s)T' -1
-  if [ $((now / period)) -ne "$slot" ]; then
-    emit
-    slot=$((now / period))
-    n=0 sum=0 max=0 min_avail=-1 job=0
-  fi
-done
-EOF
-chmod 755 /usr/local/sbin/homefield-memwatch
+install -m 755 "$script_dir/guest/homefield-memwatch" /usr/local/sbin/homefield-memwatch
 
 cat > /etc/systemd/system/homefield-memwatch.service <<'EOF'
 [Unit]

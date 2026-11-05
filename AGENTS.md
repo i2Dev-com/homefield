@@ -21,8 +21,10 @@ parts:
   on a stock Mac that is **bash 3.2**: no `mapfile`, no `inherit_errexit`,
   `set -e` is off inside `$(...)` (check failures there explicitly).
 - `vm/provision.sh` runs in the guest (Ubuntu, bash 5) and **must stay
-  idempotent**: every run is also an upgrade.
-- Run `shellcheck bin/homefield install.sh vm/provision.sh routing-guard/tests/run.sh tests/*.sh`
+  idempotent**: every run is also an upgrade. The guest helpers it installs
+  are `vm/guest/` files, staged beside it by `bin/homefield`; they run in the
+  guest too, and `tests/guest-scripts.sh` runs two of them against fakes.
+- Run `shellcheck bin/homefield install.sh vm/provision.sh vm/guest/* routing-guard/tests/run.sh tests/*.sh`
   (see CONTRIBUTING.md for the full pre-PR list, which also includes
   `actionlint`); CI runs the same.
 

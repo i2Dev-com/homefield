@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# The guest's memory sampler (homefield-memwatch, embedded in provision.sh):
-# lint it as extracted, then run it against a fake /proc for a few seconds and
-# check the rows it writes.
+# The guest's memory sampler (homefield-memwatch, a vm/guest file that
+# provision.sh installs): lint it, then run it against a fake /proc for a few
+# seconds and check the rows it writes.
 #
 # The sampler runs in the guest (Ubuntu, bash 5) and uses printf '%(...)T',
 # which macOS's bash 3.2 lacks, so the run needs a newer bash. It also needs
@@ -15,12 +15,9 @@ set -uo pipefail
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
-script="$work/homefield-memwatch"
+script="$ROOT/vm/guest/homefield-memwatch"
 
-# Between the heredoc's opening line and its terminator.
-sed -n "/^cat > \/usr\/local\/sbin\/homefield-memwatch <<'EOF'\$/,/^EOF\$/p" "$ROOT/vm/provision.sh" |
-  sed '1d;$d' >"$script"
-record "extracted the sampler" "yes" "$([ -s "$script" ] && echo yes || echo no)"
+record "the sampler is a vm/guest file" "yes" "$([ -s "$script" ] && echo yes || echo no)"
 
 if command -v shellcheck >/dev/null; then
   record "shellcheck" "clean" "$(shellcheck "$script" >/dev/null 2>&1 && echo clean || echo findings)"

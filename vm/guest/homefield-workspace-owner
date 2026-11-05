@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# HOMEFIELD_RUNNER_HOME exists for tests/workspace-owner.sh; the hook sets none.
+runner_home="${HOMEFIELD_RUNNER_HOME:-/opt/actions-runner}"
+work="$runner_home/_work"
+
+relink() { # relink <bin dir> <name> <link target>
+  local dest="$1/$2"
+  # Only the artifact: a regular file, never a proper link or a missing name.
+  [ -f "$dest" ] && [ ! -L "$dest" ] || return 0
+  if cmp -s "$dest" "$1/$3"; then
+    ln -sf "$3" "$dest"
+    echo "homefield-workspace-owner: relinked $2 in $1 (the runner self-update flattened it, actions/runner#2094)"
+  else
+    echo "homefield-workspace-owner: $dest is a regular file, but not the flattened artifact; leaving it alone" >&2
+  fi
+}
+
+# externals is a real directory on a fresh install; the first self-update
+# turns it into a symlink to the versioned externals.<version> beside it.
+# Both spellings are swept, but never the same directory twice through the
+# symlink. node20 and node24 are today's copies; the glob takes any others.
+shopt -s nullglob
+for bin in "$runner_home"/externals*/node*/bin; do
+  case "$bin" in
+    "$runner_home"/externals/*) [ -L "$runner_home/externals" ] && continue ;;
+  esac
+  relink "$bin" npm ../lib/node_modules/npm/bin/npm-cli.js
+  relink "$bin" npx ../lib/node_modules/npm/bin/npx-cli.js
+  relink "$bin" corepack ../lib/node_modules/corepack/dist/corepack.js
+done
+
+# npm must not merely look right but run, so any other form of the breakage
+# is caught here rather than in a job's first step. Only the active tree (the
+# `externals` name, real directory or symlink) is checked: the older
+# externals.<version> directories are not used by jobs. Only node20 and
+# node24 are checked, deliberately not every node* directory: a musl-linked
+# alpine build, if a version ships one, can never run on this glibc guest and
+# would fail every job here. `cd /` keeps a project .npmrc out of the check.
+for n in node20 node24; do
+  d="$runner_home/externals/$n/bin"
+  [ -x "$d/node" ] && [ -e "$d/npm" ] || continue
+  if ! out="$(cd / && "$d/node" "$d/npm" --version 2>&1)"; then
+    echo "homefield-workspace-owner: npm for $n under $runner_home/externals is broken and the repair did not hold:" >&2
+    printf '%s\n' "$out" >&2
+    echo "homefield-workspace-owner: failing this job here; see docs/runbook.md, \"Runner updates\"" >&2
+    exit 1
+  fi
+done
+
+# A missing _work (before the first job) ends here, after the npm repair,
+# which must run whether or not a workspace exists yet.
+[ -d "$work" ] || exit 0
+# find does not follow symlinks and chown -h changes the link itself, so a
+# job's symlink to a file outside _work never hands that file to runner.
+find "$work" -xdev ! -user runner -exec chown -h runner:runner {} +
