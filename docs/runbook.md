@@ -456,8 +456,10 @@ limactl shell homefield sudo bash /tmp/provision.sh   # runs it now
 was removed from the archive in February 2024), so `RUNNER_EXTRA_PACKAGES`
 cannot supply it and provisioning stops in apt with no candidate. The hook
 installs the official AWS CLI v2 bundle instead; `--preset hosted` copies that
-same hook, arch-aware and idempotent. `gh`, `shellcheck` and `sqlite3` are apt
-packages, so they need no hook.
+same hook, arch-aware and idempotent. The hook pins a version and the zip's
+SHA256 (as `provision.sh` pins the runner), so a provision installs exactly
+that version; bump the version and both digests together. `gh`, `shellcheck`
+and `sqlite3` are apt packages, so they need no hook.
 
 Provision while the runner is idle, as for any upgrade (see "Maintenance").
 Everything added here is available to every repository's jobs, so keep
