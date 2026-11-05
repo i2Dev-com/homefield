@@ -241,6 +241,12 @@ UNREAD = (
     # A key with a tag or anchor (`!!str runs-on:`, `&a runs-on:`, `&a "runs-on":`)
     # parses with runs-on as the key, so the plain-key scan below never sees it.
     (re.compile(r"""^\s*[&!]\S*\s+["']?runs-on["']?\s*:"""), "a tagged or anchored runs-on key"),
+    # The same spellings of a `uses` key: a job-level call this scan cannot
+    # read is refused, remote calls included (a quoted `"uses":`, a tag or
+    # anchor on the key, a space before the colon).
+    (re.compile(r"""^\s*(-\s+)?["']uses["']\s*:"""), "a quoted uses key"),
+    (re.compile(r"""^\s*uses\s+:"""), "a space before the colon of uses"),
+    (re.compile(r"""^\s*[&!]\S*\s+["']?uses["']?\s*:"""), "a tagged or anchored uses key"),
     # A line that is only a node property — an anchor, a tag, or both
     # (`&body` alone under a job id): the job's real keys are indented under
     # it, and taking the property's depth for theirs would leave a deeper

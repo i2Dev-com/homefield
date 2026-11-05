@@ -106,6 +106,14 @@ case_ "standalone anchor and tag"         fail "$EXPECTED" "" "$(printf '  unsaf
 # here to scan.
 case_ "remote reusable workflow call"            fail "$EXPECTED" "" "$(printf '  call:\n    uses: evil/repo/.github/workflows/wf.yml@v1')"
 case_ "remote reusable workflow call, expected"  fail "$EXPECTED ci.yml:call" "" "$(printf '  call:\n    uses: evil/repo/.github/workflows/wf.yml@v1')"
+# The spellings of the `uses` key the line scan cannot read — a call written
+# that way is refused, remote call included.
+case_ "quoted uses key, remote"        fail "$EXPECTED" "" "$(printf '  call:\n    "uses": evil/repo/.github/workflows/wf.yml@v1')"
+case_ "single-quoted uses key, remote" fail "$EXPECTED" "" "$(printf "  call:\n    'uses': evil/repo/.github/workflows/wf.yml@v1")"
+case_ "tagged uses key, remote"        fail "$EXPECTED" "" "$(printf '  call:\n    !!str uses: evil/repo/.github/workflows/wf.yml@v1')"
+case_ "anchored uses key, remote"      fail "$EXPECTED" "" "$(printf '  call:\n    &a uses: evil/repo/.github/workflows/wf.yml@v1')"
+case_ "space before the colon of uses" fail "$EXPECTED" "" "$(printf '  call:\n    uses : evil/repo/.github/workflows/wf.yml@v1')"
+case_ "quoted uses key, local"         fail "$EXPECTED" "" "$(printf '  call:\n    "uses": ./.github/workflows/other.yml')"
 # Plain forms around them that must keep passing.
 # Text under a block scalar is not YAML syntax: a script line may start with ?, a
 # bracket or an open quote (regression in v0.2.0, found on real workflows).
