@@ -15,6 +15,16 @@ The next release bumps the minor version to 0.5.0: commands that act on a VM
 now cover every HomeField VM on this Mac by default, so their output — and what
 an unqualified command acts on — changes for anyone with more than one.
 
+### Fixed
+
+- Three failure paths in `bin/homefield` ended the command with no message
+  (#184): `adopt --setup` died silently when the downloaded workflows could
+  not be read (the `${mode:-simple}` fallback on the next line was never
+  reached), and the workflow-name quoting in `adopt` and `adopt --setup`, and
+  the memory-log read in `memory`, ended the run with a bare `exit 1` past
+  `die`. Each now prints the tool, the state and the fix, like every
+  neighboring failure.
+
 ### Changed
 
 - Commands that act on a VM no longer report only the `homefield` instance when
