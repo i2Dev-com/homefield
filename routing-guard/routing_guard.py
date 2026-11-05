@@ -481,17 +481,22 @@ def main() -> int:
                 # is scanned like any other file here. A step-level `uses:`
                 # (actions/checkout@v4) sits deeper, under `steps:`.
                 m_uses = re.match(r"^\s*uses:\s*(.*?)\s*$", code)
-                if in_jobs and m_uses and not in_scalar and body_key:
-                    if not re.match(r"""^['"]?\./""", m_uses.group(1)):
-                        fail(
-                            f"{where}: a job calling a reusable workflow in"
-                            " another repository is refused: the called"
-                            " workflow's jobs evaluate runs-on in this"
-                            " repository's context, so its routing cannot be"
-                            " checked; call a local workflow"
-                            " (./.github/workflows/<file>) that carries the"
-                            " routing expression"
-                        )
+                if (
+                    in_jobs
+                    and m_uses
+                    and not in_scalar
+                    and body_key
+                    and not re.match(r"""^['"]?\./""", m_uses.group(1))
+                ):
+                    fail(
+                        f"{where}: a job calling a reusable workflow in"
+                        " another repository is refused: the called"
+                        " workflow's jobs evaluate runs-on in this"
+                        " repository's context, so its routing cannot be"
+                        " checked; call a local workflow"
+                        " (./.github/workflows/<file>) that carries the"
+                        " routing expression"
+                    )
                 if not in_jobs or not m or not body_key:
                     continue
                 value = m.group(1)
