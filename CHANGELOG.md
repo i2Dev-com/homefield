@@ -9,7 +9,20 @@ fail, such as a new guard in the routing expression, bumps the minor version
 (0.1 to 0.2). Compatible changes bump the patch. Merged changes wait on
 `main`, under *Unreleased*, until a release is cut.
 
-## Unreleased
+## v0.4.2 (2026-11-05)
+
+Bumps the patch from v0.4.1: both entries are compatible. The presets are
+opt-in (`--preset`), and the passwordless `sudo` adds a capability a hosted
+runner already has, so no workflow that passes v0.4.1's guard fails now; one
+that probes `sudo -n true` takes its hosted branch instead of a fallback and
+still passes. To upgrade, run the README's one-liner again (it replaces the
+installed copy), then `homefield upgrade --instance <name>` while idle on each
+VM: it re-runs the *installed* tool's `provision.sh`, so the tool has to come
+first for a VM to get the new sudoers rule, the needrestart drop-in and the
+disabled apt-daily timers. Bump `routing-guard@v0.4.1` pins to `@v0.4.2`
+before running `homefield adopt` (it counts only its own release); the checker
+itself is unchanged, so a v0.4.1 pin keeps passing.
+
 
 ### Added
 

@@ -3,13 +3,13 @@
 # PATH, makes sure Lima and gh are there (one question covers both), and hands
 # over to `homefield setup` (`install` for a release older than setup).
 #
-#   curl -fsSL https://raw.githubusercontent.com/i2Dev-com/homefield/v0.4.1/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/i2Dev-com/homefield/v0.4.2/install.sh | bash
 #   ... | bash -s -- --url https://github.com/<org>      # install options pass through
 #   ... | bash -s -- --url https://github.com/<you>/<repo>   # a personal account: a repository
 #
 # Settings, all optional:
 #   HOMEFIELD_REPO      owner/repo to download from (default i2Dev-com/homefield)
-#   HOMEFIELD_REF       branch, tag or commit to install (default v0.4.1)
+#   HOMEFIELD_REF       branch, tag or commit to install (default v0.4.2)
 #   HOMEFIELD_HOME      where the tool goes (default ~/.local/share/homefield)
 #   HOMEFIELD_BIN_DIR   where the `homefield` command goes (default: Homebrew's
 #                       bin when writable, else ~/.local/bin)
@@ -31,7 +31,7 @@
 set -euo pipefail
 
 REPO="${HOMEFIELD_REPO:-i2Dev-com/homefield}"
-REF="${HOMEFIELD_REF:-v0.4.1}"
+REF="${HOMEFIELD_REF:-v0.4.2}"
 INSTALL_DIR="${HOMEFIELD_HOME:-$HOME/.local/share/homefield}"
 INSTANCE="${HOMEFIELD_INSTANCE:-homefield}"
 # The terminal to ask on. Under `curl | bash` stdin is this script, so prompts
