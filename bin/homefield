@@ -1853,6 +1853,7 @@ run_provision() {
   trap 'guest_unstage "$stage"' RETURN
   limactl copy "$PROVISION" "${INSTANCE}:${stage}/provision.sh"
   printf '%s' "$input" | guest_stdin sudo "$@" bash "${stage}/provision.sh"
+  guest_unstage "$stage"
   trap - RETURN
 }
 
@@ -2313,6 +2314,7 @@ copy_preset_hooks() {
     guest_stdin sudo install -D -m 0755 "${stage}/${base}" "${GUEST_HOOKS}/${base}" </dev/null ||
       die "could not install preset hook ${base} in VM ${INSTANCE}; nothing was stopped"
   done
+  guest_unstage "$stage"
   trap - RETURN
 }
 
