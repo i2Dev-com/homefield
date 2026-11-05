@@ -197,6 +197,16 @@ upgrade` on each runner. Bump `routing-guard@v0.3.2` pins to `@v0.4.0`:
 
 ### Fixed
 
+- The files `bin/homefield` stages into the guest for the guest to run as
+  root — `provision.sh` (provisioning, and the restore `uninstall`/`reset`
+  fall back on) and the preset hooks — are staged through a per-run private
+  directory (#185): `mktemp -d`, 0700, owned by the login user, with a name
+  no live job can guess, instead of fixed `/tmp/provision.sh` and
+  `/tmp/homefield-preset-<name>` paths. The guest's `runner` user cannot read
+  what is staged, and the copy and the run no longer depend on how Lima's
+  agent treats a pre-planted path. `HOMEFIELD_STAGE_DIR` pins the directory
+  for the suites. A directory left behind by a killed run is harmless.
+
 - `adopt`'s verify step no longer re-runs the routing guard's own run: after
   `adopt --setup` the newest `pull_request` run is often the guard
   workflow's, which is hosted by design, so the check always ended in the

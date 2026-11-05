@@ -29,7 +29,6 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LIMA_YAML="$ROOT/vm/lima.yaml"
 PROVISION="$ROOT/vm/provision.sh"
-GUEST_PROVISION="/tmp/provision.sh"
 DEFAULT_INSTANCE="homefield"
 INSTANCE="${HOMEFIELD_INSTANCE:-$DEFAULT_INSTANCE}"
 # 1 when --instance (or HOMEFIELD_INSTANCE) named one VM. Commands that can
@@ -1095,6 +1094,13 @@ restart_runner_on_failure() {
     guest sudo systemctl start "$stopped_unit" ||
       echo "homefield: could not start ${stopped_unit}; check bin/homefield status" >&2
   fi
+  # deregister_runner's staging directory (#185): a failure past the copy
+  # exits through this trap, so the cleanup rides on it. Empty for every
+  # other caller.
+  if [ -n "${RS_STAGE:-}" ]; then
+    guest_unstage "$RS_STAGE"
+    RS_STAGE=""
+  fi
 }
 runner_back() {
   trap - EXIT
@@ -1110,10 +1116,13 @@ runner_setting() {
 
 # What status and diagnose both say about a registered runner, from the VM.
 # load_runner_settings: the runner's name, URL and id into RS_NAME / RS_URL /
-# RS_ID (each empty when the settings could not be read).
+# RS_ID (each empty when the settings could not be read). RS_STAGE is the
+# staging directory deregister_runner creates and restart_runner_on_failure
+# cleans up when a failure ends the command through its EXIT trap.
 RS_NAME=""
 RS_URL=""
 RS_ID=""
+RS_STAGE=""
 load_runner_settings() {
   RS_NAME=""
   RS_URL=""
@@ -1812,12 +1821,39 @@ wait_online() {
 }
 
 # ── Provisioning ────────────────────────────────────────────────────────────
+# guest_stage_dir: a per-run private directory in the guest, 0700 and owned by
+# the login user: the runner user cannot read what is staged in it, and the
+# name is not guessable. Files the guest later runs as root (provision.sh, the
+# preset hooks) are staged through it, never at a fixed /tmp path a live job
+# could have pre-planted (#185). HOMEFIELD_STAGE_DIR pins the directory (the
+# suites drive it: they pre-build what the copy would place there). 
+# guest_unstage removes one; a leftover after a killed run is harmless (0700,
+# its name dies with the run).
+guest_stage_dir() {
+  if [ -n "${HOMEFIELD_STAGE_DIR:-}" ]; then
+    printf '%s' "$HOMEFIELD_STAGE_DIR"
+    return 0
+  fi
+  local dir
+  dir="$(guest mktemp -d /tmp/homefield-stage-XXXXXXXX)" ||
+    die "could not create a staging directory in VM ${INSTANCE}"
+  printf '%s' "$dir"
+}
+
+guest_unstage() {
+  [ -n "$1" ] || return 0
+  guest rm -rf -- "$1" </dev/null 2>/dev/null || true
+}
+
 # run_provision <stdin text> [VAR=value ...]
 run_provision() {
-  local input="$1"
+  local input="$1" stage
   shift
-  limactl copy "$PROVISION" "${INSTANCE}:${GUEST_PROVISION}"
-  printf '%s' "$input" | guest_stdin sudo "$@" bash "$GUEST_PROVISION"
+  stage="$(guest_stage_dir)"
+  trap 'guest_unstage "$stage"' RETURN
+  limactl copy "$PROVISION" "${INSTANCE}:${stage}/provision.sh"
+  printf '%s' "$input" | guest_stdin sudo "$@" bash "${stage}/provision.sh"
+  trap - RETURN
 }
 
 enable_autostart() {
@@ -2261,19 +2297,23 @@ merge_packages() {
 
 # copy_preset_hooks: puts PRESET_HOOKS in the guest's provision.d, so this and
 # every later provisioning run executes them (a plain `upgrade` keeps them).
+# Staged through a private directory (#185): each hook is installed by root
+# from the guest's /tmp, and a fixed name there is a live job's to pre-plant.
 copy_preset_hooks() {
-  local f base tmp
+  local f base stage
+  stage="$(guest_stage_dir)"
+  trap 'guest_unstage "$stage"' RETURN
   for f in ${PRESET_HOOKS[@]+"${PRESET_HOOKS[@]}"}; do
     base="${f##*/}"
-    tmp="/tmp/homefield-preset-${base}"
-    limactl copy "$f" "${INSTANCE}:${tmp}" </dev/null ||
+    limactl copy "$f" "${INSTANCE}:${stage}/${base}" </dev/null ||
       die "could not copy preset hook ${base} into VM ${INSTANCE}; nothing was stopped"
   done
   for f in ${PRESET_HOOKS[@]+"${PRESET_HOOKS[@]}"}; do
     base="${f##*/}"
-    guest_stdin sudo install -D -m 0755 "/tmp/homefield-preset-${base}" "${GUEST_HOOKS}/${base}" </dev/null ||
+    guest_stdin sudo install -D -m 0755 "${stage}/${base}" "${GUEST_HOOKS}/${base}" </dev/null ||
       die "could not install preset hook ${base} in VM ${INSTANCE}; nothing was stopped"
   done
+  trap - RETURN
 }
 
 # preset_saved_drops <replacement>: names from any shipped preset that are in
@@ -3405,11 +3445,11 @@ cmd_diagnose() {
 deregister_script() {
   # shellcheck disable=SC2016  # the guest's shell expands these, not this one
   local script='cd @HOME@ && read -r t && s=0 && { [ ! -f .service ] || s=1; } && { [ "$s" = 0 ] || ./svc.sh uninstall || { rc=$?; bash @PROVISION@ ensure-service --start; exit "$rc"; }; } && { ACTIONS_RUNNER_INPUT_TOKEN="$t" sudo --preserve-env=ACTIONS_RUNNER_INPUT_TOKEN -u runner ./config.sh remove@LOCAL@ || { rc=$?; [ "$s" = 0 ] || bash @PROVISION@ ensure-service --start; exit "$rc"; }; }'
-  local flag=""
-  [ "${1:-}" != local ] || flag=" --local"
+  local provision="$1" flag=""
+  [ "${2:-}" != local ] || flag=" --local"
   script="${script//@HOME@/$RUNNER_HOME}"
   script="${script//@LOCAL@/$flag}"
-  printf '%s' "${script//@PROVISION@/$GUEST_PROVISION}"
+  printf '%s' "${script//@PROVISION@/$provision}"
 }
 
 # deregister_runner <url> <id> <on>: takes the registered runner out of
@@ -3421,26 +3461,32 @@ deregister_script() {
 # as a plain command, never from a condition: errexit is off in there and the
 # failure would pass for success.
 deregister_runner() {
-  local url="$1" id="$2" on="$3" token
+  local url="$1" id="$2" on="$3" token stage
   echo "homefield: switch every repository that routes to this runner to hosted first:" >&2
   echo "homefield:   gh variable set CI_RUNNER --repo <owner>/<repo> --body hosted" >&2
-  # The restore deregister_script falls back on, copied in while nothing
-  # has changed yet.
-  limactl copy "$PROVISION" "${INSTANCE}:${GUEST_PROVISION}" ||
-    die "could not copy provision.sh into VM ${INSTANCE}; nothing was changed"
+  # The restore deregister_script falls back on, staged in a private
+  # directory while nothing has changed yet (#185). RS_STAGE is cleaned up by
+  # restart_runner_on_failure (the EXIT trap stop_runner sets below) when a
+  # failure ends the command mid-flow, and explicitly after runner_back.
+  stage="$(guest_stage_dir)"
+  RS_STAGE="$stage"
+  limactl copy "$PROVISION" "${INSTANCE}:${stage}/provision.sh" ||
+    { guest_unstage "$stage"; RS_STAGE=""; die "could not copy provision.sh into VM ${INSTANCE}; nothing was changed"; }
   # Offline before the token is fetched or typed, which can take a while.
   stop_runner
   if [ "$on" = 1 ]; then
     # A full removal would ask GitHub to delete a runner it does not have.
     log "GitHub no longer has this runner (id ${id}) at ${url}; removing its registration from the VM only"
-    printf '\n' | guest_stdin sudo sh -c "$(deregister_script local)"
+    printf '\n' | guest_stdin sudo sh -c "$(deregister_script "${stage}/provision.sh" local)"
   else
     token="$(get_token remove "$url")"
     log "deregistering from ${url}"
-    printf '%s\n' "$token" | guest_stdin sudo sh -c "$(deregister_script)"
+    printf '%s\n' "$token" | guest_stdin sudo sh -c "$(deregister_script "${stage}/provision.sh")"
     token=""
   fi
   runner_back
+  guest_unstage "$stage"
+  RS_STAGE=""
 }
 
 # delete_vm: takes the VM out of start at login, stops it and deletes it.
