@@ -2337,10 +2337,11 @@ copy_preset_hooks() {
     log "${INSTANCE}: removed preset hook ${base}; the preset no longer ships it"
   done
   # The manifest is what the next copy prunes against: the names this copy
-  # installed, one per line.
+  # installed, one per line. Through the guest: the stage dir is the guest's
+  # and there is no shared mount, so a host-side redirection has no path to
+  # write to (found by review on this PR).
   # shellcheck disable=SC2086  # unquoted: word splitting puts each name on its own line
-  printf '%s\n' $names >"$stage/preset-hooks"
-  guest_stdin sudo install -D -m 0644 "${stage}/preset-hooks" "$GUEST_MANIFEST" </dev/null ||
+  printf '%s\n' $names | guest_stdin sudo tee "$GUEST_MANIFEST" >/dev/null ||
     die "could not write the preset hook manifest in VM ${INSTANCE}; nothing was stopped"
   guest_unstage "$stage"
   trap - RETURN

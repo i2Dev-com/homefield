@@ -100,8 +100,6 @@ srun() {
   done
   shift
   : >"$calls"
-  # The manifest copy writes the manifest file into the stage dir on the host
-  # side, so the stage dir is a real one (#185's seam).
   mkdir -p "$work/stage"
   out="$(env -i HOME="$work/home" PATH="$stubs" CALLS="$calls" ROOT_DIR="$ROOT" \
     HOMEFIELD_STATE_DIR="$work/state" HOMEFIELD_STAGE_DIR="$work/stage" "${envs[@]+"${envs[@]}"}" \
@@ -193,8 +191,8 @@ record "hosted on a VM with extras: saved first, its own names added once each" 
   "$(printf 'ok/libpq-dev shellcheck %s' "$browser_libs gh sqlite3 xvfb rsync")" \
   "$([ "$rc" -eq 0 ] && echo ok)/$(envline)"
 record "...both hooks copied and installed in provision.d before the stop, once each, with the manifest" \
-  "2/3/before/yes/3" \
-  "$(grep -c 'limactl copy.*vm/presets/hosted' "$calls" || true)/$(called '^guest sudo install -D')/$(
+  "2/2/1/before/yes/2" \
+  "$(grep -c 'limactl copy.*vm/presets/hosted' "$calls" || true)/$(called '^guest sudo install -D')/$(called 'sudo tee /etc/homefield/preset-hooks')/$(
     awk '/stop_runner/{s=NR} /limactl copy/{c=NR} END{print (c && s && c < s) ? "before" : "after"}' "$calls")/$(has "$out" 'upgrading homefield')/$(called '^guest sudo install -D')"
 
 srun MODE=upgrade SAVED="libpq-dev shellcheck" -- cmd_upgrade --preset browsers
@@ -229,18 +227,18 @@ echo
 echo "install --preset on an already registered instance"
 srun MODE=install SAVED="libpq-dev" -- cmd_install --preset hosted
 record "hands the preset to upgrade, which adds it beside what was saved" \
-  "$(printf 'yes/libpq-dev %s' "$browser_libs gh shellcheck sqlite3 xvfb rsync")/3" \
-  "$(has "$out" 'upgrading instead')/$(envline)/$(called '^guest sudo install -D')"
+  "$(printf 'yes/libpq-dev %s' "$browser_libs gh shellcheck sqlite3 xvfb rsync")/2/1" \
+  "$(has "$out" 'upgrading instead')/$(envline)/$(called '^guest sudo install -D')/$(called 'sudo tee /etc/homefield/preset-hooks')"
 
 echo
 echo "the preset hook manifest (#188): a hook the preset no longer ships is removed"
 srun MODE=upgrade SAVED="" -- cmd_upgrade --preset hosted
 record "a first copy: both hooks installed, the manifest written, nothing removed" "2/1/0" \
-  "$(called '^guest sudo install -D -m 0755')/$(called 'install -D -m 0644')/$(called 'sudo rm -f')"
+  "$(called '^guest sudo install -D -m 0755')/$(called 'sudo tee /etc/homefield/preset-hooks')/$(called 'sudo rm -f')"
 srun MODE=upgrade SAVED="" GUEST_HAVE="50-awscli.sh
 60-nodejs.sh" -- cmd_upgrade --preset hosted
 record "a manifest naming the current hooks: the same set is reinstalled, nothing removed" "2/1/0" \
-  "$(called '^guest sudo install -D -m 0755')/$(called 'install -D -m 0644')/$(called 'sudo rm -f')"
+  "$(called '^guest sudo install -D -m 0755')/$(called 'sudo tee /etc/homefield/preset-hooks')/$(called 'sudo rm -f')"
 srun MODE=upgrade SAVED="" GUEST_HAVE="40-old.sh
 50-awscli.sh
 60-nodejs.sh" -- cmd_upgrade --preset hosted
@@ -252,6 +250,6 @@ srun MODE=upgrade SAVED="" GUEST_HAVE="../ssh/sshd_config
 record "a tampered manifest line is not a rm path: skipped, nothing removed" "0" "$(called 'sudo rm -f')"
 srun MODE=upgrade SAVED="" GUEST_HAVE="50-awscli.sh" -- cmd_upgrade --preset hosted
 record "a manifest missing a current hook: the hook is reinstalled, the manifest rewritten" "2/1/0" \
-  "$(called '^guest sudo install -D -m 0755')/$(called 'install -D -m 0644')/$(called 'sudo rm -f')"
+  "$(called '^guest sudo install -D -m 0755')/$(called 'sudo tee /etc/homefield/preset-hooks')/$(called 'sudo rm -f')"
 
 summary
