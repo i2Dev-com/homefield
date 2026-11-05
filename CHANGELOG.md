@@ -25,11 +25,21 @@ fail, such as a new guard in the routing expression, bumps the minor version
   provisioned before this gets it after updating the tool (the README's
   one-liner again) and running `homefield upgrade` while idle: `upgrade`
   re-runs the `provision.sh` in the installed tool, so the tool comes first.
-  A job that failed now passes, so this is compatible (patch); a workflow
-  that probes `sudo -n true` (snapdrift's browser actions) takes its
-  `--with-deps` branch instead of the pre-provisioned fallback, which is the
-  hosted branch. The runbook's trust, parity, browsers and failure rows, and
-  the adopting notes, follow.
+  Two guards come with it, because jobs now run apt themselves. A
+  needrestart drop-in (`/etc/needrestart/conf.d/50-homefield.conf`) makes a
+  job's apt list the services that use an upgraded library instead of
+  restarting them, and never restart the runner, whose restart killed the job
+  (the #8 failure); `homefield-maintenance` still restarts the others. And
+  `apt-daily.timer` and `apt-daily-upgrade.timer` are disabled, as on a hosted
+  image: they held apt's lists lock at random times, and a job's `sudo apt-get
+  update` fails at once on it. Maintenance refreshes the lists daily instead.
+  A job that failed now passes, so this is compatible (patch). A workflow
+  that probes `sudo -n true` (snapdrift's browser actions) now takes its
+  `--with-deps` branch, the hosted one, instead of the pre-provisioned
+  fallback: it passes, and runs `apt-get update` and an apt install in every
+  job, so pre-provisioned browser libraries no longer save it that step. The
+  runbook's trust, parity, browsers, failure and maintenance rows, and the
+  adopting notes, follow.
 
 ## v0.4.1 (2026-11-04)
 
