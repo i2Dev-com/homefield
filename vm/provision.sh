@@ -533,8 +533,11 @@ sudo -u "$RUNNER_USER" /usr/local/sbin/homefield-job-started.sh
 # inside the guest, so a job could already do anything as root — this only lets
 # it use the root it has for those commands instead of failing for a password.
 # The VM, not the user, stays the boundary. It is a second drop-in, so the
-# workspace-owner rule above keeps its narrow, argument-less line; sudo applies
-# the last matching rule, so that one still governs its own command.
+# workspace-owner rule above keeps its narrow, argument-less line; sudo
+# applies the last matching rule, and `#includedir` reads these files in
+# sorted lexical order — `homefield-runner` before
+# `homefield-workspace-owner` — so the narrow rule still governs its own
+# command.
 new_tmp
 runner_sudoers="$tmp"
 echo 'runner ALL=(ALL) NOPASSWD: ALL' >"$runner_sudoers"
