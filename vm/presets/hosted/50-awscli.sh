@@ -36,9 +36,15 @@ curl -fsSL --retry 3 "https://awscli.amazonaws.com/awscli-exe-linux-${arch}-${AW
 echo "${want}  ${tmp}/awscliv2.zip" | sha256sum -c - >/dev/null
 unzip -q "$tmp/awscliv2.zip" -d "$tmp"
 # The bundle's installer puts the CLI in /usr/local/aws-cli and links
-# /usr/local/bin/aws, as it does on a hosted runner; over an older version it
-# upgrades in place.
-"$tmp/aws/install"
+# /usr/local/bin/aws, as it does on a hosted runner. An installation of
+# another version (the pin moved, or a job installed its own) reaches here
+# past the version skip above, and the installer refuses to overwrite it
+# without --update; a fresh install takes the plain form.
+if [ -x /usr/local/bin/aws ]; then
+  "$tmp/aws/install" --update
+else
+  "$tmp/aws/install"
+fi
 [ -x /usr/local/bin/aws ] || {
   echo "50-awscli.sh: aws is not at /usr/local/bin after the official install" >&2
   exit 1
