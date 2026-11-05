@@ -2099,7 +2099,9 @@ _preset_load() {
 # with the same file name.
 load_presets() {
   local name
-  SEEN_PRESETS=""
+  # Leading space, so the first name is matched like every later one: `--preset
+  # hosted --preset hosted` loads it once instead of colliding with itself.
+  SEEN_PRESETS=" "
   HOOK_NAMES=" "
   PRESET_PKGS=""
   PRESET_HOOKS=()

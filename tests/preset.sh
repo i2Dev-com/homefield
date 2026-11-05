@@ -154,6 +154,13 @@ record "an include cycle ends, loading each preset once" \
   "libcairo2 shellcheck/exit-0" \
   "$(field pkgs)/$([ "$rc" -eq 0 ] && echo exit-0 || echo exit-$rc)"
 
+srun MODE=pkgs PRESET_ARGS="hosted browsers hosted" --
+record "a repeated preset name loads it once, without self-collision (packages)" \
+  "$(printf 'exit-0/%s gh shellcheck sqlite3 xvfb rsync' "$browser_libs")" \
+  "$([ "$rc" -eq 0 ] && echo exit-0 || echo "exit-$rc")/$(field pkgs)"
+record "...and its hooks once each, not two pairs of the same names" \
+  "50-awscli.sh/60-nodejs.sh" "$(hooks | paste -sd / -)"
+
 mkdir -p "$work/presets/x" "$work/presets/y"
 printf 'pkg-a\n' >"$work/presets/x/packages"
 printf '#!/bin/sh\nexit 0\n' >"$work/presets/x/10-tool.sh"
