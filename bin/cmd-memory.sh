@@ -80,16 +80,8 @@ END {
 
 # memory_single: one VM's table; vm_dispatch runs it for every VM by default.
 memory_single() {
-  local days=7 cutoff rows rc cutoff_epoch
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --days) days="${2:?--days needs a value}"; shift 2 ;;
-      *) die "memory: unknown option $1 (see bin/homefield help)" ;;
-    esac
-  done
-  if ! [[ "$days" =~ ^[0-9]+$ ]] || [ "$days" -lt 1 ]; then
-    die "memory: --days must be a positive number"
-  fi
+  parse_memory_args "$@"
+  local days="$MEMORY_DAYS" cutoff rows rc cutoff_epoch
   check_host
   vm_lookup
   [ "$VM_STATUS" = "Running" ] || die "memory: VM ${INSTANCE} is not running"
@@ -110,23 +102,30 @@ memory_single() {
   [ "$rc" -eq 0 ] || exit "$rc"
 }
 
-cmd_memory() {
-  # The options are validated once here, so a bad one fails before any VM is
-  # asked and does not repeat for each of them (#182).
-  local days=7 opts=()
+# parse_memory_args: --days into MEMORY_DAYS, validated. cmd_memory runs it
+# once for the early refusal (#182); memory_single runs it again for the
+# value — one parser, so the two can never disagree.
+parse_memory_args() {
+  MEMORY_DAYS=7
   while [ $# -gt 0 ]; do
     case "$1" in
       --days)
-        days="${2:?--days needs a value}"
-        opts+=("--days" "${2}")
+        MEMORY_DAYS="${2:?--days needs a value}"
         shift 2
         ;;
       *) die "memory: unknown option $1 (see bin/homefield help)" ;;
     esac
   done
-  if ! [[ "$days" =~ ^[0-9]+$ ]] || [ "$days" -lt 1 ]; then
+  if ! [[ "$MEMORY_DAYS" =~ ^[0-9]+$ ]] || [ "$MEMORY_DAYS" -lt 1 ]; then
     die "memory: --days must be a positive number"
   fi
+}
+
+cmd_memory() {
+  # The options are validated once here, so a bad one fails before any VM is
+  # asked and does not repeat for each of them (#182).
+  parse_memory_args "$@"
+  local opts=("--days" "$MEMORY_DAYS")
   vm_dispatch memory memory_single "${opts[@]+"${opts[@]}"}"
 }
 

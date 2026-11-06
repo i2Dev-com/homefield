@@ -733,16 +733,9 @@ cmd_install() {
 
 # upgrade_single: one VM's upgrade; vm_dispatch runs it for every VM by default.
 upgrade_single() {
-  local packages="" packages_set=0 force=0 presets=()
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --packages) packages="${2?--packages needs a value (may be empty)}"; packages_set=1; shift 2 ;;
-      --preset) presets+=("${2:?--preset needs a value}"); shift 2 ;;
-      --force) force=1; shift ;;
-      *) die "upgrade: unknown option $1 (see bin/homefield help)" ;;
-    esac
-  done
-  [ ${#presets[@]} -eq 0 ] || load_presets ${presets[@]+"${presets[@]}"}
+  parse_upgrade_args "$@"
+  local packages="$UP_PACKAGES" packages_set="$UP_PACKAGES_SET" force="$UP_FORCE"
+  [ ${#UP_PRESETS[@]} -eq 0 ] || load_presets ${UP_PRESETS[@]+"${UP_PRESETS[@]}"}
   check_host
   vm_lookup
   [ -n "$VM_STATUS" ] || die "no VM ${INSTANCE}; run bin/homefield install"
@@ -791,25 +784,38 @@ upgrade_single() {
   runner_back
 }
 
-cmd_upgrade() {
-  # The options are validated once here: an unknown one, or a malformed preset,
-  # fails before any VM is stopped and does not repeat per instance (#182).
-  local opts=("$@") packages_set=0 presets=()
+# parse_upgrade_args: the --packages/--preset/--force options, into
+# UP_PACKAGES/UP_PACKAGES_SET/UP_FORCE/UP_PRESETS. cmd_upgrade runs it once
+# for the early refusal (#182) and hands the same arguments to vm_dispatch;
+# upgrade_single runs it again for the values — one parser, so the two can
+# never disagree about what the options are.
+parse_upgrade_args() {
+  UP_PACKAGES="" UP_PACKAGES_SET=0 UP_FORCE=0
+  UP_PRESETS=()
   while [ $# -gt 0 ]; do
     case "$1" in
       --packages)
         [ $# -ge 2 ] || die "--packages needs a value (may be empty)"
+        UP_PACKAGES="$2" UP_PACKAGES_SET=1
         shift 2
         ;;
       --preset)
-        presets+=("${2:?--preset needs a value}")
+        UP_PRESETS+=("${2:?--preset needs a value}")
         shift 2
         ;;
-      --force) shift ;;
+      --force) UP_FORCE=1; shift ;;
       *) die "upgrade: unknown option $1 (see bin/homefield help)" ;;
     esac
   done
-  [ ${#presets[@]} -eq 0 ] || load_presets "${presets[@]+"${presets[@]}"}"
+}
+
+cmd_upgrade() {
+  # The options are validated once here: an unknown one, or a malformed
+  # preset, fails before any VM is stopped and does not repeat per instance
+  # (#182). The values are parsed again per instance, by the same parser.
+  parse_upgrade_args "$@"
+  local opts=("$@")
+  [ ${#UP_PRESETS[@]} -eq 0 ] || load_presets "${UP_PRESETS[@]+"${UP_PRESETS[@]}"}"
   vm_dispatch upgrade upgrade_single "${opts[@]+"${opts[@]}"}"
 }
 
