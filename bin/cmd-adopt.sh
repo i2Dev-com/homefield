@@ -202,14 +202,19 @@ adopt_events_key() {
 # report is what CI runs. A usable step is the action pinned to
 # this copy's release or a commit, in a workflow that runs on pull requests
 # (tools/adopt.py says which are).
-adopt_routing_check() {
-  local dir="$1" label="$2" label_given="$3" rows where gstatus glabel gblocks gwarns gjobs out rc lines
-  local gevents gdependabot gfallback garch gmode gmatch opts
-  local candidates=0 deferred="" routed routedjob
+# adopt_routing_init <label>: sets the outcome globals the check reports
+# through — ADOPT_READY, ADOPT_REASONS, ADOPT_NOTES, ADOPT_LABEL, ADOPT_EVENTS,
+# ADOPT_DEPENDABOT, ADOPT_FALLBACK, ADOPT_MODE, ADOPT_GUARDS, ADOPT_ROUTED —
+# to their defaults: ready until a reason, the flags' values where --events,
+# --dependabot and --fallback were given, and the expression's shape in
+# ADOPT_MODE. ADOPT_LABEL starts at the --label value; a guard's own label
+# replaces it below.
+adopt_routing_init() {
+  local label="$1"
   ADOPT_READY=1
   ADOPT_REASONS=""
   ADOPT_NOTES=""
-    ADOPT_LABEL="$label"
+  ADOPT_LABEL="$label"
   ADOPT_LABEL_OK=""
   ADOPT_EVENTS="${ADOPT_FLAG_EVENTS:-pull_request}"
   ADOPT_DEPENDABOT="${ADOPT_FLAG_DEPENDABOT:-hosted}"
@@ -223,10 +228,122 @@ adopt_routing_check() {
   fi
   ADOPT_GUARDS=0
   ADOPT_ROUTED=""
+}
+
+# adopt_routing_first <label> <label_given> <glabel> <gevents> <gdependabot>
+# <gfallback> <gmode>: the first usable guard row names the label and options
+# the repository routes on; they stand wherever a flag did not pick the value.
+# Sets ADOPT_LABEL, ADOPT_EVENTS, ADOPT_DEPENDABOT, ADOPT_FALLBACK and
+# ADOPT_MODE.
+adopt_routing_first() {
+  local label="$1" label_given="$2" glabel="$3" gevents="$4" gdependabot="$5" gfallback="$6" gmode="$7"
+  [ "$label_given" = 1 ] || ADOPT_LABEL="$glabel"
+  [ -n "$ADOPT_FLAG_EVENTS" ] || ADOPT_EVENTS="$gevents"
+  [ -n "$ADOPT_FLAG_DEPENDABOT" ] || ADOPT_DEPENDABOT="$gdependabot"
+  [ -n "$ADOPT_FLAG_FALLBACK" ] || ADOPT_FALLBACK="$gfallback"
+  [ "$ADOPT_FLAG_GUARDS" = 1 ] || ADOPT_MODE="$gmode"
+}
+
+# adopt_routing_mismatches <label> <label_given> <where> <glabel> <gevents>
+# <gdependabot> <gfallback> <garch> <gmode>: one reason on ADOPT_REASONS for
+# every guard option that disagrees with a flag (--label, --events,
+# --dependabot, --fallback) and for the ones adopt cannot route (a non-arm64
+# arch, a non-guarded mode under --guards). Returns 1 when a mismatch was
+# added, 0 when the guard's own options speak for the repository.
+adopt_routing_mismatches() {
+  local label="$1" label_given="$2" where="$3" glabel="$4" gevents="$5" gdependabot="$6" gfallback="$7" garch="$8" gmode="$9"
+  local match=1
+  if [ "$label_given" = 1 ] && [ "$glabel" != "$label" ]; then
+    match=0
+    adopt_reason "the routing-guard step at ${where} uses label ${glabel}, but --label is ${label}"
+  fi
+  if [ -n "$ADOPT_FLAG_EVENTS" ] && [ "$(adopt_events_key "$gevents")" != "$(adopt_events_key "$ADOPT_FLAG_EVENTS")" ]; then
+    match=0
+    adopt_reason "the routing-guard step at ${where} uses events ${gevents}, but --events is ${ADOPT_FLAG_EVENTS}"
+  fi
+  if [ -n "$ADOPT_FLAG_DEPENDABOT" ] && [ "$gdependabot" != "$ADOPT_FLAG_DEPENDABOT" ]; then
+    match=0
+    adopt_reason "the routing-guard step at ${where} uses dependabot ${gdependabot}, but --dependabot is ${ADOPT_FLAG_DEPENDABOT}"
+  fi
+  if [ -n "$ADOPT_FLAG_FALLBACK" ] && [ "$gfallback" != "$ADOPT_FLAG_FALLBACK" ]; then
+    match=0
+    adopt_reason "the routing-guard step at ${where} uses fallback ${gfallback}, but --fallback is ${ADOPT_FLAG_FALLBACK}"
+  fi
+  if [ "$garch" != arm64 ]; then
+    match=0
+    adopt_reason "the routing-guard step at ${where} uses arch ${garch}, but adopt sets up an arm64 VM; a guard step for another architecture routes its jobs to a runner this Mac does not have (docs/adopting.md, step 3)"
+  fi
+  if [ "$ADOPT_FLAG_GUARDS" = 1 ] && [ "$gmode" != guards ]; then
+    match=0
+    adopt_reason "the routing-guard step at ${where} uses mode ${gmode}, but --guards is given: simple mode is the one-clause expression whose only guardrail is CI_RUNNER, and it cannot check the guarded one's clauses; drop --guards, or edit the guard (docs/adopting.md, step 3)"
+  fi
+  [ "$match" = 1 ]
+}
+
+# adopt_routing_routed <dir> <guard options...>: the jobs routed under the
+# guard's label and options, into ADOPT_ROUTED. A repository can carry several
+# routing-guard steps; jobs routed under any of them count, not only the first
+# guard's — unless a flag picked a value, in which case only steps carrying it
+# speak for it and the others are already reported as a mismatch above. A
+# guard whose own options the script refuses fails here too: the guard check
+# reports that, so an empty list is right for now.
+adopt_routing_routed() {
+  local dir="$1" routed routedjob
+  shift
+  routed="$(python3 -I "$ROOT/routing-guard/routing_guard.py" --workflows-dir "$dir" "$@" --list 2>/dev/null)" || routed=""
+  while IFS= read -r routedjob; do
+    [ -n "$routedjob" ] || continue
+    case $'\n'"$ADOPT_ROUTED"$'\n' in
+      *"$'\n'${routedjob}"$'\n'*) ;;
+      *) ADOPT_ROUTED="${ADOPT_ROUTED:+${ADOPT_ROUTED}$'\n'}${routedjob}" ;;
+    esac
+  done <<<"$routed"
+}
+
+# adopt_routing_ok <gmatch> <glabel> <gevents> <gdependabot> <gfallback>
+# <gmode>: the first guard that passes and agrees with the flags names the
+# label and options; they equal the flags' wherever one was given. Sets
+# ADOPT_LABEL_OK and ADOPT_OK_EVENTS, ADOPT_OK_DEPENDABOT, ADOPT_OK_FALLBACK
+# and ADOPT_OK_MODE.
+adopt_routing_ok() {
+  local gmatch="$1" glabel="$2" gevents="$3" gdependabot="$4" gfallback="$5" gmode="$6"
+  if [ "$gmatch" = 1 ] && [ -z "$ADOPT_LABEL_OK" ]; then
+    ADOPT_LABEL_OK="$glabel"
+    ADOPT_OK_EVENTS="$gevents"
+    ADOPT_OK_DEPENDABOT="$gdependabot"
+    ADOPT_OK_FALLBACK="$gfallback"
+    ADOPT_OK_MODE="$gmode"
+  fi
+}
+
+# adopt_routing_failure <where> <out>: one reason for a guard that would fail,
+# from the routing_guard.py output <out>: the failure lines only, no colours,
+# no passes, no header or totals.
+adopt_routing_failure() {
+  local where="$1" out="$2" lines
+  lines="$(printf '%s\n' "$out" | sed $'s/\033\\[[0-9;]*m//g' |
+    grep -v -e PASS -e '^self-hosted runner routing' -e ' passed, ' -e '^$' || true)"
+  adopt_reason "the routing-guard step at ${where} would fail:"
+  ADOPT_REASONS="${ADOPT_REASONS}$(printf '%s\n' "$lines" | sed 's/^ */      /')"$'\n'
+}
+
+# adopt_routing_guards <dir> <label> <label_given>: reads the guard rows
+# tools/adopt.py finds in dir and checks each one. Sets ADOPT_GUARDS (the
+# usable guards found) and ADOPT_CANDIDATES (the guard steps at all), and
+# hands the blocked rows' reasons back through ADOPT_DEFERRED — they are only
+# a reason when no step is usable. The outcome globals the row helpers set
+# (ADOPT_LABEL, ADOPT_EVENTS, ADOPT_DEPENDABOT, ADOPT_FALLBACK, ADOPT_MODE,
+# ADOPT_REASONS, ADOPT_NOTES, ADOPT_ROUTED, ADOPT_LABEL_OK, ADOPT_OK_*) are
+# what the rest of the check and the caller read.
+adopt_routing_guards() {
+  local dir="$1" label="$2" label_given="$3" rows where gstatus glabel gblocks gwarns gevents gdependabot gfallback garch gmode gjobs
+  local gmatch opts out rc
+  ADOPT_CANDIDATES=0
+  ADOPT_DEFERRED=""
   rows="$(python3 -I "$ROOT/tools/adopt.py" guards "$dir")" || die "adopt: could not read the downloaded workflows"
   while IFS=$'\t' read -r where gstatus glabel gblocks gwarns gevents gdependabot gfallback garch gmode gjobs; do
     [ -n "$where" ] || continue
-    candidates=$((candidates + 1))
+    ADOPT_CANDIDATES=$((ADOPT_CANDIDATES + 1))
     case "$gstatus" in
       source)
         adopt_each adopt_reason "$gblocks"
@@ -235,119 +352,64 @@ adopt_routing_check() {
       blocked)
         # Only a reason when no step is usable: a leftover that cannot run is
         # not a guard, and does no harm next to one that can.
-        [ "$gblocks" = - ] || deferred="${deferred:+${deferred};}${gblocks}"
+        [ "$gblocks" = - ] || ADOPT_DEFERRED="${ADOPT_DEFERRED:+${ADOPT_DEFERRED};}${gblocks}"
         continue
         ;;
     esac
     if [ "$ADOPT_GUARDS" = 0 ]; then
-      [ "$label_given" = 1 ] || ADOPT_LABEL="$glabel"
-      [ -n "$ADOPT_FLAG_EVENTS" ] || ADOPT_EVENTS="$gevents"
-      [ -n "$ADOPT_FLAG_DEPENDABOT" ] || ADOPT_DEPENDABOT="$gdependabot"
-      [ -n "$ADOPT_FLAG_FALLBACK" ] || ADOPT_FALLBACK="$gfallback"
-      [ "$ADOPT_FLAG_GUARDS" = 1 ] || ADOPT_MODE="$gmode"
+      adopt_routing_first "$label" "$label_given" "$glabel" "$gevents" "$gdependabot" "$gfallback" "$gmode"
     fi
     ADOPT_GUARDS=$((ADOPT_GUARDS + 1))
     adopt_each adopt_note "$gwarns"
     gmatch=1
-    if [ "$label_given" = 1 ] && [ "$glabel" != "$label" ]; then
-      gmatch=0
-      adopt_reason "the routing-guard step at ${where} uses label ${glabel}, but --label is ${label}"
-    fi
-    if [ -n "$ADOPT_FLAG_EVENTS" ] && [ "$(adopt_events_key "$gevents")" != "$(adopt_events_key "$ADOPT_FLAG_EVENTS")" ]; then
-      gmatch=0
-      adopt_reason "the routing-guard step at ${where} uses events ${gevents}, but --events is ${ADOPT_FLAG_EVENTS}"
-    fi
-    if [ -n "$ADOPT_FLAG_DEPENDABOT" ] && [ "$gdependabot" != "$ADOPT_FLAG_DEPENDABOT" ]; then
-      gmatch=0
-      adopt_reason "the routing-guard step at ${where} uses dependabot ${gdependabot}, but --dependabot is ${ADOPT_FLAG_DEPENDABOT}"
-    fi
-    if [ -n "$ADOPT_FLAG_FALLBACK" ] && [ "$gfallback" != "$ADOPT_FLAG_FALLBACK" ]; then
-      gmatch=0
-      adopt_reason "the routing-guard step at ${where} uses fallback ${gfallback}, but --fallback is ${ADOPT_FLAG_FALLBACK}"
-    fi
-    if [ "$garch" != arm64 ]; then
-      gmatch=0
-      adopt_reason "the routing-guard step at ${where} uses arch ${garch}, but adopt sets up an arm64 VM; a guard step for another architecture routes its jobs to a runner this Mac does not have (docs/adopting.md, step 3)"
-    fi
-    if [ "$ADOPT_FLAG_GUARDS" = 1 ] && [ "$gmode" != guards ]; then
-      gmatch=0
-      adopt_reason "the routing-guard step at ${where} uses mode ${gmode}, but --guards is given: simple mode is the one-clause expression whose only guardrail is CI_RUNNER, and it cannot check the guarded one's clauses; drop --guards, or edit the guard (docs/adopting.md, step 3)"
-    fi
+    adopt_routing_mismatches "$label" "$label_given" "$where" "$glabel" "$gevents" "$gdependabot" "$gfallback" "$garch" "$gmode" || gmatch=0
     opts=(--label "$glabel" --events "$gevents" --dependabot "$gdependabot" --fallback "$gfallback" --arch "$garch" --mode "$gmode")
-    # Collect the jobs routed under this guard's label and options. A
-    # repository can carry several routing-guard steps; jobs routed under any
-    # of them count, not only the first guard's — unless a flag picked a
-    # value, in which case only steps carrying it speak for it and the others
-    # are already reported as a mismatch above.
     if [ "$gmatch" = 1 ]; then
-      # A guard whose own options the script refuses fails here too: the
-      # check below reports that, so an empty list is right for now.
-      routed="$(python3 -I "$ROOT/routing-guard/routing_guard.py" --workflows-dir "$dir" "${opts[@]}" --list 2>/dev/null)" || routed=""
-      while IFS= read -r routedjob; do
-        [ -n "$routedjob" ] || continue
-        case $'\n'"$ADOPT_ROUTED"$'\n' in
-          *"$'\n'${routedjob}"$'\n'*) ;;
-          *) ADOPT_ROUTED="${ADOPT_ROUTED:+${ADOPT_ROUTED}$'\n'}${routedjob}" ;;
-        esac
-      done <<<"$routed"
+      adopt_routing_routed "$dir" "${opts[@]}"
     fi
     rc=0
     out="$(python3 -I "$ROOT/routing-guard/routing_guard.py" --workflows-dir "$dir" "${opts[@]}" --jobs "$gjobs" 2>&1)" || rc=$?
     if [ "$rc" -eq 0 ]; then
-      # The first guard that passes and agrees with the flags names the label
-      # and options; they equal the flags' wherever one was given.
-      if [ "$gmatch" = 1 ] && [ -z "$ADOPT_LABEL_OK" ]; then
-        ADOPT_LABEL_OK="$glabel"
-        ADOPT_OK_EVENTS="$gevents"
-        ADOPT_OK_DEPENDABOT="$gdependabot"
-        ADOPT_OK_FALLBACK="$gfallback"
-        ADOPT_OK_MODE="$gmode"
-      fi
+      adopt_routing_ok "$gmatch" "$glabel" "$gevents" "$gdependabot" "$gfallback" "$gmode"
       continue
     fi
-    # The failure lines only: no colours, no passes, no header or totals.
-    lines="$(printf '%s\n' "$out" | sed $'s/\033\\[[0-9;]*m//g' |
-      grep -v -e PASS -e '^self-hosted runner routing' -e ' passed, ' -e '^$' || true)"
-    adopt_reason "the routing-guard step at ${where} would fail:"
-    ADOPT_REASONS="${ADOPT_REASONS}$(printf '%s\n' "$lines" | sed 's/^ */      /')"$'\n'
+    adopt_routing_failure "$where" "$out"
   done <<<"$rows"
-  if [ "$ADOPT_MODE" = simple ] && [ -n "$ADOPT_FLAG_EVENTS$ADOPT_FLAG_DEPENDABOT" ]; then
-    die "adopt: --events and --dependabot have no effect in simple mode, which routes every event; drop them, or pass --guards for the guarded expression"
+}
+
+# adopt_routing_noguard <dir> <deferred>: what a repository with no usable
+# guard step is told. The blocked rows' reasons (<deferred>) become reasons
+# after all, then the no-guard reason, and the routed jobs are listed by
+# routing_guard.py itself: no guard to say which label applies, so the check
+# looks with the expected one, as before. The options were checked above, so a
+# failure here is the script not running, not "no jobs": an empty list would
+# hide it. The shape is the resolved one — simple without --guards, the
+# guarded one with it. Sets ADOPT_ROUTED.
+adopt_routing_noguard() {
+  local dir="$1" deferred="$2"
+  adopt_each adopt_reason "${deferred:--}"
+  if [ "$ADOPT_CANDIDATES" = 0 ]; then
+    adopt_reason "no routing-guard step in .github/workflows (docs/adopting.md, step 3)"
+  else
+    adopt_reason "no routing-guard step that runs on pull requests (docs/adopting.md, step 3)"
   fi
-  if [ "$ADOPT_GUARDS" = 0 ]; then
-    adopt_each adopt_reason "${deferred:--}"
-    if [ "$candidates" = 0 ]; then
-      adopt_reason "no routing-guard step in .github/workflows (docs/adopting.md, step 3)"
-    else
-      adopt_reason "no routing-guard step that runs on pull requests (docs/adopting.md, step 3)"
-    fi
-    # No guard to say which label applies; look with the expected one, as before.
-    # The options were checked above, so a failure here is the script not
-    # running, not "no jobs": an empty list would hide it. The shape is the
-    # resolved one — simple without --guards, the guarded one with it.
-    if [ "$ADOPT_MODE" = guards ]; then
-      ADOPT_ROUTED="$(python3 -I "$ROOT/routing-guard/routing_guard.py" --workflows-dir "$dir" --label "$ADOPT_LABEL" \
-        --events "$ADOPT_EVENTS" --dependabot "$ADOPT_DEPENDABOT" --fallback "$ADOPT_FALLBACK" --list 2>/dev/null)" ||
-        die "adopt: routing_guard.py could not list the routed jobs; run it by hand on the workflows to see why"
-    else
-      ADOPT_ROUTED="$(python3 -I "$ROOT/routing-guard/routing_guard.py" --workflows-dir "$dir" --label "$ADOPT_LABEL" \
-        --mode simple --fallback "$ADOPT_FALLBACK" --list 2>/dev/null)" ||
-        die "adopt: routing_guard.py could not list the routed jobs; run it by hand on the workflows to see why"
-    fi
-  elif [ -n "$ADOPT_LABEL_OK" ]; then
-    ADOPT_LABEL="$ADOPT_LABEL_OK"
-    ADOPT_EVENTS="$ADOPT_OK_EVENTS"
-    ADOPT_DEPENDABOT="$ADOPT_OK_DEPENDABOT"
-    ADOPT_FALLBACK="$ADOPT_OK_FALLBACK"
-    ADOPT_MODE="$ADOPT_OK_MODE"
+  if [ "$ADOPT_MODE" = guards ]; then
+    ADOPT_ROUTED="$(python3 -I "$ROOT/routing-guard/routing_guard.py" --workflows-dir "$dir" --label "$ADOPT_LABEL" \
+      --events "$ADOPT_EVENTS" --dependabot "$ADOPT_DEPENDABOT" --fallback "$ADOPT_FALLBACK" --list 2>/dev/null)" ||
+      die "adopt: routing_guard.py could not list the routed jobs; run it by hand on the workflows to see why"
+  else
+    ADOPT_ROUTED="$(python3 -I "$ROOT/routing-guard/routing_guard.py" --workflows-dir "$dir" --label "$ADOPT_LABEL" \
+      --mode simple --fallback "$ADOPT_FALLBACK" --list 2>/dev/null)" ||
+      die "adopt: routing_guard.py could not list the routed jobs; run it by hand on the workflows to see why"
   fi
-  if [ -z "$ADOPT_ROUTED" ]; then
-    adopt_reason "no job uses the routing expression for label ${ADOPT_LABEL} (docs/adopting.md, step 2)"
-  fi
-  # Jobs with no runs-on run on GitHub's ubuntu-latest default and are left
-  # hosted silently — the routing-completeness gap: nothing else surfaces
-  # them until --verify after the switch. The scanner's own parse, so the
-  # ready report says so.
+}
+
+# adopt_routing_norunson <dir>: the jobs with no runs-on, into ADOPT_NORUNSON.
+# They run on GitHub's ubuntu-latest default and are left hosted silently —
+# the routing-completeness gap: nothing else surfaces them until --verify
+# after the switch. The scanner's own parse, so the ready report says so.
+adopt_routing_norunson() {
+  local dir="$1"
   if [ "$ADOPT_MODE" = guards ]; then
     ADOPT_NORUNSON="$(python3 -I "$ROOT/routing-guard/routing_guard.py" --workflows-dir "$dir" --label "$ADOPT_LABEL" \
       --events "$ADOPT_EVENTS" --dependabot "$ADOPT_DEPENDABOT" --fallback "$ADOPT_FALLBACK" --list-unroutable 2>/dev/null)" || ADOPT_NORUNSON=""
@@ -355,6 +417,13 @@ adopt_routing_check() {
     ADOPT_NORUNSON="$(python3 -I "$ROOT/routing-guard/routing_guard.py" --workflows-dir "$dir" --label "$ADOPT_LABEL" \
       --mode simple --fallback "$ADOPT_FALLBACK" --list-unroutable 2>/dev/null)" || ADOPT_NORUNSON=""
   fi
+}
+
+# adopt_routing_report: what the check found, as the caller and the person
+# running it read it: ready with the routed jobs, or not ready with its
+# reasons, plus the notes on guards that may not run on every pull request.
+# Reads the ADOPT_* outcome globals; changes nothing.
+adopt_routing_report() {
   if [ "$ADOPT_READY" = 1 ]; then
     log "routing: ready, the guard passes and these jobs are routed: $(printf '%s' "$ADOPT_ROUTED" | tr '\n' ' ')"
     [ -z "$ADOPT_NORUNSON" ] || log "routing: these jobs have no runs-on and stay hosted on GitHub's default: $(printf '%s' "$ADOPT_NORUNSON" | tr '\n' ' ')"
@@ -366,6 +435,44 @@ adopt_routing_check() {
     adopt_warn "the routing guard may not run on every pull request. Check that every pull request that changes .github/workflows still runs it:"
     printf '%s' "$ADOPT_NOTES" | sed 's/^/homefield:   /' >&2
   fi
+}
+
+# adopt_routing_check <dir> <label> <label_given>: sets ADOPT_READY (1 when a
+# usable routing-guard step is there, passes, and at least one job is routed),
+# ADOPT_REASONS (why not), ADOPT_LABEL, ADOPT_EVENTS, ADOPT_DEPENDABOT,
+# ADOPT_FALLBACK and ADOPT_ROUTED. The workflows' own guard says which label,
+# options and jobs to expect; --events, --dependabot and --fallback arrive as
+# ADOPT_FLAG_EVENTS, ADOPT_FLAG_DEPENDABOT and ADOPT_FLAG_FALLBACK (empty when
+# not given) and are held to the guard the way --label is. The guard's arch is
+# read too, and refused unless arm64: adopt sets up the arm64 VM, and there is
+# no flag to change that (#21 is the x86-64 future). The checks are routing_guard.py,
+# the same script the guard runs in CI, with the step's own arch, so what they
+# report is what CI runs. A usable step is the action pinned to
+# this copy's release or a commit, in a workflow that runs on pull requests
+# (tools/adopt.py says which are). The work goes to adopt_routing_init,
+# adopt_routing_guards, adopt_routing_noguard, adopt_routing_norunson and
+# adopt_routing_report.
+adopt_routing_check() {
+  local dir="$1" label="$2" label_given="$3"
+  adopt_routing_init "$label"
+  adopt_routing_guards "$dir" "$label" "$label_given"
+  if [ "$ADOPT_MODE" = simple ] && [ -n "$ADOPT_FLAG_EVENTS$ADOPT_FLAG_DEPENDABOT" ]; then
+    die "adopt: --events and --dependabot have no effect in simple mode, which routes every event; drop them, or pass --guards for the guarded expression"
+  fi
+  if [ "$ADOPT_GUARDS" = 0 ]; then
+    adopt_routing_noguard "$dir" "$ADOPT_DEFERRED"
+  elif [ -n "$ADOPT_LABEL_OK" ]; then
+    ADOPT_LABEL="$ADOPT_LABEL_OK"
+    ADOPT_EVENTS="$ADOPT_OK_EVENTS"
+    ADOPT_DEPENDABOT="$ADOPT_OK_DEPENDABOT"
+    ADOPT_FALLBACK="$ADOPT_OK_FALLBACK"
+    ADOPT_MODE="$ADOPT_OK_MODE"
+  fi
+  if [ -z "$ADOPT_ROUTED" ]; then
+    adopt_reason "no job uses the routing expression for label ${ADOPT_LABEL} (docs/adopting.md, step 2)"
+  fi
+  adopt_routing_norunson "$dir"
+  adopt_routing_report
 }
 
 # adopt_fallback <image>: a warning only. routing_guard.py accepts any
@@ -753,10 +860,29 @@ adopt_write_denied() {
 # without one gets simple — the shape a personal repository reads at a
 # glance. events and dependabot have no effect in simple mode, which routes
 # every event, so they are refused there.
-adopt_setup() {
-  local repo="$1" label="$2" jobs="$3" dry="$4"
-  local setup="$ADOPT_TMP/setup" plan kind value name enc sha head_sha url body check line ws
-  local opts=(--label "$label") gopts mode expr routed="" files=""
+# State adopt_setup's helpers hand each other: ADOPT_SETUP_EXPR, the
+# expression tools/adopt.py setup writes into the workflows; ADOPT_SETUP_OPTS,
+# its options; ADOPT_SETUP_GOPTS, the options the guard check of the staged
+# files runs with; and the plan's outcome, ADOPT_SETUP_ROUTED (the planned
+# jobs, comma-joined) and ADOPT_SETUP_FILES (the files it touches, one per
+# line). The pull request body and the staged-files check read them.
+ADOPT_SETUP_EXPR=""
+ADOPT_SETUP_OPTS=()
+ADOPT_SETUP_GOPTS=()
+ADOPT_SETUP_ROUTED=""
+ADOPT_SETUP_FILES=""
+
+# adopt_setup_expression <label>: resolves the expression's shape and the
+# routing_guard.py invocations the plan and its check run with, into
+# ADOPT_SETUP_EXPR, ADOPT_SETUP_OPTS and ADOPT_SETUP_GOPTS. The shape
+# (--mode): --guards asks for the guarded one; without it, a guard
+# already in the repository keeps its own shape and a repository without one
+# gets simple — the shape a personal repository reads at a glance. events and
+# dependabot have no effect in simple mode, which routes every event, so they
+# are refused there. Dies when the options cannot be routed on.
+adopt_setup_expression() {
+  local label="$1" mode expr
+  local opts=(--label "$label") gopts
   if [ "$ADOPT_FLAG_GUARDS" = 1 ]; then
     mode=guards
   else
@@ -789,10 +915,21 @@ adopt_setup() {
     gopts+=(--events "${ADOPT_FLAG_EVENTS:-pull_request}" --dependabot "${ADOPT_FLAG_DEPENDABOT:-hosted}")
   fi
   gopts+=(--fallback "${ADOPT_FLAG_FALLBACK:-ubuntu-latest}")
-  ADOPT_SETUP_REPO="$repo"
+  ADOPT_SETUP_EXPR="$expr"
+  ADOPT_SETUP_OPTS=("${opts[@]}")
+  ADOPT_SETUP_GOPTS=("${gopts[@]}")
+}
 
+# adopt_setup_plan <jobs>: runs tools/adopt.py setup over the downloaded
+# workflows with ADOPT_SETUP_EXPR and ADOPT_SETUP_OPTS, into $ADOPT_TMP/setup,
+# and reads its plan into ADOPT_SETUP_ROUTED and ADOPT_SETUP_FILES. Dies when
+# nothing was planned; warns the plan's own lines (setup-err), and logs the
+# routes and the files it will change.
+adopt_setup_plan() {
+  local jobs="$1" setup="$ADOPT_TMP/setup" plan kind value name
+  local routed="" files=""
   plan="$(python3 -I "$ROOT/tools/adopt.py" setup "$ADOPT_TMP/workflows" "$setup" \
-    --expression "$expr" --jobs "$jobs" "${opts[@]}" 2>"$ADOPT_TMP/setup-err")" ||
+    --expression "$ADOPT_SETUP_EXPR" --jobs "$jobs" "${ADOPT_SETUP_OPTS[@]}" 2>"$ADOPT_TMP/setup-err")" ||
     die "adopt: setup: $(head -1 "$ADOPT_TMP/setup-err")"
   while IFS=$'\t' read -r kind value; do
     case "$kind" in
@@ -802,43 +939,56 @@ adopt_setup() {
   done <<<"$plan"
   [ -n "$routed" ] || die "adopt: setup: no job was planned; run bin/homefield adopt without --setup to see why"
   while IFS= read -r line; do adopt_warn "$line"; done <"$ADOPT_TMP/setup-err"
-
+  ADOPT_SETUP_ROUTED="$routed"
+  ADOPT_SETUP_FILES="$files"
   log "setup: routes $(printf '%s' "$routed" | tr ',' ' ')"
   while IFS= read -r name; do
     [ -n "$name" ] && log "setup: changes .github/workflows/${name}"
   done <<<"$files"
-  # The staged files are checked with the very script the guard step runs, so
-  # merging what we generate cannot fail CI on routing.
-  check="$(python3 -I "$ROOT/routing-guard/routing_guard.py" --workflows-dir "$setup" "${gopts[@]}" --jobs "$routed" 2>&1)" || {
+  # The file list's trailing empty line makes the loop above end with the
+  # failed test of it; the run goes on, so the status is not the plan's.
+  return 0
+}
+
+# adopt_setup_check <repo> <dir>: checks the staged files in dir with the very
+# script the guard step runs (ADOPT_SETUP_GOPTS, ADOPT_SETUP_ROUTED), so
+# merging what we generate cannot fail CI on routing. Dies, printing the
+# guard's failures, when they would not pass.
+adopt_setup_check() {
+  local repo="$1" dir="$2" check
+  check="$(python3 -I "$ROOT/routing-guard/routing_guard.py" --workflows-dir "$dir" "${ADOPT_SETUP_GOPTS[@]}" --jobs "$ADOPT_SETUP_ROUTED" 2>&1)" || {
     printf '%s\n' "$check" | sed $'s/\033\\[[0-9;]*m//g' |
       grep -v -e PASS -e '^self-hosted runner routing' -e ' passed, ' -e '^$' >&2 || true
     die "adopt: setup: the generated workflows would fail the routing guard; nothing was sent to ${repo}"
   }
-  if [ "$dry" = 1 ]; then
-    log "setup: dry run: nothing was sent to ${repo}"
-    return 0
-  fi
+}
 
-  # The Contents writes below need the workflow scope of a classic PAT, and
-  # GitHub answers a bare 404 without it (#165): the same token writes
-  # everywhere else. A scope proven absent stops here, before the branch
-  # exists; one that cannot be told goes on, and the write's own 404 below
-  # says so.
-  ws=0
+# adopt_setup_scope: the Contents writes of a --setup run need the workflow
+# scope of a classic PAT, and GitHub answers a bare 404 without it (#165): the
+# same token writes everywhere else. A scope proven absent stops here, before
+# the branch exists; one that cannot be told goes on, and the write's own 404
+# below says so.
+adopt_setup_scope() {
+  local ws=0
   adopt_workflow_scope || ws=$?
   if [ "$ws" = 1 ]; then
     die "adopt: setup: gh's active login has no workflow scope, and writing .github/workflows/ needs it (a bare 404 is all GitHub says): gh auth refresh -h github.com -s workflow, then run this again"
   fi
+}
 
+# adopt_setup_branch <repo>: creates SETUP_BRANCH from ADOPT_BRANCH, after
+# reading the head commit and refusing a branch that is already there. The
+# cleanup is armed before the call: a signal while it is in flight can find gh
+# finishing it, and the branch would be left with no one to remove it. Where
+# gh was killed before it created the ref, the cleanup's delete finds nothing,
+# and says so. Sets ADOPT_SETUP_BRANCH_MADE for the trap.
+adopt_setup_branch() {
+  local repo="$1" head_sha
   head_sha="$(gh api "repos/${repo}/commits/${ADOPT_BRANCH}" --jq .sha 2>"$ADOPT_TMP/err")" ||
     die "adopt: setup: could not read ${ADOPT_BRANCH} on ${repo}: $(head -1 "$ADOPT_TMP/err")"
   if gh api "repos/${repo}/git/ref/heads/${SETUP_BRANCH}" --jq .object.sha >/dev/null 2>&1; then
     die "adopt: setup: the branch ${SETUP_BRANCH} already exists on ${repo}: merge or close its pull request, or delete the branch, and run again"
   fi
-  # The cleanup is armed before the call: a signal while it is in flight can
-  # find gh finishing it, and the branch would be left with no one to remove
-  # it. Where gh was killed before it created the ref, the cleanup's delete
-  # finds nothing, and says so.
   ADOPT_SETUP_BRANCH_MADE=1
   trap adopt_setup_exit EXIT
   gh api -X POST "repos/${repo}/git/refs" -f ref="refs/heads/${SETUP_BRANCH}" -f sha="$head_sha" >/dev/null || {
@@ -846,7 +996,12 @@ adopt_setup() {
     die "adopt: setup: could not create ${SETUP_BRANCH} on ${repo}"
   }
   log "setup: created ${SETUP_BRANCH} from ${ADOPT_BRANCH}"
+}
 
+# adopt_setup_write_files <repo> <dir>: writes every file of ADOPT_SETUP_FILES
+# to SETUP_BRANCH through the Contents API.
+adopt_setup_write_files() {
+  local repo="$1" dir="$2" name enc sha
   while IFS= read -r name; do
     [ -n "$name" ] || continue
     enc="$(python3 -I "$ROOT/tools/adopt.py" quote "$name" </dev/null)" ||
@@ -855,16 +1010,22 @@ adopt_setup() {
     # has no sha to update, and the Contents API creates it. -X GET matters:
     # -f alone would switch gh api to POST, which never answers this lookup.
     sha="$(gh api -X GET "repos/${repo}/contents/.github/workflows/${enc}" -f ref="$SETUP_BRANCH" --jq .sha 2>/dev/null)" || sha=""
-    python3 -I "$ROOT/tools/adopt.py" contents-payload "$setup/$name" "${sha:-none}" "$SETUP_MSG" "$SETUP_BRANCH" \
+    python3 -I "$ROOT/tools/adopt.py" contents-payload "$dir/$name" "${sha:-none}" "$SETUP_MSG" "$SETUP_BRANCH" \
       >"$ADOPT_TMP/put.json" || die "adopt: setup: could not stage .github/workflows/${name}"
     gh api -X PUT "repos/${repo}/contents/.github/workflows/${enc}" --input "$ADOPT_TMP/put.json" >/dev/null 2>"$ADOPT_TMP/err" ||
       die "$(adopt_write_denied "$name" "$repo" "$ADOPT_TMP/err")"
     log "setup: wrote .github/workflows/${name}"
-  done <<<"$files"
+  done <<<"$ADOPT_SETUP_FILES"
+}
 
+# adopt_setup_pr <repo> <label>: opens the pull request whose body lists
+# ADOPT_SETUP_ROUTED, sets the ADOPT_SETUP_PR_* state the interrupt handler
+# and the EXIT trap read, and logs what comes next.
+adopt_setup_pr() {
+  local repo="$1" label="$2" url body
   # shellcheck disable=SC2016  # `${{ runner.arch }}` is literal text for the PR body, not this shell's
   body="$(printf 'This PR routes these jobs to the local HomeField runner. See [docs/adopting.md](docs/adopting.md).\n\n%s\n\nGenerated by `homefield adopt --repo %s --setup`:\n\n- Every routed job now carries the canonical `runs-on` expression for label %s (docs/adopting.md, step 2).\n- The routing guard lists exactly these jobs (step 3).\n- Cache keys in the routed files that were built from `runner.os` gained `${{ runner.arch }}` (step 4).\n\nNothing is switched on by this PR: `CI_RUNNER` stays unset, so everything runs hosted. After merging, `%s` adds the repository to the runner group and routes (step 5); if the `--wait` run that opened this PR is still going, it does that for you.\n' \
-    "$(printf '%s\n' "$routed" | tr ',' '\n' | sed 's/^/- /')" "$repo" "$label" "$ADOPT_PLAIN_CMD")"
+    "$(printf '%s\n' "$ADOPT_SETUP_ROUTED" | tr ',' '\n' | sed 's/^/- /')" "$repo" "$label" "$ADOPT_PLAIN_CMD")"
   ADOPT_SETUP_PR_PENDING=1
   url="$(gh api -X POST "repos/${repo}/pulls" -f title="$SETUP_MSG" -f head="$SETUP_BRANCH" -f base="$ADOPT_BRANCH" -f body="$body" --jq .html_url 2>"$ADOPT_TMP/err")" || {
     ADOPT_SETUP_PR_PENDING=0
@@ -880,6 +1041,34 @@ adopt_setup() {
   else
     log "next: review and merge it, then ${ADOPT_PLAIN_CMD} (docs/adopting.md, step 5); adopt --setup --wait does both in one run"
   fi
+}
+
+# adopt_setup <owner/repo> <label> <jobs> <dry>: the --setup path, the
+# workflow edits of docs/adopting.md steps 1-4 opened as a pull request. The
+# plan comes from tools/adopt.py setup over the same downloaded workflows a
+# normal adopt checks; it is verified with routing_guard.py before anything
+# leaves the Mac, then written to SETUP_BRANCH through the Contents API and
+# opened with POST /pulls. Nothing here touches the runner group or CI_RUNNER:
+# that is step 5, after the pull request is merged. Needs gh with write access
+# to the repository; needs no VM. The work goes to adopt_setup_expression,
+# adopt_setup_plan, adopt_setup_check, adopt_setup_scope, adopt_setup_branch,
+# adopt_setup_write_files and adopt_setup_pr, which hand each other the
+# ADOPT_SETUP_* state above.
+adopt_setup() {
+  local repo="$1" label="$2" jobs="$3" dry="$4"
+  local setup="$ADOPT_TMP/setup"
+  adopt_setup_expression "$label"
+  ADOPT_SETUP_REPO="$repo"
+  adopt_setup_plan "$jobs"
+  adopt_setup_check "$repo" "$setup"
+  if [ "$dry" = 1 ]; then
+    log "setup: dry run: nothing was sent to ${repo}"
+    return 0
+  fi
+  adopt_setup_scope
+  adopt_setup_branch "$repo"
+  adopt_setup_write_files "$repo" "$setup"
+  adopt_setup_pr "$repo" "$label"
 }
 
 # adopt_interrupted <status> [parent]: Ctrl-C or SIGTERM during a --setup run
