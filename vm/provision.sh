@@ -121,8 +121,11 @@ if ! [[ "$RUNNER_NAME" =~ $name_re ]]; then
   echo "provision.sh: RUNNER_NAME must be letters, digits, '.', '_', ' ' or '-', got: $RUNNER_NAME" >&2
   exit 1
 fi
-if [ -n "$RUNNER_GROUP" ] && ! [[ "$RUNNER_GROUP" =~ ^[A-Za-z0-9._-]+$ ]]; then
-  echo "provision.sh: RUNNER_GROUP must be letters, digits, '.', '_' or '-', got: $RUNNER_GROUP" >&2
+# A runner group's name may carry spaces (the host creates and finds them:
+# tests/runner-group.sh), so the validation allows them too.
+group_re='^[A-Za-z0-9._ -]+$'
+if [ -n "$RUNNER_GROUP" ] && ! [[ "$RUNNER_GROUP" =~ $group_re ]]; then
+  echo "provision.sh: RUNNER_GROUP must be letters, digits, '.', '_', ' ' or '-', got: $RUNNER_GROUP" >&2
   exit 1
 fi
 # Debian package names, checked before anything runs; the names reach

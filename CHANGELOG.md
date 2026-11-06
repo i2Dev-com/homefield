@@ -55,10 +55,12 @@ fail, such as a new guard in the routing expression, bumps the minor version
   download, prints a hand-off when the post-update restart fails, wants
   Docker for the cleanup unit, gates the `chown -R` of the runner home on a
   run that replaced the binary, validates `RUNNER_NAME`/`RUNNER_GROUP`
-  locally, and reads a missing runner setting as empty instead of a
-  traceback; `install.sh` says what to do when the wrapper write fails (the
-  new copy is in place, the old one gone) and probes for the `setup`
-  command with `homefield setup --exists` instead of scraping help text.
+  locally (a group name keeps its spaces), and reads a missing runner
+  setting as empty instead of a traceback; `install.sh` says what to do when
+  the wrapper write fails (the new copy is in place, the old one gone) and
+  probes for the `setup` command with `homefield setup --exists`, falling
+  back to the help text for a release that has setup but predates the
+  probe.
 
 ### Changed
 
