@@ -20,6 +20,8 @@ preflight_collect() {
   local login scopes whoami py_version
   PF_NAME=()
   PF_LEVEL=()
+  # PF_MSG is read by lib/emit.sh's pf_render_row
+  # shellcheck disable=SC2034
   PF_MSG=()
   # Lima
   if ! command -v limactl >/dev/null 2>&1; then
@@ -88,16 +90,12 @@ preflight_collect() {
 # cmd_preflight: preflight_collect's checks, one line each, each failure with
 # the command that fixes it. Exits 0 when every check passes, 1 otherwise.
 cmd_preflight() {
-  local failed=0 total i level level_color
+  local failed=0 total i
   preflight_collect
   total=${#PF_NAME[@]}
   for ((i = 0; i < total; i++)); do
-    case "${PF_LEVEL[i]}" in
-      ok) level=OK; level_color=1 ;;
-      warn) level=WARN; level_color=2 ;;
-      *) level=FAIL; level_color=3; failed=$((failed + 1)) ;;
-    esac
-    printf '  %s%-6s%s%s\n' "$(hf_color "$level_color")" "$level" "$(hf_color 0)" "${PF_MSG[i]}"
+    pf_render_row "" "$i"
+    [ "${PF_LEVEL[i]}" = ok ] || [ "${PF_LEVEL[i]}" = warn ] || failed=$((failed + 1))
   done
   # Summary
   echo ""

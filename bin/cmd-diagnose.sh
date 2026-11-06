@@ -220,11 +220,7 @@ dg_collect_group() {
   # The same test as ensure_group's. The Default group is open to the whole
   # organization on purpose on a plan without custom groups (docs/runbook.md,
   # "Plans"), so that alone is a note; public repositories are never fine.
-  case "$vis" in
-    all) wide="every repository in ${org} can use it" ;;
-    private) wide="every private repository in ${org} can use it" ;;
-  esac
-  [ "$pub" != true ] || wide="${wide:+${wide}, and }public repositories can use it"
+  wide="$(group_wide "$org" "$vis" "$pub")"
   if [ -n "$wide" ]; then
     if [ "$(lower "$name")" = default ] && [ "$pub" != true ]; then
       dg_warn "runner group ${name}: ${wide}; right only if you trust every repository in ${org} (docs/runbook.md, \"Runner group\")"
@@ -267,11 +263,7 @@ dg_render_prereqs() {
   echo ""
   echo "Prerequisites:"
   for ((i = 0; i < n; i++)); do
-    case "${PF_LEVEL[i]}" in
-      ok) printf '  - %s%-6s%s%s\n' "$(hf_color 1)" OK "$(hf_color 0)" "${PF_MSG[i]}" ;;
-      warn) printf '  - %s%-6s%s%s\n' "$(hf_color 2)" WARN "$(hf_color 0)" "${PF_MSG[i]}" ;;
-      *) printf '  - %s%-6s%s%s\n' "$(hf_color 3)" FAIL "$(hf_color 0)" "${PF_MSG[i]}" ;;
-    esac
+    pf_render_row "- " "$i"
   done
   echo ""
 }

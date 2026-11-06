@@ -51,6 +51,20 @@ pf_add() {
   PF_MSG+=("$3")
 }
 
+# pf_render_row <prefix> <index>: one prerequisite row — the level word in its
+# color, the message. The prefix is "" for preflight's rows, "- " for
+# diagnose's list. One rendering, so the two commands cannot disagree about
+# what a level looks like.
+pf_render_row() {
+  local prefix="$1" i="$2" level level_color
+  case "${PF_LEVEL[i]}" in
+    ok) level=OK; level_color=1 ;;
+    warn) level=WARN; level_color=2 ;;
+    *) level=FAIL; level_color=3 ;;
+  esac
+  printf '  %s%s%-6s%s%s\n' "$prefix" "$(hf_color "$level_color")" "$level" "$(hf_color 0)" "${PF_MSG[i]}"
+}
+
 # json_str <text>: <text> as a JSON string literal. Plain bash: a stock Mac has
 # no jq, and its python3 may be only a stub. Escapes the quote, the backslash
 # and every control character; the rest, UTF-8 included, passes through.

@@ -477,6 +477,21 @@ token_hint() {
   echo "homefield: GITHUB_TOKEN or GH_TOKEN is set, and gh uses it instead of its stored login. If that login has admin:org, run this again with them empty for this one command: GITHUB_TOKEN= GH_TOKEN= homefield install ..." >&2
 }
 
+# group_wide <org> <vis> <pub>: why a runner group is wider than it should be
+# — "every repository in <org> can use it", "every private repository…", and
+# "public repositories can use it", joined with ", and "; "" when it is
+# narrow. One definition: ensure_group's warning and diagnose's problem line
+# must name the same widths the same way.
+group_wide() {
+  local why=""
+  case "$2" in
+    all) why="every repository in $1 can use it" ;;
+    private) why="every private repository in $1 can use it" ;;
+  esac
+  [ "$3" != true ] || why="${why:+${why}, and }public repositories can use it"
+  printf '%s' "$why"
+}
+
 # ensure_group <url> <group>: for an organization URL, finds the group by name
 # and warns when it is wider than it should be, or creates it. A repository
 # URL has no groups, and Default always exists. GitHub treats group names
@@ -525,12 +540,7 @@ ensure_group() {
   while IFS=$'\t' read -r name vis pub gid; do
     [ "$(lower "$name")" = "$(lower "$group")" ] || continue
     found=1
-    why=""
-    case "$vis" in
-      all) why="every repository in ${org} can use it" ;;
-      private) why="every private repository in ${org} can use it" ;;
-    esac
-    [ "$pub" != true ] || why="${why:+${why}, and }public repositories can use it"
+    why="$(group_wide "$org" "$vis" "$pub")"
     if [ -n "$why" ]; then
       GROUP_STATE=wide
       echo "homefield: warning: runner group ${name} is wider than it should be: ${why}." >&2
