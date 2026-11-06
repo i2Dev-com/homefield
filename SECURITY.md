@@ -22,7 +22,9 @@ they'd rather not be.
 - Getting the runner to run code from a fork, or from Dependabot or on a push
   when the repository has not opted those in (`dependabot: local`, `push` in
   `events`), despite the canonical routing expression; or a `runs-on` that
-  reaches the runner while `routing-guard` passes.
+  reaches the runner while `routing-guard` passes. The bypasses of the guard
+  found so far are documented, with the fix each one shipped in, in
+  [the routing guard's contract and past bypasses](docs/security.md).
 - Leaking registration or removal tokens (they should only ever reach the VM
   on stdin).
 - `bin/homefield` or `provision.sh` doing something unsafe with their inputs.
