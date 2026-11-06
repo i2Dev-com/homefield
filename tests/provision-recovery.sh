@@ -289,8 +289,13 @@ echo "a running runner, already current:"
 fresh "$current" active
 run chown
 rc=$?
+record "already current: no replacement, so no chown of _work at all" "0/0/running" "$rc/$(grep -c '^chown -R ' "$work/state.log" || true)/$(running)"
+
+echo "a running runner, binary replaced this run:"
+fresh 2.0.0 active
+run chown
+rc=$?
 record "chown fails: provisioning fails" "1" "$rc"
-record "...the runner was never stopped, and is still running" "0/running" "$(calls stop)/$(running)"
 
 echo "a stopped runner (the host stopped it for \`upgrade\`):"
 fresh 2.0.0 stopped

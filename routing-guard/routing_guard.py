@@ -302,6 +302,14 @@ def main() -> int:
         " line, and exit 0; checks nothing else",
     )
     ap.add_argument(
+        "--list-unroutable",
+        action="store_true",
+        help="print the jobs that carry no runs-on at all — GitHub runs them on"
+        " ubuntu-latest, so they stay hosted silently — one file:job per line,"
+        " and exit 0; reusable-workflow calls (their runs-on is the callee's)"
+        " are not listed; checks nothing else",
+    )
+    ap.add_argument(
         "--print-expression",
         action="store_true",
         help="print the canonical runs-on expression for the options and exit",
@@ -309,8 +317,9 @@ def main() -> int:
     args = ap.parse_args()
 
     def refuse(msg: str) -> int:
-        # --list and --print-expression keep stdout for what they print.
-        out = sys.stderr if args.list or args.print_expression else sys.stdout
+        # --list, --list-unroutable and --print-expression keep stdout for
+        # what they print.
+        out = sys.stderr if args.list or args.list_unroutable or args.print_expression else sys.stdout
         print(f"  \033[31mFAIL\033[0m {msg}", file=out)
         return 1
 
@@ -340,7 +349,7 @@ def main() -> int:
         print(canonical)
         return 0
     expected = [e for e in re.split(r"[\s,]+", args.jobs) if e]
-    quiet = args.list
+    quiet = args.list or args.list_unroutable
 
     failed = 0
     passed = 0
@@ -349,6 +358,15 @@ def main() -> int:
         nonlocal failed
         if not quiet:
             print(f"  \033[31mFAIL\033[0m {msg}")
+            # In CI, the same failure as a GitHub annotation, so it surfaces
+            # on the pull request's diff. The scanner's messages name the
+            # file and line ("ci.yml:12: ..."); the annotation carries them
+            # structurally, with the multi-line rest encoded GitHub's way.
+            if os.environ.get("GITHUB_ACTIONS"):
+                at = re.match(r"([^:\s]+):(\d+): ", msg)
+                if at:
+                    detail = msg[at.end():].replace("\n", "%0A")
+                    print(f"::error file=.github/workflows/{at.group(1)},line={at.group(2)}::{detail}")
         failed += 1
 
     def ok(msg: str) -> None:
@@ -368,6 +386,7 @@ def main() -> int:
         return 1
 
     found = []
+    no_runs_on = []
     for name in sorted(os.listdir(args.workflows_dir)):
         if not name.endswith((".yml", ".yaml")):
             continue
@@ -376,8 +395,15 @@ def main() -> int:
         job_indent = None
         body_indent = None
         scalar_col = None
+        file_no_runs_on = []
         path = os.path.join(args.workflows_dir, name)
-        with open(path) as fh:
+        # utf-8/replace, as tools/adopt.py reads the same files: a workflow
+        # with bytes outside UTF-8 scans the same under every locale.
+        try:
+            fh = open(path, encoding="utf-8", errors="replace")
+        except OSError as err:
+            fail(f"{name}: unreadable file: {err}")
+        with fh:
             for lineno, line in enumerate(fh, 1):
                 # Comments may name the label; only code counts. Safe to cut at
                 # '#' because the canonical expression contains none.
@@ -444,6 +470,10 @@ def main() -> int:
                         if m:
                             job = m.group(3)
                             body_indent = None
+                            # A job starts with no runs-on; the job-level
+                            # runs-on (and a reusable-workflow call, whose
+                            # runs-on is the callee's) clears it below.
+                            file_no_runs_on.append(job)
                         else:
                             job = None
                             fail(f"{name}:{lineno}: unreadable job id; {HOW}")
@@ -460,6 +490,8 @@ def main() -> int:
                         body_key = indent == body_indent
                 where = f"{name}:{lineno} (job {job})"
                 m = re.match(r"^\s*runs-on:\s*(.*?)\s*$", code)
+                if in_jobs and m and body_key and not in_scalar and job in file_no_runs_on:
+                    file_no_runs_on.remove(job)
                 # Only runs-on lines inside `jobs:` matter: a key named
                 # `runs-on:` under `on:` (a workflow_dispatch input, say) is
                 # not routing. Every one at the job's own key depth is checked
@@ -486,6 +518,16 @@ def main() -> int:
                     and m_uses
                     and not in_scalar
                     and body_key
+                    and job in file_no_runs_on
+                ):
+                    # A reusable-workflow call carries no runs-on of its own;
+                    # its routing is the callee's.
+                    file_no_runs_on.remove(job)
+                if (
+                    in_jobs
+                    and m_uses
+                    and not in_scalar
+                    and body_key
                     and not re.match(r"""^['"]?\./""", m_uses.group(1))
                 ):
                     fail(
@@ -503,17 +545,35 @@ def main() -> int:
                 if HOSTED.match(value):
                     continue
                 if value not in accepted:
+                    # Simple mode accepts the guarded expression too, so a
+                    # job carrying neither is told both.
+                    want = accepted[0]
+                    if len(accepted) > 1:
+                        want += f"\n         or:  {accepted[1]}"
                     fail(
-                        f"{where}: runs-on is neither a GitHub-hosted image nor the"
-                        f" {args.mode} expression\n"
-                        f"         got:  {value or '(multi-line)'}\n         want: {canonical}"
+                        f"{where}: runs-on is neither a GitHub-hosted image nor an"
+                        f" expression this check accepts\n"
+                        f"         got:  {value or '(multi-line)'}\n         want: {want}"
                     )
                     continue
                 found.append(f"{name}:{job}")
                 ok(f"{where} uses the {args.mode} expression")
 
+        no_runs_on += [f"{name}:{job}" for job in file_no_runs_on]
+
     if args.list:
         for key in found:
+            print(key)
+        # Always 0: a list reports what it found. Drift (a job carrying a
+        # stale expression, a shape this scan cannot read) is an answer, not
+        # a crash — bin/homefield's adopt builds its ready report from this
+        # listing and must see the found jobs. A run that died (no python,
+        # a crashed scan) exits nonzero, which is what the caller's
+        # `|| die` is for.
+        return 0
+
+    if args.list_unroutable:
+        for key in no_runs_on:
             print(key)
         return 0
 

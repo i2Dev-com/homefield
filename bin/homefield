@@ -557,10 +557,9 @@ check_instance() {
 
 # vm_status: prints the VM's status (Running, Stopped, ...), or nothing when
 # there is no such VM. Returns 2 when Lima could not be asked, or lists the VM
-# without a status. It lists every
-# instance and picks its own: `limactl list NAME` exits 1 for a missing VM
-# ("unmatched instances", Lima 2.2.0) as it does when Lima itself fails, so
-# only a successful list can say "no VM".
+# without a status. It lists every instance and picks its own: `limactl list
+# NAME` exits 1 for a missing VM ("unmatched instances", Lima 2.2.0) as it
+# does when Lima itself fails, so only a successful list can say "no VM".
 vm_status() {
   local rows name status
   rows="$(limactl list --format '{{.Name}} {{.Status}}' 2>/dev/null)" || return 2
@@ -819,6 +818,10 @@ verify_loopback() {
   fi
   nc -k -l 127.0.0.1 "$port" <"$tokenfile" >"$errfile" 2>&1 &
   listener=$!
+  # A Ctrl-C (or a TERM) during the ~5 s probe would orphan the listener:
+  # the handler kills it and the probe dies with the signal. Cleared on
+  # every path below that gets here on its own.
+  trap 'kill "$listener" 2>/dev/null; exit 130' INT TERM
   # The guest's answer means nothing until the token comes back locally:
   # the bind is asynchronous (retry a moment), and an answer that is not the
   # token is some service that already held the port — attribution is lost
@@ -832,6 +835,7 @@ verify_loopback() {
     sleep 0.5
   done
   if [ "$got" != "$token" ]; then
+    trap - INT TERM
     kill "$listener" 2>/dev/null || true
     wait "$listener" 2>/dev/null || true
     # The wait reaps the listener, so what it left behind is final: its
@@ -865,6 +869,7 @@ verify_loopback() {
     sleep 0.2
   done
   if [ "$ok" != 1 ]; then
+    trap - INT TERM
     kill "$listener" 2>/dev/null || true
     wait "$listener" 2>/dev/null || true
     rm -f "$tokenfile"
@@ -883,6 +888,7 @@ verify_loopback() {
   kill "$listener" 2>/dev/null || true
   wait "$listener" 2>/dev/null || true
   rm -f "$tokenfile"
+  trap - INT TERM
   case "$answer" in
     open)
       # Was this VM asked to block the loopback? Its own stored config says
@@ -1500,7 +1506,7 @@ remove_taken_name() {
 # address a group by it). Tabs, because a name may have spaces.
 list_groups_ids() {
   gh api --paginate "orgs/${1}/actions/runner-groups?per_page=100" \
-    --jq '.runner_groups[] | [.name, .visibility, (.allows_public_repositories | tostring), (.id | tostring)] | @tsv' 2>/dev/null
+    --jq '.runner_groups[] | [.name, .visibility, (.allows_public_repositories | tostring), (.id | tostring)] | @tsv' 2>/dev/null </dev/null
 }
 
 # group_repositories <org> <group id>: the full names of the repositories a
@@ -1595,12 +1601,13 @@ GROUP_ID=""
 # replaces on every update. docs/runbook.md, "Rolling back a failed install".
 state_file() { printf '%s/%s.state' "${HOMEFIELD_STATE_DIR:-$HOME/.local/state/homefield}" "$INSTANCE"; }
 
-# state_get <key>: its value, or nothing.
+# state_get <key>: its value, or nothing. The key goes to awk as data (-v),
+# not into a sed program: only the fixed group_created key made the sed safe.
 state_get() {
   local f
   f="$(state_file)"
   [ -f "$f" ] || return 0
-  sed -n "s/^${1}=//p" "$f" | head -1
+  awk -v k="$1" 'index($0, k "=") == 1 { print substr($0, length(k) + 2); exit }' "$f"
 }
 
 # state_set <key> <value>: written to a temp file next to the state file and
@@ -2206,6 +2213,10 @@ setup_upgrade_summary() {
 # cmd_setup: install's options and steps, with the stricter preflight gate and
 # the summary (SETUP, read by cmd_install).
 cmd_setup() {
+  # `homefield setup --exists`: install.sh's sturdier probe for whether this
+  # copy has the setup command at all — a check of the command, not of the
+  # help text's layout (which a reflow would break). Exits 0, prints nothing.
+  [ "${1:-}" = "--exists" ] && [ $# -eq 1 ] && return 0
   SETUP=1
   cmd_install "$@"
 }
@@ -2295,16 +2306,19 @@ load_presets() {
 # what is already there.
 merge_packages() {
   local out="" seen=" " arg pkg
+  # The caller's globbing is saved and restored: set -f is global, and the
+  # unquoted $have split below needs it off only inside this function.
+  case "$-" in *f*) local had_f=1 ;; *) local had_f=0 ;; esac
+  set -f
   for arg in "$@"; do
-    set -f
     # shellcheck disable=SC2086  # the lists are space-separated words by design
     for pkg in $arg; do
       case "$seen" in *" $pkg "*) continue ;; esac
       seen="$seen$pkg "
       out="${out:+$out }$pkg"
     done
-    set +f
   done
+  if [ "$had_f" = 1 ]; then set -f; else set +f; fi
   printf '%s' "$out"
 }
 
@@ -4368,8 +4382,20 @@ adopt_routing_check() {
   if [ -z "$ADOPT_ROUTED" ]; then
     adopt_reason "no job uses the routing expression for label ${ADOPT_LABEL} (docs/adopting.md, step 2)"
   fi
+  # Jobs with no runs-on run on GitHub's ubuntu-latest default and are left
+  # hosted silently — the routing-completeness gap: nothing else surfaces
+  # them until --verify after the switch. The scanner's own parse, so the
+  # ready report says so.
+  if [ "$ADOPT_MODE" = guards ]; then
+    ADOPT_NORUNSON="$(python3 -I "$ROOT/routing-guard/routing_guard.py" --workflows-dir "$dir" --label "$ADOPT_LABEL" \
+      --events "$ADOPT_EVENTS" --dependabot "$ADOPT_DEPENDABOT" --fallback "$ADOPT_FALLBACK" --list-unroutable 2>/dev/null)" || ADOPT_NORUNSON=""
+  else
+    ADOPT_NORUNSON="$(python3 -I "$ROOT/routing-guard/routing_guard.py" --workflows-dir "$dir" --label "$ADOPT_LABEL" \
+      --mode simple --fallback "$ADOPT_FALLBACK" --list-unroutable 2>/dev/null)" || ADOPT_NORUNSON=""
+  fi
   if [ "$ADOPT_READY" = 1 ]; then
     log "routing: ready, the guard passes and these jobs are routed: $(printf '%s' "$ADOPT_ROUTED" | tr '\n' ' ')"
+    [ -z "$ADOPT_NORUNSON" ] || log "routing: these jobs have no runs-on and stay hosted on GitHub's default: $(printf '%s' "$ADOPT_NORUNSON" | tr '\n' ' ')"
   else
     log "routing: not ready"
     printf '%s' "$ADOPT_REASONS"
@@ -5455,7 +5481,8 @@ cmd_version() {
   [ $# -eq 0 ] || die "version takes no options besides --instance"
   local key value repo="" ref="" commit=""
   if [ -f "$ROOT/.homefield-ref" ]; then
-    while IFS='=' read -r key value; do
+    # `|| [ -n "$key" ]`: a final line with no trailing newline is still read.
+    while IFS='=' read -r key value || [ -n "$key" ]; do
       case "$key" in
         repo) repo="$value" ;;
         ref) ref="$value" ;;
@@ -5493,7 +5520,7 @@ main() {
     esac
   done
   [ -n "$cmd" ] || { usage >&2; exit 1; }
-  color_init ${COLOR_ARG:+"$COLOR_ARG"} "$cmd" "$@"
+  color_init ${COLOR_ARG:+"$COLOR_ARG"} "$cmd"
   # Only the commands that act on the VM: preflight, route, adopt, report and
   # version never use it, so a stale HOMEFIELD_INSTANCE does not stop them.
   case "$cmd" in setup | install | upgrade | status | start | stop | diagnose | uninstall | reset | memory) check_instance ;; esac

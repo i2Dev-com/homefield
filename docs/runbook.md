@@ -597,7 +597,9 @@ nothing, which is easy to misread as "no containers".
   `homefield-maintenance.timer` runs daily at 07:00 guest time (Lima takes the
   Mac's). If a job is running it skips the day. Otherwise it stops the runner,
   runs `apt-get upgrade`, and starts the runner again, or reboots the guest
-  first if the update needs it (`/var/run/reboot-required`). Queued jobs wait
+  first if the update needs it (`/var/run/reboot-required`, which
+  `update-notifier-common` writes; a minimal image without that package never
+  writes it, so the upgrade then finishes without a reboot). Queued jobs wait
   through it, typically under a minute and longer on a reboot.
   - A job's own `sudo apt-get` (#176) never restarts a service. Ubuntu's
     needrestart would restart everything using an upgraded library, the

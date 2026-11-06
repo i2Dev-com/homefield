@@ -21,7 +21,7 @@ has() { case "$1" in *"$2"*) echo yes ;; *) echo no ;; esac; }
 mkdir -p "$work/src/homefield-abc1234/bin" "$work/src/homefield-abc1234/vm"
 # STUB_HAS_SETUP=1 makes `help` list a setup command, as a release that has it does.
 # shellcheck disable=SC2016  # the stub body expands when it runs, not when written
-printf '#!/bin/sh\nif [ "$1" = help ] && [ "${STUB_HAS_SETUP:-}" = 1 ]; then echo "  setup      first-time setup"; exit 0; fi\necho "homefield stub: $*"\n' >"$work/src/homefield-abc1234/bin/homefield"
+printf '#!/bin/sh\nif [ "$1" = help ] && [ "${STUB_HAS_SETUP:-}" = 1 ]; then echo "  setup      first-time setup"; exit 0; fi\nif [ "$1" = setup ] && [ "$2" = --exists ]; then [ "${STUB_HAS_SETUP:-}" = 1 ]; exit\nfi\necho "homefield stub: $*"\n' >"$work/src/homefield-abc1234/bin/homefield"
 chmod +x "$work/src/homefield-abc1234/bin/homefield"
 echo "name: homefield" >"$work/src/homefield-abc1234/vm/lima.yaml"
 echo "#!/bin/sh" >"$work/src/homefield-abc1234/vm/provision.sh"

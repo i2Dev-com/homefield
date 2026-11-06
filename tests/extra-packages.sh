@@ -29,4 +29,14 @@ check "*" reject
 check $'tree\njq' reject
 check $'tree\n' reject
 
+# The package-name rule is written twice — provision.sh's check_packages for
+# the names it hands apt-get, bin/homefield's preset manifest loop for the
+# names it merges — and the two must stay the same regex.
+# shellcheck disable=SC2016  # the literal \$pkg is the point of the sed
+prov_re="$(sed -n 's/.*if ! \[\[ "\$pkg" =~ \(.*\) \]\]; then/\1/p' "$ROOT/vm/provision.sh" | head -1)"
+# shellcheck disable=SC2016  # the literal \$pkg is the point of the sed
+host_re="$(sed -n 's/.*\[\[ "\$pkg" =~ \(.*\) \]\] ||.*/\1/p' "$ROOT/bin/homefield" | head -1)"
+record "the package-name regex is the same in provision.sh and bin/homefield" "yes" \
+  "$([ -n "$prov_re" ] && [ "$prov_re" = "$host_re" ] && echo yes || echo no)"
+
 summary
