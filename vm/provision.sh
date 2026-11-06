@@ -113,6 +113,21 @@ if [ -n "$RUNNER_URL" ] && ! [[ "$RUNNER_URL" =~ ^https://github\.com/[A-Za-z0-9
   echo "provision.sh: RUNNER_URL must be https://github.com/<org> or https://github.com/<owner>/<repo>, got: $RUNNER_URL" >&2
   exit 1
 fi
+# RUNNER_NAME and RUNNER_GROUP reach config.sh and the group API as single
+# argv elements, so this is not injection; the check makes a bad value fail
+# here, locally, instead of as a round-trip to GitHub with a confusing error.
+name_re='^[A-Za-z0-9._ -]+$'
+if ! [[ "$RUNNER_NAME" =~ $name_re ]]; then
+  echo "provision.sh: RUNNER_NAME must be letters, digits, '.', '_', ' ' or '-', got: $RUNNER_NAME" >&2
+  exit 1
+fi
+# A runner group's name may carry spaces (the host creates and finds them:
+# tests/runner-group.sh), so the validation allows them too.
+group_re='^[A-Za-z0-9._ -]+$'
+if [ -n "$RUNNER_GROUP" ] && ! [[ "$RUNNER_GROUP" =~ $group_re ]]; then
+  echo "provision.sh: RUNNER_GROUP must be letters, digits, '.', '_', ' ' or '-', got: $RUNNER_GROUP" >&2
+  exit 1
+fi
 # Debian package names, checked before anything runs; the names reach
 # apt-get as arguments, so an option (`-o ...`) must not get through either.
 # Space-separated on one line: `read` stops at a newline, so a multi-line
@@ -271,7 +286,7 @@ fi
 # written with a BOM, hence utf-8-sig).
 # Prints the named settings, one per line: a name may contain spaces.
 runner_setting() {
-  python3 -c 'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8-sig")); print(*(d[k] for k in sys.argv[2:]), sep="\n")' \
+  python3 -c 'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8-sig")); print(*(d.get(k, "") for k in sys.argv[2:]), sep="\n")' \
     "$RUNNER_HOME/.runner" "$@"
 }
 registered_url() { runner_setting gitHubUrl; }
@@ -351,13 +366,23 @@ if [ -n "${RUNNER_EXTRA_PACKAGES+set}" ]; then
   extra_packages=(${requested_packages[@]+"${requested_packages[@]}"})
 fi
 export DEBIAN_FRONTEND=noninteractive
+# The package lists are refreshed by homefield-maintenance's own `apt-get
+# update`, not by Ubuntu's apt-daily timers. Those refresh the lists twice a
+# day at random times and hold the lists lock while they do, so a job's
+# `sudo apt-get update` then fails at once with "Could not get lock" (#176).
+# A GitHub-hosted image turns them off for the same reason. Only the timers
+# need disabling: the .service units they start are static. Disabled before
+# the first apt run, not after it: on a fresh VM the still-enabled timers
+# would race this run for the lists lock (apt waits for it — latency, not
+# breakage).
+systemctl disable --now apt-daily.timer apt-daily-upgrade.timer
 apt-get update -q
 apt-get install -y -q \
   ca-certificates curl git jq python3 tar zip unzip dnsutils build-essential \
   docker.io docker-compose-v2 docker-buildx \
   ${extra_packages[@]+"${extra_packages[@]}"}
 if [ -n "${RUNNER_EXTRA_PACKAGES+set}" ]; then
-  printf '%s\n' ${extra_packages[@]+"${extra_packages[@]}"} | sed '/^$/d' >"$CONFIG_DIR/extra-packages"
+  printf '%s\n' ${extra_packages[@]+"${extra_packages[@]}"} >"$CONFIG_DIR/extra-packages"
 fi
 systemctl enable --now docker
 
@@ -401,13 +426,16 @@ restore_runner() {
   if [ -n "${env_prev:-}" ]; then
     install -o "$RUNNER_USER" -g "$RUNNER_USER" -m 644 "$env_prev" "$RUNNER_HOME/.env"
   fi
-  systemctl restart "$svc_unit"
+  systemctl restart "$svc_unit" ||
+    echo "provision.sh: could not restart ${svc_unit} (the extraction above may be partial); start it by hand (docs/runbook.md, \"Runner updates\")" >&2
 }
 mkdir -p "$RUNNER_HOME"
+runner_replaced=0
 if [ ! -x "$RUNNER_HOME/config.sh" ] || ! grep -qx "$RUNNER_VERSION" "$RUNNER_HOME/.provisioned-version" 2>/dev/null; then
+  runner_replaced=1
   new_tmp /tmp/actions-runner.XXXXXX.tar.gz
   tarball="$tmp"
-  curl -fsSL -o "$tarball" \
+  curl -fsSL --retry 3 --retry-delay 2 -o "$tarball" \
     "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-arm64-${RUNNER_VERSION}.tar.gz"
   echo "${RUNNER_SHA256}  ${tarball}" | sha256sum -c -
   restart_old=0
@@ -422,9 +450,20 @@ if [ ! -x "$RUNNER_HOME/config.sh" ] || ! grep -qx "$RUNNER_VERSION" "$RUNNER_HO
   tar -xzf "$tarball" -C "$RUNNER_HOME"
   rm -f "$tarball"
   "$RUNNER_HOME/bin/installdependencies.sh"
+fi
+# Only when this run replaced the binary: the tar extracted as root left
+# root-owned files. The job-started hook keeps ownership right from here on
+# (incrementally, before every job), so a run that only re-checks settings
+# does not walk all of _work. The version marker is written only after the
+# chown: a run interrupted between extraction and repair (the chown failing
+# included) leaves no marker, so the next run re-extracts and repairs,
+# instead of finding the marker and skipping the chown forever — a root-owned
+# runner home blocks registration, and unwritable extracted files break the
+# runner's updates.
+if [ "$runner_replaced" = 1 ]; then
+  chown -R "$RUNNER_USER:$RUNNER_USER" "$RUNNER_HOME"
   echo "$RUNNER_VERSION" > "$RUNNER_HOME/.provisioned-version"
 fi
-chown -R "$RUNNER_USER:$RUNNER_USER" "$RUNNER_HOME"
 
 # ── Runner npm + workspace ownership ────────────────────────────────────────
 # Two repairs the runner cannot make itself, run before every job through the
@@ -658,6 +697,10 @@ install -m 755 "$script_dir/guest/homefield-cleanup" /usr/local/sbin/homefield-c
 cat > /etc/systemd/system/homefield-cleanup.service <<'EOF'
 [Unit]
 Description=Prune Docker and stale runner workspaces
+# docker system prune fails noisily when Docker is down, so the unit wants it
+# up and runs after it: a guest that came up without Docker starts it here.
+After=docker.service
+Wants=docker.service
 
 [Service]
 Type=oneshot
@@ -694,13 +737,6 @@ cat > /etc/apt/apt.conf.d/52homefield-no-unattended-upgrade <<'EOF'
 // homefield#8: upgrades run from homefield-maintenance.timer, only while idle.
 APT::Periodic::Unattended-Upgrade "0";
 EOF
-# The package lists are refreshed by homefield-maintenance's own `apt-get
-# update`, not by Ubuntu's apt-daily timers. Those refresh the lists twice a
-# day at random times and hold the lists lock while they do, so a job's
-# `sudo apt-get update` then fails at once with "Could not get lock" (#176).
-# A GitHub-hosted image turns them off for the same reason. Only the timers
-# need disabling: the .service units they start are static.
-systemctl disable --now apt-daily.timer apt-daily-upgrade.timer
 
 install -m 755 "$script_dir/guest/homefield-maintenance" /usr/local/sbin/homefield-maintenance
 
@@ -772,7 +808,7 @@ systemctl restart homefield-memwatch.service
 # existing registration was kept. Labels are not in the runner's config; the
 # runners page shows them.
 # The runner is set up by now, so a config it cannot read fails nothing.
-if { read -r reg_name && read -r reg_url; } < <(runner_setting agentName gitHubUrl); then
+if { read -r reg_name && read -r reg_url; } < <(runner_setting agentName gitHubUrl) && [ -n "$reg_name" ] && [ -n "$reg_url" ]; then
   echo "provision.sh: runner ${reg_name} (${RUNNER_VERSION}) registered at ${reg_url}"
 else
   echo "provision.sh: runner provisioned (${RUNNER_VERSION}); could not read its name and URL from ${RUNNER_HOME}/.runner" >&2

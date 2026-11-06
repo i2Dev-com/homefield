@@ -289,8 +289,19 @@ echo "a running runner, already current:"
 fresh "$current" active
 run chown
 rc=$?
+record "already current: no replacement, so no chown of _work at all" "0/0/running" "$rc/$(grep -c '^chown -R ' "$work/state.log" || true)/$(running)"
+
+echo "a running runner, binary replaced this run:"
+fresh 2.0.0 active
+run chown
+rc=$?
 record "chown fails: provisioning fails" "1" "$rc"
-record "...the runner was never stopped, and is still running" "0/running" "$(calls stop)/$(running)"
+# The version marker is only written after the chown: an interrupted run must
+# leave the marker at the old version, so the next run re-extracts and
+# repairs instead of finding the current version and skipping the chown
+# forever.
+record "...and the marker is not the current version, so the next run repairs" "2.0.0" \
+  "$(cat "$work/runner/.provisioned-version" 2>/dev/null)"
 
 echo "a stopped runner (the host stopped it for \`upgrade\`):"
 fresh 2.0.0 stopped

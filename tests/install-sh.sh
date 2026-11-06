@@ -21,7 +21,7 @@ has() { case "$1" in *"$2"*) echo yes ;; *) echo no ;; esac; }
 mkdir -p "$work/src/homefield-abc1234/bin" "$work/src/homefield-abc1234/vm"
 # STUB_HAS_SETUP=1 makes `help` list a setup command, as a release that has it does.
 # shellcheck disable=SC2016  # the stub body expands when it runs, not when written
-printf '#!/bin/sh\nif [ "$1" = help ] && [ "${STUB_HAS_SETUP:-}" = 1 ]; then echo "  setup      first-time setup"; exit 0; fi\necho "homefield stub: $*"\n' >"$work/src/homefield-abc1234/bin/homefield"
+printf '#!/bin/sh\nif [ "$1" = help ] && [ "${STUB_HAS_SETUP:-}" = 1 ] || { [ "$1" = help ] && [ "${STUB_HAS_SETUP:-}" = old ]; }; then echo "  setup      first-time setup"; exit 0; fi\nif [ "$1" = setup ] && [ "$2" = --exists ]; then [ "${STUB_HAS_SETUP:-}" = 1 ]; exit\nfi\necho "homefield stub: $*"\n' >"$work/src/homefield-abc1234/bin/homefield"
 chmod +x "$work/src/homefield-abc1234/bin/homefield"
 echo "name: homefield" >"$work/src/homefield-abc1234/vm/lima.yaml"
 echo "#!/bin/sh" >"$work/src/homefield-abc1234/vm/provision.sh"
@@ -203,6 +203,13 @@ record "...--personal reaches setup" "homefield stub: setup --personal --url htt
 echo y >"$work/answer"
 run_install STUB_HAS_SETUP=1 HOMEFIELD_TTY="$work/answer"
 record "...with a terminal and no arguments, setup runs" "homefield stub: setup" "$(echo "$out" | grep 'homefield stub' || true)"
+# A release that has setup but predates the --exists probe (v0.5.0 and
+# earlier): the probe's nonzero must fall back to the help text, not pick
+# install and bypass setup's preflight.
+echo y >"$work/answer"
+run_install STUB_HAS_SETUP=old HOMEFIELD_TTY="$work/answer"
+record "a release with setup but no --exists probe: the help-text fallback picks setup" \
+  "homefield stub: setup" "$(echo "$out" | grep 'homefield stub' || true)"
 record "the wrapper runs the installed homefield by its real path, with arguments" "homefield stub: status --instance x" "$(env -i "$home/bin/homefield" status --instance x)"
 record "the wrapper is a script, not a symlink" "yes" "$([ -f "$home/bin/homefield" ] && [ ! -L "$home/bin/homefield" ] && echo yes || echo no)"
 record "the wrapper is two lines" "2" "$(wc -l <"$home/bin/homefield" | tr -d ' ')"

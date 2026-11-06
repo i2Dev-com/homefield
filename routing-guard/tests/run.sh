@@ -647,6 +647,60 @@ else
   echo "  ok   missing workflows dir (fail)"; pass=$((pass + 1))
 fi
 
+# The GITHUB_ACTIONS annotations: a failure also emits a ::error with the
+# file and line — job-qualified messages included — and nothing does without
+# the variable, so a local run stays clean.
+ann="$(mktemp -d)"
+printf 'name: CI\non: [pull_request]\njobs:\n  checks:\n    runs-on: self-hosted\n    steps:\n      - run: echo hi\n' >"$ann/ci.yml"
+n="$(GITHUB_ACTIONS=true python3 "$SCRIPT" --workflows-dir "$ann" --jobs "" 2>/dev/null | grep -c '^::error file=.github/workflows/ci.yml,line=5::runs-on is neither')"
+if [ "$n" = 1 ]; then
+  echo "  ok   GITHUB_ACTIONS: the job-qualified failure is an annotation (pass)"; pass=$((pass + 1))
+else
+  echo "  FAIL GITHUB_ACTIONS annotation: wanted 1 ::error, got $n"; fail=$((fail + 1))
+fi
+n="$(env -u GITHUB_ACTIONS python3 "$SCRIPT" --workflows-dir "$ann" --jobs "" 2>/dev/null | grep -c '^::error')"
+if [ "$n" = 0 ]; then
+  echo "  ok   without GITHUB_ACTIONS: no annotation (pass)"; pass=$((pass + 1))
+else
+  echo "  FAIL without GITHUB_ACTIONS: wanted 0 ::error, got $n"; fail=$((fail + 1))
+fi
+rm -rf "$ann"
+
+# --list-unroutable: the jobs with no runs-on at all (GitHub runs them on its
+# ubuntu-latest default, so they stay hosted silently). The listing is
+# compared to what it must print, one file:job per line.
+case_list() {
+  local name="$1" want="$2" append="${3:-}"
+  local dir got
+  dir="$(mktemp -d)"
+  cp "${HERE}/base/"*.yml "$dir/"
+  if [ -n "$append" ]; then
+    printf '\n%s\n' "$append" >>"$dir/ci.yml"
+  fi
+  got="$(python3 "$SCRIPT" --workflows-dir "$dir" --list-unroutable 2>/dev/null)"
+  if [ "$got" = "$want" ]; then
+    echo "  ok   ${name} (pass)"
+    pass=$((pass + 1))
+  else
+    echo "  FAIL ${name}: wanted $(printf '%s' "$want" | tr '\n' '/'), got $(printf '%s' "$got" | tr '\n' '/')"
+    fail=$((fail + 1))
+  fi
+  rm -rf "$dir"
+}
+
+# The base has no job without runs-on.
+case_list "clean base lists no no-runs-on job" ""
+case_list "a job with no runs-on is listed" "ci.yml:unsafe" \
+  "$(printf '  unsafe:\n    steps:\n      - run: echo unsafe')"
+case_list "a hosted job is not listed" "" \
+  "$(printf '  hosted2:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo hi')"
+case_list "a reusable-workflow call is not listed (its routing is the callee's)" "" \
+  "$(printf '  call:\n    uses: ./.github/workflows/other.yml')"
+case_list "a quoted runs-on key counts as no readable runs-on" "ci.yml:unsafe" \
+  "$(printf '  unsafe:\n    "runs-on": self-hosted\n    steps:\n      - run: echo unsafe')"
+case_list "runs-on only inside a block scalar counts as none" "ci.yml:scripts" \
+  "$(printf '  scripts:\n    steps:\n      - run: |\n          echo "runs-on: ubuntu-latest"')"
+
 echo
 echo "${pass} passed, ${fail} failed"
 [ "$fail" -eq 0 ]

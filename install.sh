@@ -173,7 +173,8 @@ write_wrapper() {
   mkdir -p "$dir"
   if [ -e "$wrapper" ] || [ -L "$wrapper" ]; then
     { [ -f "$wrapper" ] && [ ! -L "$wrapper" ] && grep -q '/bin/homefield" "\$@"$' "$wrapper"; } ||
-      die "$wrapper exists and is not a homefield wrapper; remove it or set HOMEFIELD_BIN_DIR"
+      die "$wrapper exists and is not a homefield wrapper; remove it or set HOMEFIELD_BIN_DIR.
+The new copy is in place and the previous one is gone, so 'homefield' is not on the PATH until this succeeds: rerun the install one-liner."
   fi
   tmp="$(mktemp "$dir/.homefield.XXXXXX")"
   printf '#!/bin/sh\nexec "%s/bin/homefield" "$@"\n' "$INSTALL_DIR" >"$tmp"
@@ -316,7 +317,11 @@ main() {
   # tool just installed has it, else `install`. REF may be a release older than
   # `setup` (the default is a pinned tag), so what exists is asked, not assumed.
   local first=install
-  if "$installed" help 2>/dev/null </dev/null | grep -q '^  setup '; then first=setup; fi
+  if "$installed" setup --exists 2>/dev/null </dev/null; then first=setup
+# A release that has setup but predates the --exists probe (v0.5.0 and
+# earlier): the probe's nonzero is "no such option", not "no setup", so
+# fall back to the help text, as before the probe existed.
+elif "$installed" help 2>/dev/null </dev/null | grep -q '^  setup '; then first=setup; fi
   # Run again with no arguments on a Mac that already has the VM, this is a
   # tool update, with or without a terminal: `install` there would upgrade the
   # VM and briefly stop the runner, which nobody asked for, and advice to set

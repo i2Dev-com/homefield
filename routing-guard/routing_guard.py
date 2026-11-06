@@ -302,6 +302,14 @@ def main() -> int:
         " line, and exit 0; checks nothing else",
     )
     ap.add_argument(
+        "--list-unroutable",
+        action="store_true",
+        help="print the jobs that carry no runs-on at all — GitHub runs them on"
+        " ubuntu-latest, so they stay hosted silently — one file:job per line,"
+        " and exit 0; reusable-workflow calls (their runs-on is the callee's)"
+        " are not listed; checks nothing else",
+    )
+    ap.add_argument(
         "--print-expression",
         action="store_true",
         help="print the canonical runs-on expression for the options and exit",
@@ -309,8 +317,9 @@ def main() -> int:
     args = ap.parse_args()
 
     def refuse(msg: str) -> int:
-        # --list and --print-expression keep stdout for what they print.
-        out = sys.stderr if args.list or args.print_expression else sys.stdout
+        # --list, --list-unroutable and --print-expression keep stdout for
+        # what they print.
+        out = sys.stderr if args.list or args.list_unroutable or args.print_expression else sys.stdout
         print(f"  \033[31mFAIL\033[0m {msg}", file=out)
         return 1
 
@@ -340,7 +349,7 @@ def main() -> int:
         print(canonical)
         return 0
     expected = [e for e in re.split(r"[\s,]+", args.jobs) if e]
-    quiet = args.list
+    quiet = args.list or args.list_unroutable
 
     failed = 0
     passed = 0
@@ -349,6 +358,16 @@ def main() -> int:
         nonlocal failed
         if not quiet:
             print(f"  \033[31mFAIL\033[0m {msg}")
+            # In CI, the same failure as a GitHub annotation, so it surfaces
+            # on the pull request's diff. The scanner's messages name the
+            # file and line — "ci.yml:12: ..." and, job-qualified,
+            # "ci.yml:12 (job checks): ..." — the annotation carries them
+            # structurally, with the multi-line rest encoded GitHub's way.
+            if os.environ.get("GITHUB_ACTIONS"):
+                at = re.match(r"([^:\s]+):(\d+)(?: \(job [^)]*\))?: ", msg)
+                if at:
+                    detail = msg[at.end():].replace("\n", "%0A")
+                    print(f"::error file=.github/workflows/{at.group(1)},line={at.group(2)}::{detail}")
         failed += 1
 
     def ok(msg: str) -> None:
@@ -368,6 +387,7 @@ def main() -> int:
         return 1
 
     found = []
+    no_runs_on = []
     for name in sorted(os.listdir(args.workflows_dir)):
         if not name.endswith((".yml", ".yaml")):
             continue
@@ -376,144 +396,187 @@ def main() -> int:
         job_indent = None
         body_indent = None
         scalar_col = None
+        file_no_runs_on = []
         path = os.path.join(args.workflows_dir, name)
-        with open(path) as fh:
-            for lineno, line in enumerate(fh, 1):
-                # Comments may name the label; only code counts. Safe to cut at
-                # '#' because the canonical expression contains none.
-                code = line.split("#", 1)[0]
-                # Inside a block scalar (blank, or indented past its key), the
-                # line is text. The unreadable-syntax checks skip it.
-                in_scalar = False
-                if scalar_col is not None:
-                    in_scalar = not line.strip() or len(line) - len(line.lstrip()) > scalar_col
+        # utf-8/replace, as tools/adopt.py reads the same files: a workflow
+        # with bytes outside UTF-8 scans the same under every locale. The
+        # open is inside the try so an unopenable file is a fail(), not a
+        # traceback; a mid-scan read failure is the same "unreadable file".
+        try:
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                for lineno, line in enumerate(fh, 1):
+                    # Comments may name the label; only code counts. Safe to cut at
+                    # '#' because the canonical expression contains none.
+                    code = line.split("#", 1)[0]
+                    # Inside a block scalar (blank, or indented past its key), the
+                    # line is text. The unreadable-syntax checks skip it.
+                    in_scalar = False
+                    if scalar_col is not None:
+                        in_scalar = not line.strip() or len(line) - len(line.lstrip()) > scalar_col
+                        if not in_scalar:
+                            scalar_col = None
                     if not in_scalar:
-                        scalar_col = None
-                if not in_scalar:
-                    start = BLOCK_START.match(code)
-                    if start:
-                        # The key's own column, or the dash's for `- |`.
-                        scalar_col = len(start.group(1)) + (len(start.group(2)) if start.group(2) and start.group(3) else 0)
-                # Job ids are the keys directly under top-level `jobs:` — at
-                # whatever indent the file's first such key uses, so a
-                # workflow indented other than the common two spaces still
-                # attributes its runs-on lines to the right job — while keys
-                # deeper than that (needs, steps, ...) belong to the job's
-                # body, and keys under any other top-level key (`on:` among
-                # them) are not jobs at all. Top-level keys and job ids may
-                # be quoted (`"jobs":`, `"checks":`): a quoted `jobs:` missed
-                # here would skip every runs-on in the file — none of them
-                # checked, a bare `runs-on: self-hosted` included — and a
-                # quoted key missed below would credit its runs-on to the
-                # previous job.
-                top = re.match(r"""^(['"]?)([A-Za-z0-9_-]+)\1:""", code)
-# Every top-level line is a plain `key:`. Anything else
-                # (`jobs :`, `? jobs`, a flow mapping's closing brace, the
-                # document markers) could hide the jobs from this scan.
-                if (
-                    code.strip()
-                    and not code[0].isspace()
-                    and code.strip() not in ("---", "...")
-                    and not PLAIN_KEY.match(code)
-                ):
-                    fail(f"{name}:{lineno}: unreadable top-level line; {HOW}")
-                    in_jobs = False
-                    job = None
-                    job_indent = None
-                    body_indent = None
-                    continue
-                if top:
-                    in_jobs = top.group(2) == "jobs"
-                    job = None
-                    job_indent = None
-                    body_indent = None
-                    # `jobs: &jobs` — the value's anchor, not inline jobs. A
-                    # tag (`jobs: !!mapping`) is the same shape.
-                    rest = re.sub(r"^[&!]\S*(\s+|$)", "", code[top.end():].strip())
-                    if in_jobs and rest:
-                        fail(f"{name}:{lineno}: jobs: has its jobs on the same line; {HOW}")
-                m = re.match(r"""^(\s*)(['"]?)([A-Za-z0-9_-]+)\2:\s*$""", code)
-                body_key = False
-                if in_jobs and code.strip() and not top and not in_scalar:
-                    indent = len(code) - len(code.lstrip())
-                    if job_indent is None:
-                        # The first line under `jobs:` is a job id; everything
-                        # at that depth is one, anything deeper is its body.
-                        job_indent = indent
-                    if indent == job_indent:
-                        if m:
-                            job = m.group(3)
-                            body_indent = None
+                        start = BLOCK_START.match(code)
+                        if start:
+                            # The key's own column, or the dash's for `- |`.
+                            scalar_col = len(start.group(1)) + (len(start.group(2)) if start.group(2) and start.group(3) else 0)
+                    # Job ids are the keys directly under top-level `jobs:` — at
+                    # whatever indent the file's first such key uses, so a
+                    # workflow indented other than the common two spaces still
+                    # attributes its runs-on lines to the right job — while keys
+                    # deeper than that (needs, steps, ...) belong to the job's
+                    # body, and keys under any other top-level key (`on:` among
+                    # them) are not jobs at all. Top-level keys and job ids may
+                    # be quoted (`"jobs":`, `"checks":`): a quoted `jobs:` missed
+                    # here would skip every runs-on in the file — none of them
+                    # checked, a bare `runs-on: self-hosted` included — and a
+                    # quoted key missed below would credit its runs-on to the
+                    # previous job.
+                    top = re.match(r"""^(['"]?)([A-Za-z0-9_-]+)\1:""", code)
+    # Every top-level line is a plain `key:`. Anything else
+                    # (`jobs :`, `? jobs`, a flow mapping's closing brace, the
+                    # document markers) could hide the jobs from this scan.
+                    if (
+                        code.strip()
+                        and not code[0].isspace()
+                        and code.strip() not in ("---", "...")
+                        and not PLAIN_KEY.match(code)
+                    ):
+                        fail(f"{name}:{lineno}: unreadable top-level line; {HOW}")
+                        in_jobs = False
+                        job = None
+                        job_indent = None
+                        body_indent = None
+                        continue
+                    if top:
+                        in_jobs = top.group(2) == "jobs"
+                        job = None
+                        job_indent = None
+                        body_indent = None
+                        # `jobs: &jobs` — the value's anchor, not inline jobs. A
+                        # tag (`jobs: !!mapping`) is the same shape.
+                        rest = re.sub(r"^[&!]\S*(\s+|$)", "", code[top.end():].strip())
+                        if in_jobs and rest:
+                            fail(f"{name}:{lineno}: jobs: has its jobs on the same line; {HOW}")
+                    m = re.match(r"""^(\s*)(['"]?)([A-Za-z0-9_-]+)\2:\s*$""", code)
+                    body_key = False
+                    if in_jobs and code.strip() and not top and not in_scalar:
+                        indent = len(code) - len(code.lstrip())
+                        if job_indent is None:
+                            # The first line under `jobs:` is a job id; everything
+                            # at that depth is one, anything deeper is its body.
+                            job_indent = indent
+                        if indent == job_indent:
+                            if m:
+                                job = m.group(3)
+                                body_indent = None
+                                # A job starts with no runs-on; the job-level
+                                # runs-on (and a reusable-workflow call, whose
+                                # runs-on is the callee's) clears it below.
+                                file_no_runs_on.append(job)
+                            else:
+                                job = None
+                                fail(f"{name}:{lineno}: unreadable job id; {HOW}")
+                                continue
+                        elif indent < job_indent:
+                            fail(f"{name}:{lineno}: unreadable indentation under jobs; {HOW}")
                         else:
-                            job = None
-                            fail(f"{name}:{lineno}: unreadable job id; {HOW}")
-                            continue
-                    elif indent < job_indent:
-                        fail(f"{name}:{lineno}: unreadable indentation under jobs; {HOW}")
-                    else:
-                        # The job's own keys (runs-on, needs, steps, uses, ...)
-                        # sit at one depth; keys deeper than that belong to
-                        # them (a step, a matrix dimension) and are data, not
-                        # routing.
-                        if body_indent is None:
-                            body_indent = indent
-                        body_key = indent == body_indent
-                where = f"{name}:{lineno} (job {job})"
-                m = re.match(r"^\s*runs-on:\s*(.*?)\s*$", code)
-                # Only runs-on lines inside `jobs:` matter: a key named
-                # `runs-on:` under `on:` (a workflow_dispatch input, say) is
-                # not routing. Every one at the job's own key depth is checked
-                # against the allowlist below, and a multi-line runs-on
-                # already fails on its first line, so the label appearing
-                # elsewhere (a step name, a docs URL in a run string) is not
-                # routing. A deeper `runs-on:` is a matrix dimension (data the
-                # job's own runs-on would have to reference, and that
-                # reference is not on the allowlist), so it is not checked.
-                if in_jobs and not m and not in_scalar:
-                    for pattern, what in UNREAD:
-                        if pattern.search(code):
-                            fail(f"{where}: {what} is not read by this check; {HOW}")
-                            break
-                # A job-level `uses:` that calls a reusable workflow in
-                # another repository cannot be checked: the called file is not
-                # in this repository, and its jobs evaluate runs-on in the
-                # caller's context. A local call (`./.github/workflows/...`)
-                # is scanned like any other file here. A step-level `uses:`
-                # (actions/checkout@v4) sits deeper, under `steps:`.
-                m_uses = re.match(r"^\s*uses:\s*(.*?)\s*$", code)
-                if (
-                    in_jobs
-                    and m_uses
-                    and not in_scalar
-                    and body_key
-                    and not re.match(r"""^['"]?\./""", m_uses.group(1))
-                ):
-                    fail(
-                        f"{where}: a job calling a reusable workflow in"
-                        " another repository is refused: the called"
-                        " workflow's jobs evaluate runs-on in this"
-                        " repository's context, so its routing cannot be"
-                        " checked; call a local workflow"
-                        " (./.github/workflows/<file>) that carries the"
-                        " routing expression"
-                    )
-                if not in_jobs or not m or not body_key:
-                    continue
-                value = m.group(1)
-                if HOSTED.match(value):
-                    continue
-                if value not in accepted:
-                    fail(
-                        f"{where}: runs-on is neither a GitHub-hosted image nor the"
-                        f" {args.mode} expression\n"
-                        f"         got:  {value or '(multi-line)'}\n         want: {canonical}"
-                    )
-                    continue
-                found.append(f"{name}:{job}")
-                ok(f"{where} uses the {args.mode} expression")
+                            # The job's own keys (runs-on, needs, steps, uses, ...)
+                            # sit at one depth; keys deeper than that belong to
+                            # them (a step, a matrix dimension) and are data, not
+                            # routing.
+                            if body_indent is None:
+                                body_indent = indent
+                            body_key = indent == body_indent
+                    where = f"{name}:{lineno} (job {job})"
+                    m = re.match(r"^\s*runs-on:\s*(.*?)\s*$", code)
+                    if in_jobs and m and body_key and not in_scalar and job in file_no_runs_on:
+                        file_no_runs_on.remove(job)
+                    # Only runs-on lines inside `jobs:` matter: a key named
+                    # `runs-on:` under `on:` (a workflow_dispatch input, say) is
+                    # not routing. Every one at the job's own key depth is checked
+                    # against the allowlist below, and a multi-line runs-on
+                    # already fails on its first line, so the label appearing
+                    # elsewhere (a step name, a docs URL in a run string) is not
+                    # routing. A deeper `runs-on:` is a matrix dimension (data the
+                    # job's own runs-on would have to reference, and that
+                    # reference is not on the allowlist), so it is not checked.
+                    if in_jobs and not m and not in_scalar:
+                        for pattern, what in UNREAD:
+                            if pattern.search(code):
+                                fail(f"{where}: {what} is not read by this check; {HOW}")
+                                break
+                    # A job-level `uses:` that calls a reusable workflow in
+                    # another repository cannot be checked: the called file is not
+                    # in this repository, and its jobs evaluate runs-on in the
+                    # caller's context. A local call (`./.github/workflows/...`)
+                    # is scanned like any other file here. A step-level `uses:`
+                    # (actions/checkout@v4) sits deeper, under `steps:`.
+                    m_uses = re.match(r"^\s*uses:\s*(.*?)\s*$", code)
+                    if (
+                        in_jobs
+                        and m_uses
+                        and not in_scalar
+                        and body_key
+                        and job in file_no_runs_on
+                    ):
+                        # A reusable-workflow call carries no runs-on of its own;
+                        # its routing is the callee's.
+                        file_no_runs_on.remove(job)
+                    if (
+                        in_jobs
+                        and m_uses
+                        and not in_scalar
+                        and body_key
+                        and not re.match(r"""^['"]?\./""", m_uses.group(1))
+                    ):
+                        fail(
+                            f"{where}: a job calling a reusable workflow in"
+                            " another repository is refused: the called"
+                            " workflow's jobs evaluate runs-on in this"
+                            " repository's context, so its routing cannot be"
+                            " checked; call a local workflow"
+                            " (./.github/workflows/<file>) that carries the"
+                            " routing expression"
+                        )
+                    if not in_jobs or not m or not body_key:
+                        continue
+                    value = m.group(1)
+                    if HOSTED.match(value):
+                        continue
+                    if value not in accepted:
+                        # Simple mode accepts the guarded expression too, so a
+                        # job carrying neither is told both.
+                        want = accepted[0]
+                        if len(accepted) > 1:
+                            want += f"\n         or:  {accepted[1]}"
+                        fail(
+                            f"{where}: runs-on is neither a GitHub-hosted image nor an"
+                            f" expression this check accepts\n"
+                            f"         got:  {value or '(multi-line)'}\n         want: {want}"
+                        )
+                        continue
+                    found.append(f"{name}:{job}")
+                    ok(f"{where} uses the {args.mode} expression")
+        except OSError as err:
+            fail(f"{name}: unreadable file: {err}")
+            continue
+
+        no_runs_on += [f"{name}:{job}" for job in file_no_runs_on]
 
     if args.list:
         for key in found:
+            print(key)
+        # Always 0: a list reports what it found. Drift (a job carrying a
+        # stale expression, a shape this scan cannot read) is an answer, not
+        # a crash — bin/homefield's adopt builds its ready report from this
+        # listing and must see the found jobs. A run that died (no python,
+        # a crashed scan) exits nonzero, which is what the caller's
+        # `|| die` is for.
+        return 0
+
+    if args.list_unroutable:
+        for key in no_runs_on:
             print(key)
         return 0
 

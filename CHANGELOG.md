@@ -13,6 +13,57 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ### Changed
 
+- The routing checker's list modes gained `--list-unroutable` (#193): the
+  jobs that carry no `runs-on` at all — GitHub runs them on its
+  `ubuntu-latest` default, so they stay hosted silently — one `file:job` per
+  line, reusable-workflow calls excluded (their routing is the callee's).
+  `homefield adopt`'s ready report prints the line ("these jobs have no
+  runs-on and stay hosted on GitHub's default") from the same scan, closing
+  the routing-completeness gap that only `--verify` surfaced after the
+  switch.
+
+- In GitHub Actions, the routing checker's failures are `::error` annotations
+  on the workflow file and line as well as output lines (#193), so a drift
+  surfaces on the pull request's diff, not only in the job log.
+
+- The checker's simple-mode refusal for a `runs-on` that is neither
+  GitHub-hosted nor accepted names both accepted expressions now (#193):
+  simple mode also passes a job carrying the guarded expression, and the
+  message used to show only the simple one.
+
+- `tests/parser-parity.sh` is a new suite pinning the agreement between the
+  two line-by-line workflow readers — `routing_guard.py` and `tools/adopt.py`
+  (duplicated by design, `python3 -I` keeps them from sharing a module) — on
+  workflows shaped to mislead a naive scan (#193): a `runs-on` line inside a
+  block scalar, one in a comment, a quoted `"runs-on"` key. It records that
+  adopt reads the quoted key and rewrites the job to a plain `runs-on:`, so
+  the plan's output is a file the checker reads.
+
+### Fixed
+
+- The 2026-11 audit's hygiene sweep (#193): the checker reads workflow files
+  as utf-8 with replacement, as `adopt.py` does, so a non-UTF-8 workflow
+  scans the same under every locale; `report.py`'s multiplier matches
+  `macOS-15` (it lowercased in `classify` but not here, so the label billed
+  1× instead of 10×); `bin/homefield` reads `.homefield-ref` with the
+  final-line-without-newline idiom, asks `gh api --paginate` to close its
+  stdin, saves and restores the caller's globbing in `merge_packages`, hands
+  `state_get`'s key to awk as data instead of into a sed program, and the
+  loopback probe kills its listener on INT/TERM; provision.sh disables
+  apt-daily's timers before its first apt run (a fresh VM raced it for the
+  lists lock), drops the dead `sed '/^$/d'`, retries the runner tarball
+  download, prints a hand-off when the post-update restart fails, wants
+  Docker for the cleanup unit, gates the `chown -R` of the runner home on a
+  run that replaced the binary, validates `RUNNER_NAME`/`RUNNER_GROUP`
+  locally (a group name keeps its spaces), and reads a missing runner
+  setting as empty instead of a traceback; `install.sh` says what to do when
+  the wrapper write fails (the new copy is in place, the old one gone) and
+  probes for the `setup` command with `homefield setup --exists`, falling
+  back to the help text for a release that has setup but predates the
+  probe.
+
+### Changed
+
 - The five guest helpers provision.sh used to carry as heredocs are
   `vm/guest/` files now (#189): homefield-workspace-owner, the job-started
   hook, homefield-cleanup, homefield-maintenance and homefield-memwatch are

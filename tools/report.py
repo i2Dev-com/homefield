@@ -175,7 +175,7 @@ HOSTED_IMAGES = ("ubuntu-", "macos-", "windows-")
 
 
 def multiplier(labels):
-    joined = " ".join(labels)
+    joined = " ".join(labels).lower()
     if "macos" in joined:
         return 10
     if "windows" in joined:
