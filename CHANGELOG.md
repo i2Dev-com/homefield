@@ -9,6 +9,17 @@ fail, such as a new guard in the routing expression, bumps the minor version
 (0.1 to 0.2). Compatible changes bump the patch. Merged changes wait on
 `main`, under *Unreleased*, until a release is cut.
 
+## Unreleased
+
+### Documentation
+
+- `docs/security.md` is new: the routing guard's contract (write the
+  `runs-on` key plainly, call local reusable workflows only, keep the guard
+  step able to fail) and the bypasses found so far, each with its advisory
+  link, the affected versions, the release that fixed it and the pin bump
+  consumers make (#201, #202). Linked from the README's Security model,
+  `docs/adopting.md` step 2 and `SECURITY.md`.
+
 ## v0.5.1 (2026-11-06)
 
 Bumps the patch from v0.5.0, and it is compatible: a workflow that passes

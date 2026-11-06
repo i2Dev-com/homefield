@@ -93,7 +93,9 @@ workflows line by line and fails on syntax it cannot read (a quoted
 *another* repository is refused: the called workflow's jobs evaluate
 `runs-on` in this repository's context, and the called file is not here to
 check. Call a local workflow (`uses: ./.github/workflows/<file>`) and route
-its jobs in that file.
+its jobs in that file. The bypasses of this contract that were found and
+fixed — the affected versions and the pin each one makes consumers bump —
+are in [the routing guard's contract and past bypasses](security.md).
 
 ## 3. Add the guard
 
