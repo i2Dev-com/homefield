@@ -17,7 +17,7 @@ PF_LEVEL=()
 PF_MSG=()
 
 preflight_collect() {
-  local version major minor login scopes whoami py_version
+  local login scopes whoami py_version
   PF_NAME=()
   PF_LEVEL=()
   PF_MSG=()
@@ -25,14 +25,11 @@ preflight_collect() {
   if ! command -v limactl >/dev/null 2>&1; then
     pf_add lima fail "Lima not found: run 'brew install lima'"
   else
-    version="$(limactl --version 2>/dev/null | awk '{print $NF}')"
-    major="${version%%.*}"
-    minor="${version#*.}"
-    minor="${minor%%.*}"
-    if ! [[ "$major" =~ ^[0-9]+$ && "$minor" =~ ^[0-9]+$ ]] || [ "$major" -lt 2 ]; then
-      pf_add lima fail "Lima >= 2.0 required, found ${version:-unknown}: run 'brew install lima'"
+    lima_major_minor
+    if [ -z "$LIMA_MAJOR" ] || [ "$LIMA_MAJOR" -lt 2 ]; then
+      pf_add lima fail "Lima >= 2.0 required, found ${LIMA_VERSION:-unknown}: run 'brew install lima'"
     else
-      pf_add lima ok "Lima $version"
+      pf_add lima ok "Lima $LIMA_VERSION"
     fi
   fi
   # gh: the active account, by login and scopes. App-installed tokens report no

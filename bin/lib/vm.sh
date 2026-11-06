@@ -3,19 +3,28 @@
 # the runner's service and settings as seen from the guest.
 
 # ── Host and VM ─────────────────────────────────────────────────────────────
+# lima_major_minor: the installed limactl's version, split into
+# LIMA_VERSION/LIMA_MAJOR/LIMA_MINOR — empty parts when it cannot be read or
+# does not parse. One definition, so the three readers (check_host, the
+# preflight's Lima row, lima_at_least) never disagree.
+# shellcheck disable=SC2034  # LIMA_VERSION is read by cmd-preflight.sh
+lima_major_minor() {
+  LIMA_VERSION="$(limactl --version 2>/dev/null | awk '{print $NF}')"
+  LIMA_MAJOR="${LIMA_VERSION%%.*}"
+  LIMA_MINOR="${LIMA_VERSION#*.}"
+  LIMA_MINOR="${LIMA_MINOR%%.*}"
+  [[ "$LIMA_MAJOR" =~ ^[0-9]+$ && "$LIMA_MINOR" =~ ^[0-9]+$ ]] || { LIMA_MAJOR=""; LIMA_MINOR=""; }
+}
+
 check_host() {
   [ "$(uname -s)" = "Darwin" ] || die "needs macOS (Lima with Apple's Virtualization.framework)"
   [ "$(uname -m)" = "arm64" ] || die "needs an Apple Silicon Mac: the VM is arm64"
   command -v limactl >/dev/null || die "needs Lima >= 2.0: brew install lima"
-  local version major minor
-  version="$(limactl --version | awk '{print $NF}')"
-  major="${version%%.*}"
-  minor="${version#*.}"
-  minor="${minor%%.*}"
   # 2.0 is the first release documented to accept the `template:` locator in
   # vm/lima.yaml; it deprecated `template://` (Lima 2.0.0 release notes).
-  if ! [[ "$major" =~ ^[0-9]+$ && "$minor" =~ ^[0-9]+$ ]] || [ "$major" -lt 2 ]; then
-    die "needs Lima >= 2.0, found ${version}"
+  lima_major_minor
+  if [ -z "$LIMA_MAJOR" ] || [ "$LIMA_MAJOR" -lt 2 ]; then
+    die "needs Lima >= 2.0, found ${LIMA_VERSION}"
   fi
 }
 
@@ -203,16 +212,12 @@ verify_isolation() {
 }
 
 # lima_at_least MAJOR MINOR: is the installed limactl at least that release?
-# The same version parsing as check_host's; an unreadable version answers no.
+# The same parse as check_host's; an unreadable version answers no.
 lima_at_least() {
-  local version major minor
-  version="$(limactl --version 2>/dev/null | awk '{print $NF}')"
-  major="${version%%.*}"
-  minor="${version#*.}"
-  minor="${minor%%.*}"
-  [[ "$major" =~ ^[0-9]+$ && "$minor" =~ ^[0-9]+$ ]] || return 1
-  if [ "$major" -gt "$1" ]; then return 0; fi
-  [ "$major" -eq "$1" ] && [ "$minor" -ge "$2" ]
+  lima_major_minor
+  [ -n "$LIMA_MAJOR" ] || return 1
+  if [ "$LIMA_MAJOR" -gt "$1" ]; then return 0; fi
+  [ "$LIMA_MAJOR" -eq "$1" ] && [ "$LIMA_MINOR" -ge "$2" ]
 }
 
 # verify_loopback: the #18 probe. vm/lima.yaml asks Lima to stop mapping the
@@ -348,7 +353,8 @@ verify_loopback() {
       if lima_at_least 2 3; then
         echo "homefield: warning: #18: jobs in VM ${INSTANCE} can reach the Mac's loopback; its stored config does not show networkOpts.hostLoopback: false (absent, or unreadable): recreate the VM, or stop it and add the setting with limactl edit (docs/runbook.md, Host loopback exposure)" >&2
       else
-        echo "homefield: warning: #18: jobs in VM ${INSTANCE} can reach the Mac's loopback; Lima $(limactl --version 2>/dev/null | awk '{print $NF}') ignores networkOpts.hostLoopback — it closes for VMs created on Lima >= 2.3.0 (docs/runbook.md, Host loopback exposure)" >&2
+        lima_major_minor
+        echo "homefield: warning: #18: jobs in VM ${INSTANCE} can reach the Mac's loopback; Lima ${LIMA_VERSION} ignores networkOpts.hostLoopback — it closes for VMs created on Lima >= 2.3.0 (docs/runbook.md, Host loopback exposure)" >&2
       fi
       ;;
     closed-1|closed-124)
@@ -361,17 +367,34 @@ verify_loopback() {
   return 0
 }
 
+# guest_probe <through> <snippet> [args...]: run the snippet in the guest —
+# through <through> ("" , or sudo: guest_has_file reads a root-owned file) —
+# and turn its yes/no (or ok/broken) answer into an exit code: 0 for the
+# first, 1 for the second, 2 when the guest could not be asked (the call
+# failed, or the answer was neither). The snippet prints its answer, so a
+# failed call cannot pass for "no": a probe's `test -f` exits 1 for a missing
+# file and for a `limactl shell` that never reached the guest. A caller that
+# acts on "no" has to stop on 2.
+guest_probe() {
+  local through="$1" answer snippet
+  shift
+  snippet="$1"
+  shift
+  # shellcheck disable=SC2016  # the guest's shell expands the snippet's "$1"..., not this one
+  # shellcheck disable=SC2086  # an empty $through drops out of the command
+  answer="$(guest $through sh -c "$snippet" sh "$@")" || return 2
+  case "$answer" in
+    yes|ok) return 0 ;;
+    no|broken) return 1 ;;
+    *) return 2 ;;
+  esac
+}
+
 # guest_sees PATH: like guest_has_file for any kind of path, without sudo:
 # 0 if the guest can see it, 1 if not, 2 if the guest could not be asked.
 guest_sees() {
-  local answer
   # shellcheck disable=SC2016  # the guest's shell expands $1, not this one
-  answer="$(guest sh -c 'if test -e "$1"; then echo yes; else echo no; fi' sh "$1")" || return 2
-  case "$answer" in
-    yes) return 0 ;;
-    no) return 1 ;;
-    *) return 2 ;;
-  esac
+  guest_probe "" 'if test -e "$1"; then echo yes; else echo no; fi' "$1"
 }
 
 # guest_has_file PATH: 0 if the file is there, 1 if the guest says it is not,
@@ -381,14 +404,8 @@ guest_sees() {
 # `limactl shell` that never reached the guest. A caller that acts on "no"
 # has to stop on 2.
 guest_has_file() {
-  local answer
   # shellcheck disable=SC2016  # the guest's shell expands $1, not this one
-  answer="$(guest sudo sh -c 'if test -f "$1"; then echo yes; else echo no; fi' sh "$1")" || return 2
-  case "$answer" in
-    yes) return 0 ;;
-    no) return 1 ;;
-    *) return 2 ;;
-  esac
+  guest_probe sudo 'if test -f "$1"; then echo yes; else echo no; fi' "$1"
 }
 
 # is_registered: registered, for the commands that act on "no". A VM that could
@@ -413,14 +430,7 @@ removed_recovery() {
 # job" and for a `limactl shell` that never reached the guest. The [R] keeps
 # the pattern from matching this shell's own command line.
 job_running() {
-  local answer
-  # shellcheck disable=SC2016  # the guest's shell expands these, not this one
-  answer="$(guest sh -c 'pgrep -f "[R]unner.Worker" >/dev/null; case $? in 0) echo yes ;; 1) echo no ;; esac')" || return 2
-  case "$answer" in
-    yes) return 0 ;;
-    no) return 1 ;;
-    *) return 2 ;;
-  esac
+  guest_probe "" 'pgrep -f "[R]unner.Worker" >/dev/null; case $? in 0) echo yes ;; 1) echo no ;; esac'
 }
 
 # is_job_running: job_running, for the commands that go on when it says "no".
@@ -439,14 +449,8 @@ is_job_running() {
 # externals symlinks a runner self-update flattens (actions/runner#2094)
 # before every job. `cd /` keeps a project .npmrc out of the check.
 npm_state() {
-  local answer
-  # shellcheck disable=SC2016  # the guest's shell expands these, not this one
-  answer="$(guest sh -c 'for n in node20 node24; do d="/opt/actions-runner/externals/$n/bin"; [ -e "$d/npm" ] || continue; (cd / && "$d/node" "$d/npm" --version >/dev/null 2>&1) || { echo broken; exit 0; }; done; echo ok')" || return 2
-  case "$answer" in
-    ok) return 0 ;;
-    broken) return 1 ;;
-    *) return 2 ;;
-  esac
+  # shellcheck disable=SC2016  # the guest's shell expands the snippet's $n, not this one
+  guest_probe "" 'for n in node20 node24; do d="/opt/actions-runner/externals/$n/bin"; [ -e "$d/npm" ] || continue; (cd / && "$d/node" "$d/npm" --version >/dev/null 2>&1) || { echo broken; exit 0; }; done; echo ok'
 }
 
 # Maintenance (upgrade, uninstall) takes the runner offline first, straight

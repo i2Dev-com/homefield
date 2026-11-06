@@ -813,6 +813,86 @@ cmd_upgrade() {
   vm_dispatch upgrade upgrade_single "${opts[@]+"${opts[@]}"}"
 }
 
+# runner_report <verbose>: the runner half of a status/start report — the
+# registration, GitHub's listing, the service — the ~40 lines the two reports
+# share. "verbose" is start's form of the GitHub line (it names the status and
+# points at the runners page when the runner is listed but not online).
+# Leaves the answers in RR_NAME/RR_URL/RR_ID/RR_REMOVED/RR_UNKNOWN/RR_NOTREG/
+# RR_SVC/RR_ON for the caller: status ends on a removed runner, start computes
+# "taking jobs" from the service and the listing, and the not-registered extra
+# line is start's, not status's. A guest that cannot be asked is reported as
+# unknown, never read as "not registered" (#80).
+RR_NAME="" RR_URL="" RR_ID="" RR_REMOVED=0 RR_UNKNOWN=0 RR_NOTREG=0 RR_SVC=0 RR_ON=2 RR_ASKFAIL=0
+runner_report() {
+  local reg=0 on=0
+  RR_REMOVED=0; RR_UNKNOWN=0; RR_NOTREG=0; RR_SVC=0; RR_ON=2; RR_ASKFAIL=0
+  registered || reg=$?
+  if [ "$reg" -ge 2 ]; then
+    echo "runner: unknown (could not ask the VM)"
+    RR_UNKNOWN=1
+    RR_ASKFAIL=1
+    return 0
+  fi
+  if [ "$reg" = 1 ]; then
+    echo "runner: not registered"
+    RR_NOTREG=1
+    return 0
+  fi
+  # Fewer than three lines read must reach the check below, not stop here.
+  load_runner_settings
+  # RS_NAME/RS_URL/RS_ID are lib/vm.sh's load_runner_settings' output.
+  # shellcheck disable=SC2153
+  RR_NAME="$RS_NAME" RR_URL="$RS_URL" RR_ID="$RS_ID"
+  if [ -n "$RR_NAME" ] && [ -n "$RR_URL" ]; then
+    echo "runner: ${RR_NAME}, registered at ${RR_URL}"
+  else
+    # The registration exists (.runner is there) but its details could not be
+    # read just now; the rest of the report still stands on its own, and the
+    # GitHub ask needs an id.
+    echo "runner: registered, but its details could not be read"
+  fi
+  runner_on_github "$RR_URL" "$RR_ID" || on=$?
+  RR_ON="$on"
+  case "$on" in
+    0)
+      if [ "${1:-}" = verbose ]; then
+        echo "github: listed (${RUNNER_GH_STATUS})"
+        if [ "$RUNNER_GH_STATUS" != online ]; then
+          echo "  GitHub lists it, but not online (${RUNNER_GH_STATUS}): check $(runners_page "$RR_URL")"
+        fi
+      else
+        echo "github: listed"
+      fi
+      ;;
+    1)
+      echo "github: NOT listed: GitHub removes runners that have not connected for more than 14 days."
+      echo "  Register it again: $(removed_recovery "$RR_URL" "$RR_NAME")"
+      RR_REMOVED=1
+      ;;
+    3)
+      echo "github: not checked (timed out after ${GH_TIMEOUT}s; the network may be down)"
+      # start counts an unproven GitHub answer as unknown; status's report
+      # stands on its own and exits 0 (its job/npm rows carry the unknowns).
+      [ "${1:-}" = verbose ] && RR_UNKNOWN=1
+      ;;
+    *)
+      if [ -n "$RR_ID" ]; then
+        echo "github: not checked (needs gh with admin access to ${RR_URL})"
+      else
+        echo "github: not checked (no runner id in the VM's settings)"
+      fi
+      [ "${1:-}" = verbose ] && RR_UNKNOWN=1
+      ;;
+  esac
+  if runner_service_state; then
+    echo "service: running"
+  else
+    RR_SVC=1
+    echo "service: NOT running (${SERVICE_UNIT:-no service installed})"
+  fi
+  return 0
+}
+
 # status_single: one VM's report; vm_dispatch runs it for every VM by default.
 status_single() {
   [ $# -eq 0 ] || die "status takes no options besides --instance"
@@ -828,73 +908,30 @@ status_single() {
   fi
   echo "VM ${INSTANCE}: ${status}"
   [ "$status" = "Running" ] || return 0
-  local reg=0
-  registered || reg=$?
-  if [ "$reg" -ge 2 ]; then
-    echo "runner: unknown (could not ask the VM)"
-    return 1
-  fi
-  if [ "$reg" = 1 ]; then
-    echo "runner: not registered"
-    return
-  fi
-  local name url id removed=0 on=0
-  # Fewer than three lines read must reach the check below, not stop here.
-  load_runner_settings
-  name="$RS_NAME" url="$RS_URL" id="$RS_ID"
-  if [ -n "$name" ] && [ -n "$url" ]; then
-    echo "runner: ${name}, registered at ${url}"
-    runner_on_github "$url" "$id" || on=$?
-    case "$on" in
-      0) echo "github: listed" ;;
-      1)
-        echo "github: NOT listed: GitHub removes runners that have not connected for more than 14 days."
-        echo "  Register it again: $(removed_recovery "$url" "$name")"
-        removed=1
-        ;;
-      3)
-        echo "github: not checked (timed out after ${GH_TIMEOUT}s; the network may be down)"
-        ;;
-      *)
-        if [ -n "$id" ]; then
-          echo "github: not checked (needs gh with admin access to ${url})"
-        else
-          echo "github: not checked (no runner id in the VM's settings)"
-        fi
-        ;;
-    esac
-  else
-    # The registration exists (.runner is there) but its details could not be
-    # read just now; the rest of the report still stands on its own.
-    echo "runner: registered, but its details could not be read"
-  fi
-  if runner_service_state; then
-    echo "service: running"
-  else
-    echo "service: NOT running (${SERVICE_UNIT:-no service installed})"
-  fi
-  local job=0 unknown=0
+  runner_report
+  [ "$RR_ASKFAIL" = 0 ] || return 1
+  [ "$RR_NOTREG" = 0 ] || return 0
+  local job=0 npm=0
   job_running || job=$?
   case "$job" in
     0) echo "job: running" ;;
     1) echo "job: idle" ;;
-    *) echo "job: unknown (could not ask the VM)"; unknown=1 ;;
+    *) echo "job: unknown (could not ask the VM)"; RR_UNKNOWN=1 ;;
   esac
   echo "runner version: $(runner_version)"
-  local npm=0
   npm_state || npm=$?
   case "$npm" in
     0) echo "npm: ok" ;;
     1)
       echo "npm: BROKEN (a runner self-update can flatten the externals symlinks; docs/runbook.md, \"Runner updates\")"
-      unknown=1
+      RR_UNKNOWN=1
       ;;
-    *) echo "npm: unknown (could not ask the VM)"; unknown=1 ;;
+    *) echo "npm: unknown (could not ask the VM)"; RR_UNKNOWN=1 ;;
   esac
   echo "extra packages: $(runner_extra_packages)"
-  [ -n "$url" ] && echo "labels: see $(runners_page "$url") (not stored in the VM)"
-  [ "$removed" = 0 ] || return 1
-  return "$unknown"
+  [ -n "$RR_URL" ] && echo "labels: see $(runners_page "$RR_URL") (not stored in the VM)"
+  [ "$RR_REMOVED" = 0 ] || return 1
+  return "$RR_UNKNOWN"
 }
 
 # upgrade_registered <upgrade args...>: the fallback install/setup take on an
@@ -938,56 +975,13 @@ start_single() {
   echo "VM ${INSTANCE}: Running"
   # The guest answers only now; a VM that could not be asked is reported as
   # unknown, never read as "not registered" (#80).
-  local reg=0 svc=0 on=0 online=0 unknown=0
-  registered || reg=$?
-  if [ "$reg" -ge 2 ]; then
-    echo "runner: unknown (could not ask the VM)"
-    return 1
-  fi
-  if [ "$reg" = 1 ]; then
-    echo "runner: not registered"
+  runner_report verbose
+  [ "$RR_ASKFAIL" = 0 ] || return 1
+  if [ "$RR_NOTREG" = 1 ]; then
     echo "  Register it, then run this again: bin/homefield install --instance ${INSTANCE} --url https://github.com/<org>[/<repo>]"
     return 1
   fi
-  load_runner_settings
-  local name="$RS_NAME" url="$RS_URL" id="$RS_ID"
-  if [ -n "$name" ] && [ -n "$url" ]; then
-    echo "runner: ${name}, registered at ${url}"
-  else
-    # The registration exists (.runner is there) but its details could not be
-    # read just now: the rest of the report still stands on its own, and the
-    # GitHub ask needs an id.
-    echo "runner: registered, but its details could not be read"
-  fi
-  if runner_service_state; then
-    echo "service: running"
-  else
-    svc=1
-    echo "service: NOT running (${SERVICE_UNIT:-no service installed})"
-  fi
-  runner_on_github "$url" "$id" || on=$?
-  case "$on" in
-    0) echo "github: listed (${RUNNER_GH_STATUS})"
-       if [ "$RUNNER_GH_STATUS" != online ]; then
-         echo "  GitHub lists it, but not online (${RUNNER_GH_STATUS}): check $(runners_page "$url")"
-       fi ;;
-    1)
-      echo "github: NOT listed: GitHub removes runners that have not connected for more than 14 days."
-      echo "  Register it again: $(removed_recovery "$url" "$name")"
-      ;;
-    3)
-      echo "github: not checked (timed out after ${GH_TIMEOUT}s; the network may be down)"
-      unknown=1
-      ;;
-    *)
-      if [ -n "$id" ]; then
-        echo "github: not checked (needs gh with admin access to ${url})"
-      else
-        echo "github: not checked (no runner id in the VM's settings)"
-      fi
-      unknown=1
-      ;;
-  esac
+  local svc="$RR_SVC" on="$RR_ON" online=0
   # Online needs both answers: the service is listening and GitHub lists it as
   # online. Either one unproven keeps "taking jobs: yes" unsaid.
   if [ "$svc" = 0 ] && [ "$on" = 0 ] && [ "$RUNNER_GH_STATUS" = online ]; then
