@@ -12,6 +12,8 @@ set -uo pipefail
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
+nonzero() { [ "$1" -ne 0 ] && echo nonzero || echo "$1"; }
+
 cat >"$work/fixture.json" <<'JSON'
 {"acme/app": [
  {"id": 1, "path": ".github/workflows/ci.yml", "event": "pull_request", "branch": "feat/a", "jobs": [
@@ -166,5 +168,86 @@ out="$(HOMEFIELD_REPORT_FIXTURE="$work/no-such-fixture.json" python3 "$ROOT/tool
   --repo acme/app --since 2026-10-01 --until 2026-10-02 2>&1)"
 record "a missing fixture file is refused, not a traceback" "yes/no" \
   "$(echo "$out" | grep -q 'could not read the fixture' && echo yes || echo no)/$(echo "$out" | grep -q Traceback && echo yes || echo no)"
+
+# ── The live gh path ───────────────────────────────────────────────────────
+# A gh stub on PATH answers the API the way gh --paginate prints: the post-jq
+# objects, one per line, pages back to back. The runs query is answered per
+# created= day, the jobs query per run, so the pagination contract (one run's
+# jobs arriving as two pages) and the day-span filter are under test.
+echo
+echo "the live gh path"
+stubs="$work/stubs"
+mkdir -p "$stubs" "$work/runs" "$work/jobs"
+cat >"$stubs/gh" <<'STUB'
+#!/bin/sh
+echo "gh $*" >>"$CALLS"
+if [ -n "${GH_FAIL:-}" ]; then echo "gh: HTTP 502" >&2; exit 1; fi
+case "$*" in
+  *"actions/runs?per_page=100&created="*)
+    day="$(printf '%s' "$*" | sed -n 's/.*created=\([0-9-]*\)T.*/\1/p')"
+    # A day with no runs is an empty answer, not a failure: gh --paginate
+    # exits 0 and prints nothing.
+    [ -f "$RUNS/$day.txt" ] && cat "$RUNS/$day.txt"
+    ;;
+  *"actions/runs/"*"/jobs"*)
+    id="$(printf '%s' "$*" | sed -n 's|.*/actions/runs/\([0-9]*\)/jobs.*|\1|p')"
+    [ -f "$JOBS/jobs-$id.txt" ] && cat "$JOBS/jobs-$id.txt"
+    ;;
+esac
+# A query with no answer is an empty page, never a failure: fall through to 0.
+exit 0
+STUB
+chmod +x "$stubs/gh"
+# The post-jq shapes, one object per line: RUN_FIELDS for runs, JOB_FIELDS for
+# jobs. Run 1001's jobs are two pages' worth (gh --paginate prints them back
+# to back); run 1002's job carries the acme-ci label for the --label case.
+printf '%s\n' '{"id": 1001, "path": ".github/workflows/ci.yml", "event": "pull_request", "created_at": "2026-10-01T10:00:00Z", "branch": "feat/a"}' >"$work/runs/2026-10-01.txt"
+printf '%s\n' '{"id": 1002, "path": ".github/workflows/ci.yml", "event": "pull_request", "created_at": "2026-10-02T09:00:00Z", "branch": "feat/b"}' >"$work/runs/2026-10-02.txt"
+printf '%s\n%s\n' \
+  '{"id": 11, "name": "checks", "status": "completed", "conclusion": "success", "created_at": "2026-10-01T10:00:00Z", "started_at": "2026-10-01T10:00:30Z", "completed_at": "2026-10-01T10:02:10Z", "runner_name": "lima", "labels": ["self-hosted", "linux", "arm64", "homefield-ci"]}' \
+  '{"id": 12, "name": "lint", "status": "completed", "conclusion": "success", "created_at": "2026-10-01T10:00:00Z", "started_at": "2026-10-01T10:00:03Z", "completed_at": "2026-10-01T10:01:04Z", "runner_name": "GitHub Actions 5", "labels": ["ubuntu-latest"]}' >"$work/jobs/jobs-1001.txt"
+printf '%s\n' '{"id": 21, "name": "acme-checks", "status": "completed", "conclusion": "success", "created_at": "2026-10-02T09:00:00Z", "started_at": "2026-10-02T09:00:10Z", "completed_at": "2026-10-02T09:01:00Z", "runner_name": "lima", "labels": ["self-hosted", "linux", "arm64", "acme-ci"]}' >"$work/jobs/jobs-1002.txt"
+
+live() {
+  : >"$work/calls"
+  out="$(env -i PATH="$stubs:$PATH" CALLS="$work/calls" RUNS="$work/runs" JOBS="$work/jobs" HOME="$work" \
+    ${GH_FAIL:+GH_FAIL=1} HOMEFIELD_REPORT_TODAY="$REPORT_TODAY" \
+    python3 "$ROOT/tools/report.py" "$@" 2>&1)"
+  rc=$?
+}
+REPORT_TODAY=2026-10-02
+live --repo acme/app --since 2026-10-01 --until 2026-10-02
+record "live: two days' runs, each with its jobs, the progress line on stderr" "0/yes/yes/yes" \
+  "$rc/$(echo "$out" | grep -q 'app .*ci.yml / checks .*local' && echo yes || echo no)/$(echo "$out" | grep -q 'app .*ci.yml / lint .*hosted' && echo yes || echo no)/$(echo "$out" | grep -q 'acme/app: 2 runs, fetching jobs' && echo yes || echo no)"
+record "live: the created span is a single UTC day, per day of the window" "2" \
+  "$(grep -c 'created=2026-10-0[12]T00:00:00Z\.\.2026-10-0[12]T23:59:59Z' "$work/calls")"
+record "live: one run's jobs arrive as two pages of one call, both counted" "1/1/1" \
+  "$(grep -c 'actions/runs/1001/jobs' "$work/calls")/$(echo "$out" | grep -q 'ci.yml / checks .*local' && echo 1 || echo 0)/$(echo "$out" | grep -q 'ci.yml / lint .*hosted' && echo 1 || echo 0)"
+live --repo acme/app --since 2026-10-01 --until 2026-10-02 --label acme-ci
+record "live: a custom --label reclassifies the job that carries it" "0/yes/no" \
+  "$rc/$(echo "$out" | grep -q 'app .*ci.yml / acme-checks .*local' && echo yes || echo no)/$(echo "$out" | grep -q 'acme-checks .*hosted' && echo yes || echo no)"
+live --repo acme/app --repo acme/other --since 2026-10-01 --until 2026-10-02
+record "live: repeated --repo asks each repository" "2/2" \
+  "$(grep -c 'repos/acme/app/actions/runs?per_page=100&created=' "$work/calls")/$(grep -c 'repos/acme/other/actions/runs?per_page=100&created=' "$work/calls")"
+GH_FAIL=1 live --repo acme/app --since 2026-10-01 --until 2026-10-02
+record "live: a gh failure is the one-line refusal, not a traceback" "nonzero/yes/no" \
+  "$(nonzero "$rc")/$(echo "$out" | grep -q 'gh api repos/acme/app/.* failed' && echo yes || echo no)/$(echo "$out" | grep -q Traceback && echo yes || echo no)"
+# The default window: the first of the current month through today, in UTC
+# (the window report.py computes). The clock is pinned with
+# HOMEFIELD_REPORT_TODAY — the test never reads the host's clock — and the
+# stub answers a run created on the pinned day, so the report's header names
+# both ends.
+today="2026-11-05"
+first="2026-11-01"
+printf '%s\n' "{\"id\": 1003, \"path\": \".github/workflows/ci.yml\", \"event\": \"pull_request\", \"created_at\": \"${today}T10:00:00Z\", \"branch\": \"feat/c\"}" >"$work/runs/$today.txt"
+printf '%s\n' '{"id": 31, "name": "today-job", "status": "completed", "conclusion": "success", "created_at": "'"$today"'T10:00:00Z", "started_at": "'"$today"'T10:00:10Z", "completed_at": "'"$today"'T10:01:00Z", "runner_name": "lima", "labels": ["self-hosted", "linux", "arm64", "homefield-ci"]}' >"$work/jobs/jobs-1003.txt"
+REPORT_TODAY="$today"
+live --repo acme/app
+record "live: no --since/--until is the month to date, and it is said" "0/yes/yes" \
+  "$rc/$(echo "$out" | grep -q "Jobs from $first to $today (UTC)" && echo yes || echo no)/$(echo "$out" | grep -q 'ci.yml / today-job .*local' && echo yes || echo no)"
+out="$(HOMEFIELD_REPORT_TODAY=not-a-date PATH="$stubs:$PATH" RUNS="$work/runs" JOBS="$work/jobs" HOME="$work" \
+  python3 "$ROOT/tools/report.py" --repo acme/app 2>&1)"; rc=$?
+record "a malformed HOMEFIELD_REPORT_TODAY is refused, not a traceback" "nonzero/yes/no" \
+  "$(nonzero "$rc")/$(echo "$out" | grep -q 'not a date (YYYY-MM-DD)' && echo yes || echo no)/$(echo "$out" | grep -q Traceback && echo yes || echo no)"
 
 summary
