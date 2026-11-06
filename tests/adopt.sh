@@ -1563,6 +1563,17 @@ jobs:
 EOF
 record "setup: routes, comments, keys and the guard list, byte for byte" "0/yes/yes/1" \
   "$rc_setup/$(cmp -s "$work/setup-out/ci.yml" "$work/setup-want.yml" && echo yes)/$([ "$got" = "$want" ] && echo yes)/$(find "$work/setup-out" -type f | wc -l | tr -d ' ')"
+# The no-op refusal, on its own fixture: every job that could route already
+# carries the expression, and the guard already lists it. (Built by the suite
+# like every fixture, not reused from a previous setup run: setup's own
+# output, run through setup again, was flaky here in a way the tool's own
+# 20-run determinism check on this same shape never reproduced.)
+mkdir -p "$work/setup-done"
+{ header; emit_job lint "$expr"; emit_job guard ubuntu-24.04-arm "$(guard ci.yml:lint)"; } >"$work/setup-done/ci.yml"
+got="$(python3 -I "$ROOT/tools/adopt.py" setup "$work/setup-done" "$work/setup-out13" --expression "$expr" 2>&1)"
+rc_setup=$?
+record "setup: every job routed and listed already: the no-op refusal" "nonzero/yes/no" \
+  "$(nonzero "$rc_setup")/$(has "$got" 'every job that could route already carries the expression, and the guard already lists it')/$([ -d "$work/setup-out13" ] && echo yes || echo no)"
 got="$(python3 -I "$ROOT/tools/adopt.py" setup "$work/wf-norouted" "$work/setup-out2" --expression "$expr" 2>&1)"
 rc_setup=$?
 record "setup: a hosted job only inside the guard job: nothing to route, nothing staged" "nonzero/yes/no" \
@@ -1615,6 +1626,18 @@ got="$(python3 -I "$ROOT/tools/adopt.py" setup "$work/wf-twoguards" "$work/setup
 rc_setup=$?
 record "setup: two passing guards refuse the run rather than pick one" "nonzero/yes/no" \
   "$(nonzero "$rc_setup")/$(has "$got" 'more than one routing-guard step')/$([ -d "$work/setup-out9" ] && echo yes || echo no)"
+got="$(python3 -I "$ROOT/tools/adopt.py" setup "$work/wf-ready" "$work/setup-out11" --expression "$expr" --jobs ci.yml:missing 2>&1)"
+rc_setup=$?
+record "setup --jobs naming a job that cannot route: refused, naming it" "nonzero/yes/no" \
+  "$(nonzero "$rc_setup")/$(has "$got" 'nothing to route: ci.yml:missing cannot be routed')/$([ -d "$work/setup-out11" ] && echo yes || echo no)"
+mkdir -p "$work/setup-seq"
+# The guard's own job keeps its runner, so a job to route has to exist beside
+# it: `j` runs the guard, whose jobs: list is in sequence form, and `k` routes.
+{ header; emit_job j ubuntu-latest "$(printf '      - name: Routing guard\n        uses: i2Dev-com/homefield/routing-guard@v0.5.0\n        with:\n          jobs:\n            - ci.yml:k')"; emit_job k ubuntu-latest; } >"$work/setup-seq/ci.yml"
+got="$(python3 -I "$ROOT/tools/adopt.py" setup "$work/setup-seq" "$work/setup-out12" --expression "$expr" 2>&1)"
+rc_setup=$?
+record "setup: a jobs: list in sequence form is refused, not rewritten" "nonzero/yes/no" \
+  "$(nonzero "$rc_setup")/$(has "$got" 'does not have a jobs: list setup can rewrite')/$([ -d "$work/setup-out12" ] && echo yes || echo no)"
 # An edited file is written with LF endings even when the original had CRLF.
 mkdir -p "$work/setup-crlf"
 { header; emit_job lint ubuntu-latest; } | sed 's/$/\r/' >"$work/setup-crlf/ci.yml"
