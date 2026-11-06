@@ -757,7 +757,7 @@ upgrade_single() {
   # stops being reinstalled. Plain --packages still replaces the whole list;
   # say which preset names that takes out of it.
   local merged=""
-  if [ ${#presets[@]} -gt 0 ]; then
+  if [ ${#UP_PRESETS[@]} -gt 0 ]; then
     copy_preset_hooks
     local extra="" saved=""
     [ "$packages_set" = 1 ] && extra="$packages"
@@ -772,7 +772,7 @@ upgrade_single() {
   fi
   stop_runner
   local env=()
-  if [ ${#presets[@]} -gt 0 ]; then
+  if [ ${#UP_PRESETS[@]} -gt 0 ]; then
     env+=(RUNNER_EXTRA_PACKAGES="$merged")
   elif [ "$packages_set" = 1 ]; then
     env+=(RUNNER_EXTRA_PACKAGES="$packages")
