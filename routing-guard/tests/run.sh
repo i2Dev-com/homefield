@@ -658,7 +658,7 @@ if [ "$n" = 1 ]; then
 else
   echo "  FAIL GITHUB_ACTIONS annotation: wanted 1 ::error, got $n"; fail=$((fail + 1))
 fi
-n="$(python3 "$SCRIPT" --workflows-dir "$ann" --jobs "" 2>/dev/null | grep -c '^::error')"
+n="$(env -u GITHUB_ACTIONS python3 "$SCRIPT" --workflows-dir "$ann" --jobs "" 2>/dev/null | grep -c '^::error')"
 if [ "$n" = 0 ]; then
   echo "  ok   without GITHUB_ACTIONS: no annotation (pass)"; pass=$((pass + 1))
 else
