@@ -3,12 +3,20 @@
 The routing guard (`routing-guard/routing_guard.py`, run as
 [`i2Dev-com/homefield/routing-guard`](routing-guard/action.yml)) fails CI
 unless every job that can reach the local runner uses the one reviewed
-`runs-on` expression. The expression carries four guarantees: jobs run on the
-self-hosted runner only when `vars.CI_RUNNER == 'local'`, the event is a
-pull request, Dependabot's actor and branches are excluded, fork pull
-requests run hosted, and anything else falls back to a GitHub-hosted image.
-The full procedure, including how to write and pin the guard, is
-[adopting.md](adopting.md) steps 2-3.
+`runs-on` expression. Which restrictions the expression carries depends on
+its shape. The **guarded** expression — the one the docs and the examples
+here describe — routes a job to the self-hosted runner only when
+`vars.CI_RUNNER == 'local'`, the event is a pull request, the author is not
+Dependabot and the branch is not from a fork; everything else falls back to
+a GitHub-hosted image. Its events and Dependabot handling are options of
+the action (`events`, `dependabot`): a repository can opt a push schedule
+or Dependabot in deliberately, and the guard checks the jobs against the
+expression those options produce. The **simple** expression — the default
+`homefield adopt --setup` writes — has only the switch and the hosted
+fallback: every event routes, pushes and fork pull requests included. It is
+for a private repository where being able to open a pull request already
+means being trusted with the Mac. The full procedure, including how to
+write and pin the guard, is [adopting.md](adopting.md) steps 2-3.
 
 ## The contract
 
@@ -38,7 +46,7 @@ workflow that passes the current release's check ran guarded before.**
 each has the key `runs-on`, and every release before v0.2.1 read only a
 plain `runs-on:` under a plain `job-id:` line. The job was treated as having
 no `runs-on`, which the guard did not check, and it reached the self-hosted
-runner with none of the four guarantees.
+runner with none of the reviewed expression's restrictions.
 
 - **Advisory:** [GHSA-4795-jpw2-47v2](https://github.com/i2Dev-com/homefield/security/advisories/GHSA-4795-jpw2-47v2)
 - **Affected:** v0.1.0-v0.1.1. v0.2.0 contains the fix but was too strict
@@ -117,9 +125,10 @@ workflow has no `runs-on` of its own, so it was treated as having no
 `runs-on` and not checked. The called workflow's jobs evaluate their
 `runs-on` in the **caller's** context: a remote workflow with
 `runs-on: [self-hosted]` therefore reached the caller's self-hosted runner
-with none of the four guarantees — the caller passed the guard, and the
-routing happened in a file the guard never saw. A step-level `uses:`
-(`actions/checkout@v4`) is not a call and is not affected.
+with none of the reviewed expression's restrictions — the caller passed the
+guard, and the routing happened in a file the guard never saw. A
+step-level `uses:` (`actions/checkout@v4`) is not a call and is not
+affected.
 
 - **Affected:** any workflow passing the guard at a pin of v0.4.2 or
   earlier, with a job calling a reusable workflow in another repository
