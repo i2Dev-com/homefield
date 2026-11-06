@@ -647,6 +647,25 @@ else
   echo "  ok   missing workflows dir (fail)"; pass=$((pass + 1))
 fi
 
+# The GITHUB_ACTIONS annotations: a failure also emits a ::error with the
+# file and line — job-qualified messages included — and nothing does without
+# the variable, so a local run stays clean.
+ann="$(mktemp -d)"
+printf 'name: CI\non: [pull_request]\njobs:\n  checks:\n    runs-on: self-hosted\n    steps:\n      - run: echo hi\n' >"$ann/ci.yml"
+n="$(GITHUB_ACTIONS=true python3 "$SCRIPT" --workflows-dir "$ann" --jobs "" 2>/dev/null | grep -c '^::error file=.github/workflows/ci.yml,line=5::runs-on is neither')"
+if [ "$n" = 1 ]; then
+  echo "  ok   GITHUB_ACTIONS: the job-qualified failure is an annotation (pass)"; pass=$((pass + 1))
+else
+  echo "  FAIL GITHUB_ACTIONS annotation: wanted 1 ::error, got $n"; fail=$((fail + 1))
+fi
+n="$(python3 "$SCRIPT" --workflows-dir "$ann" --jobs "" 2>/dev/null | grep -c '^::error')"
+if [ "$n" = 0 ]; then
+  echo "  ok   without GITHUB_ACTIONS: no annotation (pass)"; pass=$((pass + 1))
+else
+  echo "  FAIL without GITHUB_ACTIONS: wanted 0 ::error, got $n"; fail=$((fail + 1))
+fi
+rm -rf "$ann"
+
 # --list-unroutable: the jobs with no runs-on at all (GitHub runs them on its
 # ubuntu-latest default, so they stay hosted silently). The listing is
 # compared to what it must print, one file:job per line.

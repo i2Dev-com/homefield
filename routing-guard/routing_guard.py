@@ -360,10 +360,11 @@ def main() -> int:
             print(f"  \033[31mFAIL\033[0m {msg}")
             # In CI, the same failure as a GitHub annotation, so it surfaces
             # on the pull request's diff. The scanner's messages name the
-            # file and line ("ci.yml:12: ..."); the annotation carries them
+            # file and line — "ci.yml:12: ..." and, job-qualified,
+            # "ci.yml:12 (job checks): ..." — the annotation carries them
             # structurally, with the multi-line rest encoded GitHub's way.
             if os.environ.get("GITHUB_ACTIONS"):
-                at = re.match(r"([^:\s]+):(\d+): ", msg)
+                at = re.match(r"([^:\s]+):(\d+)(?: \(job [^)]*\))?: ", msg)
                 if at:
                     detail = msg[at.end():].replace("\n", "%0A")
                     print(f"::error file=.github/workflows/{at.group(1)},line={at.group(2)}::{detail}")

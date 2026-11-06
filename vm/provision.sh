@@ -450,13 +450,20 @@ if [ ! -x "$RUNNER_HOME/config.sh" ] || ! grep -qx "$RUNNER_VERSION" "$RUNNER_HO
   tar -xzf "$tarball" -C "$RUNNER_HOME"
   rm -f "$tarball"
   "$RUNNER_HOME/bin/installdependencies.sh"
-  echo "$RUNNER_VERSION" > "$RUNNER_HOME/.provisioned-version"
 fi
 # Only when this run replaced the binary: the tar extracted as root left
 # root-owned files. The job-started hook keeps ownership right from here on
 # (incrementally, before every job), so a run that only re-checks settings
-# does not walk all of _work.
-[ "$runner_replaced" = 1 ] && chown -R "$RUNNER_USER:$RUNNER_USER" "$RUNNER_HOME"
+# does not walk all of _work. The version marker is written only after the
+# chown: a run interrupted between extraction and repair (the chown failing
+# included) leaves no marker, so the next run re-extracts and repairs,
+# instead of finding the marker and skipping the chown forever — a root-owned
+# runner home blocks registration, and unwritable extracted files break the
+# runner's updates.
+if [ "$runner_replaced" = 1 ]; then
+  chown -R "$RUNNER_USER:$RUNNER_USER" "$RUNNER_HOME"
+  echo "$RUNNER_VERSION" > "$RUNNER_HOME/.provisioned-version"
+fi
 
 # ── Runner npm + workspace ownership ────────────────────────────────────────
 # Two repairs the runner cannot make itself, run before every job through the
