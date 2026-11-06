@@ -641,11 +641,11 @@ mkdir -p "$dflt/bin/lib"
 cp "$ROOT/bin/homefield" "$dflt/bin/homefield"
 cp "$ROOT"/bin/lib/*.sh "$dflt/bin/lib/"
 cp "$ROOT"/bin/cmd-*.sh "$dflt/bin/"
-printf 'repo=i2Dev-com/homefield\nref=v0.5.0\ncommit=%s\n' "$old" >"$dflt/.homefield-ref"
+printf 'repo=i2Dev-com/homefield\nref=v0.5.1\ncommit=%s\n' "$old" >"$dflt/.homefield-ref"
 : >"$calls"
 out="$(env -i HOME="$work/h" PATH="$work/vgh" CALLS="$calls" V_TAGS="$tags_rel" V_COMMIT="$new" "$BASH" "$dflt/bin/homefield" version 2>&1 </dev/null)"
 record "default repo, ref and place: the README's one-liner" "yes" "$(has "$out" "
-  curl -fsSL https://raw.githubusercontent.com/i2Dev-com/homefield/v0.5.0/install.sh | bash
+  curl -fsSL https://raw.githubusercontent.com/i2Dev-com/homefield/v0.5.1/install.sh | bash
 ")"
 
 printf 'repo=acme/tool\nref=release/1\ncommit=%s\n' "$old" >"$work/inst/.homefield-ref"

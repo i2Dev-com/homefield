@@ -9,7 +9,18 @@ fail, such as a new guard in the routing expression, bumps the minor version
 (0.1 to 0.2). Compatible changes bump the patch. Merged changes wait on
 `main`, under *Unreleased*, until a release is cut.
 
-## Unreleased
+## v0.5.1 (2026-11-06)
+
+Bumps the patch from v0.5.0, and it is compatible: a workflow that passes
+v0.5.0's check passes this one, and no guard, default or option changed.
+The routing checker gained `--list-unroutable` and posts `::error`
+annotations in CI; the homefield tool's preset hooks are no longer
+add-only (#188) — a hook a preset stops shipping is removed from the VMs
+on the next provision run. To upgrade, run the README's one-liner again
+(it replaces the installed copy, `bin/lib/` and the per-command files
+included), then `homefield upgrade --instance <name>` while idle on each
+VM. Consumers of the routing guard can bump `routing-guard@v0.5.0` pins
+to `@v0.5.1` at their leisure — a v0.5.0 pin passes the same workflows.
 
 ### Changed
 
