@@ -865,8 +865,7 @@ adopt_write_denied() {
 # its options; ADOPT_SETUP_GOPTS, the options the guard check of the staged
 # files runs with; and the plan's outcome, ADOPT_SETUP_ROUTED (the planned
 # jobs, comma-joined) and ADOPT_SETUP_FILES (the files it touches, one per
-# line). The caller's summary and the interrupt handler read
-# ADOPT_SETUP_ROUTED too.
+# line). The pull request body and the staged-files check read them.
 ADOPT_SETUP_EXPR=""
 ADOPT_SETUP_OPTS=()
 ADOPT_SETUP_GOPTS=()
