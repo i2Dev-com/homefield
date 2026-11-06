@@ -23,7 +23,8 @@ HOMEFIELD_REPORT_FIXTURE=<file.json> reads {"owner/repo": [run, ...]} instead
 of calling GitHub; tests/report.sh uses it. The fixture carries the fields the
 API gives: runs are objects with their jobs under "jobs", and every job has a
 name and a created_at. Anything else is refused with a message, not a
-traceback.
+traceback. HOMEFIELD_REPORT_TODAY=<YYYY-MM-DD> pins "today" for the default
+window, so a test does not read the host's clock.
 """
 
 import argparse
@@ -362,6 +363,12 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     today = dt.datetime.now(dt.timezone.utc).date()
+    # HOMEFIELD_REPORT_TODAY pins "today" (tests/report.sh uses it): the
+    # default window is month to date, and a test that reads the host's clock
+    # can straddle UTC midnight against this one.
+    pinned = os.environ.get("HOMEFIELD_REPORT_TODAY")
+    if pinned:
+        today = parse_date(pinned)
     first = parse_date(args.since) if args.since else today.replace(day=1)
     last = parse_date(args.until) if args.until else today
     if first > last:

@@ -211,10 +211,11 @@ printf '%s\n' '{"id": 21, "name": "acme-checks", "status": "completed", "conclus
 live() {
   : >"$work/calls"
   out="$(env -i PATH="$stubs:$PATH" CALLS="$work/calls" RUNS="$work/runs" JOBS="$work/jobs" HOME="$work" \
-    ${GH_FAIL:+GH_FAIL=1} \
+    ${GH_FAIL:+GH_FAIL=1} HOMEFIELD_REPORT_TODAY="$REPORT_TODAY" \
     python3 "$ROOT/tools/report.py" "$@" 2>&1)"
   rc=$?
 }
+REPORT_TODAY=2026-10-02
 live --repo acme/app --since 2026-10-01 --until 2026-10-02
 record "live: two days' runs, each with its jobs, the progress line on stderr" "0/yes/yes/yes" \
   "$rc/$(echo "$out" | grep -q 'app .*ci.yml / checks .*local' && echo yes || echo no)/$(echo "$out" | grep -q 'app .*ci.yml / lint .*hosted' && echo yes || echo no)/$(echo "$out" | grep -q 'acme/app: 2 runs, fetching jobs' && echo yes || echo no)"
@@ -232,14 +233,21 @@ GH_FAIL=1 live --repo acme/app --since 2026-10-01 --until 2026-10-02
 record "live: a gh failure is the one-line refusal, not a traceback" "nonzero/yes/no" \
   "$(nonzero "$rc")/$(echo "$out" | grep -q 'gh api repos/acme/app/.* failed' && echo yes || echo no)/$(echo "$out" | grep -q Traceback && echo yes || echo no)"
 # The default window: the first of the current month through today, in UTC
-# (the window report.py computes). The stub answers a run created today, so
-# the report's header names both ends.
-today="$(date -u +%Y-%m-%d)"
-first="$(date -u +%Y-%m-01)"
+# (the window report.py computes). The clock is pinned with
+# HOMEFIELD_REPORT_TODAY — the test never reads the host's clock — and the
+# stub answers a run created on the pinned day, so the report's header names
+# both ends.
+today="2026-11-05"
+first="2026-11-01"
 printf '%s\n' "{\"id\": 1003, \"path\": \".github/workflows/ci.yml\", \"event\": \"pull_request\", \"created_at\": \"${today}T10:00:00Z\", \"branch\": \"feat/c\"}" >"$work/runs/$today.txt"
 printf '%s\n' '{"id": 31, "name": "today-job", "status": "completed", "conclusion": "success", "created_at": "'"$today"'T10:00:00Z", "started_at": "'"$today"'T10:00:10Z", "completed_at": "'"$today"'T10:01:00Z", "runner_name": "lima", "labels": ["self-hosted", "linux", "arm64", "homefield-ci"]}' >"$work/jobs/jobs-1003.txt"
+REPORT_TODAY="$today"
 live --repo acme/app
 record "live: no --since/--until is the month to date, and it is said" "0/yes/yes" \
   "$rc/$(echo "$out" | grep -q "Jobs from $first to $today (UTC)" && echo yes || echo no)/$(echo "$out" | grep -q 'ci.yml / today-job .*local' && echo yes || echo no)"
+out="$(HOMEFIELD_REPORT_TODAY=not-a-date PATH="$stubs:$PATH" RUNS="$work/runs" JOBS="$work/jobs" HOME="$work" \
+  python3 "$ROOT/tools/report.py" --repo acme/app 2>&1)"; rc=$?
+record "a malformed HOMEFIELD_REPORT_TODAY is refused, not a traceback" "nonzero/yes/no" \
+  "$(nonzero "$rc")/$(echo "$out" | grep -q 'not a date (YYYY-MM-DD)' && echo yes || echo no)/$(echo "$out" | grep -q Traceback && echo yes || echo no)"
 
 summary
