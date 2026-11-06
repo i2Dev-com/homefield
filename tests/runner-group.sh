@@ -574,9 +574,13 @@ record "status: no VM: not created, exit 0" "0/yes" "$rc/$(has "$out" 'VM homefi
 
 # ── version ────────────────────────────────────────────────────────────────
 echo "version"
-mkdir -p "$work/inst/bin" "$work/bare/bin" "$work/nogh"
+mkdir -p "$work/inst/bin/lib" "$work/bare/bin/lib" "$work/nogh"
 cp "$ROOT/bin/homefield" "$work/inst/bin/homefield"
 cp "$ROOT/bin/homefield" "$work/bare/bin/homefield"
+cp "$ROOT"/bin/lib/*.sh "$work/inst/bin/lib/"
+cp "$ROOT"/bin/cmd-*.sh "$work/inst/bin/"
+cp "$ROOT"/bin/lib/*.sh "$work/bare/bin/lib/"
+cp "$ROOT"/bin/cmd-*.sh "$work/bare/bin/"
 for t in dirname git; do ln -s "$(command -v "$t")" "$work/nogh/$t"; done
 old=0123456789abcdef0123456789abcdef01234567
 new=89abcdef0123456789abcdef0123456789abcdef
@@ -633,8 +637,10 @@ record "...the VM note comes once" "1" "$(printf '%s\n' "$out" | grep -c 'homefi
 
 # The README's one-liner exactly: default repository and ref, in the default place.
 dflt="$work/h/.local/share/homefield"
-mkdir -p "$dflt/bin"
+mkdir -p "$dflt/bin/lib"
 cp "$ROOT/bin/homefield" "$dflt/bin/homefield"
+cp "$ROOT"/bin/lib/*.sh "$dflt/bin/lib/"
+cp "$ROOT"/bin/cmd-*.sh "$dflt/bin/"
 printf 'repo=i2Dev-com/homefield\nref=v0.5.0\ncommit=%s\n' "$old" >"$dflt/.homefield-ref"
 : >"$calls"
 out="$(env -i HOME="$work/h" PATH="$work/vgh" CALLS="$calls" V_TAGS="$tags_rel" V_COMMIT="$new" "$BASH" "$dflt/bin/homefield" version 2>&1 </dev/null)"

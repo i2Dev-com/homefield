@@ -11,7 +11,7 @@ set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 # The program text, between MEMORY_AWK=' and the closing quote.
-prog="$(sed -n "/^MEMORY_AWK='\$/,/^}'\$/p" "$ROOT/bin/homefield" | sed '1d;$d')"
+prog="$(sed -n "/^MEMORY_AWK='\$/,/^}'\$/p" "$ROOT/bin/cmd-memory.sh" | sed '1d;$d')"
 prog="${prog}
 }"
 record "extracted the awk program" "yes" "$([ -n "$prog" ] && echo yes || echo no)"

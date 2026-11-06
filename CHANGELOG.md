@@ -13,6 +13,11 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ### Changed
 
+- `bin/homefield` is split into `bin/lib/` (presentation, state, the VM,
+  GitHub) and one `bin/cmd-*.sh` per command (#194). The move is mechanical
+  and byte-preserving; behavior, options and output are unchanged. The
+  download carries the whole tree, so installs and updates work as before.
+
 - The routing checker's list modes gained `--list-unroutable` (#193): the
   jobs that carry no `runs-on` at all — GitHub runs them on its
   `ubuntu-latest` default, so they stay hosted silently — one `file:job` per

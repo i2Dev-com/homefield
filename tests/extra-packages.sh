@@ -35,7 +35,7 @@ check $'tree\n' reject
 # shellcheck disable=SC2016  # the literal \$pkg is the point of the sed
 prov_re="$(sed -n 's/.*if ! \[\[ "\$pkg" =~ \(.*\) \]\]; then/\1/p' "$ROOT/vm/provision.sh" | head -1)"
 # shellcheck disable=SC2016  # the literal \$pkg is the point of the sed
-host_re="$(sed -n 's/.*\[\[ "\$pkg" =~ \(.*\) \]\] ||.*/\1/p' "$ROOT/bin/homefield" | head -1)"
+host_re="$(sed -n 's/.*\[\[ "\$pkg" =~ \(.*\) \]\] ||.*/\1/p' "$ROOT/bin/cmd-install.sh" | head -1)"
 record "the package-name regex is the same in provision.sh and bin/homefield" "yes" \
   "$([ -n "$prov_re" ] && [ "$prov_re" = "$host_re" ] && echo yes || echo no)"
 
