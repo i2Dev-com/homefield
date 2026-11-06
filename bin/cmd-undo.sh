@@ -252,37 +252,48 @@ confirm_reset() {
   esac
 }
 
-cmd_reset() {
-  local keep_vm=0 keep_group=0 remove_tool=0
+# State cmd_reset's helpers share: the options (RESET_KEEP_VM, RESET_KEEP_GROUP,
+# RESET_REMOVE_TOOL), what --remove-tool found (RESET_WRAPPERS, the wrapper
+# commands, one per line, and RESET_TOOL_DIR, the tool directory; both empty
+# when --remove-tool was not given), and RESET_ASKED_EARLY, 1 when the plan's
+# runner answer came from before the confirmation. The helpers also read
+# reset_inspect's R_* and reset_load_group's RG_* state and report through
+# rep, RESET_RC and RG_KEEP.
+RESET_KEEP_VM=0
+RESET_KEEP_GROUP=0
+RESET_REMOVE_TOOL=0
+RESET_WRAPPERS=""
+RESET_TOOL_DIR=""
+RESET_ASKED_EARLY=0
+
+# reset_options <args...>: the reset options, into RESET_KEEP_VM,
+# RESET_KEEP_GROUP and RESET_REMOVE_TOOL. Dies on an unknown option, before
+# anything is looked at.
+reset_options() {
+  RESET_KEEP_VM=0
+  RESET_KEEP_GROUP=0
+  RESET_REMOVE_TOOL=0
   while [ $# -gt 0 ]; do
     case "$1" in
-      --keep-vm) keep_vm=1; shift ;;
-      --keep-group) keep_group=1; shift ;;
-      --remove-tool) remove_tool=1; shift ;;
+      --keep-vm) RESET_KEEP_VM=1; shift ;;
+      --keep-group) RESET_KEEP_GROUP=1; shift ;;
+      --remove-tool) RESET_REMOVE_TOOL=1; shift ;;
       *) die "reset: unknown option $1 (see bin/homefield help)" ;;
     esac
   done
-  refuse_unnamed_vm reset
-  check_host
-  local vm wrappers="" dir="" plan=() line
-  # Not vm_lookup: a VM Lima cannot describe is the usual half-built one, and
-  # the way out has to be named.
-  VM_STATUS="$(vm_status)" || die "could not ask Lima about VM ${INSTANCE} (limactl list failed, or lists it without a status), so reset cannot tell what is there. If its runner registered, remove that on GitHub's runners page first; then delete the VM by hand: limactl delete --force ${INSTANCE}"
-  vm="$VM_STATUS"
-  R_REG=0
-  R_ON=2
-  reset_load_group
-  # A running VM can be asked now; a stopped one is started only after the
-  # answer, which makes the plan say so. asked_early: the answer is from before
-  # the confirmation, so it is checked again after it.
-  local asked_early=0
-  if [ "$vm" = Running ]; then
-    asked_early=1
-    reset_inspect
-  fi
-  if [ "$remove_tool" = 1 ]; then
-    wrappers="$(tool_wrappers)"
-    dir="$(tool_dir)"
+}
+
+# reset_plan <vm>: builds and prints the plan of what reset will do, from the
+# runner state reset_inspect read (R_REG, R_ON, R_URL), the group record
+# reset_load_group read (RG_ORG, RG_LABEL) and the options, and asks for the
+# confirmation. Sets RESET_WRAPPERS and RESET_TOOL_DIR when RESET_REMOVE_TOOL
+# is 1; the removal below reads them too.
+reset_plan() {
+  local vm="$1" line
+  local plan=()
+  if [ "$RESET_REMOVE_TOOL" = 1 ]; then
+    RESET_WRAPPERS="$(tool_wrappers)"
+    RESET_TOOL_DIR="$(tool_dir)"
   fi
 
   if [ -n "$vm" ]; then
@@ -293,26 +304,33 @@ cmd_reset() {
     elif [ "$R_REG" = 1 ]; then
       plan+=("deregister the runner from ${R_URL}")
     fi
-    [ "$keep_vm" = 1 ] || plan+=("delete VM ${INSTANCE}")
+    [ "$RESET_KEEP_VM" = 1 ] || plan+=("delete VM ${INSTANCE}")
   fi
-  if [ -n "$RG_ORG" ] && [ "$keep_group" = 0 ]; then
+  if [ -n "$RG_ORG" ] && [ "$RESET_KEEP_GROUP" = 0 ]; then
     plan+=("delete the runner group ${RG_LABEL}, which install created, unless it holds other runners")
   fi
-  if [ -n "$wrappers" ]; then
-    plan+=("remove the command ${wrappers}, shared by every instance on this Mac")
+  if [ -n "$RESET_WRAPPERS" ]; then
+    plan+=("remove the command ${RESET_WRAPPERS}, shared by every instance on this Mac")
   fi
-  if [ -n "$dir" ]; then
-    plan+=("remove the tool in ${dir}, shared by every instance on this Mac")
+  if [ -n "$RESET_TOOL_DIR" ]; then
+    plan+=("remove the tool in ${RESET_TOOL_DIR}, shared by every instance on this Mac")
   fi
   if [ "${#plan[@]}" -gt 0 ]; then
     echo "Reset of ${INSTANCE} will:"
     for line in "${plan[@]}"; do echo "  - ${line}"; done
     confirm_reset
   fi
+}
 
-  REPORT=()
-  RESET_RC=0
-  RG_KEEP=0
+# reset_vm <vm>: the VM part of the plan, after the confirmation. Starts a
+# stopped VM to inspect it, deregisters a registered runner and deletes the
+# VM unless RESET_KEEP_VM. Reports through rep; sets RESET_RC 1 when the
+# deletion fails. Reads reset_inspect's R_* state, and leaves R_ID for
+# reset_group: it is set only for a runner that was registered here and is
+# now deregistered (or the command would have ended), the one runner that may
+# still show in the group for a moment.
+reset_vm() {
+  local vm="$1"
   if [ -n "$vm" ]; then
     if [ "$vm" != Running ]; then
       log "starting VM ${INSTANCE}"
@@ -323,7 +341,7 @@ cmd_reset() {
     if [ "$R_REG" = 1 ]; then
       # The runner stayed online while the plan was read and confirmed, and may
       # have taken a job since; nothing has been changed yet.
-      if [ "$asked_early" = 1 ] && is_job_running; then
+      if [ "$RESET_ASKED_EARLY" = 1 ] && is_job_running; then
         die "a job started on ${INSTANCE} while you were deciding; reset when it is idle (no runner was touched)"
       fi
       # Plain command, not a condition: a failure here ends reset with the VM
@@ -337,7 +355,7 @@ cmd_reset() {
     else
       rep "runner: not registered"
     fi
-    if [ "$keep_vm" = 1 ]; then
+    if [ "$RESET_KEEP_VM" = 1 ]; then
       rep "VM ${INSTANCE}: kept (--keep-vm)"
     elif delete_vm; then
       rep "VM ${INSTANCE}: deleted"
@@ -346,15 +364,12 @@ cmd_reset() {
       RESET_RC=1
     fi
   fi
-  if [ -n "$RG_ORG" ]; then
-    # R_ID is set only for a runner that was registered here and is now
-    # deregistered (or the command would have ended): the one runner that may
-    # still show in the group for a moment.
-    reset_group "$keep_group" "$R_ID"
-  elif [ "$RG_BAD" = 1 ]; then
-    rep "runner group: the group_created record in $(state_file) does not parse, so no group was touched"
-    RG_KEEP=1
-  fi
+}
+
+# reset_state_file: removes the state file, keeping it when the group record
+# it carries is still live (RG_KEEP, from reset_group). Sets RESET_RC 1 when
+# the removal fails.
+reset_state_file() {
   if [ -e "$(state_file)" ]; then
     if [ "$RG_KEEP" = 1 ]; then
       rep "state file $(state_file): kept, it still records the group"
@@ -365,26 +380,69 @@ cmd_reset() {
       RESET_RC=1
     fi
   fi
-  # Last, and only when the rest went well: the tool is how the rest is run
-  # again. After this nothing reads from it, and the script exits.
-  if [ "$remove_tool" = 1 ]; then
+}
+
+# reset_tool: the tool removal, last and only when the rest went well
+# (RESET_RC 0): the tool is how the rest is run again. After this nothing
+# reads from it, and the script exits. Removes the wrappers and the directory
+# --remove-tool found (RESET_WRAPPERS, RESET_TOOL_DIR); sets RESET_RC 1 when
+# a removal fails.
+reset_tool() {
+  local line
+  if [ "$RESET_REMOVE_TOOL" = 1 ]; then
     if [ "$RESET_RC" != 0 ]; then
       rep "tool: kept, a step above failed; run reset --remove-tool again after fixing it"
     else
-      if [ -z "$wrappers" ]; then
+      if [ -z "$RESET_WRAPPERS" ]; then
         rep "command: no homefield wrapper of this install found in $(tool_bin_dirs | tr '\n' ' ')(HOMEFIELD_BIN_DIR names another place)"
       else
         while IFS= read -r line; do
           if rm -f -- "$line"; then rep "command ${line}: removed"; else rep "command ${line}: could not be removed"; RESET_RC=1; fi
-        done <<<"$wrappers"
+        done <<<"$RESET_WRAPPERS"
       fi
-      if [ -n "$dir" ]; then
-        if rm -rf -- "$dir"; then rep "tool ${dir}: removed"; else rep "tool ${dir}: could not be removed"; RESET_RC=1; fi
+      if [ -n "$RESET_TOOL_DIR" ]; then
+        if rm -rf -- "$RESET_TOOL_DIR"; then rep "tool ${RESET_TOOL_DIR}: removed"; else rep "tool ${RESET_TOOL_DIR}: could not be removed"; RESET_RC=1; fi
       else
         rep "tool: $(tool_install_dir) was not put there by install.sh (no .homefield-ref), left alone"
       fi
     fi
   fi
+}
+
+cmd_reset() {
+  reset_options "$@"
+  refuse_unnamed_vm reset
+  check_host
+  local vm line
+  # Not vm_lookup: a VM Lima cannot describe is the usual half-built one, and
+  # the way out has to be named.
+  VM_STATUS="$(vm_status)" || die "could not ask Lima about VM ${INSTANCE} (limactl list failed, or lists it without a status), so reset cannot tell what is there. If its runner registered, remove that on GitHub's runners page first; then delete the VM by hand: limactl delete --force ${INSTANCE}"
+  vm="$VM_STATUS"
+  R_REG=0
+  R_ON=2
+  reset_load_group
+  # A running VM can be asked now; a stopped one is started only after the
+  # answer, which makes the plan say so. asked_early: the answer is from before
+  # the confirmation, so it is checked again after it.
+  RESET_ASKED_EARLY=0
+  if [ "$vm" = Running ]; then
+    RESET_ASKED_EARLY=1
+    reset_inspect
+  fi
+  reset_plan "$vm"
+
+  REPORT=()
+  RESET_RC=0
+  RG_KEEP=0
+  reset_vm "$vm"
+  if [ -n "$RG_ORG" ]; then
+    reset_group "$RESET_KEEP_GROUP" "$R_ID"
+  elif [ "$RG_BAD" = 1 ]; then
+    rep "runner group: the group_created record in $(state_file) does not parse, so no group was touched"
+    RG_KEEP=1
+  fi
+  reset_state_file
+  reset_tool
 
   if [ "${#REPORT[@]}" -eq 0 ]; then
     log "nothing to reset for ${INSTANCE}: no VM and no runner group it created"
@@ -392,6 +450,6 @@ cmd_reset() {
     echo "Reset of ${INSTANCE}:"
     for line in "${REPORT[@]}"; do echo "  - ${line}"; done
   fi
-  if [ "$remove_tool" = 1 ]; then exit "$RESET_RC"; fi
+  if [ "$RESET_REMOVE_TOOL" = 1 ]; then exit "$RESET_RC"; fi
   return "$RESET_RC"
 }
