@@ -44,6 +44,13 @@ fail, such as a new guard in the routing expression, bumps the minor version
   link, the affected versions, the release that fixed it and the pin bump
   consumers make (#201, #202). Linked from the README's Security model,
   `docs/adopting.md` step 2 and `SECURITY.md`.
+- The README is trimmed to ~250 lines: the "Repository layout" section is
+  gone (the intro names the three parts, and the Documentation table maps
+  `docs/`), "Development" merged into "Contributing, security, license", and
+  the Quick start, routing, requirements, security, cost and alternatives
+  prose tightened. No facts, links, anchors or code snippets changed; the
+  canonical expression and the pinned routing-guard snippet are byte for byte
+  what they were, as `tests/adopt.sh` pins.
 
 ## v0.5.1 (2026-11-06)
 
