@@ -56,6 +56,8 @@ record "help setup: install's options (setup takes them)" "yes/yes" "$(has "$out
 
 out="$(env -i HOME="$HOME" PATH="$PATH" "$HF" help status 2>&1 </dev/null)"
 record "help status: the global --instance note" "yes" "$(has "$out" '--instance NAME')"
+record "help status: its --json section" "yes" "$(has "$out" 'status:
+  --json')"
 record "help status: no install section" "no" "$(has "$out" '--group-exists')"
 
 out="$(env -i HOME="$HOME" PATH="$PATH" "$HF" help bogus 2>&1 </dev/null)"; rc=$?

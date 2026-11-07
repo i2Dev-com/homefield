@@ -11,8 +11,33 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ## Unreleased
 
+### Added
+
+- `status --json`: the status report as one machine-readable object per VM
+  (instance, healthy, the VM's status, the runner and its registration, the
+  GitHub listing, the service, the job, npm, the extra packages), wrapped as
+  `instances`/`healthy`/`vms` for every VM on this Mac, matching the shape
+  `diagnose --json` wraps its reports in. The human form is unchanged, and
+  `healthy`/the exit status carry the same facts.
+
+### Changed
+
+- The help is reorganized: `homefield --help` is now a concise overview (one
+  line per command, pointers to the rest), `homefield help <command>` and
+  `<command> --help` print one command's options (`install --help` is no
+  longer "unknown option"), and `homefield help` remains the full reference,
+  unchanged. New `tests/help.sh` pins every surface.
+
 ### Documentation
 
+- The README is refocused on the goal, the problems it solves and the quick
+  start (292 lines, from 483); its setup detail moved to a new
+  `docs/getting-started.md`, and the routing expression — the versioned
+  contract — stays in the README.
+- `docs/cli.md` is new: every command, option, exit code, environment
+  variable and `--json` shape, organized for scripts and AI agents; the
+  README links it from a new "For AI agents" section. `docs/README.md` is a
+  new index of the guides.
 - `docs/security.md` is new: the routing guard's contract (write the
   `runs-on` key plainly, call local reusable workflows only, keep the guard
   step able to fail) and the bypasses found so far, each with its advisory

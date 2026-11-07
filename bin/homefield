@@ -21,7 +21,8 @@
 # bin/homefield, which is the same file in a checkout.
 #
 # Every command takes --instance NAME (default homefield, or $HOMEFIELD_INSTANCE)
-# to pick the Lima VM. Run `bin/homefield help` for the options.
+# to pick the Lima VM. Run `bin/homefield help <command>` for a command's
+# options, `bin/homefield help` for the full reference.
 set -euo pipefail
 # Runs on macOS's stock bash 3.2, which turns `set -e` off inside $(...). A
 # function that can fail inside one says `|| exit 1` where it calls another.
@@ -314,6 +315,19 @@ diagnose:
                      GitHub waits at most HOMEFIELD_GH_TIMEOUT seconds (15).
 EOF
 }
+usage_sec_status() {
+  cat <<'EOF'
+status:
+  --json             machine-readable output: the same facts, one object per
+                     VM (instance, healthy, the VM's status, the runner and
+                     its registration, the GitHub listing, the service, the
+                     job, npm, the extra packages), wrapped as
+                     instances/healthy/vms when every HomeField VM on this
+                     Mac is reported; nothing else on stdout. Needs neither
+                     jq nor python3. The GitHub ask waits at most
+                     HOMEFIELD_GH_TIMEOUT seconds (15).
+EOF
+}
 usage_sec_uninstall() {
   cat <<'EOF'
 uninstall:
@@ -496,6 +510,7 @@ usage() {
     usage_sec_install \
     usage_sec_upgrade \
     usage_sec_diagnose \
+    usage_sec_status \
     usage_sec_uninstall \
     usage_sec_reset \
     usage_sec_route \
@@ -519,7 +534,7 @@ usage_for() {
     upgrade)
       usage_join usage_header usage_cmd_upgrade usage_sec_upgrade usage_options ;;
     status)
-      usage_join usage_header usage_cmd_status usage_options ;;
+      usage_join usage_header usage_cmd_status usage_sec_status usage_options ;;
     start)
       usage_join usage_header usage_cmd_start usage_options ;;
     stop)

@@ -828,19 +828,21 @@ cmd_upgrade() {
 # "taking jobs" from the service and the listing, and the not-registered extra
 # line is start's, not status's. A guest that cannot be asked is reported as
 # unknown, never read as "not registered" (#80).
-RR_NAME="" RR_URL="" RR_ID="" RR_REMOVED=0 RR_UNKNOWN=0 RR_NOTREG=0 RR_SVC=0 RR_ON=2 RR_ASKFAIL=0
-runner_report() {
+# RR_* : one runner's facts, set by runner_report_collect and rendered by
+# runner_report_human. RR_ASKFAIL is 1 when the VM could not be asked;
+# RR_SVC is 1 when the service is not running; RR_ON is runner_on_github's
+# code (3 and * are "not checked", which only start counts as unknown, via
+# its own read of RR_ON).
+RR_NAME="" RR_URL="" RR_ID="" RR_REMOVED=0 RR_NOTREG=0 RR_SVC=0 RR_ON=2 RR_ASKFAIL=0
+runner_report_collect() {
   local reg=0 on=0
-  RR_REMOVED=0; RR_UNKNOWN=0; RR_NOTREG=0; RR_SVC=0; RR_ON=2; RR_ASKFAIL=0
+  RR_REMOVED=0; RR_NOTREG=0; RR_SVC=0; RR_ON=2; RR_ASKFAIL=0
   registered || reg=$?
   if [ "$reg" -ge 2 ]; then
-    echo "runner: unknown (could not ask the VM)"
-    RR_UNKNOWN=1
     RR_ASKFAIL=1
     return 0
   fi
   if [ "$reg" = 1 ]; then
-    echo "runner: not registered"
     RR_NOTREG=1
     return 0
   fi
@@ -849,6 +851,40 @@ runner_report() {
   # RS_NAME/RS_URL/RS_ID are lib/vm.sh's load_runner_settings' output.
   # shellcheck disable=SC2153
   RR_NAME="$RS_NAME" RR_URL="$RS_URL" RR_ID="$RS_ID"
+  runner_on_github "$RR_URL" "$RR_ID" || on=$?
+  RR_ON="$on"
+  case "$on" in
+    1) RR_REMOVED=1 ;;
+    3)
+      # start counts an unproven GitHub answer as unknown; status's report
+      # stands on its own and exits 0 (its job/npm rows carry the unknowns).
+      ;;
+    *)
+      ;;
+  esac
+  if runner_service_state; then
+    RR_SVC=0
+  else
+    RR_SVC=1
+  fi
+  return 0
+}
+
+runner_report() {
+  runner_report_collect "$@"
+  runner_report_human "${1:-}"
+}
+
+runner_report_human() {
+  local verbose="$1"
+  if [ "$RR_ASKFAIL" = 1 ]; then
+    echo "runner: unknown (could not ask the VM)"
+    return 0
+  fi
+  if [ "$RR_NOTREG" = 1 ]; then
+    echo "runner: not registered"
+    return 0
+  fi
   if [ -n "$RR_NAME" ] && [ -n "$RR_URL" ]; then
     echo "runner: ${RR_NAME}, registered at ${RR_URL}"
   else
@@ -857,11 +893,9 @@ runner_report() {
     # GitHub ask needs an id.
     echo "runner: registered, but its details could not be read"
   fi
-  runner_on_github "$RR_URL" "$RR_ID" || on=$?
-  RR_ON="$on"
-  case "$on" in
+  case "$RR_ON" in
     0)
-      if [ "${1:-}" = verbose ]; then
+      if [ "$verbose" = verbose ]; then
         echo "github: listed (${RUNNER_GH_STATUS})"
         if [ "$RUNNER_GH_STATUS" != online ]; then
           echo "  GitHub lists it, but not online (${RUNNER_GH_STATUS}): check $(runners_page "$RR_URL")"
@@ -873,13 +907,9 @@ runner_report() {
     1)
       echo "github: NOT listed: GitHub removes runners that have not connected for more than 14 days."
       echo "  Register it again: $(removed_recovery "$RR_URL" "$RR_NAME")"
-      RR_REMOVED=1
       ;;
     3)
       echo "github: not checked (timed out after ${GH_TIMEOUT}s; the network may be down)"
-      # start counts an unproven GitHub answer as unknown; status's report
-      # stands on its own and exits 0 (its job/npm rows carry the unknowns).
-      [ "${1:-}" = verbose ] && RR_UNKNOWN=1
       ;;
     *)
       if [ -n "$RR_ID" ]; then
@@ -887,57 +917,250 @@ runner_report() {
       else
         echo "github: not checked (no runner id in the VM's settings)"
       fi
-      [ "${1:-}" = verbose ] && RR_UNKNOWN=1
       ;;
   esac
-  if runner_service_state; then
+  if [ "$RR_SVC" = 0 ]; then
     echo "service: running"
   else
-    RR_SVC=1
     echo "service: NOT running (${SERVICE_UNIT:-no service installed})"
   fi
   return 0
 }
 
-# status_single: one VM's report; vm_dispatch runs it for every VM by default.
-status_single() {
-  [ $# -eq 0 ] || die "status takes no options besides --instance"
-  command -v limactl >/dev/null || die "Lima is not installed"
-  local status
-  if ! status="$(vm_status)"; then
+# ST_* : one VM's status facts, collected by st_collect and rendered by
+# st_render_human / st_render_json, so the human and the --json form say the
+# same thing. ST_REG is yes/no/unknown; ST_GH is listed/not_listed/timeout/
+# not_checked; ST_SVC running/not_running; ST_JOB and ST_NPM carry unknown.
+ST_CREATED="" ST_STATUS="" ST_REG="unknown" ST_GH="not_checked" ST_GH_STATUS=""
+ST_SVC="unknown" ST_UNIT="" ST_JOB="unknown" ST_VER="" ST_NPM="unknown"
+ST_PKGS_STATE="unknown" ST_PKGS="" ST_ASKFAIL=0 ST_REMOVED=0
+
+st_collect() {
+  ST_CREATED=""; ST_STATUS=""; ST_REG="unknown" ST_GH="not_checked" ST_GH_STATUS=""
+  ST_SVC="unknown" ST_UNIT="" ST_JOB="unknown" ST_VER="" ST_NPM="unknown"
+  ST_PKGS_STATE="unknown" ST_PKGS=""; ST_ASKFAIL=0; ST_REMOVED=0
+  local job=0 npm=0
+  # Always 0: the ask-fail case is ST_STATUS empty (a `return 1` here would
+  # end status_single under set -e, before it renders anything).
+  if ! ST_STATUS="$(vm_status)"; then
+    ST_STATUS=""
+    return 0
+  fi
+  if [ -z "$ST_STATUS" ]; then
+    ST_CREATED="no"
+    return 0
+  fi
+  ST_CREATED="yes"
+  [ "$ST_STATUS" = "Running" ] || return 0
+  runner_report_collect
+  ST_ASKFAIL="$RR_ASKFAIL"; ST_REMOVED="$RR_REMOVED"
+  if [ "$RR_ASKFAIL" = 0 ] && [ "$RR_NOTREG" = 0 ]; then
+    ST_REG="yes"
+    ST_NAME="$RR_NAME" ST_URL="$RR_URL" ST_ID="$RR_ID"
+    case "$RR_ON" in
+      0) ST_GH="listed"; ST_GH_STATUS="$RUNNER_GH_STATUS" ;;
+      1) ST_GH="not_listed" ;;
+      3) ST_GH="timeout" ;;
+      *) ST_GH="not_checked" ;;
+    esac
+    if [ "$RR_SVC" = 0 ]; then ST_SVC="running"; else ST_SVC="not_running"; fi
+    ST_UNIT="${SERVICE_UNIT:-}"
+    ST_VER="$(runner_version)"
+    ST_PKGS="$(runner_extra_packages)"; ST_PKGS_STATE="listed"
+    job_running || job=$?
+    case "$job" in
+      0) ST_JOB="running" ;;
+      1) ST_JOB="idle" ;;
+      *) ST_JOB="unknown" ;;
+    esac
+    npm_state || npm=$?
+    case "$npm" in
+      0) ST_NPM="ok" ;;
+      1) ST_NPM="broken" ;;
+      *) ST_NPM="unknown" ;;
+    esac
+  elif [ "$RR_ASKFAIL" = 0 ]; then
+    ST_REG="no"
+  fi
+  return 0
+}
+
+st_render_human() {
+  if [ -z "$ST_CREATED" ] && [ -z "$ST_STATUS" ]; then
     echo "VM ${INSTANCE}: unknown (could not ask Lima)"
     return 1
   fi
-  if [ -z "$status" ]; then
+  if [ "$ST_CREATED" = "no" ]; then
     echo "VM ${INSTANCE}: not created"
-    return
+    return 0
   fi
-  echo "VM ${INSTANCE}: ${status}"
-  [ "$status" = "Running" ] || return 0
-  runner_report
-  [ "$RR_ASKFAIL" = 0 ] || return 1
-  [ "$RR_NOTREG" = 0 ] || return 0
-  local job=0 npm=0
-  job_running || job=$?
-  case "$job" in
-    0) echo "job: running" ;;
-    1) echo "job: idle" ;;
-    *) echo "job: unknown (could not ask the VM)"; RR_UNKNOWN=1 ;;
-  esac
-  echo "runner version: $(runner_version)"
-  npm_state || npm=$?
-  case "$npm" in
-    0) echo "npm: ok" ;;
-    1)
-      echo "npm: BROKEN (a runner self-update can flatten the externals symlinks; docs/runbook.md, \"Runner updates\")"
-      RR_UNKNOWN=1
+  echo "VM ${INSTANCE}: ${ST_STATUS}"
+  [ "$ST_STATUS" = "Running" ] || return 0
+  if [ "$ST_ASKFAIL" = 1 ]; then
+    echo "runner: unknown (could not ask the VM)"
+    return 1
+  fi
+  if [ "$ST_REG" = "no" ]; then
+    echo "runner: not registered"
+    return 0
+  fi
+  if [ -n "$ST_NAME" ] && [ -n "$ST_URL" ]; then
+    echo "runner: ${ST_NAME}, registered at ${ST_URL}"
+  else
+    echo "runner: registered, but its details could not be read"
+  fi
+  case "$ST_GH" in
+    listed) echo "github: listed" ;;
+    not_listed)
+      echo "github: NOT listed: GitHub removes runners that have not connected for more than 14 days."
+      echo "  Register it again: $(removed_recovery "$ST_URL" "$ST_NAME")"
       ;;
-    *) echo "npm: unknown (could not ask the VM)"; RR_UNKNOWN=1 ;;
+    timeout) echo "github: not checked (timed out after ${GH_TIMEOUT}s; the network may be down)" ;;
+    not_checked)
+      if [ -n "$ST_ID" ]; then
+        echo "github: not checked (needs gh with admin access to ${ST_URL})"
+      else
+        echo "github: not checked (no runner id in the VM's settings)"
+      fi
+      ;;
   esac
-  echo "extra packages: $(runner_extra_packages)"
-  [ -n "$RR_URL" ] && echo "labels: see $(runners_page "$RR_URL") (not stored in the VM)"
-  [ "$RR_REMOVED" = 0 ] || return 1
-  return "$RR_UNKNOWN"
+  if [ "$ST_SVC" = "running" ]; then
+    echo "service: running"
+  else
+    echo "service: NOT running (${ST_UNIT:-no service installed})"
+  fi
+  case "$ST_JOB" in
+    running) echo "job: running" ;;
+    idle) echo "job: idle" ;;
+    *) echo "job: unknown (could not ask the VM)" ;;
+  esac
+  echo "runner version: $ST_VER"
+  case "$ST_NPM" in
+    ok) echo "npm: ok" ;;
+    broken)
+      echo "npm: BROKEN (a runner self-update can flatten the externals symlinks; docs/runbook.md, \"Runner updates\")"
+      ;;
+    *) echo "npm: unknown (could not ask the VM)" ;;
+  esac
+  echo "extra packages: $ST_PKGS"
+  [ -n "$ST_URL" ] && echo "labels: see $(runners_page "$ST_URL") (not stored in the VM)"
+  return 0
+}
+
+st_render_json() {
+  printf '{\n'
+  printf '  "instance": %s,\n' "$(json_str "$INSTANCE")"
+  local healthy=true
+  if [ -z "$ST_CREATED" ] && [ -z "$ST_STATUS" ]; then
+    healthy=false
+  elif [ "$ST_CREATED" = "no" ]; then
+    : # a VM that does not exist is a clean answer, as the human form's exit 0
+  elif [ "$ST_ASKFAIL" = 1 ]; then
+    healthy=false
+  elif [ "$ST_REG" = yes ] && { [ "$ST_REMOVED" = 1 ] || [ "$ST_JOB" = unknown ] || [ "$ST_NPM" != ok ]; }; then
+    healthy=false
+  fi
+  printf '  "healthy": %s,\n' "$healthy"
+  printf '  "vm": {"created": %s, "status": %s},\n' \
+    "$(json_bool "$ST_CREATED")" "$(json_nstr "$ST_STATUS")"
+  local reg_json=null
+  if [ "$ST_REG" = yes ]; then reg_json=true; elif [ "$ST_REG" = no ]; then reg_json=false; fi
+  printf '  "registered": %s,\n' "$reg_json"
+  if [ "$ST_REG" = yes ]; then
+    printf '  "runner": {"name": %s, "url": %s, "id": %s},\n' \
+      "$(json_nstr "$ST_NAME")" "$(json_nstr "$ST_URL")" "$(json_nstr "$ST_ID")"
+  else
+    printf '  "runner": null,\n'
+  fi
+  printf '  "on_github": {"state": %s, "status": %s},\n' \
+    "$(json_str "$ST_GH")" "$(json_nstr "$ST_GH_STATUS")"
+  printf '  "service": {"state": %s, "unit": %s},\n' \
+    "$(json_str "$ST_SVC")" "$(json_nstr "$ST_UNIT")"
+  printf '  "job": {"state": %s},\n' "$(json_str "$ST_JOB")"
+  printf '  "version": %s,\n' "$(json_nstr "$ST_VER")"
+  printf '  "npm": %s,\n' "$(json_str "$ST_NPM")"
+  if [ "$ST_PKGS_STATE" = listed ]; then
+    printf '  "extra_packages": %s\n' "$(json_words "$ST_PKGS")"
+  else
+    printf '  "extra_packages": null\n'
+  fi
+  printf '}\n'
+}
+
+# status_single: one VM's report; vm_dispatch runs it for every VM by default.
+status_single() {
+  local json=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --json) json=1; shift ;;
+      *) die "status: unknown option $1 (see bin/homefield help)" ;;
+    esac
+  done
+  command -v limactl >/dev/null || die "Lima is not installed"
+  st_collect
+  local rc=0
+  if [ "$json" = 1 ]; then
+    st_render_json || rc=$?
+  else
+    st_render_human || rc=$?
+  fi
+  # The exit status is the human form's, and the JSON form's healthy carries
+  # the same facts: 1 when Lima could not be asked, the VM could not be asked,
+  # a job or npm state is unknown, the runner was removed from GitHub; 0 when
+  # the VM does not exist (a clean answer).
+  if [ -z "$ST_CREATED" ] && [ -z "$ST_STATUS" ]; then
+    return 1
+  fi
+  [ "$ST_CREATED" = "no" ] && return 0
+  [ "$ST_STATUS" = "Running" ] || return 0
+  [ "$ST_ASKFAIL" = 0 ] || return 1
+  [ "$ST_REG" = "yes" ] || return 0
+  [ "$ST_REMOVED" = 0 ] || return 1
+  [ "$ST_JOB" != unknown ] || return 1
+  [ "$ST_NPM" = ok ] || return 1
+  return 0
+}
+
+# status_many <names> <json>: every VM on this Mac, each its own report as its
+# own process (so one cannot affect the next), the human blocks headed by the
+# instance name and the JSON form wrapping the single-VM objects: instances,
+# healthy, vms -- the same shape diagnose --json wraps its reports in.
+status_many() {
+  local names="$1" json="$2" name rc=0 first=1 out child_rc=0
+  if [ "$json" = 1 ]; then
+    printf '{\n'
+    printf '  "instances": ['
+    first=1
+    while IFS= read -r name; do
+      [ -n "$name" ] || continue
+      [ "$first" = 1 ] || printf ', '
+      first=0
+      json_str "$name"
+    done <<<"$names"
+    printf '],\n'
+    # healthy needs every run's answer, so collect their objects first.
+    local vms="" sep=""
+    while IFS= read -r name; do
+      [ -n "$name" ] || continue
+      child_rc=0
+      out="$(instance_command "$name" status --json)" || child_rc=$?
+      [ "$child_rc" = 0 ] || rc=1
+      vms="${vms}${sep}${out}"
+      sep=",
+"
+    done <<<"$names"
+    printf '  "healthy": %s,\n' "$([ "$rc" = 0 ] && echo true || echo false)"
+    printf '  "vms": [\n%s\n  ]\n}\n' "$vms"
+    return "$rc"
+  fi
+  first=1
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    [ "$first" = 1 ] || echo ""
+    first=0
+    HOMEFIELD_ONE_OF_MANY=1 instance_command "$name" status || rc=1
+  done <<<"$names"
+  return "$rc"
 }
 
 # upgrade_registered <upgrade args...>: the fallback install/setup take on an
@@ -952,8 +1175,31 @@ upgrade_registered() {
 }
 
 cmd_status() {
-  [ $# -eq 0 ] || die "status takes no options besides --instance"
-  vm_dispatch status status_single
+  local json=0 opts=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --json) json=1; opts+=(--json); shift ;;
+      *) die "status: unknown option $1 (see bin/homefield help)" ;;
+    esac
+  done
+  local list="" name n=0
+  if [ "$EXPLICIT_INSTANCE" = 0 ] && list="$(vm_instances)"; then
+    while IFS= read -r name; do
+      [ -z "$name" ] || n=$((n + 1))
+    done <<<"$list"
+    case "$n" in
+      0 | 1)
+        # Nothing (or one) found: INSTANCE's own report says what to do, as
+        # vm_dispatch's single-VM path did.
+        status_single "${opts[@]+"${opts[@]}"}"
+        return
+        ;;
+    esac
+    status_many "$list" "$json"
+    return
+  fi
+  # Explicit --instance, or a Lima that cannot be asked: the single report.
+  status_single "${opts[@]+"${opts[@]}"}"
 }
 
 # ── start / stop ────────────────────────────────────────────────────────────
