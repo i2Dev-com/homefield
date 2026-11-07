@@ -19,12 +19,14 @@ lima_major_minor() {
 check_host() {
   [ "$(uname -s)" = "Darwin" ] || die "needs macOS (Lima with Apple's Virtualization.framework)"
   [ "$(uname -m)" = "arm64" ] || die "needs an Apple Silicon Mac: the VM is arm64"
-  command -v limactl >/dev/null || die "needs Lima >= 2.0: brew install lima"
-  # 2.0 is the first release documented to accept the `template:` locator in
-  # vm/lima.yaml; it deprecated `template://` (Lima 2.0.0 release notes).
+  command -v limactl >/dev/null || die "needs Lima >= 2.3: brew install lima"
+  # 2.3 is the first stable release that honours networkOpts.hostLoopback
+  # (lima-vm/lima#5581, released 2026-11-06) — the loopback boundary the
+  # probe below proves, and the reason for the minimum. It subsumes 2.0,
+  # which the `template:` locator in vm/lima.yaml needs.
   lima_major_minor
-  if [ -z "$LIMA_MAJOR" ] || [ "$LIMA_MAJOR" -lt 2 ]; then
-    die "needs Lima >= 2.0, found ${LIMA_VERSION}"
+  if ! lima_at_least 2 3; then
+    die "needs Lima >= 2.3, found ${LIMA_VERSION}"
   fi
 }
 
@@ -332,19 +334,14 @@ loopback_interpret() {
       config="${LIMA_HOME:-$HOME/.lima}/${INSTANCE}/lima.yaml"
       asks_closed=0
       [ -f "$config" ] && grep -Eq '^[[:space:]]*hostLoopback:[[:space:]]*false' "$config" && asks_closed=1
-      if [ "$asks_closed" = 1 ] && lima_at_least 2 3; then
+      if [ "$asks_closed" = 1 ]; then
         # The gate is the limactl binary; a VM still running from before a
         # Lima upgrade keeps its old gateway, so the message makes the first
         # step a restart, and only what survives a restart is a broken
         # boundary.
         die "VM ${INSTANCE} reaches the Mac's loopback through host.lima.internal although its config sets networkOpts.hostLoopback: false. If the VM has been running since before Lima was upgraded, its gateway is the old one: stop it, start it, and run this again (the mapping is applied at VM start). If it still reaches the loopback after that the boundary is broken — nothing was registered, but a fresh install leaves the VM (and possibly the runner group) behind: docs/runbook.md, Host loopback exposure"
       fi
-      if lima_at_least 2 3; then
-        echo "homefield: warning: #18: jobs in VM ${INSTANCE} can reach the Mac's loopback; its stored config does not show networkOpts.hostLoopback: false (absent, or unreadable): recreate the VM, or stop it and add the setting with limactl edit (docs/runbook.md, Host loopback exposure)" >&2
-      else
-        lima_major_minor
-        echo "homefield: warning: #18: jobs in VM ${INSTANCE} can reach the Mac's loopback; Lima ${LIMA_VERSION} ignores networkOpts.hostLoopback — it closes for VMs created on Lima >= 2.3.0 (docs/runbook.md, Host loopback exposure)" >&2
-      fi
+      echo "homefield: warning: #18: jobs in VM ${INSTANCE} can reach the Mac's loopback; its stored config does not show networkOpts.hostLoopback: false (absent, or unreadable): recreate the VM, or stop it and add the setting with limactl edit (docs/runbook.md, Host loopback exposure)" >&2
       ;;
     closed-1|closed-124)
       log "loopback probe: closed (the guest cannot reach the Mac's 127.0.0.1)"
@@ -357,16 +354,15 @@ loopback_interpret() {
 
 # verify_loopback: the #18 probe. vm/lima.yaml asks Lima to stop mapping the
 # host's loopback to host.lima.internal (networkOpts.hostLoopback: false);
-# Lima >= 2.3.0 (lima-vm/lima#5581) honours that, Lima 2.0-2.2 warn about the
-# unknown field and ignore it. The isolation claim is tested, not inferred: a
+# Lima >= 2.3.0 (lima-vm/lima#5581) honours that, and 2.3 is what check_host
+# requires. The isolation claim is tested, not inferred: a
 # throwaway listener on the Mac's 127.0.0.1 answers whether the guest can
 # really reach it, and open, closed and unknown stay three different answers
 # (an unknown is never read as closed).
 #   closed  - logged; loopback-only services are out of PR code's reach.
-#   open    - fatal only when the VM's own config asks for the block AND the
-#             Lima is new enough to honour it: the boundary is claimed but
-#             broken. Otherwise a warning naming the way to close it, because
-#             this is the documented state until Lima 2.3.0 is released.
+#   open    - fatal when the VM's own config asks for the block: the
+#             boundary is claimed but broken. Otherwise a warning naming the
+#             way to close it.
 #   unknown - a warning that nothing was proven; the run goes on.
 # The listener's setup lives in loopback_listen (a skip there is a pass
 # here), the answer's meaning in loopback_interpret; this is the sequence

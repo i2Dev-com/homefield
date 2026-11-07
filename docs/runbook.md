@@ -51,7 +51,7 @@ every job holding cloud or production credentials.
 | Unreviewed dependency code | Dependabot PRs are routed hosted by default (see above). With `dependabot: local` their install scripts run on the VM. |
 | Host files and credentials | Lima VM with **no mounts** (`mounts: []` + `--mount-none`), no SSH-agent forwarding, and no host SSH keys. `~/.aws`, `gh` auth, `.env` files and working trees on the Mac are not reachable from the guest. |
 | Guest ports on the Mac | Guest→host port forwarding is disabled, so a job's service containers never appear on the Mac's `localhost`. |
-| **Mac and LAN services from the guest** | **Partly isolated.** The guest reaches the Mac at `host.lima.internal` (192.168.5.2, also its gateway and DNS). On VMs created on Lima ≥ 2.3.0, `networkOpts.hostLoopback: false` makes that gateway answer for itself, so **nothing** bound to the Mac's loopback is reachable through it — services bound only to `127.0.0.1` and `*`-bound ones alike; `*`-bound services and the wider LAN stay reachable through the Mac's LAN address. On Lima 2.0–2.2 (every supported version until 2.3.0 is a stable release) the line is ignored and even `127.0.0.1`-only services are reachable. `install` and `upgrade` prove the state from inside the guest ([Host loopback exposure](#host-loopback-exposure)). A firewall inside the guest would not hold, since jobs are root-equivalent there. Until [#18](https://github.com/i2Dev-com/homefield/issues/18) is closed, keep sensitive services off the Mac that hosts the runner. |
+| **Mac and LAN services from the guest** | **Partly isolated.** The guest reaches the Mac at `host.lima.internal` (192.168.5.2, also its gateway and DNS). On VMs created on Lima ≥ 2.3.0 (the minimum), `networkOpts.hostLoopback: false` makes that gateway answer for itself, so **nothing** bound to the Mac's loopback is reachable through it — services bound only to `127.0.0.1` and `*`-bound ones alike; `*`-bound services and the wider LAN stay reachable through the Mac's LAN address. `install` and `upgrade` prove the state from inside the guest ([Host loopback exposure](#host-loopback-exposure)). A firewall inside the guest would not hold, since jobs are root-equivalent there. Keep anything the runner's repositories should not reach off the Mac that hosts them ([#18](https://github.com/i2Dev-com/homefield/issues/18)). |
 | Production | The VM holds no cloud credentials. Deploy jobs stay hosted and get their credentials through OIDC. |
 | Secrets in jobs | Jobs on the runner receive the secrets their workflow passes, on same-repo PRs. Push-only secrets never reach it by default, because pushes run hosted; they do when `events` includes `push`, `workflow_dispatch` or `schedule`. |
 | Across repositories | Every allowed repository's PR jobs share one VM, one after another. Workspaces are per repository, but anything a job leaves in the guest (Docker images, `/tmp`, and through `sudo` the packages it installs and the services it enables) is visible to the next job from another repository. Allow only repositories you would trust with each other's PR code. |
@@ -78,12 +78,12 @@ need an organization owner (`admin:org`):
 ## Host loopback exposure
 
 `vm/lima.yaml` asks Lima to stop mapping `host.lima.internal` onto the Mac's
-loopback (`networkOpts.hostLoopback: false`, lima-vm/lima#5581). On Lima
-≥ 2.3.0 nothing bound to the Mac's loopback is then reachable through that
+loopback (`networkOpts.hostLoopback: false`, lima-vm/lima#5581, honoured
+since Lima 2.3.0 — the version the tool requires, released 2026-11-06).
+Nothing bound to the Mac's loopback is then reachable through that
 address — `127.0.0.1`-only services and `*`-bound ones alike; `*`-bound
 services stay reachable through the Mac's LAN address, because the line
-closes the loopback, not the network. Until 2.3.0 is a stable release every
-supported Lima (≥ 2.0) ignores the line and the VM keeps the exposure. The
+closes the loopback, not the network. The
 block is applied when the VM starts, so after `brew upgrade lima` it takes
 effect only once the VM has been stopped and started again. This is issue
 [#18](https://github.com/i2Dev-com/homefield/issues/18).
@@ -101,7 +101,7 @@ never as isolation:
 | Probe says | Meaning | What to do |
 |---|---|---|
 | `loopback probe: closed` | The guest cannot reach the Mac's loopback | Nothing. |
-| `#18: jobs in VM ... can reach the Mac's loopback` | The documented state: below Lima 2.3.0 nothing can close it; on 2.3.0+ it is a VM whose stored config does not show the block (absent, or unreadable) | Wait for the Lima 2.3.0 stable release, `brew upgrade lima`, then close the VM (below). |
+| `#18: jobs in VM ... can reach the Mac's loopback` | A VM whose stored config does not show the block (absent, or unreadable) | Recreate the VM, or stop it and add the setting with `limactl edit`, then start it (below). |
 | `... although its config sets networkOpts.hostLoopback: false` | The block was asked for and the installed Lima honours asks, yet the guest gets through. Most likely the VM has been running since before the Lima upgrade and still has the old gateway. Nothing was stopped or registered. | Stop the VM, start it, and run this again. If it still gets through, check `limactl --version` and `~/.lima/<name>/lima.yaml`; if both are right, the boundary is broken — report it (SECURITY.md). A fresh install leaves the VM (and possibly the runner group) behind. |
 | `#18 probe skipped (...)` or `no clear answer ...` | Nothing proved (no `nc` on the Mac, port in use, an `nc` without `-k`, guest unreachable, or an answer that is neither open nor closed) | The run goes on; treat the exposure as present until a probe answers. |
 
@@ -201,7 +201,7 @@ workflow`. `GITHUB_TOKEN`/`GH_TOKEN` must carry the scope themselves; gh's
 prerequisite check below and stops when any check fails, then does what
 `install` does (the steps below) and ends with a summary and the next steps.
 Run `homefield preflight` on its own to verify the prerequisites (macOS,
-Apple Silicon, Lima ≥ 2.0, gh, a python3 that actually runs, Homebrew) are in
+Apple Silicon, Lima ≥ 2.3, gh, a python3 that actually runs, Homebrew) are in
 place. It exits 0 when all pass, 1 otherwise, with messages pointing to the
 exact fix command (`brew install lima`, `gh auth login`, and so on; a missing
 Homebrew points at <https://brew.sh>). For gh it reads the active
@@ -235,7 +235,7 @@ Run the [README's one-liner](../README.md#quick-start), or, from a checkout,
 `bin/homefield setup --url https://github.com/<org>` (or
 `https://github.com/<owner>/<repo>`, which is what a personal account needs;
 options: `bin/homefield help`). It needs
-Lima ≥ 2.0 (verified on 2.2.0), which the one-liner installs, with gh, in one
+Lima ≥ 2.3 (verified on 2.3.0), which the one-liner installs, with gh, in one
 Homebrew question (`HOMEFIELD_YES=1` answers it; Lima is required, so declining
 it, or no terminal without `HOMEFIELD_YES=1`, stops the one-liner with the brew
 command to run, while a missing gh never does and is left to `setup`'s

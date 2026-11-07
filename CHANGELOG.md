@@ -22,6 +22,18 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ### Changed
 
+- The minimum Lima is 2.3.0, from 2.0. 2.3.0 (released 2026-11-06) is the
+  first stable release honouring `networkOpts.hostLoopback: false`
+  (lima-vm/lima#5581), the loopback boundary `install` and `upgrade` prove
+  from inside the guest; 2.0–2.2 ignored the ask and left even
+  `127.0.0.1`-only services reachable. A host below 2.3.0 is refused, with
+  `brew install lima` / `brew upgrade lima` as the fix, and the probe's
+  "Lima below 2.3 ignores the setting" warning is gone with those versions —
+  on 2.3.0 an open probe means the VM's config (recreate it, or `limactl
+  edit`). This closes
+  [#18](https://github.com/i2Dev-com/homefield/issues/18). A
+  host-requirement bump: hosts on 2.0–2.2 need `brew upgrade lima` before
+  installing or upgrading.
 - The help is reorganized: `homefield --help` is now a concise overview (one
   line per command, pointers to the rest), `homefield help <command>` and
   `<command> --help` print one command's options (`install --help` is no

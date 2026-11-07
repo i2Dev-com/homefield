@@ -32,7 +32,7 @@ stub_dir() {
       limactl)
         cat >"$dir/limactl" <<'EOF'
 #!/bin/sh
-echo "limactl version ${LIMA_VERSION:-2.2.0}"
+echo "limactl version ${LIMA_VERSION:-2.3.0}"
 EOF
         ;;
       gh)
@@ -182,7 +182,7 @@ case_missing() {
 case_lima_old() {
   local d="$work/lima-old"; ok_stub "$d"
   preflight "$d" LIMA_VERSION="1.5.0"
-  if [ "$pf_rc" -eq 1 ] && has "$pf_out" "Lima >= 2.0 required, found 1.5.0"; then
+  if [ "$pf_rc" -eq 1 ] && has "$pf_out" "Lima >= 2.3 required, found 1.5.0"; then
     record "Lima 1.5.0: FAIL with found version, exit 1" "$pf_rc" "1"
   else
     record "Lima 1.5.0: FAIL with found version, exit 1" "$pf_rc" "1 (got: $pf_out)"
@@ -395,7 +395,7 @@ case_color_always() {
   local d="$work/color-always"; ok_stub "$d"
   preflight "$d" --color=always
   if [ "$pf_rc" -eq 0 ] && printf '%s' "$pf_out" | grep -q "$(printf '\033\[32m')" &&
-    has "$pf_out" "OK" && has "$pf_out" "Lima 2.2.0" &&
+    has "$pf_out" "OK" && has "$pf_out" "Lima 2.3.0" &&
     has "$pf_out" "All checks passed (6/6)."; then
     record "color: --color=always colors OK green, text intact" "green" "green"
   else

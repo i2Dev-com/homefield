@@ -36,7 +36,7 @@ cat >"$stubs/limactl" <<'EOF'
 #!/bin/sh
 echo "limactl $*" >>"$CALLS"
 case "$1" in
-  --version) echo "limactl version 2.2.0" ;;
+  --version) echo "limactl version 2.3.0" ;;
   list)
     if [ -n "${LIMA_LIST_FAIL:-}" ]; then echo "limactl: list failed" >&2; exit 1; fi
     [ -z "${LIMA_STATUS:-}" ] || echo "homefield ${LIMA_STATUS}"

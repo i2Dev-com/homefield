@@ -8,7 +8,7 @@
   <a href="https://github.com/i2Dev-com/homefield/actions/workflows/ci.yml"><img src="https://github.com/i2Dev-com/homefield/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License: MIT"></a>
   <a href="#requirements-and-limitations"><img src="https://img.shields.io/badge/platform-macOS%20Apple%20Silicon-lightgrey?logo=apple" alt="Platform: macOS on Apple Silicon"></a>
-  <a href="https://lima-vm.io"><img src="https://img.shields.io/badge/VM-Lima%20%E2%89%A5%202.0-4e9a06" alt="VM: Lima 2.0 or later"></a>
+  <a href="https://lima-vm.io"><img src="https://img.shields.io/badge/VM-Lima%20%E2%89%A5%202.3-4e9a06" alt="VM: Lima 2.3 or later"></a>
   <a href="https://docs.github.com/en/actions"><img src="https://img.shields.io/badge/GitHub%20Actions-self--hosted%20runner-2088FF?logo=githubactions&amp;logoColor=white" alt="GitHub Actions self-hosted runner"></a>
 </p>
 
@@ -167,12 +167,12 @@ Inside the guest, jobs are root-equivalent, as on a hosted runner.
 
 **The network is partly isolated.** Jobs can reach the internet and your LAN;
 `vm/lima.yaml` asks Lima to stop mapping `host.lima.internal` onto your
-loopback. On Lima ≥ 2.3.0 (not yet a stable release —
+loopback. On Lima ≥ 2.3.0 (the minimum,
 [#18](https://github.com/i2Dev-com/homefield/issues/18)) nothing bound to the
-Mac's loopback is reachable through it; Lima 2.0–2.2 ignore the ask, and
-install and upgrade prove which state a VM is in from inside the guest. Until
-2.3.0 is stable, don't run anything on the Mac hosting the runner that the
-repositories using it shouldn't be able to reach.
+Mac's loopback is reachable through it, and install and upgrade prove which
+state a VM is in from inside the guest. `*`-bound services and the LAN stay
+reachable through the Mac's LAN address — don't run anything on the Mac
+hosting the runner that the repositories using it shouldn't be able to reach.
 
 By default the routing expression keeps pushes, Dependabot and fork pull
 requests on hosted runners; `pull_request_target` cannot be routed. The fork

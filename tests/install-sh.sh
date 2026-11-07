@@ -70,7 +70,7 @@ EOF
 cat >"$tpl/limactl" <<'EOF'
 #!/bin/sh
 echo "limactl $*" >>"$CALLS"
-[ "$1" != --version ] || echo "limactl version ${FAKE_LIMA_VERSION:-2.2.0}"
+[ "$1" != --version ] || echo "limactl version ${FAKE_LIMA_VERSION:-2.3.0}"
 # `limactl list --format ... <name>` prints the status of an existing VM only.
 if [ "$1" = list ]; then
   [ -z "${FAKE_VM_STATUS:-}" ] || echo "$FAKE_VM_STATUS"
@@ -310,16 +310,17 @@ record "...before anything is downloaded or written (#146)" "0/0/no" \
   "$(called '^gh')/$(called '^curl')/$([ -e "$home/share" ] && echo yes || echo no)"
 new_env gh curl limactl brew
 run_install
-record "Lima 2.0 or later present: nothing is installed or upgraded" "0/0/0" "$rc/$(called '^brew install')/$(called '^brew upgrade')"
+record "Lima 2.3.0 present: nothing is installed or upgraded" "0/0/0" "$rc/$(called '^brew install')/$(called '^brew upgrade')"
 new_env gh curl limactl brew
-run_install FAKE_LIMA_VERSION=0.23.2
-record "Lima older than 2.0, no terminal: stops, naming brew upgrade" "nonzero/yes/0" "$(nonzero "$rc")/$(has "$out" 'brew upgrade lima')/$(called '^brew upgrade')"
+run_install FAKE_LIMA_VERSION=2.2.0
+record "Lima older than 2.3, no terminal: stops, naming brew upgrade" "nonzero/yes/0" "$(nonzero "$rc")/$(has "$out" 'brew upgrade lima')/$(called '^brew upgrade')"
 new_env gh curl limactl brew
 run_install FAKE_LIMA_VERSION=1.9.9 HOMEFIELD_YES=1
-record "Lima 1.x with HOMEFIELD_YES=1: upgraded (the template: locator needs 2.0)" "0/1" "$rc/$(called '^brew upgrade lima$')"
+record "Lima 1.x with HOMEFIELD_YES=1: upgraded (the loopback boundary needs 2.3)" "0/1" "$rc/$(called '^brew upgrade lima$')"
 new_env gh curl limactl brew
-run_install FAKE_LIMA_VERSION=2.0.0
-record "Lima exactly 2.0.0: accepted" "0/0/0" "$rc/$(called '^brew install')/$(called '^brew upgrade')"
+run_install FAKE_LIMA_VERSION=2.2.9
+record "Lima exactly 2.2.9: refused (below 2.3), naming brew upgrade" "nonzero/yes/0/0" \
+  "$(nonzero "$rc")/$(has "$out" 'Lima is older than 2.3 and there is no terminal to ask on. Run: brew upgrade lima')/$(called '^brew install')/$(called '^brew upgrade')"
 
 # ── gh, asked with Lima in one question (#146) ─────────────────────────────
 # A fresh Mac has neither: one Y/n covers both, and nothing but Lima can make
@@ -335,7 +336,7 @@ new_env curl brew
 echo n >"$work/answer"
 run_install HOMEFIELD_TTY="$work/answer"
 record "Lima and gh missing, n: stops as for Lima alone, naming only Lima's command" "nonzero/yes/0/1" \
-  "$(nonzero "$rc")/$(has "$out" 'Lima 2.0 or later is required. Run: brew install lima')/$(called '^brew install')/$(prompts)"
+  "$(nonzero "$rc")/$(has "$out" 'Lima 2.3 or later is required. Run: brew install lima')/$(called '^brew install')/$(prompts)"
 new_env curl brew
 run_install
 record "Lima and gh missing, no terminal: stops as for Lima alone" "nonzero/yes/0" \
@@ -347,8 +348,8 @@ record "Lima and gh missing, HOMEFIELD_YES=1: both installed, no question" "0/1/
 new_env curl limactl brew
 echo y >"$work/answer"
 run_install HOMEFIELD_TTY="$work/answer" FAKE_LIMA_VERSION=1.9.9
-record "Lima older than 2.0 and gh missing: one question, upgrade and install" "1/yes/1/1" \
-  "$(prompts)/$(has "$out" 'Lima is older than 2.0. gh is not installed. Run brew upgrade lima and brew install gh? [Y/n]')/$(called '^brew upgrade lima$')/$(called '^brew install gh$')"
+record "Lima older than 2.3 and gh missing: one question, upgrade and install" "1/yes/1/1" \
+  "$(prompts)/$(has "$out" 'Lima is older than 2.3. gh is not installed. Run brew upgrade lima and brew install gh? [Y/n]')/$(called '^brew upgrade lima$')/$(called '^brew install gh$')"
 new_env curl brew
 echo y >"$work/answer"
 run_install HOMEFIELD_TTY="$work/answer" FAKE_BREW_FAIL="install gh"

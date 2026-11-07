@@ -18,7 +18,7 @@
 #   HOMEFIELD_INSTANCE  the VM's Lima instance name (default homefield), as for
 #                       bin/homefield
 #
-# Lima is required: if it is missing or older than 2.0 and you decline, or
+# Lima is required: if it is missing or older than 2.3 and you decline, or
 # there is no terminal and no HOMEFIELD_YES, this stops with the brew command
 # to run, and without Homebrew it stops before downloading anything. gh is not:
 # the one question offers `brew install gh` when it is missing, but declining,
@@ -196,8 +196,9 @@ path_hint() {
   echo "  export PATH=\"$shown:\$PATH\""
 }
 
-# lima_new_enough: limactl reports 2.0 or later, the minimum bin/homefield's
-# check_host asks for (same parsing).
+# lima_new_enough: limactl reports 2.3 or later, the minimum bin/homefield's
+# check_host asks for (same parsing). 2.3 is the first stable release that
+# honours networkOpts.hostLoopback (lima-vm/lima#5581).
 lima_new_enough() {
   local version major minor
   version="$(limactl --version 2>/dev/null | awk '{print $NF}')"
@@ -205,12 +206,13 @@ lima_new_enough() {
   minor="${version#*.}"
   minor="${minor%%.*}"
   [[ "$major" =~ ^[0-9]+$ && "$minor" =~ ^[0-9]+$ ]] || return 1
-  [ "$major" -ge 2 ]
+  [ "$major" -gt 2 ] && return 0
+  [ "$major" -eq 2 ] && [ "$minor" -ge 3 ]
 }
 
 # plan_packages: what Homebrew has to install for this Mac, set before
 # anything is downloaded: LIMA_VERB (install or upgrade) and LIMA_WHAT (why)
-# when Lima is missing or older than 2.0, NEED_GH=1 when gh is not on the PATH
+# when Lima is missing or older than 2.3, NEED_GH=1 when gh is not on the PATH
 # (setup's preflight needs it and `gh auth login` follows). A Lima that cannot
 # be had, with no Homebrew to get it, is told now, before anything is written.
 # Without Homebrew gh is only left for preflight to report, never a failure here.
@@ -223,12 +225,12 @@ plan_packages() {
     LIMA_WHAT="is not installed"
   elif ! lima_new_enough; then
     LIMA_VERB=upgrade
-    LIMA_WHAT="is older than 2.0"
+    LIMA_WHAT="is older than 2.3"
   fi
   command -v gh >/dev/null 2>&1 || NEED_GH=1
   if ! command -v brew >/dev/null 2>&1; then
     [ -z "$LIMA_VERB" ] ||
-      die "Lima ${LIMA_WHAT}. Install 2.0 or later (https://lima-vm.io/docs/installation/, or install Homebrew from https://brew.sh and run: brew install lima), then run this again"
+      die "Lima ${LIMA_WHAT}. Install 2.3 or later (https://lima-vm.io/docs/installation/, or install Homebrew from https://brew.sh and run: brew install lima), then run this again"
     NEED_GH=0
   fi
 }
@@ -260,7 +262,7 @@ ensure_packages() {
     case "$answer" in
       "" | [Yy]*) ;;
       *)
-        [ -z "$LIMA_VERB" ] || die "Lima 2.0 or later is required. Run: brew ${LIMA_VERB} lima"
+        [ -z "$LIMA_VERB" ] || die "Lima 2.3 or later is required. Run: brew ${LIMA_VERB} lima"
         log "gh was not installed; setup will report it. To install it: brew install gh"
         return 0
         ;;

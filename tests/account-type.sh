@@ -52,7 +52,7 @@ cat >"$stubs/limactl" <<'EOF'
 #!/bin/sh
 echo "limactl $*" >>"$CALLS"
 case "$1" in
-  --version) echo "limactl version 2.2.0" ;;
+  --version) echo "limactl version 2.3.0" ;;
   list)
     echo "other-vm Stopped"
     [ -z "${LIMA_STATUS:-}" ] || echo "homefield ${LIMA_STATUS}"

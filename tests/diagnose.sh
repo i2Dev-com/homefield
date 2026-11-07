@@ -39,7 +39,7 @@ cat >"$stubs/limactl" <<'EOF'
 #!/bin/sh
 echo "limactl $*" >>"$CALLS"
 case "$1" in
-  --version) echo "limactl version ${LIMA_VERSION:-2.2.0}" ;;
+  --version) echo "limactl version ${LIMA_VERSION:-2.3.0}" ;;
   list)
     if [ -n "${LIMA_LIST_FAIL:-}" ]; then echo "limactl: list failed" >&2; exit 1; fi
     echo "other-vm Stopped"
@@ -201,7 +201,7 @@ record "...listed on GitHub, online and idle" "yes" "$(has "$out" '  - On GitHub
 record "...the service, the version, the packages and npm" "yes/yes/yes/yes" "$(has "$out" '  - Service: running (actions.runner.acme.test.service)')/$(has "$out" '  - Version: 2.338.0')/$(has "$out" '  - Extra packages: libpq-dev')/$(has "$out" '  - npm: ok')"
 record "...the group: selected repositories, public off" "yes" "$(has "$out" '  - Group: homefield-ci (selected repositories, public off)')"
 record "...and the repositories in it" "yes" "$(has "$out" '  - Repositories in group: acme/app, acme/web')"
-record "...the prerequisites, from preflight's checks" "yes/yes/yes" "$(has "$out" 'Prerequisites:')/$(has "$out" '  - OK    Lima 2.2.0')/$(has "$out" '  - OK    gh authenticated as stub-user (admin:org scope)')"
+record "...the prerequisites, from preflight's checks" "yes/yes/yes" "$(has "$out" 'Prerequisites:')/$(has "$out" '  - OK    Lima 2.3.0')/$(has "$out" '  - OK    gh authenticated as stub-user (admin:org scope)')"
 record "...no problems and no notes" "no/no" "$(has "$out" 'problem')/$(has "$out" 'Note:')"
 record "...Summary is the last line" "Summary: healthy." "$(printf '%s\n' "$out" | tail -n 1)"
 record "...asked GitHub for the runner, the groups, who is in the runner's group, then its repositories" "1/1/1/1" "$(called 'orgs/acme/actions/runners?')/$(called 'orgs/acme/actions/runner-groups?')/$(called 'orgs/acme/actions/runner-groups/7/runners?')/$(called 'orgs/acme/actions/runner-groups/7/repositories')"
@@ -219,7 +219,7 @@ diag LIMA_STATUS= --
 record "no VM: exits 1, says not created" "1/yes" "$rc/$(has "$out" '  - Created: no')"
 record "...skips the guest checks, saying why" "yes/no" "$(has "$out" '  - Guest checks: skipped (the VM does not exist)')/$(has "$out" 'Isolation:')"
 record "...with the command that creates it" "yes" "$(has "$out" '     Fix: bin/homefield install --instance homefield --url https://github.com/<org>[/<repo>]')"
-record "...the group is skipped too, the prerequisites still shown" "yes/yes" "$(has "$out" '  - Group: skipped (the VM does not exist)')/$(has "$out" '  - OK    Lima 2.2.0')"
+record "...the group is skipped too, the prerequisites still shown" "yes/yes" "$(has "$out" '  - Group: skipped (the VM does not exist)')/$(has "$out" '  - OK    Lima 2.3.0')"
 record "...the guest was never asked, GitHub neither" "0/0" "$(called 'limactl shell')/$(called 'actions/runners')"
 record "...Summary names one problem" "yes" "$(has "$out" 'Summary: 1 problem found.')"
 
