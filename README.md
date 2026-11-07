@@ -21,7 +21,7 @@ one repository variable and everything runs hosted again.
 **The problems it solves:**
 
 - **Minute billing.** Hosted runners bill every job rounded up to a whole
-  minute. Repositories with many short pull-request jobs exhaust their
+  minute, so repositories with many short pull-request jobs exhaust their
   included minutes on the floors alone; on your Mac those jobs are free.
 - **Isolation.** GitHub's own self-hosted runner on a Mac runs jobs as your
   user, with your files, SSH keys and credentials in reach. HomeField runs
@@ -59,20 +59,16 @@ curl -fsSL https://raw.githubusercontent.com/i2Dev-com/homefield/v0.5.1/install.
 
 It asks a few questions and does the rest:
 
-1. **Homebrew.** If Lima or `gh` is missing, one question names the `brew`
-   commands it will run. Answer yes.
-2. **`gh` login.** If `gh` is not logged in, `setup` offers `gh auth login`
-   (with the `admin:org` scope when `--url` is an organization, so you
-   authorize once in the browser, not twice).
-3. **The runner.** `setup` creates the VM, checks its isolation, provisions it,
-   creates the `homefield-ci` runner group (organizations), registers the
+1. **Homebrew and `gh` login.** Missing Lima or `gh`, or a logged-out `gh`:
+   one question each (the `brew` commands it will run; the `gh auth login`
+   scopes), then it carries on.
+2. **The runner.** `setup` creates the VM, checks its isolation, provisions
+   it, creates the `homefield-ci` runner group (organizations), registers the
    runner and waits until GitHub shows it online.
-4. **The routing pull request.** It asks `Open the routing pull request for
-   <owner>/<repo> now, and carry on once you merge it? [Y/n]` (for an
-   organization, which repository to route first). Nothing is opened on GitHub
-   unless you say yes.
-5. **Merge it.** That is the only step that is yours; its body lists the jobs
-   it routes. `setup` waits, then adds the repository to the runner group and
+3. **The routing pull request.** It offers to open one for your first
+   repository. Nothing is opened on GitHub unless you say yes.
+4. **Merge it.** The only step that is yours; its body lists the jobs it
+   routes. `setup` waits, then adds the repository to the runner group and
    switches it to the local runner (`CI_RUNNER=local`).
 
 From then on the routed jobs of that repository's pull requests run on your
@@ -103,10 +99,9 @@ runs-on: ${{ vars.CI_RUNNER == 'local' && github.event_name == 'pull_request' &&
 It sends the job to the local runner only when the repository variable
 `CI_RUNNER` is `local`, the event is a pull request, the author is not
 Dependabot and the branch is not from a fork; otherwise to `ubuntu-latest`.
-That is the guarded expression, `guards` mode. A repository whose every
-contributor you trust with the Mac routes with the simple one instead — the
-one-clause expression that `homefield adopt --setup` writes for a repository
-without a guard (`--guards` asks for this guarded one):
+That is the guarded expression — the default. A repository whose every
+contributor you trust with the Mac routes with the simple one instead, the
+one-clause expression `homefield adopt --setup` writes without `--guards`:
 
 ```yaml
 runs-on: ${{ vars.CI_RUNNER == 'local' && 'homefield-ci' || 'ubuntu-latest' }}
@@ -116,10 +111,9 @@ It has no event, Dependabot or fork clause: every event routes, and the
 switch is the only guardrail — also the off button (`homefield route
 hosted`). It is for a private repository where being able to open a pull
 request already means being trusted with the Mac. The guard accepts either
-shape, and a repository may mix them.
-That is the default. The routed events, Dependabot and the hosted fallback
-image are options of the action, and the expression changes with them
-([routing options](docs/adopting.md#routing-options)).
+shape, and a repository may mix them. The routed events, Dependabot and the
+hosted fallback image are options of the action, and the expression changes
+with them ([routing options](docs/adopting.md#routing-options)).
 `routing-guard` keeps every copy identical and every guard in place:
 
 ```yaml
@@ -206,11 +200,10 @@ for the current terms.
 ## Alternatives
 
 - **[GitHub's own self-hosted runner](https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/add-runners)
-  on the Mac**: a few commands (`config.sh`, then `run.sh` or `svc.sh`), but
-  jobs run as your macOS user with your files, SSH keys and credentials in
-  reach, routed jobs wait while the runner is offline, and nothing keeps fork
-  pull requests, Dependabot or a widened `runs-on` off it. Enough for one
-  private repository whose every contributor you trust with your Mac.
+  on the Mac**: a few commands, but jobs run as your macOS user with your
+  files, SSH keys and credentials in reach, and nothing keeps fork pull
+  requests, Dependabot or a widened `runs-on` off it. Enough for one private
+  repository whose every contributor you trust with your Mac.
 - **[actions-runner-controller](https://github.com/actions/actions-runner-controller)**:
   ephemeral runners on Kubernetes. The right choice for a team with a
   cluster; far more to operate than one VM.
@@ -244,32 +237,14 @@ human in the loop:
 
 - `homefield --help` is the one-line-per-command overview; `homefield help
   <command>` (or `<command> --help`) prints one command's options; `homefield
-  help` is the full reference.
-- [docs/cli.md](docs/cli.md) is the machine-oriented reference: commands,
-  options, exit codes, the non-interactive environment variables
-  (`HOMEFIELD_YES=1` answers prompts; `HOMEFIELD_INSTANCE` names a VM;
-  `HOMEFIELD_GH_TIMEOUT` bounds GitHub calls) and the `--json` output shapes
-  (`diagnose --json`, `status --json`, `report --json`).
+  help` is the full reference. [docs/cli.md](docs/cli.md) is the
+  machine-oriented reference: commands, options, exit codes, the
+  non-interactive environment variables (`HOMEFIELD_YES=1` answers prompts;
+  `HOMEFIELD_INSTANCE` names a VM; `HOMEFIELD_GH_TIMEOUT` bounds GitHub
+  calls) and the `--json` output shapes.
 - `homefield diagnose --json` is the one read-only health check to run first;
   it exits 0 when every VM is healthy and names the fixing command for each
   problem it finds.
-
-## Repository layout
-
-| Path | What it is |
-|---|---|
-| [`install.sh`](install.sh) | The one-line installer: downloads the tool, puts `homefield` on the PATH, installs Lima and gh (one question), runs `homefield setup` |
-| [`bin/homefield`](bin/homefield) | Install, upgrade, inspect and remove the runner on this Mac; adopt and switch repositories |
-| [`vm/lima.yaml`](vm/lima.yaml) | The VM: Ubuntu 24.04 arm64, no host mounts, no forwarding of guest ports to the Mac, no SSH-agent forwarding |
-| [`vm/provision.sh`](vm/provision.sh) | Runs inside the VM: packages, Docker, the checksum-pinned runner, maintenance timers, registration (settings at the top of the file); `ensure-service` restores the runner's service on its own |
-| [`routing-guard/`](routing-guard/action.yml) | The routing guard action |
-| [`tools/`](tools) | Python helpers behind `homefield report` and `homefield adopt` |
-| [`docs/`](docs) | The guides: the table above |
-
-## Development
-
-The checks to run before a pull request (the test suites, `shellcheck`,
-`actionlint`) are listed in [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Versioning
 
@@ -288,6 +263,8 @@ of the latest tag.
 
 ## Contributing, security, license
 
-Contributions are welcome: see [`CONTRIBUTING.md`](CONTRIBUTING.md). Report
-security issues privately, as described in [`SECURITY.md`](SECURITY.md), which
-also lists the known limitations. Licensed under the [MIT License](LICENSE).
+Contributions are welcome: the checks to run before a pull request (the test
+suites, `shellcheck`, `actionlint`) are listed in
+[`CONTRIBUTING.md`](CONTRIBUTING.md). Report security issues privately, as
+described in [`SECURITY.md`](SECURITY.md), which also lists the known
+limitations. Licensed under the [MIT License](LICENSE).
