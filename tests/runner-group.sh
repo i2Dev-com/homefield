@@ -73,7 +73,7 @@ cat >"$stubs/limactl" <<'EOF'
 #!/bin/sh
 echo "limactl $*" >>"$CALLS"
 case "$1" in
-  --version) echo "limactl version 2.2.0" ;;
+  --version) echo "limactl version 2.3.0" ;;
   list)
     # Every instance, as `list --format '{{.Name}} {{.Status}}'`: another VM, and
     # this one when LIMA_STATUS is set. LIMA_LIST_FAIL: Lima cannot answer.

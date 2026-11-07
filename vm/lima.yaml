@@ -7,15 +7,15 @@
 #
 # The guest's outbound network (homefield#18): the networkOpts block at the
 # end stops host.lima.internal (192.168.5.2) from mapping to the host's
-# loopback, but only on Lima >= 2.3.0 (lima-vm/lima#5581, not in a stable
-# release yet; 2.0-2.2 warn "unknown field" and ignore the line, so the
-# loopback stays reachable there). `bin/homefield` probes the truth from
-# inside the guest on install and upgrade. Services bound to `*` on the Mac
-# stay reachable through its LAN address whatever the Lima version.
+# loopback (lima-vm/lima#5581, honoured since Lima 2.3.0 — the version
+# bin/homefield requires; 2.0-2.2 ignored the line, leaving the loopback
+# reachable). `bin/homefield` probes the truth from inside the guest on
+# install and upgrade. Services bound to `*` on the Mac stay reachable
+# through its LAN address whatever the Lima version.
 #
-# Requires Lima >= 2.0: `base:` is older (1.1), but the `template:` locator
-# below (the `template://` form is deprecated since Lima 2.0 and 1.x may not
-# accept the new one). Create with --mount-none as well, so a
+# The `template:` locator below needs Lima 2.0 (the `template://` form is
+# deprecated since Lima 2.0 and 1.x may not accept the new one). Create with
+# --mount-none as well, so a
 # future change to Lima's defaults cannot quietly bring the home mount back.
 
 # Image list only. The `ubuntu-24.04` template would also pull in

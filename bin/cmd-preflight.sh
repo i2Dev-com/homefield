@@ -11,7 +11,7 @@
 # gh missing is a failure to fix, gh logged out is a failure too, and a token
 # without admin:org only warns (an organization URL is what needs that scope,
 # a repository URL is registered with repo; `gh auth refresh -s admin:org`).
-# Lima >= 2.0 is the same check as check_host's.
+# Lima >= 2.3 is the same check as check_host's.
 PF_NAME=()
 PF_LEVEL=()
 PF_MSG=()
@@ -28,8 +28,8 @@ preflight_collect() {
     pf_add lima fail "Lima not found: run 'brew install lima'"
   else
     lima_major_minor
-    if [ -z "$LIMA_MAJOR" ] || [ "$LIMA_MAJOR" -lt 2 ]; then
-      pf_add lima fail "Lima >= 2.0 required, found ${LIMA_VERSION:-unknown}: run 'brew install lima'"
+    if [ -z "$LIMA_MAJOR" ] || ! { [ "$LIMA_MAJOR" -gt 2 ] || { [ "$LIMA_MAJOR" -eq 2 ] && [ "$LIMA_MINOR" -ge 3 ]; }; }; then
+      pf_add lima fail "Lima >= 2.3 required, found ${LIMA_VERSION:-unknown}: run 'brew install lima'"
     else
       pf_add lima ok "Lima $LIMA_VERSION"
     fi

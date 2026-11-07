@@ -11,7 +11,7 @@ variable is in [cli.md](cli.md).
 ## The one-liner and `setup`
 
 The one-liner installs Lima and `gh` with Homebrew if they are missing (Lima
-also if it is older than 2.0), after one question that names the `brew`
+also if it is older than 2.3), after one question that names the `brew`
 commands it will run, puts the tool in `~/.local/share/homefield` with a
 `homefield` command on your PATH, and runs `homefield setup` (`homefield
 install` on a release older than `setup`). If `gh` is installed but not logged
@@ -28,7 +28,7 @@ online. Any other option is appended after `bash -s --`, like `--url`:
 ... | bash -s -- --url https://github.com/<org>      # or https://github.com/<owner>/<repo>
 ```
 
-From a checkout, with Lima ≥ 2.0, run `bin/homefield setup --url
+From a checkout, with Lima ≥ 2.3, run `bin/homefield setup --url
 https://github.com/<org>` instead. `setup` is the whole first-time setup in one
 command: it runs `preflight` first and stops, with nothing created, if any check
 fails (a warning does not stop it; on a terminal, a `gh` that is not logged in
@@ -81,7 +81,7 @@ lookup; they cannot be combined.
 ## Preflight
 
 Before a checkout setup, `homefield preflight` reports on everything the tool
-needs: macOS, Apple Silicon, Lima ≥ 2.0, gh (logged in; the `admin:org` scope is
+needs: macOS, Apple Silicon, Lima ≥ 2.3, gh (logged in; the `admin:org` scope is
 only a warning, since a repository URL does not need it), python3 and Homebrew.
 It exits 0 when every check passes and 1 otherwise, naming the command that
 fixes each failure (`brew install lima`, `gh auth login`, and so on); `setup`

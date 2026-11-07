@@ -91,7 +91,7 @@ cat >"$stubs/limactl" <<'EOF'
 #!/bin/sh
 echo "limactl $*" >>"$CALLS"
 case "$1" in
-  --version) echo "limactl version 2.2.0" ;;
+  --version) echo "limactl version 2.3.0" ;;
   list)
     echo "other-vm Stopped"
     [ -z "${LIMA_STATUS:-}" ] || echo "homefield ${LIMA_STATUS}"
@@ -122,7 +122,7 @@ if [ "${PF:-pass}" != real ]; then
   preflight_collect() {
     PF_NAME=(lima gh)
     PF_LEVEL=(ok ok)
-    PF_MSG=("Lima 2.2.0" "gh authenticated as tester")
+    PF_MSG=("Lima 2.3.0" "gh authenticated as tester")
     case "${PF:-pass}" in
       warn) PF_LEVEL[1]=warn PF_MSG[1]="gh authenticated as tester, no admin:org scope" ;;
       fail) PF_LEVEL[1]=fail PF_MSG[1]="gh not logged in: run 'gh auth login'" ;;

@@ -30,7 +30,7 @@ mkdir -p "$stubs" "$work/home/.lima/homefield"
 cat >"$stubs/limactl" <<'EOF'
 #!/bin/sh
 case "$1" in
-  --version) echo "limactl version ${LIMA_VER:-2.2.0}" ;;
+  --version) echo "limactl version ${LIMA_VER:-2.3.0}" ;;
   shell)
     [ -z "${PROBE_GUEST_FAIL:-}" ] || { echo "limactl: could not connect" >&2; exit 1; }
     if [ -n "${LIMA_RUN_GUEST:-}" ]; then
@@ -187,11 +187,6 @@ record "a guest without the probe tools: no clear answer, not a false closed" "0
   "$rc/$(has "$out" 'no clear answer from VM homefield (answer: tools)')/$(has "$out" 'probe: closed')"
 
 echo "loopback probe: the host side (a stubbed listener owns the port, token proven)"
-
-run_probe LIMA_RUN_GUEST=1 PROBE_BASH=open LIMA_VER=2.2.0 --
-record "open on an old Lima: a warning naming the ignoring version" "0/yes/yes" \
-  "$rc/$(has "$out" 'warning: #18: jobs in VM homefield can reach')/$(has "$out" 'Lima 2.2.0 ignores networkOpts.hostLoopback')"
-record "...and it does not stop the run, nor claim a closed" "no" "$(has "$out" 'probe: closed')"
 
 run_probe LIMA_RUN_GUEST=1 PROBE_BASH=open LIMA_VER=2.3.0 --
 record "open although the config asks for the block, on a Lima that honours it: refused" "nonzero/yes" \
