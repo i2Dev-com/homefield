@@ -65,15 +65,25 @@ GH_TIMEOUT="${HOMEFIELD_GH_TIMEOUT:-15}"
 case "$GH_TIMEOUT" in ''|*[!0-9]*) GH_TIMEOUT=15 ;; esac
 
 
-usage() {
+# ── Usage ───────────────────────────────────────────────────────────────────
+# The help text in pieces, so each surface prints only what it needs and the
+# full text stays one text: `homefield help` cats every piece in order (the
+# sections below are the reference, byte for byte what one file said before
+# the split), `homefield help <command>` and `<command> --help` print a
+# command's paragraph and its own options, and `homefield --help` prints the
+# short overview (usage_short).
+usage_header() {
   cat <<'EOF'
 Usage: bin/homefield <command> [options]
 
 Every command that acts on a VM covers every HomeField VM on this Mac by
 default; --instance (or $HOMEFIELD_INSTANCE) narrows it to the one named.
 install and setup create/register exactly the instance they are given.
+EOF
+}
 
-Commands:
+usage_cmd_setup() {
+  cat <<'EOF'
   setup      The whole first-time setup in one command: preflight must pass in
              full (any failed check stops it with nothing created; on a
              terminal, a gh that is not logged in is first offered
@@ -89,29 +99,53 @@ Commands:
              failed pull request does not fail setup (Ctrl-C while it waits
              ends setup with 130). Takes install's options. On an instance
              that is already registered it upgrades, like install.
+EOF
+}
+usage_cmd_install() {
+  cat <<'EOF'
   install    Create the VM (if needed), provision it and register the runner.
              For an organization it also creates the runner group, and it
              waits until the runner shows online. On an instance that is
              already registered, this is an upgrade. The lower-level command
              setup runs: it reports preflight but does not stop on it.
+EOF
+}
+usage_cmd_upgrade() {
+  cat <<'EOF'
   upgrade    Re-run provisioning on a registered runner: packages, hooks,
              runner binary. A VM with a job running is refused and skipped,
              unless --force; the others are still upgraded. A VM that cannot
              be asked whether one is is skipped too. Exits 0 only when every
              VM was upgraded.
+EOF
+}
+usage_cmd_status() {
+  cat <<'EOF'
   status     Show each VM, its registration (and whether GitHub still lists
              it) and whether a job is running. One block per VM; exits 0 only
              when every one of them answered well.
+EOF
+}
+usage_cmd_start() {
+  cat <<'EOF'
   start      Boot each VM, then report whether its runner is taking jobs:
              booted and online are separate facts. Exits 0 when every runner
              is online (service running, GitHub lists it online), 1 otherwise
              with the fix per VM; a failure on one never skips the next.
+EOF
+}
+usage_cmd_stop() {
+  cat <<'EOF'
   stop       Stop each VM, so its runner takes no jobs until it starts again.
              A VM with a job running is refused (that job would be cancelled)
              and skipped, as is one that cannot be asked whether it has one;
              the others are still stopped. Autostart stays as it was, so a
              reboot starts them again; stopping an already stopped VM is not
              an error. Exits 0 only when every VM reached Stopped.
+EOF
+}
+usage_cmd_diagnose() {
+  cat <<'EOF'
   diagnose   One read-only report per VM for when something went wrong: the VM
              (created, isolated, registered, listed on GitHub, service,
              version, npm), the runner group on GitHub's side (its access and
@@ -121,9 +155,17 @@ Commands:
              instances/healthy/prerequisites/vms. Exits 0 when every VM is
              healthy, 1 otherwise. Starts and changes nothing: a VM that is not
              running is reported, not started.
+EOF
+}
+usage_cmd_uninstall() {
+  cat <<'EOF'
   uninstall  Deregister the runner and delete one VM. With more than one on
              this Mac, or with its only VM under another name, it refuses until
              --instance names which: deleting every runner is never a default.
+EOF
+}
+usage_cmd_reset() {
+  cat <<'EOF'
   reset      Roll back an install, complete or half-finished: deregister the
              runner if it registered, delete the VM, and delete the runner
              group if this install created it (and nothing else is in it).
@@ -131,35 +173,87 @@ Commands:
              yes. Nothing to undo is not an error. Unlike uninstall it does
              not need a VM to exist. Refuses as uninstall does when the VM is
              not named and this Mac has more than one, or only another name.
+EOF
+}
+usage_cmd_route() {
+  cat <<'EOF'
   route      Switch repositories' routed jobs to hosted or local
              (the CI_RUNNER variable). Switching to hosted also cancels and
              re-runs runs whose jobs are stuck waiting for the local runner.
              A repository that cannot be switched is warned about and skipped;
              the others are still routed. Exits 0 only when every repository
              was routed.
+EOF
+}
+usage_cmd_preflight() {
+  cat <<'EOF'
   preflight  Check prerequisites for a fresh install: macOS, Apple Silicon,
               Lima, gh, python3, brew. Exits 0 when all pass, 1
               otherwise (with messages pointing to the exact fix command).
               Designed to be run before install; setup and install call it
               first (setup stops on a failure, install only reports it).
+EOF
+}
+usage_cmd_adopt() {
+  cat <<'EOF'
   adopt      Prepare a repository to use the runner: check that its routing is
              merged, and only then give it access to the runner group and
              switch it to local. Refuses a public repository.
+EOF
+}
+usage_cmd_memory() {
+  cat <<'EOF'
   memory     Show every VM's memory use from its per-minute log: average and
              peak per day, and out-of-memory kills. A VM that is not running,
              or has no samples yet, fails as it did before; the others are
              still reported.
+EOF
+}
+usage_cmd_report() {
+  cat <<'EOF'
   report     Queue wait, duration and minutes of the jobs in repositories,
              local against hosted, from the GitHub API.
+EOF
+}
+usage_cmd_version() {
+  cat <<'EOF'
   version    Show which version of this tool is installed, and whether a
              newer one is available (checked with gh).
+EOF
+}
 
+# usage_commands: the full Commands: list — every paragraph, no blanks
+# between, as the full usage prints it.
+usage_commands() {
+  echo "Commands:"
+  usage_cmd_setup
+  usage_cmd_install
+  usage_cmd_upgrade
+  usage_cmd_status
+  usage_cmd_start
+  usage_cmd_stop
+  usage_cmd_diagnose
+  usage_cmd_uninstall
+  usage_cmd_reset
+  usage_cmd_route
+  usage_cmd_preflight
+  usage_cmd_adopt
+  usage_cmd_memory
+  usage_cmd_report
+  usage_cmd_version
+}
+
+usage_options() {
+  cat <<'EOF'
 Options:
   --instance NAME    Lima instance: one VM instead of every HomeField VM on
                      this Mac. Defaults to all of them for the commands that act
                      on a VM, and install/setup create "homefield";
                      $HOMEFIELD_INSTANCE names one as if it were passed.
-
+EOF
+}
+usage_sec_install() {
+  cat <<'EOF'
 install (and setup, which takes the same options):
   --url URL          https://github.com/<org> or https://github.com/<owner>/<repo>
                      (asked for on a terminal when a new registration has none).
@@ -198,7 +292,10 @@ install (and setup, which takes the same options):
   --cpus N           VM CPUs, when creating it (default: vm/lima.yaml)
   --memory GIB       VM memory in GiB, when creating it (default: vm/lima.yaml)
   --no-autostart     do not start the VM at login
-
+EOF
+}
+usage_sec_upgrade() {
+  cat <<'EOF'
 upgrade:
   --packages "A B"   replace the saved extra packages
   --preset NAME      add a shipped preset's apt packages and hooks on top of
@@ -206,16 +303,25 @@ upgrade:
                      Unlike --packages it never replaces the saved list
                      (docs/runbook.md, "Adding tools")
   --force            upgrade even while a job is running (the job is cancelled)
-
+EOF
+}
+usage_sec_diagnose() {
+  cat <<'EOF'
 diagnose:
   --json             machine-readable output: the same facts, a top-level
                      healthy boolean and a problems array; nothing else on
                      stdout. Needs neither jq nor python3. A check that needs
                      GitHub waits at most HOMEFIELD_GH_TIMEOUT seconds (15).
-
+EOF
+}
+usage_sec_uninstall() {
+  cat <<'EOF'
 uninstall:
   --keep-vm          only deregister; keep the VM
-
+EOF
+}
+usage_sec_reset() {
+  cat <<'EOF'
 reset:
   --keep-vm          only deregister; keep the VM
   --keep-group       keep the runner group. Without this, the group is deleted
@@ -228,14 +334,20 @@ reset:
                      install.sh put on this Mac. They are shared by every
                      instance, so this is not the default. Done last, and
                      only when every other step worked
-
+EOF
+}
+usage_sec_route() {
+  cat <<'EOF'
 route <hosted|local>:
   --repo OWNER/REPO  repository to switch (repeat for several; required)
   --label LABEL      routing label of the stuck jobs to look for (default homefield-ci)
   --dry-run          show what would change, change nothing
   Needs gh with write access to the repositories' variables and runs. Does
   not need the VM.
-
+EOF
+}
+usage_sec_adopt() {
+  cat <<'EOF'
 adopt:
   --repo OWNER/REPO  the repository to adopt (required, one)
   --label LABEL      routing label (default homefield-ci; a routing-guard step
@@ -327,12 +439,18 @@ adopt:
   .github/workflows/ needs the workflow scope of a classic PAT; without it,
   --setup stops before anything is created, naming `gh auth refresh -s workflow`.
   Needs gh and python3. Does not need the VM.
-
+EOF
+}
+usage_sec_memory() {
+  cat <<'EOF'
 memory:
   --days N           how many days to show (default 7)
   The log is written by the guest every minute from samples taken every 2
   seconds, so a short spike is kept. "Used" is total minus available memory.
-
+EOF
+}
+usage_sec_report() {
+  cat <<'EOF'
 report:
   --repo OWNER/REPO  repository to include (repeat for several; required)
   --since DATE       first day, YYYY-MM-DD, UTC (default: the 1st of this month)
@@ -344,7 +462,11 @@ report:
   job's duration rounded up to the minute, as GitHub bills hosted jobs. For
   local jobs that is what they would have cost. Looks at every attempt of
   every run, so it makes one API call per run: allow a few minutes a month.
+EOF
+}
 
+usage_tokens() {
+  cat <<'EOF'
 Registration and removal need a one-hour token. It is fetched with `gh` when
 your gh credentials allow it (org owner with admin:org, or repository admin);
 otherwise you are asked to paste one from the "New runner" page. Tokens go to
@@ -352,6 +474,110 @@ the VM on stdin, never on a command line. For an organization, gh also reads
 and creates the runner group, which needs the same admin:org scope: on a
 terminal you are offered `gh auth refresh -s admin:org` if it is missing;
 without one, pass --group-exists for a group you created and checked by hand.
+EOF
+}
+
+# usage_join <pieces...>: the pieces with one blank line between, the full
+# text's own separators.
+usage_join() {
+  local first=1
+  while [ $# -gt 0 ]; do
+    [ "$first" = 1 ] || echo ""
+    first=0
+    "$1"
+    shift
+  done
+}
+
+# usage: the full reference, on `homefield help`. The pieces in the order the
+# one heredoc had them, so the text is unchanged.
+usage() {
+  usage_join usage_header usage_commands usage_options \
+    usage_sec_install \
+    usage_sec_upgrade \
+    usage_sec_diagnose \
+    usage_sec_uninstall \
+    usage_sec_reset \
+    usage_sec_route \
+    usage_sec_adopt \
+    usage_sec_memory \
+    usage_sec_report \
+    usage_tokens
+}
+
+# usage_for <command>: one command's help, for `homefield help <command>`
+# and `<command> --help`: the overview header, the command's paragraph from
+# the Commands: list, its own options, the global --instance note, and — for
+# the commands that register, deregister or ask for a token — the token
+# paragraph. setup takes install's options, so it prints install's section.
+usage_for() {
+  case "$1" in
+    setup)
+      usage_join usage_header usage_cmd_setup usage_sec_install usage_options usage_tokens ;;
+    install)
+      usage_join usage_header usage_cmd_install usage_sec_install usage_options usage_tokens ;;
+    upgrade)
+      usage_join usage_header usage_cmd_upgrade usage_sec_upgrade usage_options ;;
+    status)
+      usage_join usage_header usage_cmd_status usage_options ;;
+    start)
+      usage_join usage_header usage_cmd_start usage_options ;;
+    stop)
+      usage_join usage_header usage_cmd_stop usage_options ;;
+    diagnose)
+      usage_join usage_header usage_cmd_diagnose usage_sec_diagnose usage_options ;;
+    uninstall)
+      usage_join usage_header usage_cmd_uninstall usage_sec_uninstall usage_options usage_tokens ;;
+    reset)
+      usage_join usage_header usage_cmd_reset usage_sec_reset usage_options usage_tokens ;;
+    route)
+      usage_join usage_header usage_cmd_route usage_sec_route usage_options ;;
+    preflight)
+      usage_join usage_header usage_cmd_preflight usage_options ;;
+    adopt)
+      usage_join usage_header usage_cmd_adopt usage_sec_adopt usage_options ;;
+    memory)
+      usage_join usage_header usage_cmd_memory usage_sec_memory usage_options ;;
+    report)
+      usage_join usage_header usage_cmd_report usage_sec_report usage_options ;;
+    version)
+      usage_join usage_header usage_cmd_version usage_options ;;
+    *)
+      die "help: unknown command '$1' (see bin/homefield help)" ;;
+  esac
+}
+
+usage_short() {
+  cat <<'EOF'
+Usage: bin/homefield <command> [options]
+
+Run GitHub Actions pull-request jobs on a Lima VM on this Mac, with a hosted
+fallback. Every command that acts on a VM covers every HomeField VM on this
+Mac by default; --instance (or $HOMEFIELD_INSTANCE) narrows it to the one
+named. install and setup create/register exactly the instance they are given.
+
+Commands:
+  setup      The whole first-time setup in one command (install's options)
+  install    Create the VM, provision it and register the runner
+  upgrade    Re-run provisioning on a registered runner
+  status     Show each VM, its registration and whether a job is running
+  start      Boot each VM, then report whether its runner is taking jobs
+  stop       Stop each VM (refused while a job is running)
+  diagnose   One read-only report per VM, for when something went wrong
+  uninstall  Deregister the runner and delete one VM
+  reset      Roll back an install, complete or half-finished
+  route      Switch repositories' routed jobs to hosted or local
+  preflight  Check prerequisites for a fresh install
+  adopt      Prepare a repository to use the runner
+  memory     Show every VM's memory use from its per-minute log
+  report     Queue wait, duration and minutes of jobs, local against hosted
+  version    Show the installed version, and whether a newer one exists
+
+Run `bin/homefield help <command>` for a command's options, `bin/homefield
+help` for the full reference. The guides live in docs/: getting-started.md
+(first install), adopting.md (routing a repository), runbook.md (operating
+the runner), security.md (the routing guard's contract), cli.md (every
+command, option, exit code and environment variable, for scripts and agents).
 EOF
 }
 
@@ -686,12 +912,20 @@ main() {
         ;;
     esac
   done
-  [ -n "$cmd" ] || { usage >&2; exit 1; }
+  [ -n "$cmd" ] || { usage_short >&2; exit 1; }
   color_init ${COLOR_ARG:+"$COLOR_ARG"} "$cmd"
   # Only the commands that act on the VM: preflight, route, adopt, report and
   # version never use it, so a stale HOMEFIELD_INSTANCE does not stop them.
   case "$cmd" in setup | install | upgrade | status | start | stop | diagnose | uninstall | reset | memory) check_instance ;; esac
   set -- "${rest[@]+"${rest[@]}"}"
+  # <command> --help (or -h) prints that command's help, before the command's
+  # own parser sees the flag: no command takes -h for anything else. --help
+  # before the command (--homefield --help) is the short overview, handled
+  # below; color_init has run, so the emitters' level is already set.
+  local arg
+  for arg in ${rest[@]+"${rest[@]}"}; do
+    case "$arg" in -h | --help) usage_for "$cmd"; return 0 ;; esac
+  done
   case "$cmd" in
     preflight) [ $# -eq 0 ] || die "preflight takes no options (see bin/homefield help)"; cmd_preflight ;;
     setup) cmd_setup "$@" ;;
@@ -708,8 +942,19 @@ main() {
     memory) cmd_memory "$@" ;;
     report) cmd_report "$@" ;;
     version | --version) cmd_version "$@" ;;
-    help | -h | --help) usage ;;
-    *) usage >&2; exit 1 ;;
+    help)
+      # help (no argument): the full reference. help <command>: that command's
+      # help, the same text <command> --help prints.
+      if [ $# -eq 0 ]; then
+        usage
+      elif [ $# -eq 1 ]; then
+        usage_for "$1"
+      else
+        die "help: unknown topic '$2' (see bin/homefield help)"
+      fi
+      ;;
+    -h | --help) usage_short ;;
+    *) usage_short >&2; exit 1 ;;
   esac
 }
 
