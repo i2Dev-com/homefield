@@ -224,4 +224,17 @@ stat "${healthy[@]}" LIMA_SECOND=second --
 record "two VMs, human: two blocks, no JSON" "yes/no/0" \
   "$(has "$out" 'VM second: Running')/$(has "$out" '"vms"')/$rc"
 
+# One VM under a non-default name, no --instance: the report is about THAT VM
+# (vm_dispatch assigned the discovered name; the default name's "not created"
+# must not stand in for it).
+mkdir -p "$home/.lima/codesamplez"
+printf '%s\n' '# Lima VM for the local GitHub Actions runner.' >"$home/.lima/codesamplez/lima.yaml"
+rm -rf "$home/.lima/second"
+stat "${healthy[@]}" LIMA_SECOND=codesamplez LIMA_STATUS= --
+record "one VM, non-default name: the discovered VM is reported" "yes/no/0" \
+  "$(has "$out" 'VM codesamplez: Running')/$(has "$out" 'VM homefield: not created')/$rc"
+stat "${healthy[@]}" LIMA_SECOND=codesamplez LIMA_STATUS= -- --json
+record "one VM, non-default name: the JSON names it" "codesamplez/True/0" \
+  "$(json_field "$out" 'd["instance"]')/$(json_field "$out" 'd["healthy"]')/$rc"
+
 summary

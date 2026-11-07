@@ -1188,9 +1188,17 @@ cmd_status() {
       [ -z "$name" ] || n=$((n + 1))
     done <<<"$list"
     case "$n" in
-      0 | 1)
-        # Nothing (or one) found: INSTANCE's own report says what to do, as
-        # vm_dispatch's single-VM path did.
+      0)
+        # Nothing found: INSTANCE's own report ("not created") says what to
+        # do, as vm_dispatch's single-VM path did.
+        status_single "${opts[@]+"${opts[@]}"}"
+        return
+        ;;
+      1)
+        # Exactly one: report THAT VM, the name vm_dispatch assigned (the
+        # default name with one VM under another would report "not created").
+        while IFS= read -r name; do [ -z "$name" ] || break; done <<<"$list"
+        INSTANCE="$name"
         status_single "${opts[@]+"${opts[@]}"}"
         return
         ;;
