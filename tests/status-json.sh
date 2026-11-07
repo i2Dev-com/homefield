@@ -55,7 +55,9 @@ case "$1" in
             exec sh -c "$script" sh "$FAKE_ROOT$5"
             ;;
           *'pgrep -f'*) exec sh -c "$script" sh ;;
-          *extra-packages*) printf '%s' "${GUEST_PKGS-}" ;;
+          *extra-packages*)
+            if [ -n "${LIMA_PKGS_FAIL:-}" ]; then echo "limactl: could not connect" >&2; exit 1; fi
+            printf '%s' "${GUEST_PKGS-}" ;;
           *node20*) echo "${NPM_OUT:-ok}" ;;
           *) echo "limactl stub: unexpected sh -c: $script" >&2; exit 99 ;;
         esac
@@ -188,6 +190,10 @@ record "service down: not_running with its unit; the ask answered, so exit 0" "n
 stat "${healthy[@]}" LIMA_SHELL_FAIL=1 -- --instance homefield --json
 record "the VM cannot be asked: unhealthy, exit 1, no runner" "1/False/None" \
   "$rc/$(json_field "$out" 'd["healthy"]')/$(json_field "$out" 'd["registered"]')"
+
+stat "${healthy[@]}" LIMA_PKGS_FAIL=1 -- --instance homefield --json
+record "the packages probe fails: the report still renders, empty list" "[]/True/0" \
+  "$(json_field "$out" 'd["extra_packages"]')/$(json_field "$out" 'd["healthy"]')/$rc"
 
 guest_fs unregistered
 stat "${healthy[@]}" -- --instance homefield --json

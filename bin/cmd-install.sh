@@ -966,7 +966,11 @@ st_collect() {
     if [ "$RR_SVC" = 0 ]; then ST_SVC="running"; else ST_SVC="not_running"; fi
     ST_UNIT="${SERVICE_UNIT:-}"
     ST_VER="$(runner_version)"
-    ST_PKGS="$(runner_extra_packages)"; ST_PKGS_STATE="listed"
+    # The probe's failure is absorbed: the original printed its (empty)
+    # output inside echo, so a guest that cannot be asked never aborted the
+    # report, and the JSON form renders the same facts it does.
+    ST_PKGS="$(runner_extra_packages)" || ST_PKGS=""
+    ST_PKGS_STATE="listed"
     job_running || job=$?
     case "$job" in
       0) ST_JOB="running" ;;
