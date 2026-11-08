@@ -8,6 +8,7 @@ than a fix, open an issue first so we can agree on the approach.
 ```bash
 bash routing-guard/tests/run.sh    # routing guard fixtures
 bash tests/label-rule.sh           # label rule, provision.sh and routing-guard agree
+bash tests/release-refs.sh         # every version declaration matches tools/adopt.py RELEASE
 bash tests/extra-packages.sh       # RUNNER_EXTRA_PACKAGES validation
 bash tests/runner-url.sh           # RUNNER_URL validation
 bash tests/memwatch.sh             # memory sampler (needs bash >= 4.2 and GNU timeout to run)

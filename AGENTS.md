@@ -105,8 +105,9 @@ the same labels — run it when touching either.
   Say in the PR whether a change is compatible; `CHANGELOG.md` explains the
   upgrade.
 - A release bumps the version in `install.sh` (`REF` default and header),
-  `bin/homefield` (`update_command`), `tools/adopt.py` (`RELEASE`), the README
-  and `docs/`. Before tagging, run `routing-guard/routing_guard.py` over the
+  `bin/cmd-version.sh` (`update_command`), `tools/adopt.py` (`RELEASE`), the
+  README and `docs/`; `tests/release-refs.sh` checks those declarations agree.
+  Before tagging, run `routing-guard/routing_guard.py` over the
   consumers' real workflows (the i2dev and snap checkouts) and expect no
   finding about unreadable syntax: the fixtures alone missed v0.2.0's false
   positives on shell scripts.
