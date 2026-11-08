@@ -43,11 +43,11 @@ cmd_route() {
 
   for repo in "${repos[@]}"; do
     [[ "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die "route: --repo must be <owner>/<repo>, got: $repo"
-    current="$(gh variable get CI_RUNNER --repo "$repo" 2>/dev/null || echo "(unset)")"
+    current="$(repo_variable_get "$repo" CI_RUNNER)"
     if [ "$dry" = 1 ]; then
       log "${repo}: CI_RUNNER ${current} -> ${target} (dry run)"
     else
-      gh variable set CI_RUNNER --repo "$repo" --body "$target" >/dev/null ||
+      repo_variable_set "$repo" CI_RUNNER "$target" ||
         { rc=1; log "${repo}: could not set CI_RUNNER to ${target}; set it by hand: gh variable set CI_RUNNER --repo ${repo} --body ${target}" >&2; continue; }
       log "${repo}: CI_RUNNER ${current} -> ${target}"
     fi
@@ -81,7 +81,7 @@ cmd_route() {
         tries=$((tries + 1))
       done
       if [ "$status" = completed ]; then
-        gh run rerun "$id" --repo "$repo" >/dev/null ||
+        run_rerun "$repo" "$id" ||
           { rc=1; log "${repo}: run ${id}: the re-run was refused; run it yourself: gh run rerun ${id} --repo ${repo}" >&2; continue; }
         log "${repo}: run ${id} re-run"
       elif [ -n "$status" ]; then
