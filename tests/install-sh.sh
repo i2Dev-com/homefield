@@ -44,31 +44,23 @@ case "$1" in
 esac
 EOF
 # gh prints the error body on stdout and exits 1, as the real one does.
-cat >"$tpl/gh" <<'EOF'
-#!/bin/sh
-echo "gh $*" >>"$CALLS"
+fake_stub "$tpl" gh CALLS <<'EOF'
 if [ -n "${FAKE_GH_FAIL:-}" ]; then echo '{"message":"Not Found"}'; exit 1; fi
 cat "${FIXTURE_FOR_GH:-$FIXTURE}"
 EOF
-cat >"$tpl/curl" <<'EOF'
-#!/bin/sh
-echo "curl $*" >>"$CALLS"
+fake_stub "$tpl" curl CALLS <<'EOF'
 [ -z "${FAKE_CURL_FAIL:-}" ] || exit 22
 while [ $# -gt 0 ]; do
   if [ "$1" = -o ]; then cp "$FIXTURE" "$2"; fi
   shift
 done
 EOF
-cat >"$tpl/brew" <<'EOF'
-#!/bin/sh
-echo "brew $*" >>"$CALLS"
+fake_stub "$tpl" brew CALLS <<'EOF'
 [ "$1" != --prefix ] || echo "$BREW_PREFIX"
 # FAKE_BREW_FAIL="<args>" makes that one brew command fail.
 [ "$*" != "${FAKE_BREW_FAIL:-}" ] || exit 1
 EOF
-cat >"$tpl/limactl" <<'EOF'
-#!/bin/sh
-echo "limactl $*" >>"$CALLS"
+fake_stub "$tpl" limactl CALLS <<'EOF'
 [ "$1" != --version ] || echo "limactl version ${FAKE_LIMA_VERSION:-2.3.0}"
 # `limactl list --format ... <name>` prints the status of an existing VM only.
 if [ "$1" = list ]; then

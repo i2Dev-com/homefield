@@ -23,12 +23,9 @@ stubs="$work/stubs"
 calls="$work/calls"
 mkdir -p "$stubs" "$work/home"
 
-cat >"$stubs/limactl" <<'EOF'
-#!/bin/sh
-echo "limactl $*" >>"$CALLS"
+fake_stub "$stubs" limactl CALLS <<'EOF'
 exit 0
 EOF
-chmod +x "$stubs/limactl"
 for t in awk cat dirname grep head mktemp sed sh tr; do ln -s "$(command -v "$t")" "$stubs/$t"; done
 
 cat >"$work/harness.sh" <<'EOF'

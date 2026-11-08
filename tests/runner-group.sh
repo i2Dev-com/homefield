@@ -18,9 +18,7 @@ stubs="$work/stubs"
 calls="$work/calls"
 mkdir -p "$stubs"
 # The stub answers like gh with --jq applied: tab-separated rows from files.
-cat >"$work/gh" <<'EOF'
-#!/bin/sh
-echo "gh $*" >>"$CALLS"
+fake_stub "$work" gh CALLS <<'EOF'
 case "$*" in
   *"-X DELETE"*)
     [ -z "${GH_DELETE_FAIL:-}" ] || { echo "gh: HTTP 422" >&2; exit 1; }
@@ -59,7 +57,6 @@ case "$*" in
     ;;
 esac
 EOF
-chmod +x "$work/gh"
 for t in awk cat dirname git grep mktemp sh sleep tr; do ln -s "$(command -v "$t")" "$stubs/$t"; done
 cp "$work/gh" "$stubs/gh"
 # For the install ordering test: a Mac, and a Lima with no VM.
@@ -67,9 +64,7 @@ cat >"$stubs/uname" <<'EOF'
 #!/bin/sh
 case "$1" in -s) echo Darwin ;; -m) echo arm64 ;; esac
 EOF
-cat >"$stubs/limactl" <<'EOF'
-#!/bin/sh
-echo "limactl $*" >>"$CALLS"
+fake_stub "$stubs" limactl CALLS <<'EOF'
 case "$1" in
   --version) echo "limactl version 2.3.0" ;;
   list)
@@ -597,15 +592,10 @@ record "a checkout says so, and asks gh nothing" "yes/0" "$(has "$out" 'from a c
 # this flow ever consulted it again.
 mkdir -p "$work/vpub"
 for t in dirname git sed; do ln -s "$(command -v "$t")" "$work/vpub/$t"; done
-cat >"$work/vpub/gh" <<'EOF'
-#!/bin/sh
-echo "gh $*" >>"$CALLS"
+fake_stub "$work/vpub" gh CALLS <<'EOF'
 echo '{"message":"Bad credentials"}'; echo "gh: HTTP 401 (bad credentials)" >&2; exit 1
 EOF
-chmod +x "$work/vpub/gh"
-cat >"$work/vpub/curl" <<'EOF'
-#!/bin/sh
-echo "curl $*" >>"$CALLS"
+fake_stub "$work/vpub" curl CALLS <<'EOF'
 if [ -n "${V_CURL_FAIL:-}" ]; then echo "curl: (22) The requested URL returned error: 404" >&2; exit 22; fi
 case "$*" in
   *api.github.com/repos/*/commits/*) printf '%s' "$V_COMMIT" ;;
@@ -618,7 +608,6 @@ case "$*" in
     ;;
 esac
 EOF
-chmod +x "$work/vpub/curl"
 # Tags that are not a plain release (v1, v0.1, latest) are ignored.
 tags_rel="$(printf 'v0.1.0\nv1\nv0.1\nv0.0.9\nlatest')"
 # version_run [VAR=value ...]: out and rc of `version` on the install.sh copy.

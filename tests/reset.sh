@@ -57,9 +57,7 @@ stub brew 'echo "$BREW_PREFIX"'
 # gh: GH_GROUPS_FILE is the runner groups (name, visibility, public, id; tab
 # separated), GH_GROUP_RUNNERS the ids of the runners in any group; each can
 # fail (GH_LIST_FAIL, GH_RUNNERS_FAIL), and so can the DELETE (GH_DELETE_FAIL).
-cat >"$stubs/gh" <<'EOF'
-#!/bin/sh
-echo "gh $*" >>"$LOG"
+fake_stub "$stubs" gh LOG <<'EOF'
 case "$*" in
   *"-X DELETE"*)
     [ -z "${GH_DELETE_FAIL:-}" ] || { echo "gh: HTTP 403 (Must have admin rights)" >&2; exit 1; }
@@ -74,7 +72,6 @@ case "$*" in
     ;;
 esac
 EOF
-chmod +x "$stubs/gh"
 
 printf 'Default\tall\tfalse\t1\nhomefield-ci\tselected\tfalse\t7\n' >"$work/groups-ok"
 printf 'Default\tall\tfalse\t1\nOther\tselected\tfalse\t7\n' >"$work/groups-renamed"
@@ -507,9 +504,7 @@ irun() {
   rc=$?
 }
 # The stub gh answers a POST with the new group, as GitHub does (compact JSON).
-cat >"$stubs/gh" <<'EOF'
-#!/bin/sh
-echo "gh $*" >>"$LOG"
+fake_stub "$stubs" gh LOG <<'EOF'
 case "$*" in
   *"-X POST"*)
     if [ "${GH_POST_BODY+set}" = set ]; then printf '%s' "$GH_POST_BODY"; else printf '%s' '{"id":7,"name":"homefield-ci","visibility":"selected"}'; fi
@@ -518,7 +513,6 @@ case "$*" in
   *actions/runners*) ;;
 esac
 EOF
-chmod +x "$stubs/gh"
 printf 'Default\tall\tfalse\t1\n' >"$work/groups-none"
 irun
 record "install creates the group, and the record is there before the VM is touched" "3/yes/at-vm=group_created=acme/homefield-ci/7" "$rc/$(has "$out" 'created runner group homefield-ci')/$(echo "$out" | grep '^at-vm=')"

@@ -26,9 +26,7 @@ for t in awk cat dirname grep mktemp rm sleep; do ln -s "$(command -v "$t")" "$s
 # limactl: a Lima whose only instance is homefield when LIMA_STATUS is set
 # (empty = no VM). Every call logged. `start`/`stop` fail on their own switches.
 # `shell` is the guest: registered (REG), its service name, a live job (JOB).
-cat >"$stubs/limactl" <<'EOF'
-#!/bin/sh
-echo "limactl $*" >>"$CALLS"
+fake_stub "$stubs" limactl CALLS <<'EOF'
 case "$1" in
   --version) echo "limactl version ${LIMA_VERSION:-2.3.0}" ;;
   list)
@@ -72,9 +70,7 @@ EOF
 
 # gh: the runners list, by id and status (GH_RUNNERS rows); a failure switch,
 # and GH_SLEEP black-holes it so the code's own timer must kill it.
-cat >"$stubs/gh" <<'EOF'
-#!/bin/sh
-echo "gh $*" >>"$CALLS"
+fake_stub "$stubs" gh CALLS <<'EOF'
 case "$*" in
   *"/actions/runners?"*)
     if [ -n "${GH_SLEEP:-}" ]; then sleep 3; fi
