@@ -39,6 +39,11 @@ fail, such as a new guard in the routing expression, bumps the minor version
   `<command> --help` print one command's options (`install --help` is no
   longer "unknown option"), and `homefield help` remains the full reference,
   unchanged. New `tests/help.sh` pins every surface.
+- `homefield version`'s update check reads GitHub's public API through curl
+  alone, never `gh`: a stale or unusable `gh` login no longer turns it into
+  "could not check for updates" on this public repository
+  ([#216](https://github.com/i2Dev-com/homefield/issues/216)). A private fork
+  set with `HOMEFIELD_REPO` cannot be read that way, and now says so instead.
 
 ### Documentation
 

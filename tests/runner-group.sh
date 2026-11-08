@@ -594,26 +594,40 @@ record "neither a ref file nor a checkout" "homefield (version unknown), in $wor
 out="$(env -i PATH="$stubs" CALLS="$calls" "$BASH" "$ROOT/bin/homefield" version 2>&1)"
 record "a checkout says so, and asks gh nothing" "yes/0" "$(has "$out" 'from a checkout in')/$(called 'gh api')"
 
-# A gh that answers the two update-check calls: the commit a ref resolves to
-# (the commits endpoint follows an annotated tag to its commit) and the tags.
-mkdir -p "$work/vgh"
-for t in dirname git; do ln -s "$(command -v "$t")" "$work/vgh/$t"; done
-cat >"$work/vgh/gh" <<'EOF'
+# The public API, without a login. The fake curl answers like GitHub: the bare
+# sha for the commits endpoint (Accept: ...sha), pretty-printed JSON for tags.
+# An unusable gh sits on PATH too — every call below would fail with its 401 if
+# this flow ever consulted it again.
+mkdir -p "$work/vpub"
+for t in dirname git sed; do ln -s "$(command -v "$t")" "$work/vpub/$t"; done
+cat >"$work/vpub/gh" <<'EOF'
 #!/bin/sh
 echo "gh $*" >>"$CALLS"
-if [ -n "${V_GH_FAIL:-}" ]; then echo '{"message":"Bad credentials"}'; echo "gh: HTTP 401" >&2; exit 1; fi
+echo '{"message":"Bad credentials"}'; echo "gh: HTTP 401 (bad credentials)" >&2; exit 1
+EOF
+chmod +x "$work/vpub/gh"
+cat >"$work/vpub/curl" <<'EOF'
+#!/bin/sh
+echo "curl $*" >>"$CALLS"
+if [ -n "${V_CURL_FAIL:-}" ]; then echo "curl: (22) The requested URL returned error: 404" >&2; exit 22; fi
 case "$*" in
-  *repos/*/commits/*) echo "$V_COMMIT" ;;
-  *repos/*/tags*) printf '%s\n' "$V_TAGS" ;;
+  *api.github.com/repos/*/commits/*) printf '%s' "$V_COMMIT" ;;
+  *api.github.com/repos/*/tags*)
+    echo '['
+    printf '%s\n' "$V_TAGS" | while IFS= read -r t; do
+      printf '  {\n    "name": "%s",\n    "commit": {\n      "sha": "%s"\n    }\n  },\n' "$t" "$V_COMMIT"
+    done
+    echo ']'
+    ;;
 esac
 EOF
-chmod +x "$work/vgh/gh"
+chmod +x "$work/vpub/curl"
 # Tags that are not a plain release (v1, v0.1, latest) are ignored.
 tags_rel="$(printf 'v0.1.0\nv1\nv0.1\nv0.0.9\nlatest')"
 # version_run [VAR=value ...]: out and rc of `version` on the install.sh copy.
 version_run() {
   : >"$calls"
-  out="$(env -i HOME="$work" PATH="$work/vgh" CALLS="$calls" V_TAGS="$tags_rel" "$@" "$BASH" "$work/inst/bin/homefield" version 2>&1 </dev/null)"
+  out="$(env -i HOME="$work" PATH="$work/vpub" CALLS="$calls" V_TAGS="$tags_rel" "$@" "$BASH" "$work/inst/bin/homefield" version 2>&1 </dev/null)"
   rc=$?
 }
 mine="homefield v0.1.0 (0123456), installed from acme/tool in $work/inst"
@@ -621,7 +635,8 @@ mine="homefield v0.1.0 (0123456), installed from acme/tool in $work/inst"
 version_run V_COMMIT="$old"
 record "unchanged ref: up to date" "0/$mine
 homefield: up to date with v0.1.0" "$rc/$out"
-record "...resolved through the commits endpoint, tags listed" "1/1" "$(called 'repos/acme/tool/commits/v0.1.0')/$(called 'repos/acme/tool/tags')"
+record "...resolved through the public commits endpoint, tags listed" "1/1" "$(called 'api.github.com/repos/acme/tool/commits/v0.1.0')/$(called 'api.github.com/repos/acme/tool/tags')"
+record "...and gh is never called" "0" "$(called 'gh api')"
 
 printf 'repo=acme/tool\nref=v0.1.0\ncommit=0123456\n' >"$work/inst/.homefield-ref"
 version_run V_COMMIT="$old"
@@ -643,7 +658,7 @@ cp "$ROOT"/bin/lib/*.sh "$dflt/bin/lib/"
 cp "$ROOT"/bin/cmd-*.sh "$dflt/bin/"
 printf 'repo=i2Dev-com/homefield\nref=v0.5.1\ncommit=%s\n' "$old" >"$dflt/.homefield-ref"
 : >"$calls"
-out="$(env -i HOME="$work/h" PATH="$work/vgh" CALLS="$calls" V_TAGS="$tags_rel" V_COMMIT="$new" "$BASH" "$dflt/bin/homefield" version 2>&1 </dev/null)"
+out="$(env -i HOME="$work/h" PATH="$work/vpub" CALLS="$calls" V_TAGS="$tags_rel" V_COMMIT="$new" "$BASH" "$dflt/bin/homefield" version 2>&1 </dev/null)"
 record "default repo, ref and place: the README's one-liner" "yes" "$(has "$out" "
   curl -fsSL https://raw.githubusercontent.com/i2Dev-com/homefield/v0.5.1/install.sh | bash
 ")"
@@ -682,61 +697,28 @@ printf 'repo=acme/tool\nref=v0.1.0\ncommit=%s\n' "$old" >"$work/inst/.homefield-
 
 out="$(env -i HOME="$work" PATH="$work/nogh" "$BASH" "$work/inst/bin/homefield" version 2>&1 </dev/null)"
 rc=$?
-record "neither gh nor curl: one line, exit 0" "0/homefield: could not check for updates (neither gh nor curl is installed)" "$rc/$(printf '%s' "$out" | tail -1)"
+record "no curl: one line, exit 0" "0/homefield: could not check for updates (curl is not installed)" "$rc/$(printf '%s' "$out" | tail -1)"
 
-# No gh, but curl: the public API, without a login. The fake answers like
-# GitHub: the bare sha for the commits endpoint (Accept: ...sha), and
-# pretty-printed JSON for the tags.
-mkdir -p "$work/vcurl"
-for t in dirname git sed; do ln -s "$(command -v "$t")" "$work/vcurl/$t"; done
-cat >"$work/vcurl/curl" <<'EOF'
-#!/bin/sh
-echo "curl $*" >>"$CALLS"
-if [ -n "${V_CURL_FAIL:-}" ]; then echo "curl: (22) The requested URL returned error: 404" >&2; exit 22; fi
-case "$*" in
-  *api.github.com/repos/*/commits/*) printf '%s' "$V_COMMIT" ;;
-  *api.github.com/repos/*/tags*)
-    echo '['
-    printf '%s\n' "$V_TAGS" | while IFS= read -r t; do
-      printf '  {\n    "name": "%s",\n    "commit": {\n      "sha": "%s"\n    }\n  },\n' "$t" "$V_COMMIT"
-    done
-    echo ']'
-    ;;
-esac
-EOF
-chmod +x "$work/vcurl/curl"
-curl_run() {
-  : >"$calls"
-  out="$(env -i HOME="$work" PATH="$work/vcurl" CALLS="$calls" V_TAGS="$tags_rel" "$@" "$BASH" "$work/inst/bin/homefield" version 2>&1 </dev/null)"
-  rc=$?
-}
-curl_run V_COMMIT="$old"
-record "no gh, curl: up to date, through the public API" "0/homefield: up to date with v0.1.0/1" "$rc/$(printf '%s' "$out" | tail -1)/$(called 'api.github.com/repos/acme/tool/commits/v0.1.0')"
-curl_run V_COMMIT="$old" V_TAGS="$(printf 'v0.1.0\nv0.4.0')"
-record "...a later release from the tags JSON, with the one-liner" "yes/yes" "$(has "$out" 'homefield: v0.4.0 is out (installed: v0.1.0)')/$(has "$out" "curl -fsSL https://raw.githubusercontent.com/acme/tool/v0.4.0/install.sh")"
-curl_run V_COMMIT="$new"
-record "...a moved ref" "yes" "$(has "$out" 'homefield: v0.1.0 has moved to 89abcde')"
-curl_run V_CURL_FAIL=1 V_COMMIT="$old"
-record "...curl failing: one line naming it, exit 0, none of curl's output" "0/yes/no" "$rc/$(has "$out" 'homefield: could not check for updates (curl could not read v0.1.0 in acme/tool; a private repository needs gh)')/$(has "$out" 'returned error')"
-version_run V_COMMIT="$old"
-record "with gh there, gh is used and not curl" "0/0" "$rc/$(called 'curl ')"
-record "...curl follows redirects (a renamed repository answers 301)" "2" "$(curl_run V_COMMIT="$old"; grep -c -- '-fsSL ' "$calls")"
+# A branch with a slash goes into the path encoded; curl follows redirects.
 printf 'repo=acme/tool\nref=release/1\ncommit=%s\n' "$old" >"$work/inst/.homefield-ref"
-curl_run V_COMMIT="$old"
-record "a branch with a slash: encoded in the path, for curl" "1/0/yes" "$(called 'repos/acme/tool/commits/release%2F1')/$(called 'commits/release/1')/$(has "$out" 'up to date with release/1')"
 version_run V_COMMIT="$old"
-record "...and for gh" "1/0" "$(called 'repos/acme/tool/commits/release%2F1')/$(called 'commits/release/1')"
+record "a branch with a slash: encoded in the path, for the public API" "1/0/yes" "$(called 'api.github.com/repos/acme/tool/commits/release%2F1')/$(called 'commits/release/1')/$(has "$out" 'up to date with release/1')"
+record "...curl follows redirects (a renamed repository answers 301)" "2" "$(grep -c -- '-fsSL ' "$calls")"
 printf 'repo=acme/tool\nref=v0.1.0\ncommit=%s\n' "$old" >"$work/inst/.homefield-ref"
 
-version_run V_GH_FAIL=1 V_COMMIT="$old"
-record "gh failing: exit 0, one line, none of gh's output" "0/2/no/no" "$rc/$(printf '%s\n' "$out" | wc -l | tr -d ' ')/$(has "$out" 'Bad credentials')/$(has "$out" 'HTTP 401')"
-record "...naming what failed" "yes" "$(has "$out" 'homefield: could not check for updates (gh could not read v0.1.0 in acme/tool; see gh auth status)')"
+# The unusable gh above is on PATH for every case; if this flow regressed to
+# it, the 401 would replace these two lines.
+version_run V_COMMIT="$old"
+record "an unusable gh login cannot hide an update check" "0/homefield: up to date with v0.1.0/0/no" "$rc/$(printf '%s' "$out" | tail -1)/$(called 'gh api')/$(has "$out" 'Bad credentials')"
+
+version_run V_CURL_FAIL=1 V_COMMIT="$old"
+record "curl failing: one line naming it, exit 0, none of curl's output" "0/yes/no" "$rc/$(has "$out" 'homefield: could not check for updates (curl could not read v0.1.0 in acme/tool; the update check reads the public GitHub API, so a private fork cannot be checked)')/$(has "$out" 'returned error')"
 
 version_run V_COMMIT="not a sha"
-record "an answer that is not a commit: could not check, exit 0" "0/yes" "$rc/$(has "$out" 'could not check for updates (unexpected answer from gh')"
+record "an answer that is not a commit: could not check, exit 0" "0/yes" "$rc/$(has "$out" 'could not check for updates (unexpected answer from curl')"
 
 printf 'repo=acme/tool\nref=v0.1.0\ncommit=\n' >"$work/inst/.homefield-ref"
 version_run V_COMMIT="$new"
-record "no commit recorded: could not check, gh not called" "0/yes/0" "$rc/$(has "$out" 'could not check for updates (.homefield-ref records no commit)')/$(called 'gh api')"
+record "no commit recorded: could not check, the API is not asked" "0/yes/0/0" "$rc/$(has "$out" 'could not check for updates (.homefield-ref records no commit)')/$(called 'gh api')/$(called 'commits/')"
 
 summary
