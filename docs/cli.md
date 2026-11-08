@@ -154,7 +154,7 @@ homefield status --json
 # Non-interactive first install (the one-liner's switches, then setup);
 # HOMEFIELD_YES goes to the bash side of the pipe — that is the process
 # whose prompts it answers:
-curl -fsSL https://raw.githubusercontent.com/i2Dev-com/homefield/v0.5.1/install.sh | HOMEFIELD_YES=1 bash -s -- --url https://github.com/<org>
+curl -fsSL https://raw.githubusercontent.com/i2Dev-com/homefield/v0.5.2/install.sh | HOMEFIELD_YES=1 bash -s -- --url https://github.com/<org>
 
 # Route a repository back to hosted (the recovery path, also the off switch):
 homefield route hosted --repo <owner>/<repo>

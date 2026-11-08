@@ -56,7 +56,7 @@ hosted.
 ## 2. Route them
 
 Replace each chosen job's `runs-on` with the routing expression, verbatim.
-It must match the `routing-guard` version used in step 3 (`@v0.5.1` below); see
+It must match the `routing-guard` version used in step 3 (`@v0.5.2` below); see
 [`CHANGELOG.md`](../CHANGELOG.md) when upgrading. There are two shapes.
 
 A repository whose every contributor you trust with the Mac routes with the
@@ -103,7 +103,7 @@ In a job that runs on every PR, after `actions/checkout`:
 
 ```yaml
       - name: Routing guard
-        uses: i2Dev-com/homefield/routing-guard@v0.5.1
+        uses: i2Dev-com/homefield/routing-guard@v0.5.2
         with:
           jobs: |
             ci.yml:lint
@@ -115,7 +115,7 @@ carries `mode: simple` and nothing else changes:
 
 ```yaml
       - name: Routing guard
-        uses: i2Dev-com/homefield/routing-guard@v0.5.1
+        uses: i2Dev-com/homefield/routing-guard@v0.5.2
         with:
           jobs: |
             ci.yml:lint
@@ -130,7 +130,7 @@ a deliberate, reviewed change.
 
 `homefield adopt` counts a step as the guard only if:
 
-- it uses `i2Dev-com/homefield/routing-guard@v0.5.1`, the release your
+- it uses `i2Dev-com/homefield/routing-guard@v0.5.2`, the release your
   installed `homefield` checks with (`homefield version` shows it), or a full
   commit SHA. Another release, `@v0` or `@main` do not count;
 - it is in a workflow that runs on `pull_request` (not `pull_request_target`,
@@ -166,7 +166,7 @@ mode also accepts the guarded expression, so a repository can move between
 the shapes, or mix them, without failing.
 
 ```yaml
-      - uses: i2Dev-com/homefield/routing-guard@v0.5.1
+      - uses: i2Dev-com/homefield/routing-guard@v0.5.2
         with:
           jobs: |
             ci.yml:lint
