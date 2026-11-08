@@ -13,21 +13,15 @@ update_command() {
   echo "  curl -fsSL https://raw.githubusercontent.com/${repo}/${ref}/install.sh | ${settings}bash"
 }
 
-# github_read <gh|curl> <repo> <commits REF|tags>: the commit REF resolves to,
-# or the repository's tag names (first 100), one per line. gh when it is there
-# (it reads a private fork too); otherwise curl against the public API, which
-# needs no login. A branch with a slash (release/1) goes into the path
-# encoded, and curl follows redirects (a renamed repository answers 301).
-github_read() {
-  local via="$1" repo="$2" what="$3" ref="${4:-}"
+# public_api <repo> <commits REF|tags>: the commit REF resolves to, or the
+# repository's tag names (first 100), one per line. Unauthenticated HTTPS
+# against api.github.com with curl: no login and no gh are involved, which is
+# all this check needs for a public repository. A private fork cannot be read
+# this way. A branch with a slash (release/1) goes into the path encoded, and
+# curl follows redirects (a renamed repository answers 301).
+public_api() {
+  local repo="$1" what="$2" ref="${3:-}"
   ref="${ref//\//%2F}"
-  if [ "$via" = gh ]; then
-    case "$what" in
-      commits) gh api "repos/${repo}/commits/${ref}" --jq .sha ;;
-      tags) gh api --paginate "repos/${repo}/tags?per_page=100" --jq '.[].name' ;;
-    esac
-    return
-  fi
   case "$what" in
     commits) curl -fsSL --max-time 15 -H 'Accept: application/vnd.github.sha' "https://api.github.com/repos/${repo}/commits/${ref}" ;;
     tags)
@@ -40,20 +34,17 @@ github_read() {
 # update_check <repo> <ref> <commit>: says whether the ref this copy was
 # installed from has moved, and whether a later release exists (the highest
 # vMAJOR.MINOR.PATCH tag, when the installed ref is such a tag too). Reads
-# GitHub through gh, or curl when gh is missing (github_read). Their own
-# output is dropped: whatever goes wrong is one line here, and nothing here
-# fails the command.
+# GitHub's public API with curl alone (public_api), so no gh login can break
+# it. Its own output is dropped: whatever goes wrong is one line here, and
+# nothing here fails the command.
 update_check() {
   local repo="$1" ref="$2" commit="$3" current="" tags="" tag="" latest="" advised=0
   local la="" lb="" lc="" a b c
   local repo_re='^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' ref_re='^[A-Za-z0-9_./-]+$' sha_re='^[0-9a-f]{40}$'
-  local tag_re='^v([0-9]+)[.]([0-9]+)[.]([0-9]+)$' via hint
-  if command -v gh >/dev/null; then
-    via=gh hint="see gh auth status"
-  elif command -v curl >/dev/null; then
-    via=curl hint="a private repository needs gh"
-  else
-    log "could not check for updates (neither gh nor curl is installed)"
+  local tag_re='^v([0-9]+)[.]([0-9]+)[.]([0-9]+)$'
+  local hint="the update check reads the public GitHub API, so a private fork cannot be checked"
+  if ! command -v curl >/dev/null; then
+    log "could not check for updates (curl is not installed)"
     return 0
   fi
   if [[ ! "$repo" =~ $repo_re || "$repo" == *..* || ! "$ref" =~ $ref_re || "$ref" == *..* || "$ref" == -* ]]; then
@@ -67,17 +58,17 @@ update_check() {
   # A branch or tag name resolves to the commit it points at (an annotated tag
   # is followed to its commit). A full commit hash cannot move.
   if [[ ! "$ref" =~ $sha_re ]]; then
-    if ! current="$(github_read "$via" "$repo" commits "$ref" 2>/dev/null)"; then
-      log "could not check for updates (${via} could not read ${ref} in ${repo}; ${hint})"
+    if ! current="$(public_api "$repo" commits "$ref" 2>/dev/null)"; then
+      log "could not check for updates (curl could not read ${ref} in ${repo}; ${hint})"
       return 0
     fi
     if [[ ! "$current" =~ $sha_re ]]; then
-      log "could not check for updates (unexpected answer from ${via} for ${ref} in ${repo})"
+      log "could not check for updates (unexpected answer from curl for ${ref} in ${repo})"
       return 0
     fi
   fi
-  if ! tags="$(github_read "$via" "$repo" tags 2>/dev/null)"; then
-    log "could not check for updates (${via} could not list the tags of ${repo}; ${hint})"
+  if ! tags="$(public_api "$repo" tags 2>/dev/null)"; then
+    log "could not check for updates (curl could not list the tags of ${repo}; ${hint})"
     return 0
   fi
   # The highest release tag, compared part by part as numbers (no sort -V on
