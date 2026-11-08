@@ -1018,6 +1018,9 @@ echo "route"
 mkdir -p "$work/route-jobs"
 printf '9001\n' >"$work/route-runs"
 printf '551\n' >"$work/route-jobs/1"
+route -- hosted --repo acme/app --dry-run
+record "an unset CI_RUNNER: the dry run names it unset and writes nothing" "0/yes/0" \
+  "$rc/$(has "$out" 'acme/app: CI_RUNNER (unset) -> hosted (dry run)')/$(called 'variable set')"
 route -- local --repo acme/app --repo acme/other
 record "two repositories, both switched to local, exit 0" "0/1/1" \
   "$rc/$(called 'variable set CI_RUNNER --repo acme/app --body local')/$(called 'variable set CI_RUNNER --repo acme/other --body local')"
