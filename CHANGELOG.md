@@ -9,7 +9,19 @@ fail, such as a new guard in the routing expression, bumps the minor version
 (0.1 to 0.2). Compatible changes bump the patch. Merged changes wait on
 `main`, under *Unreleased*, until a release is cut.
 
-## Unreleased
+## v0.5.2 (2026-11-07)
+
+Bumps the patch from v0.5.1, and it is compatible for consumers: a workflow
+that passes v0.5.1's check passes this one, and no guard, default or option
+changed. The tool gains `status --json`, per-command help with an
+agent-oriented CLI reference (`docs/cli.md`), the README/docs refocus, and an
+update check that no longer depends on a working `gh` login; it now requires
+Lima 2.3.0 — hosts on 2.0–2.2 must `brew upgrade lima` before installing or
+upgrading (see below). To upgrade, run the README's one-liner again (it
+replaces the installed copy, `bin/lib/` and the per-command files included),
+then `homefield upgrade --instance <name>` while idle on each VM. Consumers of
+the routing guard can bump `routing-guard@v0.5.1` pins to `@v0.5.2` at their
+leisure — a v0.5.1 pin passes the same workflows.
 
 ### Added
 
