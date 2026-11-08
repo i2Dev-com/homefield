@@ -47,7 +47,7 @@ agents that drive the tool without a human in the loop. The guides:
 | `adopt` | Prepare a repository: check the routing, add it to the group, switch it on | `--setup` opens the routing pull request; `--wait` carries on after the merge; refuses a public repository |
 | `memory` | Every VM's memory use: average and peak per day, out-of-memory kills | `--days N` (default 7); fails for a VM it cannot ask |
 | `report` | Queue wait, duration and minutes of jobs, local against hosted | `--json`; one API call per run, so allow a few minutes a month |
-| `version` | The installed version, and whether a newer release exists | |
+| `version` | The installed version, and whether a newer release exists (read from GitHub's public API; a private fork set with `HOMEFIELD_REPO` is not checked) | |
 
 ## Environment variables
 
