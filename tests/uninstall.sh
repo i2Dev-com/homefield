@@ -138,7 +138,6 @@ run() {
   out="$(PATH="$stubs:$PATH" LOG="$work/log" HOME_DIR="$home" UNITS="$units" "$@" bash "$work/harness.sh" 2>&1 </dev/null)"
   rc=$?
 }
-has() { case "$1" in *"$2"*) echo yes ;; *) echo no ;; esac; }
 state() {
   printf '%s/%s/%s/%s' "$([ -e "$home/.runner" ] && echo registered || echo removed)" \
     "$([ -e "$units/$unit" ] && echo unit || echo no-unit)" "$([ -e "$home/.service" ] && echo .service || echo no-.service)" \

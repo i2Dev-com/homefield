@@ -14,8 +14,6 @@ set -uo pipefail
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
-has() { case "$1" in *"$2"*) echo yes ;; *) echo no ;; esac; }
-nonzero() { [ "$1" -ne 0 ] && echo nonzero || echo "$1"; }
 # before <text> <a> <b>: yes when line a comes before line b (both must be there).
 before() {
   local la lb
@@ -577,7 +575,6 @@ run_fn() {
     "$BASH" -c '. "$1"; shift; "$@"' _ "$ROOT/bin/homefield" "$@" 2>&1 </dev/null)"
   rc=$?
 }
-called() { grep -c -e "$1" "$calls" || true; }
 # called_any <pattern>...: calls that match any of them.
 called_any() {
   local args=() p

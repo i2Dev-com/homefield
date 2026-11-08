@@ -40,6 +40,16 @@ record() {
   fi
 }
 
+# has <haystack> <needle>: yes/no, for the record comparisons.
+has() { case "$1" in *"$2"*) echo yes ;; *) echo no ;; esac; }
+
+# nonzero <status>: "nonzero", or the status itself when it is 0.
+nonzero() { [ "$1" -ne 0 ] && echo nonzero || echo "$1"; }
+
+# called <pattern>: how many calls the suite's stub log recorded matching it.
+# The suite sets $calls to its log path.
+called() { grep -c -e "$1" "${calls:-/dev/null}" || true; }
+
 # summary: prints the totals; its status is the suite's.
 summary() {
   echo

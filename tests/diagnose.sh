@@ -136,7 +136,6 @@ printf '%s\n' "${MOUNT_OUT:-proc on /proc type proc (rw)}"
 EOF
 chmod +x "$stubs/limactl" "$stubs/gh" "$stubs/python3" "$stubs/brew" "$stubs/uname" "$stubs/sw_vers" "$stubs/mount"
 
-has() { case "$1" in *"$2"*) echo yes ;; *) echo no ;; esac; }
 
 # guest [registered|unregistered] [SEES_USERS]: the guest's file system under
 # $root. A registered runner has .runner, a service name and a version.
@@ -169,7 +168,6 @@ diag() {
   err="$(cat "$work/err")"
   cat "$calls" >>"$allcalls"
 }
-called() { grep -c -e "$1" "$calls" || true; }
 
 # On a terminal (have_terminal forced true) with gh logged out, diagnose reads
 # the same prerequisites as setup but is read-only: it never offers or runs

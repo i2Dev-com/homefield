@@ -17,8 +17,6 @@ set -uo pipefail
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
-has() { case "$1" in *"$2"*) echo yes ;; *) echo no ;; esac; }
-nonzero() { [ "$1" -ne 0 ] && echo nonzero || echo "$1"; }
 
 stubs="$work/stubs"
 calls="$work/calls"
@@ -204,7 +202,6 @@ srun() {
     "$BASH" "$work/harness.sh" "$@" 2>&1 <"${SRUN_IN:-/dev/null}")"
   rc=$?
 }
-called() { grep -c -e "$1" "$calls" || true; }
 # marks: how many summary lines start with the check mark / with "!".
 marks() { printf '%s\n' "$out" | grep -c "^$1" || true; }
 org=https://github.com/acme

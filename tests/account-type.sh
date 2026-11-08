@@ -15,8 +15,6 @@ set -uo pipefail
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
-has() { case "$1" in *"$2"*) echo yes ;; *) echo no ;; esac; }
-nonzero() { [ "$1" -ne 0 ] && echo nonzero || echo "$1"; }
 
 stubs="$work/stubs"
 calls="$work/calls"
@@ -82,7 +80,6 @@ run_fn() {
     "$BASH" -c '. "$1"; shift; "$@"' _ "$ROOT/bin/homefield" "$@" 2>&1 <"$RUN_IN")"
   rc=$?
 }
-called() { grep -c -e "$1" "$calls" || true; }
 # mode_of <url> <force> [VAR=value ...]: ACCOUNT_MODE after check_scope_owner.
 mode_of() {
   local url="$1" force="$2"

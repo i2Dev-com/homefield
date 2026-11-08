@@ -18,8 +18,6 @@ set -uo pipefail
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
-has() { case "$1" in *"$2"*) echo yes ;; *) echo no ;; esac; }
-nonzero() { [ "$1" -ne 0 ] && echo nonzero || echo "$1"; }
 
 stubs="$work/stubs"
 calls="$work/calls"
@@ -114,7 +112,6 @@ srun() {
 field() { printf '%s\n' "$out" | sed -n "s/^$1://p"; }
 hooks() { field hook; }
 hookpaths() { field hookpath; }
-called() { grep -c -e "$1" "$calls" || true; }
 envline() { sed -n 's/^provision RUNNER_EXTRA_PACKAGES=//p' "$calls"; }
 
 browser_libs="libatk1.0-0t64 libatk-bridge2.0-0t64 libcups2t64 libatspi2.0-0t64 libasound2t64 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libpango-1.0-0 libcairo2"

@@ -12,7 +12,6 @@ set -uo pipefail
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
-nonzero() { [ "$1" -ne 0 ] && echo nonzero || echo "$1"; }
 
 cat >"$work/fixture.json" <<'JSON'
 {"acme/app": [
