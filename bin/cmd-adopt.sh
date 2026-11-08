@@ -20,6 +20,28 @@ ADOPT_GUARDS=0
 ADOPT_ROUTED=""
 ADOPT_WORKFLOWS=0
 
+# Shell <-> Python row contracts. tools/adopt.py parses and prints; this
+# script consumes its stdout. Keep these schemas next to the producers when
+# either side changes:
+#   guards           TSV: where, status, label, blocks, warns, events,
+#                    dependabot, fallback, arch, mode, jobs. blocks/warns are
+#                    ';'-joined entries with inner ';' replaced by ',', or '-'
+#                    when empty; jobs is space-separated.
+#   cache-keys       one `file:line: text` per line, no separator.
+#   setup            TSV plan: ROUTED<TAB>file:job lines, then FILE<TAB>name.
+#   verify-run       ADOPT_FS-separated: tag, databaseId, status, url,
+#                    displayTitle. tag is empty, "1" (a guard run was skipped
+#                    above it) or "guard-only"; no row means there is no
+#                    pull-request run to re-run.
+#   verify-jobs      ADOPT_FS rows: name, status, conclusion, runner_name,
+#                    comma-separated labels; empty fields keep their place.
+#   verify-status    one bare status string.
+#   verify-attempt   one bare run_attempt integer.
+#   quote            one percent-encoded URL path segment.
+#   contents-payload one JSON object for the contents API PUT.
+ADOPT_FS=$'\x1f' # the verify-* separator above: not whitespace, so empty fields survive `read`.
+ADOPT_VERIFY_ROWS=""
+
 # adopt_repository <owner/repo>: sets ADOPT_REPO_ID, ADOPT_BRANCH and
 # ADOPT_OWNER_TYPE. Only private repositories may reach the runner.
 adopt_repository() {
@@ -1310,12 +1332,6 @@ cmd_adopt() {
 
 # 1 once a report of the jobs was printed (what the last line of adopt says).
 ADOPT_VERIFIED=0
-# The field separator of tools/adopt.py verify-*: not whitespace, so `read`
-# keeps an empty field (a job no runner has taken) in its place.
-ADOPT_FS=$'\x1f'
-ADOPT_VERIFY_ROWS=""
-
-
 
 # adopt_verify_poll <owner/repo> <run-id> <attempt>: reads the jobs of the
 # re-run (every job whose run_attempt is greater than <attempt>) into
