@@ -104,7 +104,6 @@ run() {
   out="$(env -i PATH="$PATH" HOME="${HOME_DIR:-$work/home}" ROOT="$ROOT" "$@" bash "$harness" "$name" 2>&1 </dev/null)"
   rc=$?
 }
-has() { case "$1" in *"$2"*) echo yes ;; *) echo no ;; esac; }
 lines_of() { printf '%s\n' "$out" | grep -c -e "$1" || true; }
 
 mkdir -p "$work/home/.lima/marked" "$work/home/.lima/plain"

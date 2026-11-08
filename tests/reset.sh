@@ -170,7 +170,6 @@ run() {
     "${envs[@]+"${envs[@]}"}" "$BASH" "$work/harness.sh" "$@" 2>&1)"
   rc=$?
 }
-has() { case "$1" in *"$2"*) echo yes ;; *) echo no ;; esac; }
 logged() { grep -c -e "$1" "$work/log" || true; }
 lines() { grep -c -x -e "$1" "$work/log" || true; }
 runner_state() {

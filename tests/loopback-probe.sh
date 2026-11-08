@@ -18,8 +18,6 @@ set -uo pipefail
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
-has() { case "$1" in *"$2"*) echo yes ;; *) echo no ;; esac; }
-nonzero() { [ "$1" -ne 0 ] && echo nonzero || echo "$1"; }
 
 stubs="$work/stubs"
 mkdir -p "$stubs" "$work/home/.lima/homefield"

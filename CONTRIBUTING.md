@@ -38,6 +38,12 @@ tried on a throwaway VM (`bin/homefield install --instance <name> ...`), and
 the pull request should say what was run and what happened. Never test against
 a runner that serves real repositories.
 
+Suites source `tests/lib.sh` for `record`, `summary`, `provision_verdict`,
+`has`, `nonzero` and `called`; keep only suite-specific helpers local. Override
+a shared helper only when its semantics genuinely differ (workspace-owner's
+file-based `has`, preflight's multiline one) — otherwise add or change it once
+in `lib.sh`.
+
 ## Conventions
 
 - **`bin/homefield` and `install.sh` run on the host**, which on a stock Mac is bash 3.2: no

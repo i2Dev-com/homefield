@@ -99,8 +99,6 @@ EOF
 
 chmod +x "$stubs/limactl" "$stubs/gh" "$stubs/uname" "$stubs/sw_vers"
 
-has() { case "$1" in *"$2"*) echo yes ;; *) echo no ;; esac; }
-called() { grep -c -e "$1" "$calls" || true; }
 
 # hf <VAR=value ...> -- <command and options>: out, rc and stderr.
 hf() {

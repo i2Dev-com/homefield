@@ -13,7 +13,6 @@ set -uo pipefail
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
-has() { case "$1" in *"$2"*) echo yes ;; *) echo no ;; esac; }
 
 # ── Fixture and stubs ──────────────────────────────────────────────────────
 # What GitHub's source tarball looks like: one top directory, named after the
@@ -112,10 +111,8 @@ run_install() {
     "$BASH" "$ROOT/install.sh" "$@" 2>&1 </dev/null)"
   rc=$?
 }
-called() { grep -c "$1" "$calls" || true; }
 # prompts: how many questions the run asked.
 prompts() { printf '%s\n' "$out" | grep -c '\[Y/n\]' || true; }
-nonzero() { [ "$1" -ne 0 ] && echo nonzero || echo "$1"; }
 
 # ── Fetching ───────────────────────────────────────────────────────────────
 echo "fetching"

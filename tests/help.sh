@@ -16,8 +16,6 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
 
-has() { case "$1" in *"$2"*) echo yes ;; *) echo no ;; esac; }
-nonzero() { [ "$1" -ne 0 ] && echo nonzero || echo "$1"; }
 HF="$ROOT/bin/homefield"
 
 out="$(env -i HOME="$HOME" PATH="$PATH" "$HF" --help 2>&1 </dev/null)"; rc=$?

@@ -93,8 +93,6 @@ exit "${JOB_EXIT:-1}"
 EOF
 chmod +x "$stubs/limactl" "$stubs/gh" "$stubs/pgrep"
 
-has() { case "$1" in *"$2"*) echo yes ;; *) echo no ;; esac; }
-nonzero() { [ "$1" -ne 0 ] && echo nonzero || echo "$1"; }
 
 # guest_fs [registered|unregistered]: the guest's file system under $root. A
 # registered runner has .runner, a service name and a version.

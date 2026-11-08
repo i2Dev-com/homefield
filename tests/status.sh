@@ -65,7 +65,6 @@ status() {
   out="$(env "$@" bash "$work/harness.sh" 2>&1 </dev/null)"
   rc=$?
 }
-has() { case "$1" in *"$2"*) echo yes ;; *) echo no ;; esac; }
 # rest: the lines after the runner line, all of them or not.
 rest() {
   printf '%s/%s/%s/%s' "$(has "$out" 'service: running')" "$(has "$out" 'job: idle')" \
