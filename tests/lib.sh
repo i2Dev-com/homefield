@@ -56,3 +56,8 @@ summary() {
   echo "${pass} passed, ${fail} failed"
   [ "$fail" -eq 0 ]
 }
+
+# Shared fake commands (fake_stub): every suite gets the factory, and only the
+# handler body differs.
+# shellcheck source=tests/fakes.sh
+. "$ROOT/tests/fakes.sh"

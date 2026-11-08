@@ -32,9 +32,7 @@ for t in awk cat dirname grep mktemp rm sh sleep tr; do ln -s "$(command -v "$t"
 
 # A Lima listing the instance when LIMA_STATUS is set, and a second VM when
 # LIMA_SECOND is set. `shell` is the guest: see the header.
-cat >"$stubs/limactl" <<'EOF'
-#!/bin/sh
-echo "limactl $*" >>"$CALLS"
+fake_stub "$stubs" limactl CALLS <<'EOF'
 case "$1" in
   --version) echo "limactl version 2.3.0" ;;
   list)
@@ -72,9 +70,7 @@ esac
 EOF
 # gh answers the rows the code's --jq filters would produce: the runners
 # GitHub lists (GH_RUNNERS: id, status, busy). GH_SLEEP=1 black-holes the call.
-cat >"$stubs/gh" <<'EOF'
-#!/bin/sh
-echo "gh $*" >>"$CALLS"
+fake_stub "$stubs" gh CALLS <<'EOF'
 case "$*" in
   "auth status --json hosts"*) echo "${GH_JQ_OUT-stub-user|admin:org, repo}" ;;
   *"/actions/runners?"*)

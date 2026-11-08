@@ -35,9 +35,7 @@ for t in awk cat dirname grep mktemp rm sh sleep tr; do ln -s "$(command -v "$t"
 
 # A Lima with one other VM, and this one when LIMA_STATUS is set. Every call
 # is logged. `shell` is the guest: see the header.
-cat >"$stubs/limactl" <<'EOF'
-#!/bin/sh
-echo "limactl $*" >>"$CALLS"
+fake_stub "$stubs" limactl CALLS <<'EOF'
 case "$1" in
   --version) echo "limactl version ${LIMA_VERSION:-2.3.0}" ;;
   list)
@@ -77,9 +75,7 @@ EOF
 # gh answers the rows the code's --jq filters would produce: the runners GitHub
 # lists (GH_RUNNERS: id, status, busy), the groups (GH_GROUPS), the runners of
 # a group (GH_GRP_<id>) and a group's repositories (GH_REPOS), each failing on its own switch. GH_SLEEP=1 black-holes the call.
-cat >"$stubs/gh" <<'EOF'
-#!/bin/sh
-echo "gh $*" >>"$CALLS"
+fake_stub "$stubs" gh CALLS <<'EOF'
 case "$*" in
   "auth status --json hosts"*) echo "${GH_JQ_OUT-stub-user|admin:org, repo}" ;;
   *"-X "*) echo "gh stub: a write must never be called by diagnose" >&2; exit 98 ;;

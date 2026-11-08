@@ -27,9 +27,7 @@ calls="$work/calls"
 mkdir -p "$stubs" "$work/tmp"
 # The stub answers like gh with --jq applied. GH_WF is the directory served as
 # .github/workflows (absent: a 404), GH_REPO the row for repos/<owner>/<repo>.
-cat >"$work/gh" <<'EOF'
-#!/bin/sh
-echo "gh $*" >>"$CALLS"
+fake_stub "$work" gh CALLS <<'EOF'
 state="${CALLS%/*}" # the test directory: where branch and pr_body state lives
 # GH_HANG=<text>: the first call whose arguments hold the text records HUNG
 # (what a test waits for before it signals) and then hangs for GH_HANG_SECS, as
@@ -230,7 +228,6 @@ case "$*" in
     ;;
 esac
 EOF
-chmod +x "$work/gh"
 for t in awk basename cat dirname git grep head ls mkdir mktemp rm sed sleep tr wc jq; do [ -x "$stubs/$t" ] || ln -sf "$(command -v "$t")" "$stubs/$t"; done
 # mktemp -d without a template puts the directory in TMPDIR on Linux but not on
 # macOS; the explicit template makes both land in $TMPDIR, where a test can

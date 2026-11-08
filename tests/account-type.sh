@@ -21,9 +21,7 @@ calls="$work/calls"
 mkdir -p "$stubs"
 # gh: the owner lookup (GH_OWNER_TYPE, or a failure with GH_USERS_FAIL), the
 # runner-group calls, and an empty runner list. Every call is recorded.
-cat >"$stubs/gh" <<'EOF'
-#!/bin/sh
-echo "gh $*" >>"$CALLS"
+fake_stub "$stubs" gh CALLS <<'EOF'
 case "$*" in
   *users/*)
     [ -z "${GH_USERS_FAIL:-}" ] || { echo '{"message":"Not Found"}'; exit 1; }
@@ -35,9 +33,7 @@ case "$*" in
 esac
 EOF
 # curl: the public API's answer for the owner (CURL_TYPE), or a failure.
-cat >"$stubs/curl" <<'EOF'
-#!/bin/sh
-echo "curl $*" >>"$CALLS"
+fake_stub "$stubs" curl CALLS <<'EOF'
 [ -z "${CURL_FAIL:-}" ] || exit 22
 printf '{\n  "login": "x",\n  "type": "%s",\n  "site_admin": false\n}\n' "${CURL_TYPE:-User}"
 EOF
@@ -46,9 +42,7 @@ cat >"$stubs/uname" <<'EOF'
 #!/bin/sh
 case "$1" in -s) echo Darwin ;; -m) echo arm64 ;; esac
 EOF
-cat >"$stubs/limactl" <<'EOF'
-#!/bin/sh
-echo "limactl $*" >>"$CALLS"
+fake_stub "$stubs" limactl CALLS <<'EOF'
 case "$1" in
   --version) echo "limactl version 2.3.0" ;;
   list)

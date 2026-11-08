@@ -35,9 +35,7 @@ mkdir -p "$stubs" "$work/home"
 # gh_active_account would print it) when $LOGGED_IN exists, else "|". `gh auth
 # login` creates it, unless GH_LOGIN_FAIL makes it fail, or GH_LOGIN_NOOP makes
 # it end without logging in.
-cat >"$stubs/gh" <<'EOF'
-#!/bin/sh
-echo "gh $*" >>"$CALLS"
+fake_stub "$stubs" gh CALLS <<'EOF'
 case "$*" in
   "auth status"*)
     # A gh that cannot answer (too old for --json): no output, non-zero.
@@ -85,9 +83,7 @@ cat >"$stubs/uname" <<'EOF'
 case "$1" in -s) echo Darwin ;; -m) echo arm64 ;; esac
 EOF
 # A Lima with no VM, or one in the state LIMA_STATUS names.
-cat >"$stubs/limactl" <<'EOF'
-#!/bin/sh
-echo "limactl $*" >>"$CALLS"
+fake_stub "$stubs" limactl CALLS <<'EOF'
 case "$1" in
   --version) echo "limactl version 2.3.0" ;;
   list)
