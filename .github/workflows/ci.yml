@@ -76,6 +76,9 @@ jobs:
       - name: Routing label rule, provision.sh and routing_guard.py agree
         run: bash tests/label-rule.sh
 
+      - name: Release references agree
+        run: bash tests/release-refs.sh
+
       - name: RUNNER_EXTRA_PACKAGES validation
         run: bash tests/extra-packages.sh
 
