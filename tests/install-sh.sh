@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# install.sh, the one-line installer: how it fetches the tarball (gh, then
-# curl), what it installs and where, the wrapper on the PATH, the Lima prompt
-# and the checks on the host and the settings. Every outside command is a stub
-# on a PATH of its own, the tarball is built here, and HOME is a temp dir, so
-# nothing is downloaded, installed or run for real.
+# install.sh, the one-line installer: how it fetches the tarball (curl, then
+# gh for a private HOMEFIELD_REPO), what it installs and where, the wrapper on
+# the PATH, the Lima prompt and the checks on the host and the settings. Every
+# outside command is a stub on a PATH of its own, the tarball is built here,
+# and HOME is a temp dir, so nothing is downloaded, installed or run for real.
 #
 # Run:  bash tests/install-sh.sh
 set -uo pipefail
@@ -51,7 +51,7 @@ EOF
 fake_stub "$tpl" curl CALLS <<'EOF'
 [ -z "${FAKE_CURL_FAIL:-}" ] || exit 22
 while [ $# -gt 0 ]; do
-  if [ "$1" = -o ]; then cp "$FIXTURE" "$2"; fi
+  if [ "$1" = -o ]; then cp "${FIXTURE_FOR_CURL:-$FIXTURE}" "$2"; fi
   shift
 done
 EOF
@@ -110,7 +110,7 @@ prompts() { printf '%s\n' "$out" | grep -c '\[Y/n\]' || true; }
 echo "fetching"
 new_env gh curl limactl
 run_install
-record "gh is used when it works" "1/0" "$(called '^gh api repos/i2Dev-com/homefield/tarball/v0.5.2$')/$(called '^curl')"
+record "curl is used, also when gh is present" "1/0" "$(called '^curl .*https://codeload.github.com/i2Dev-com/homefield/tar.gz/v0.5.2')/$(called '^gh api')"
 record "installed with exit 0" "0" "$rc"
 record "the tool is unpacked with the top directory stripped" "yes" "$([ -x "$home/share/bin/homefield" ] && [ -f "$home/share/vm/lima.yaml" ] && echo yes || echo no)"
 record "the ref and commit are recorded" "repo=i2Dev-com/homefield ref=v0.5.2 commit=abc1234" "$(tr '\n' ' ' <"$home/share/.homefield-ref" | sed 's/ $//')"
@@ -125,13 +125,18 @@ run_install
 record "curl is used when gh is absent" "1" "$(called '^curl .*https://codeload.github.com/i2Dev-com/homefield/tar.gz/v0.5.2')"
 record "...and installs" "0" "$rc"
 
-new_env gh curl limactl
-run_install FAKE_GH_FAIL=1
-record "curl is the fallback when gh fails (not logged in, no access)" "1/1" "$(called '^gh api')/$(called '^curl')"
-record "...and the error body gh printed is not the tarball" "0" "$rc"
+new_env gh limactl
+run_install
+record "gh is the fallback when curl is absent" "1" "$(called '^gh api repos/i2Dev-com/homefield/tarball/v0.5.2$')"
+record "...and installs" "0" "$rc"
 
 new_env gh curl limactl
-run_install FAKE_GH_FAIL=1 FAKE_CURL_FAIL=1
+run_install FAKE_CURL_FAIL=1
+record "gh is the fallback when curl fails" "1/1" "$(called '^curl')/$(called '^gh api')"
+record "...and installs" "0" "$rc"
+
+new_env gh curl limactl
+run_install FAKE_CURL_FAIL=1 FAKE_GH_FAIL=1
 record "both failing is an error" "nonzero" "$(nonzero "$rc")"
 record "...that says a private repository needs gh" "yes" "$(has "$out" 'private repository needs gh logged in with access to it')"
 record "...and installs nothing" "no" "$([ -e "$home/share" ] && echo yes || echo no)"
@@ -139,7 +144,10 @@ record "...or leaves a staging directory" "0" "$(find "$home" -name '.homefield-
 
 new_env gh curl limactl
 run_install HOMEFIELD_REPO=acme/tool HOMEFIELD_REF=feat/x
-record "HOMEFIELD_REPO and HOMEFIELD_REF choose the download" "1" "$(called '^gh api repos/acme/tool/tarball/feat/x$')"
+record "HOMEFIELD_REPO and HOMEFIELD_REF choose the download" "1" "$(called '^curl .*https://codeload.github.com/acme/tool/tar.gz/feat/x')"
+new_env gh curl limactl
+run_install FAKE_CURL_FAIL=1 HOMEFIELD_REPO=acme/tool HOMEFIELD_REF=feat/x
+record "...and gh's fallback reads a private fork" "1" "$(called '^gh api repos/acme/tool/tarball/feat/x$')"
 
 # ── Settings are checked ───────────────────────────────────────────────────
 echo "settings"
@@ -151,7 +159,7 @@ for bad in '../x' 'v0.1.0;rm' 'a b' '-x' '' 'a..b'; do
 done
 new_env gh curl limactl
 run_install HOMEFIELD_REF=
-record "an empty ref is the default" "1" "$(called 'tarball/v0.5.2$')"
+record "an empty ref is the default" "1" "$(called 'tar.gz/v0.5.2$')"
 # shellcheck disable=SC2016  # the values are meant to stay literal
 for bad in 'acme' 'a/b/c' 'a/..' '$(x)/y' 'a/b;c'; do
   new_env gh curl limactl
@@ -234,10 +242,10 @@ record "a checkout with bin/homefield but no .homefield-ref is left alone" "nonz
 
 # A download that is not the tool.
 new_env gh curl limactl
-run_install FIXTURE_FOR_GH="$work/other.tgz"
+run_install FIXTURE_FOR_CURL="$work/other.tgz"
 record "a tarball without bin/homefield is refused" "nonzero/yes/no" "$(nonzero "$rc")/$(has "$out" 'the download is not homefield')/$([ -e "$home/share" ] && echo yes || echo no)"
 new_env gh curl limactl
-run_install FIXTURE_FOR_GH="$work/noexec.tgz"
+run_install FIXTURE_FOR_CURL="$work/noexec.tgz"
 record "a tarball whose bin/homefield is not executable is refused" "nonzero/yes/no" "$(nonzero "$rc")/$(has "$out" 'bin/homefield in the download is not executable')/$([ -e "$home/share" ] && echo yes || echo no)"
 
 # The wrapper only replaces a wrapper.

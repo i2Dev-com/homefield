@@ -86,18 +86,19 @@ check_instance() {
     die "HOMEFIELD_INSTANCE must be a Lima instance name: letters and digits, with a single '.', '_' or '-' between them, at most 76 characters, not ending in .yml or .yaml; got: $INSTANCE"
 }
 
-# fetch_tarball <file>: the source of REF. gh when it works, which also reads
-# a private fork (HOMEFIELD_REPO); otherwise a plain download.
+# fetch_tarball <file>: the source of REF. A plain download first: the default
+# repository is public, so no gh and no login are needed. gh api is the
+# fallback, which also reads a private fork (HOMEFIELD_REPO).
 fetch_tarball() {
   local dest="$1"
-  # gh prints an error body on stdout, so the exit status decides, and a
-  # failed attempt's output is overwritten by the next one.
-  if command -v gh >/dev/null 2>&1 && gh api "repos/${REPO}/tarball/${REF}" >"$dest" 2>/dev/null; then
-    log "downloaded ${REPO} at ${REF} with gh"
-    return 0
-  fi
+  # A failed attempt's output is overwritten by the next one.
   if command -v curl >/dev/null 2>&1 && curl -fsSL -o "$dest" "https://codeload.github.com/${REPO}/tar.gz/${REF}" 2>/dev/null; then
     log "downloaded ${REPO} at ${REF}"
+    return 0
+  fi
+  # gh prints an error body on stdout, so the exit status decides.
+  if command -v gh >/dev/null 2>&1 && gh api "repos/${REPO}/tarball/${REF}" >"$dest" 2>/dev/null; then
+    log "downloaded ${REPO} at ${REF} with gh"
     return 0
   fi
   die "could not download ${REPO} at ${REF}. A private repository needs gh logged in with access to it (gh auth login); otherwise check the name, the ref and your network"

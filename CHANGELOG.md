@@ -17,7 +17,10 @@ guest, translated by Apple's Rosetta. Compatible for consumers: the routing
 expression, the guard and every default are unchanged, and jobs keep routing
 with `arch: arm64`. Applies to VMs created after this change — an existing VM
 keeps its stored config, so recreate it to get Rosetta
-(`bin/homefield uninstall --instance <name>`, then `install` again).
+(`bin/homefield uninstall --instance <name>`, then `install` again). The
+installer's download is curl-first: the public repository needs no `gh`, so
+the tarball comes from GitHub's public codeload endpoint and `gh api` is only
+the fallback, which keeps a private `HOMEFIELD_REPO` fork installable.
 
 ### Added
 
@@ -35,6 +38,15 @@ keeps its stored config, so recreate it to get Rosetta
   virtiofs/9p/sshfs/reverse-sshfs mount still refuse. The "no host mounts"
   claims in README, runbook and SECURITY.md now say "no host data mounts"
   with the share named.
+
+### Changed
+
+- `install.sh` downloads the tarball with `curl` first, from GitHub's public
+  codeload endpoint — the default repository is public, so no `gh` and no
+  login are involved on a public install. `gh api` moves to the fallback, so
+  a private `HOMEFIELD_REPO` fork stays installable when `gh` is logged in
+  with access to it. The success lines are unchanged
+  (`downloaded ... with gh` names the fallback path).
 
 ## v0.5.2 (2026-11-07)
 
