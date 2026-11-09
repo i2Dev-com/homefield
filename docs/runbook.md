@@ -49,7 +49,7 @@ every job holding cloud or production credentials.
 |---|---|
 | Who can run code on the runner | Only repositories in the runner group. Keep them **private**, and the group at `allows_public_repositories: false`: that is the boundary, because a PR runs the workflow files from its own branch and can therefore rewrite any `runs-on`. The expression's fork guard adds defence in depth for private repositories that allow forking. |
 | Unreviewed dependency code | Dependabot PRs are routed hosted by default (see above). With `dependabot: local` their install scripts run on the VM. |
-| Host files and credentials | Lima VM with **no mounts** (`mounts: []` + `--mount-none`), no SSH-agent forwarding, and no host SSH keys. `~/.aws`, `gh` auth, `.env` files and working trees on the Mac are not reachable from the guest. |
+| Host files and credentials | Lima VM with **no host data mounts** (`mounts: []` + `--mount-none`), no SSH-agent forwarding, and no host SSH keys. `~/.aws`, `gh` auth, `.env` files and working trees on the Mac are not reachable from the guest. The one expected mount is Apple's read-only Rosetta share (`vz-rosetta on /mnt/lima-rosetta`, [#21](https://github.com/i2Dev-com/homefield/issues/21)): Apple's translator, nothing of the Mac's, writes refused. |
 | Guest ports on the Mac | Guest→host port forwarding is disabled, so a job's service containers never appear on the Mac's `localhost`. |
 | **Mac and LAN services from the guest** | **Partly isolated.** The guest reaches the Mac at `host.lima.internal` (192.168.5.2, also its gateway and DNS). On VMs created on Lima ≥ 2.3.0 (the minimum), `networkOpts.hostLoopback: false` makes that gateway answer for itself, so **nothing** bound to the Mac's loopback is reachable through it — services bound only to `127.0.0.1` and `*`-bound ones alike; `*`-bound services and the wider LAN stay reachable through the Mac's LAN address. `install` and `upgrade` prove the state from inside the guest ([Host loopback exposure](#host-loopback-exposure)). A firewall inside the guest would not hold, since jobs are root-equivalent there. Keep anything the runner's repositories should not reach off the Mac that hosts them ([#18](https://github.com/i2Dev-com/homefield/issues/18)). |
 | Production | The VM holds no cloud credentials. Deploy jobs stay hosted and get their credentials through OIDC. |
@@ -68,8 +68,9 @@ need an organization owner (`admin:org`):
 - Each adopting repository has `CI_RUNNER` set the way you expect
   (`gh variable get CI_RUNNER --repo <owner>/<repo>`), and its
   `routing-guard` step passes on `main`.
-- The VM has no mounts: `bin/homefield upgrade` and `install` check this and
-  refuse to continue otherwise.
+- The VM has no host data mounts: `bin/homefield upgrade` and `install` check
+  this and refuse to continue otherwise. Apple's read-only Rosetta share is
+  expected and does not count against it.
 - Nothing on the Mac listens that PR code should not reach (see the
   network row above), and the Mac holds no credentials the VM could use.
 - People who can edit workflow files in an adopting repository are people you
@@ -317,8 +318,9 @@ From a checkout of this repository:
 limactl create --name=homefield --mount-none vm/lima.yaml
 limactl start homefield
 
-# 2. Confirm the isolation before anything runs in it: no mounts, no home dir
-limactl shell homefield -- sh -c 'mount | grep -Ec "virtiofs|9p|sshfs|reverse-sshfs"; ls /Users 2>&1'
+# 2. Confirm the isolation before anything runs in it: no host data mounts
+#    (the read-only vz-rosetta share is expected), no home dir
+limactl shell homefield -- sh -c 'mount | grep -E "virtiofs|9p|sshfs|reverse-sshfs" | grep -vc "^vz-rosetta on /mnt/lima-rosetta type virtiofs "; ls /Users 2>&1'
 # expect: 0, and "No such file or directory"
 
 # 3. Provision: packages, Docker, runner binary (checksum-verified), systemd

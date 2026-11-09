@@ -9,6 +9,33 @@ fail, such as a new guard in the routing expression, bumps the minor version
 (0.1 to 0.2). Compatible changes bump the patch. Merged changes wait on
 `main`, under *Unreleased*, until a release is cut.
 
+## Unreleased
+
+Enables Rosetta in the VM ([#21](https://github.com/i2Dev-com/homefield/issues/21)):
+x86-64 Linux binaries and `linux/amd64` container images run in the arm64
+guest, translated by Apple's Rosetta. Compatible for consumers: the routing
+expression, the guard and every default are unchanged, and jobs keep routing
+with `arch: arm64`. Applies to VMs created after this change — an existing VM
+keeps its stored config, so recreate it to get Rosetta
+(`bin/homefield uninstall --instance <name>`, then `install` again).
+
+### Added
+
+- Rosetta in the VM: `vm/lima.yaml` sets `vmOpts.vz.rosetta` (enabled +
+  binfmt, the current form — the top-level `rosetta:` key is deprecated since
+  Lima 2.0). A job that needs an amd64 binary or image now works:
+  `docker run --platform linux/amd64 ...` and x86-64 ELF files run as they
+  are. Measured (2026-11-09): translated process spawns are ~9x native, so
+  this is for the occasional amd64 job, not the default route. Requires
+  macOS ≥ 13; Lima installs the Rosetta runtime itself when missing.
+- The isolation probe knows the one expected host mount this adds: Apple's
+  read-only Rosetta share (`vz-rosetta on /mnt/lima-rosetta type virtiofs`,
+  Apple's two runtime files, writes refused). It excludes that exact line,
+  once — a rosetta line at another path, a second one, and every other
+  virtiofs/9p/sshfs/reverse-sshfs mount still refuse. The "no host mounts"
+  claims in README, runbook and SECURITY.md now say "no host data mounts"
+  with the share named.
+
 ## v0.5.2 (2026-11-07)
 
 Bumps the patch from v0.5.1, and it is compatible for consumers: a workflow

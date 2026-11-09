@@ -25,8 +25,8 @@ one repository variable and everything runs hosted again.
   included minutes on the floors alone; on your Mac those jobs are free.
 - **Isolation.** GitHub's own self-hosted runner on a Mac runs jobs as your
   user, with your files, SSH keys and credentials in reach. HomeField runs
-  them in a Lima VM with no mounts and no reach to the Mac, and proves that
-  boundary from inside the guest before anything runs.
+  them in a Lima VM with no host data mounts and no reach to the Mac, and
+  proves that boundary from inside the guest before anything runs.
 - **Opt-in, with a fallback.** A repository joins by merging one routing pull
   request and carries a `runs-on` expression that falls back to
   `ubuntu-latest` whenever the runner is off — pushes, Dependabot and fork
@@ -161,8 +161,14 @@ bypasses](docs/security.md).
 ## Security model
 
 The VM is the boundary. Jobs run pull-request code, so the Mac's files and
-credentials are not reachable from inside: no mounts, no SSH-agent forwarding
-and no host SSH keys, and `bin/homefield` refuses to continue if it finds any.
+credentials are not reachable from inside: no host data mounts, no SSH-agent
+forwarding and no host SSH keys, and `bin/homefield` refuses to continue if it
+finds any. The one expected mount is Apple's Rosetta runtime
+([#21](https://github.com/i2Dev-com/homefield/issues/21)): with Rosetta
+enabled, Lima shares the translator read-only into the guest as
+`vz-rosetta on /mnt/lima-rosetta` — Apple's two runtime files, nothing of
+yours, and writes into it fail. The isolation probe knows that exact line and
+still refuses every other host mount.
 Inside the guest, jobs are root-equivalent, as on a hosted runner.
 
 **The network is partly isolated.** Jobs can reach the internet and your LAN;

@@ -132,7 +132,7 @@ if [ "${PF:-pass}" != real ]; then
   }
 fi
 have_terminal() { [ "${TTY:-}" = 1 ]; }
-verify_isolation() { echo "verify_isolation" >>"$CALLS"; log "isolation verified: no host mounts"; }
+verify_isolation() { echo "verify_isolation" >>"$CALLS"; log "isolation verified: no host data mounts"; }
 is_registered() { [ "${REGISTERED:-no}" = yes ]; }
 cmd_upgrade() { echo "cmd_upgrade $*" >>"$CALLS"; log "upgrade ran"; }
 get_token() { echo tok123; }
@@ -312,7 +312,7 @@ echo "fresh setup, organization"
 srun GH_GROUPS="$work/groups-none" GH_REPOS='' -- cmd_setup --url $org
 record "created group: exit 0" "0" "$rc"
 record "...the VM was created" "yes/1" "$(has "$out" '✓ VM homefield created (Running)')/$(called 'limactl create')"
-record "...isolation verified" "yes" "$(has "$out" '✓ Isolation verified (no host mounts)')"
+record "...isolation verified" "yes" "$(has "$out" '✓ Isolation verified (no host data mounts)')"
 record "...the group was created, selected repositories, public off" "yes/1" "$(has "$out" '✓ Runner group homefield-ci created (selected repositories, public off)')/$(called 'POST')"
 record "...the runner registered, with its name and id" "yes" "$(has "$out" '✓ Runner registered (test-mac-homefield, id 41)')"
 record "...and online, with its labels and its group (confirmed by the group's runner list)" "yes" \
@@ -401,7 +401,7 @@ echo "existing VM and registration"
 srun LIMA_STATUS=Running REGISTERED=yes -- cmd_setup
 record "registered: it upgrades, as install does" "0/1/0/0" "$rc/$(called 'cmd_upgrade')/$(called 'run_provision')/$(called 'POST')"
 record "...the summary: the VM, isolation, and the runner upgraded in place" "yes/yes/yes" \
-  "$(has "$out" '✓ VM homefield already existed (Running)')/$(has "$out" '✓ Isolation verified (no host mounts)')/$(has "$out" '✓ Runner test-mac-homefield (id 41) was already registered: upgraded in place')"
+  "$(has "$out" '✓ VM homefield already existed (Running)')/$(has "$out" '✓ Isolation verified (no host data mounts)')/$(has "$out" '✓ Runner test-mac-homefield (id 41) was already registered: upgraded in place')"
 record "...no group line, no repositories list, the group was not looked at" "no/no/no/0" \
   "$(has "$out" 'Runner group')/$(has "$out" 'Repositories that can use')/$(has "$out" 'Registered to')/$(called 'runner-groups')"
 record "...next steps follow, without group advice" "yes/yes/no" \
