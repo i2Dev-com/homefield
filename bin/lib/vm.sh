@@ -188,8 +188,16 @@ isolation_probe() {
   # mount is run on its own: in a pipe its failure would be hidden, and grep
   # would count nothing in its empty output. grep -c exits 1 for a count of 0,
   # which is an answer; a status above 1 is not.
+  #
+  # The count is of *host data* mounts. The one expected exception is #21's
+  # Rosetta share: with vmOpts.vz.rosetta enabled, Lima shares Apple's
+  # translator read-only as `vz-rosetta on /mnt/lima-rosetta type virtiofs`.
+  # The share carries Apple's two runtime files and nothing of the host's —
+  # writes into it fail — so the exact line is excluded, once: a second
+  # rosetta line, or one at another path, counts as a host mount. Everything
+  # else matching virtiofs/9p/sshfs/reverse-sshfs is host data and refuses.
   # shellcheck disable=SC2016  # the guest's shell expands these, not this one
-  if ! mounts="$(guest sh -c 'out="$(mount)" || exit 3; printf "%s\n" "$out" | grep -Ec "virtiofs|9p|sshfs|reverse-sshfs"; test $? -le 1')"; then
+  if ! mounts="$(guest sh -c 'out="$(mount)" || exit 3; total=$(printf "%s\n" "$out" | grep -Ec "virtiofs|9p|sshfs|reverse-sshfs") || [ "$?" -le 1 ] || exit 3; ros=$(printf "%s\n" "$out" | grep -Ec "^vz-rosetta on /mnt/lima-rosetta type virtiofs ") || [ "$?" -le 1 ] || exit 3; if [ "$ros" -le 1 ]; then echo $((total - ros)); else echo "$total"; fi')"; then
     isolation_fail 2 "could not run the isolation check in VM ${INSTANCE}" "; is it running? (see docs/runbook.md, Setup)" || return
   fi
   case "$mounts" in
@@ -209,7 +217,7 @@ verify_isolation() {
   local rc=0
   isolation_probe || rc=$?
   [ "$rc" -eq 0 ] || die "${ISOLATION_WHY}${ISOLATION_SUFFIX}"
-  log "isolation verified: no host mounts"
+  log "isolation verified: no host data mounts"
   verify_loopback
 }
 

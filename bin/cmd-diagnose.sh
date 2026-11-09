@@ -311,7 +311,7 @@ dg_render_human() {
     echo "  - Guest checks: skipped (${why})"
   else
     case "$DG_ISO" in
-      verified) echo "  - Isolation: verified (no host mounts, /Users hidden)" ;;
+      verified) echo "  - Isolation: verified (no host data mounts, /Users hidden)" ;;
       failed) echo "  - Isolation: $(color_wrap 3 "BROKEN") (${DG_ISO_WHY})" ;;
       *) echo "  - Isolation: unknown (${DG_ISO_WHY})" ;;
     esac

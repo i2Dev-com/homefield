@@ -178,7 +178,7 @@ setup_vm_lines() {
   else
     echo "✓ VM ${INSTANCE} already existed (${SETUP_VM_WAS}); started"
   fi
-  echo "✓ Isolation verified (no host mounts)"
+  echo "✓ Isolation verified (no host data mounts)"
 }
 
 # setup_group_line <group> <slug>: the runner group, by what ensure_group found.

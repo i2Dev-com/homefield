@@ -50,6 +50,12 @@ These are documented and not treated as vulnerabilities; see the
   passwordless `sudo` as on a hosted runner; neither adds reach the other did
   not give. Repositories sharing the runner can see what earlier jobs left
   behind.
+- **The Rosetta share** ([#21](https://github.com/i2Dev-com/homefield/issues/21)):
+  with Rosetta enabled (`vm/lima.yaml`, `vmOpts.vz.rosetta`), Lima shares
+  Apple's x86-64 translator into the guest read-only as
+  `vz-rosetta on /mnt/lima-rosetta` — two Apple-owned runtime files, nothing
+  of the host's, writes refused. The isolation probe excludes that exact line
+  and refuses every other host mount.
 
 ## Supported versions
 

@@ -70,7 +70,28 @@ portForwards:
 # continue when a VM whose own config asks for it is reachable anyway
 # (docs/runbook.md, "Host loopback exposure"). Lima >= 2.3 refuses the ask
 # outright (rather than ignoring it) on a vmType other than vz or on a
-# user-v2 network; this file is vz with the default network, and #21
-# revisits this if that ever changes.
+# user-v2 network; this file is vz with the default network, and this stays
+# true with the Rosetta share below, which is a virtiofs *share* into the
+# guest, not a network change.
+# #21: Rosetta translates x86-64 Linux binaries in this arm64 guest, so a job
+# that needs an amd64 binary or image works without a second VM:
+# `docker run --platform linux/amd64 ...` and x86-64 ELF files run as they are.
+# Lima shares Apple's Rosetta runtime into the guest as a read-only virtiofs
+# share (`vz-rosetta` on `/mnt/lima-rosetta`): the guest can read Apple's
+# translator and nothing else, and writes fail. That share is the one expected
+# exception to "no host mounts" — bin/lib/vm.sh's isolation probe knows this
+# exact line and still refuses every other host mount. Measured on 2026-11-09
+# (issue #21): amd64 containers and static x86-64 binaries run; translated
+# process spawns are ~9x native, so this is for the occasional amd64 job, not
+# the default route — consumers keep `arch: arm64`, which the guard accepts
+# for this VM. Requires macOS >= 13; Lima installs the Rosetta runtime itself
+# when missing (softwareupdate --install-rosetta). The top-level `rosetta:`
+# form is deprecated since Lima 2.0; this is the current one.
+vmOpts:
+  vz:
+    rosetta:
+      enabled: true
+      binfmt: true
+
 networkOpts:
   hostLoopback: false

@@ -668,9 +668,11 @@ guest_stdin() { limactl shell --workdir / "$INSTANCE" "$@"; }
 
 
 # The VM is the isolation boundary, so nothing runs in it until it is shown to
-# have no host mounts and no view of the Mac's home directories. A guest
+# have no host data mounts and no view of the Mac's home directories. A guest
 # command that cannot run at all is reported as such: treating its empty
-# output as "no mounts found" would misread a broken VM as a safe one.
+# output as "no mounts found" would misread a broken VM as a safe one. The
+# one expected mount is Apple's read-only Rosetta share (#21), which
+# isolation_probe excludes by its exact line.
 #
 # isolation_probe is the check itself, for the callers that report instead of
 # stopping (diagnose): 0 verified, 1 broken (host mounts, or /Users visible),

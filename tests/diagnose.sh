@@ -189,7 +189,7 @@ guest_fs
 diag "${healthy[@]}" --
 record "healthy: exits 0 and says so" "0/yes" "$rc/$(has "$out" 'Summary: healthy.')"
 record "...the VM, created and Running" "yes/yes" "$(has "$out" 'VM homefield:')/$(has "$out" '  - Created: yes (Running)')"
-record "...isolation verified from the guest" "yes" "$(has "$out" '  - Isolation: verified (no host mounts, /Users hidden)')"
+record "...isolation verified from the guest" "yes" "$(has "$out" '  - Isolation: verified (no host data mounts, /Users hidden)')"
 record "...registered, with the name, the id and where" "yes" "$(has "$out" '  - Registered: yes (my-mac-homefield, id 42, at https://github.com/acme)')"
 record "...listed on GitHub, online and idle" "yes" "$(has "$out" '  - On GitHub: listed (online, idle)')"
 record "...the service, the version, the packages and npm" "yes/yes/yes/yes" "$(has "$out" '  - Service: running (actions.runner.acme.test.service)')/$(has "$out" '  - Version: 2.338.0')/$(has "$out" '  - Extra packages: libpq-dev')/$(has "$out" '  - npm: ok')"
