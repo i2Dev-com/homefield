@@ -608,3 +608,28 @@ GROUP_STATE=""
 # unknown, or for any other state), for the listing of its repositories.
 # shellcheck disable=SC2034  # read by cmd-install.sh and cmd-adopt.sh
 GROUP_ID=""
+
+# ── Run and variable calls shared by adopt and route ───────────────────────
+
+# repo_variable_get <owner/repo> <name>: the repository variable's value, or
+# "(unset)" — the form both commands print.
+repo_variable_get() {
+  gh variable get "$2" --repo "$1" 2>/dev/null || echo "(unset)"
+}
+
+# repo_variable_set <owner/repo> <name> <value>: sets it, quiet on success.
+repo_variable_set() {
+  gh variable set "$2" --repo "$1" --body "$3" >/dev/null
+}
+
+# run_rerun <owner/repo> <run-id> [stderr-file]: re-runs it. The empty third
+# argument leaves gh's stderr on the terminal (route); a file captures it
+# (adopt, which reports the first line itself).
+run_rerun() {
+  local repo="$1" id="$2" err="${3:-}"
+  if [ -n "$err" ]; then
+    gh run rerun "$id" --repo "$repo" >/dev/null 2>"$err" </dev/null
+  else
+    gh run rerun "$id" --repo "$repo" >/dev/null </dev/null
+  fi
+}

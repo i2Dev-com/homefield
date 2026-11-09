@@ -584,7 +584,7 @@ adopt_snippets() {
 # missing and stops the command.
 adopt_switch() {
   local repo="$1" label="$2" dry="$3" switch="$4" jobs="$5" current
-  current="$(gh variable get CI_RUNNER --repo "$repo" 2>/dev/null || echo "(unset)")"
+  current="$(repo_variable_get "$repo" CI_RUNNER)"
   if [ "$ADOPT_READY" = 1 ]; then
     if [ "$current" = local ]; then
       ADOPT_SWITCH_OUTCOME="is already local"
@@ -779,7 +779,7 @@ adopt_verify() {
     adopt_warn "could not verify: gh gave a run that this tool cannot read ($(head -1 "$ADOPT_TMP/v.err"))"
     return 0
   }
-  gh run rerun "$id" --repo "$repo" >/dev/null 2>"$ADOPT_TMP/v.err" </dev/null || {
+  run_rerun "$repo" "$id" "$ADOPT_TMP/v.err" || {
     adopt_warn "could not verify: gh could not re-run run ${id}: $(head -1 "$ADOPT_TMP/v.err")"
     return 0
   }
