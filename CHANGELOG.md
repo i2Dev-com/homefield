@@ -9,18 +9,21 @@ fail, such as a new guard in the routing expression, bumps the minor version
 (0.1 to 0.2). Compatible changes bump the patch. Merged changes wait on
 `main`, under *Unreleased*, until a release is cut.
 
-## Unreleased
+## v0.5.3 (2026-11-10)
 
-Enables Rosetta in the VM ([#21](https://github.com/i2Dev-com/homefield/issues/21)):
-x86-64 Linux binaries and `linux/amd64` container images run in the arm64
-guest, translated by Apple's Rosetta. Compatible for consumers: the routing
-expression, the guard and every default are unchanged, and jobs keep routing
-with `arch: arm64`. Applies to VMs created after this change — an existing VM
-keeps its stored config, so recreate it to get Rosetta
-(`bin/homefield uninstall --instance <name>`, then `install` again). The
-installer's download is curl-first: the public repository needs no `gh`, so
-the tarball comes from GitHub's public codeload endpoint and `gh api` is only
-the fallback, which keeps a private `HOMEFIELD_REPO` fork installable.
+Bumps the patch from v0.5.2, and it is compatible for consumers: a workflow
+that passes v0.5.2's check passes this one, and no guard, default or option
+changed. The VM gains Rosetta
+([#21](https://github.com/i2Dev-com/homefield/issues/21)): x86-64 Linux
+binaries and `linux/amd64` container images run in the arm64 guest, translated
+by Apple's Rosetta. The installer downloads its tarball with `curl` first, so a
+public install needs no `gh`. To upgrade, run the README's one-liner again (it
+replaces the installed copy, `bin/lib/` and the per-command files included) —
+no `homefield upgrade` is needed, the VM is untouched. Rosetta applies to VMs
+created after this change: an existing VM keeps its stored config, so recreate
+it (`bin/homefield uninstall --instance <name>`, then `install` again) when a
+job needs amd64. Consumers of the routing guard can bump `routing-guard@v0.5.2`
+pins to `@v0.5.3` at their leisure — a v0.5.2 pin passes the same workflows.
 
 ### Added
 

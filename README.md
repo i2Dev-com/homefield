@@ -54,7 +54,7 @@ On such a Mac, in a terminal, with the URL of your organization (or, for a
 personal account or a single repository, `https://github.com/<owner>/<repo>`):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/i2Dev-com/homefield/v0.5.2/install.sh | bash -s -- --url https://github.com/<org>
+curl -fsSL https://raw.githubusercontent.com/i2Dev-com/homefield/v0.5.3/install.sh | bash -s -- --url https://github.com/<org>
 ```
 
 It asks a few questions and does the rest:
@@ -117,7 +117,7 @@ with them ([routing options](docs/adopting.md#routing-options)).
 `routing-guard` keeps every copy identical and every guard in place:
 
 ```yaml
-      - uses: i2Dev-com/homefield/routing-guard@v0.5.2
+      - uses: i2Dev-com/homefield/routing-guard@v0.5.3
         with:
           jobs: |
             ci.yml:lint
