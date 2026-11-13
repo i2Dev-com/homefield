@@ -403,6 +403,7 @@ wf_guard() {
   } >"$work/$1/ci.yml"
 }
 action="i2Dev-com/homefield/routing-guard@v0.5.3"
+guide_url="https://github.com/i2Dev-com/homefield/blob/v0.5.3/docs/adopting.md"
 sha40="0123456789abcdef0123456789abcdef01234567"
 wf_guard wf-src-other 'on: [pull_request]' other-org/homefield/routing-guard@v0.5.0
 wf_guard wf-src-v1 'on: [pull_request]' i2Dev-com/homefield/routing-guard@v1
@@ -1509,6 +1510,8 @@ echo "setup"
 # tools/adopt.py setup, byte-exact: the routed job gets the expression and a
 # comment, its cache key gains runner.arch, the guard's jobs: block lists
 # exactly it, and the job carrying the guard step stays hosted.
+out="$(python3 -I "$ROOT/tools/adopt.py" guide-url 2>&1)"; rc=$?
+record "guide-url: the absolute adoption guide at this release" "0/${guide_url}" "$rc/$out"
 mkdir -p "$work/setup-in"
 cat >"$work/setup-in/ci.yml" <<EOF
 name: CI
@@ -1540,7 +1543,7 @@ name: CI
 on: [pull_request]
 jobs:
   lint:
-    # Routed to the local HomeField runner (docs/adopting.md)
+    # Routed to the local HomeField runner (https://github.com/i2Dev-com/homefield/blob/v0.5.3/docs/adopting.md)
     runs-on: $expr
     steps:
       - uses: actions/checkout@v5
@@ -1656,6 +1659,8 @@ record "...the sha lookup is a GET with the branch ref, not the POST -f alone wo
   "$(called '-X GET repos/acme/app/contents/.github/workflows/ci.yml -f ref=homefield/route-to-local')"
 record "...the spaced file is not written, and the body lists the jobs and step 5" "0/yes/yes" \
   "$(called 'X PUT repos/acme/app/contents/.github/workflows/my%20flow.yaml')/$(has "$(cat "$work/pr_body")" 'ci.yml:build')/$(has "$(cat "$work/pr_body")" 'step 5')"
+record "...the body links the adoption guide absolutely, not to the consumer's tree" "yes/no" \
+  "$(has "$(cat "$work/pr_body")" "[the adoption guide](${guide_url})")/$(has "$(cat "$work/pr_body")" '[docs/adopting.md](docs/adopting.md)')"
 record "...and the branch stands on the fake remote" "yes" \
   "$([ -f "$work/branch-homefield_route-to-local" ] && echo yes || echo no)"
 adopt -- --setup
@@ -1713,6 +1718,8 @@ record "--setup, no guard: simple mode, routing workflow and ci.yml written" "0/
   "$rc/$(has "$out" 'setup: changes .github/workflows/homefield-routing.yml')/$(has "$out" 'setup: changes .github/workflows/ci.yml')/$(called 'X PUT')"
 record "...the guard step carries mode: simple, and no events or dependabot" "yes/no/no" \
   "$(payload homefield-routing.yml | grep -q '          mode: simple' && echo yes || echo no)/$(payload homefield-routing.yml | grep -q '          events:' && echo yes || echo no)/$(payload homefield-routing.yml | grep -q '          dependabot:' && echo yes || echo no)"
+record "...the generated guard workflow links the guide absolutely too" "yes" \
+  "$(payload homefield-routing.yml | grep -qF "$guide_url" && echo yes || echo no)"
 record "...the routed job carries the simple expression, with the comment" "yes/yes/no" \
   "$(payload ci.yml | grep -qF "runs-on: $expr_simple" && echo yes || echo no)/$(payload ci.yml | grep -q 'Routed to the local HomeField runner' && echo yes || echo no)/$(payload ci.yml | grep -q 'github.event_name' && echo yes || echo no)"
 rm -f "$work/branch-homefield_route-to-local"

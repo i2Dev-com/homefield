@@ -9,6 +9,15 @@ fail, such as a new guard in the routing expression, bumps the minor version
 (0.1 to 0.2). Compatible changes bump the patch. Merged changes wait on
 `main`, under *Unreleased*, until a release is cut.
 
+## Unreleased
+
+### Fixed
+
+- `homefield adopt --setup`'s pull request, and the workflow comments it
+  writes, now link to the adoption guide at the installed release instead of
+  a relative `docs/adopting.md` that does not exist in the consumer's
+  repository ([#237](https://github.com/i2Dev-com/homefield/issues/237)).
+
 ## v0.5.3 (2026-11-10)
 
 Bumps the patch from v0.5.2, and it is compatible for consumers: a workflow
