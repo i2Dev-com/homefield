@@ -48,6 +48,7 @@ check_text "tests/install-sh.sh expects the recorded ref ${release}" tests/insta
 check_text "tests/install-sh.sh expects the installed summary at ${release}" tests/install-sh.sh "installed homefield ${release}"
 check_text "tests/runner-group.sh's default-ref fixture is ${release}" tests/runner-group.sh "ref=${release}"
 check_text "tests/adopt.sh's guard fixture is ${release}" tests/adopt.sh "action=\"${action}\""
+check_text "tests/adopt.sh's guide URL is at ${release}" tests/adopt.sh "blob/${release}/docs/adopting.md"
 check_text "tests/adopt.sh's mode-release default is ${release}" tests/adopt.sh "HOMEFIELD_MODE_RELEASE=\"\${HOMEFIELD_MODE_RELEASE:-${release}}\""
 
 # No tagged install one-liner in a current-facing file may name another

@@ -80,8 +80,13 @@ import urllib.parse
 # README tell consumers to pin; tests/adopt.sh checks that the docs still say
 # it. Bump it when a release is cut.
 RELEASE = "v0.5.3"
-ACTION_PATH = "i2Dev-com/homefield/routing-guard"
+REPO = "i2Dev-com/homefield"
+ACTION_PATH = f"{REPO}/routing-guard"
 ACTION = f"{ACTION_PATH}@{RELEASE}"
+# Where generated files and the adopt --setup pull request send readers: an
+# absolute link, because both land in the consumer's repository, where a
+# relative docs/adopting.md does not exist. Pinned to this copy's release.
+GUIDE_URL = f"https://github.com/{REPO}/blob/{RELEASE}/docs/adopting.md"
 DEFAULT_LABEL = "homefield-ci"
 # The routing-guard options besides the label, and their defaults.
 DEFAULT_EVENTS = "pull_request"
@@ -751,7 +756,7 @@ def routing_workflow(label, jobs, events, dependabot, fallback, mode=DEFAULT_MOD
     routed job."""
     return "\n".join(
         [
-            "# Checks the routing to the local HomeField runner (docs/adopting.md).",
+            f"# Checks the routing to the local HomeField runner ({GUIDE_URL}).",
             "# Created by `homefield adopt --setup`.",
             "name: HomeField routing",
             "on:",
@@ -921,7 +926,7 @@ def setup_plan(directory, out, expression, label, events, dependabot, fallback, 
             line = job["runs_on"][0]
             indent = " " * indent_of(info["lines"][line - 1])
             edit(name, (line - 1, line, [
-                f"{indent}# Routed to the local HomeField runner (docs/adopting.md)",
+                f"{indent}# Routed to the local HomeField runner ({GUIDE_URL})",
                 f"{indent}runs-on: {expression}",
             ]))
     routed = sorted(dict.fromkeys(routed))
@@ -1083,6 +1088,7 @@ def main():
     c.add_argument("sha")
     c.add_argument("message")
     c.add_argument("branch")
+    sub.add_parser("guide-url")
     sub.add_parser("quote").add_argument("text")
     sub.add_parser("verify-run")
     sub.add_parser("verify-attempt")
@@ -1139,6 +1145,8 @@ def main():
             print(f"ROUTED\t{key}")
         for name in written:
             print(f"FILE\t{name}")
+    elif args.cmd == "guide-url":
+        print(GUIDE_URL)
     elif args.cmd == "contents-payload":
         with open(args.file, "rb") as fh:
             body = {
