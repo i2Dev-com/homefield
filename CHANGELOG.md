@@ -9,6 +9,16 @@ fail, such as a new guard in the routing expression, bumps the minor version
 (0.1 to 0.2). Compatible changes bump the patch. Merged changes wait on
 `main`, under *Unreleased*, until a release is cut.
 
+## Unreleased
+
+### Fixed
+
+- `upgrade`, `uninstall` and `reset` now take the runner out of service
+  immediately after the idle check. Copying preset hooks and reading the
+  saved package list, or asking GitHub whether it still has the runner, could
+  take seconds to tens of seconds, and a job picked up in that window was
+  cancelled by the stop ([#238](https://github.com/i2Dev-com/homefield/issues/238)).
+
 ## v0.5.3 (2026-11-10)
 
 Bumps the patch from v0.5.2, and it is compatible for consumers: a workflow

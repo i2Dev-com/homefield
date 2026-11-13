@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # `--preset` (#175): the shipped sets parse on the host's bash, add to what a
-# VM already has instead of replacing it, copy their hooks into provision.d
-# before anything is stopped, and refuse an unknown or broken preset first.
+# VM already has instead of replacing it, take the runner offline before
+# copying their hooks into provision.d, and refuse an unknown or broken preset
+# first.
 #
 # bin/homefield runs in a harness: check_host, Lima lookup/start, the guest,
 # GitHub checks and provisioning are replaced by recording stubs. What stays
@@ -69,7 +70,7 @@ guest_stdin() {
       printf '%s\n' "${GUEST_HAVE:-}" ;;
   esac
 }
-runner_extra_packages() { printf '%s' "${SAVED:-}"; }
+runner_extra_packages() { echo runner_extra_packages >>"$CALLS"; printf '%s' "${SAVED:-}"; }
 preflight_collect() {
   PF_NAME=(lima)
   PF_LEVEL=(ok)
@@ -189,8 +190,8 @@ srun MODE=upgrade SAVED="libpq-dev shellcheck" -- cmd_upgrade --preset hosted
 record "hosted on a VM with extras: saved first, its own names added once each" \
   "$(printf 'ok/libpq-dev shellcheck %s' "$browser_libs gh sqlite3 xvfb rsync")" \
   "$([ "$rc" -eq 0 ] && echo ok)/$(envline)"
-record "...both hooks copied and installed in provision.d before the stop, once each, with the manifest" \
-  "2/2/1/before/yes/2" \
+record "...both hooks copied and installed in provision.d after the stop, once each, with the manifest" \
+  "2/2/1/after/yes/2" \
   "$(grep -c 'limactl copy.*vm/presets/hosted' "$calls" || true)/$(called '^guest sudo install -D')/$(called 'sudo tee /etc/homefield/preset-hooks')/$(
     awk '/stop_runner/{s=NR} /limactl copy/{c=NR} END{print (c && s && c < s) ? "before" : "after"}' "$calls")/$(has "$out" 'upgrading homefield')/$(called '^guest sudo install -D')"
 
@@ -210,6 +211,8 @@ srun MODE=upgrade SAVED="libcairo2 libpq-dev" -- cmd_upgrade --packages "xvfb"
 record "a left-out preset name is named in the warning; the list is replaced exactly" \
   "yes/yes/xvfb/0" \
   "$(has "$out" 'warning: --packages replaces the saved list')/$(has "$out" '(hooks stay): libcairo2')/$(envline)/$(called 'limactl copy')"
+record "...the saved list is read once, after the runner is stopped" "1/after" \
+  "$(called '^runner_extra_packages')/$(awk '/stop_runner/{s=NR} /runner_extra_packages/{r=NR} END{print (s && r && s < r) ? "after" : "before"}' "$calls")"
 srun MODE=upgrade SAVED="libpq-dev" -- cmd_upgrade --packages "xvfb"
 record "--packages with no preset name in the saved list: replaces silently, as before" \
   "no/xvfb/0/yes" \

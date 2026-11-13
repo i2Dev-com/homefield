@@ -140,7 +140,7 @@ RUNNER_HOME="$HOME_DIR"
 HOMEFIELD_STAGE_DIR="$WORK/stage"
 check_host() { :; }
 vm_status() { case "${VM:-Running}" in none) ;; *) echo "${VM:-Running}" ;; esac; }
-runner_setting() { printf '%s\n' https://github.com/acme 42; }
+runner_setting() { echo runner_setting >>"$LOG"; printf '%s\n' https://github.com/acme 42; }
 get_token() { echo "get_token $1" >>"$LOG"; echo tok; }
 runner_on_github() { echo "runner_on_github $*" >>"$LOG"; return "${GH_ON:-0}"; }
 have_terminal() { [ "${TTY:-}" = 1 ]; }
@@ -341,6 +341,11 @@ fresh
 set_state acme/homefield-ci/7
 run JOB=later VM=Stopped --
 record "a stopped VM is inspected once, after it starts: no second check" "0/1" "$rc/$(cat "$work/pgrep-n")"
+fresh
+set_state acme/homefield-ci/7
+run GH_ON=0 VM=Stopped --
+record "a stopped VM: the runner is stopped before its settings are read" "after" \
+  "$(awk '/systemctl stop/{s=NR} /runner_setting/{r=NR} END{print (s && r && s < r) ? "after" : "before"}' "$work/log")"
 
 echo "the answer to the question:"
 fresh

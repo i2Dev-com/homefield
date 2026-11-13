@@ -172,16 +172,17 @@ record "the local removal fails: uninstall fails, the service is back" "1/regist
 echo "the runner's settings cannot be read:"
 fresh
 run env NO_SETTINGS=1
-record "uninstall fails before anything is stopped" "1/yes/0/0" "$rc/$(has "$out" "could not read the runner's registration")/$(logged 'systemctl')/$(logged 'config.sh')"
+record "uninstall stops the runner first, then fails reading the settings and starts it again" "1/yes/1/1/0/registered/unit/.service/active" \
+  "$rc/$(has "$out" "could not read the runner's registration")/$(logged 'systemctl stop')/$(logged 'systemctl start')/$(logged 'config.sh')/$(state)"
 
 echo "provision.sh is copied in for the restore (#99):"
 fresh
 run env
-record "...once, before the runner is stopped" "1/limactl copy" "$(logged 'limactl copy')/$(grep -m1 -e 'limactl copy' -e 'systemctl stop' "$work/log" | cut -d' ' -f1-2)"
+record "...once, after the runner is stopped" "1/systemctl stop" "$(logged 'limactl copy')/$(grep -m1 -e 'limactl copy' -e 'systemctl stop' "$work/log" | cut -d' ' -f1-2)"
 fresh
 run env FAIL_COPY=1
 record "the copy fails: uninstall fails, saying so" "1/yes" "$rc/$(has "$out" 'could not copy provision.sh')"
-record "...nothing was stopped or deregistered" "0/0/registered/unit/.service/active" "$(logged 'systemctl')/$(logged 'config.sh')/$(state)"
+record "...the runner is started again, nothing deregistered" "1/1/0/registered/unit/.service/active" "$(logged 'systemctl stop')/$(logged 'systemctl start')/$(logged 'config.sh')/$(state)"
 
 echo "GitHub refuses the removal:"
 fresh
