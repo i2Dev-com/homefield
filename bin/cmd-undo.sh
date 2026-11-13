@@ -24,29 +24,29 @@ deregister_script() {
   printf '%s' "${script//@PROVISION@/$provision}"
 }
 
-# deregister_runner <url> <id> <on>: takes the registered runner out of
-# service and deregisters it; <on> is runner_on_github's answer for it (1:
+# deregister_runner <url> <id> <on>: deregisters a runner its caller has
+# already taken out of service; <on> is runner_on_github's answer for it (1:
 # GitHub no longer has it, so only the VM's copy of the registration goes).
 # Shared by uninstall and reset. The caller has checked that no job is
-# running. A failure ends the command (die, or `set -e`) after
-# restart_runner_on_failure has given the runner its service back, so call it
-# as a plain command, never from a condition: errexit is off in there and the
-# failure would pass for success.
+# running and called stop_runner, which arms restart_runner_on_failure. A
+# failure ends the command (die, or `set -e`) after that trap has given the
+# runner its service back, so call it as a plain command, never from a
+# condition: errexit is off in there and the failure would pass for success.
 deregister_runner() {
   local url="$1" id="$2" on="$3" token stage
   echo "homefield: switch every repository that routes to this runner to hosted first:" >&2
   echo "homefield:   gh variable set CI_RUNNER --repo <owner>/<repo> --body hosted" >&2
   # The restore deregister_script falls back on, staged in a private
-  # directory while nothing has changed yet (#185). RS_STAGE is cleaned up by
-  # restart_runner_on_failure (the EXIT trap stop_runner sets below) when a
-  # failure ends the command mid-flow, and explicitly after runner_back.
+  # directory before the token is fetched (#185). RS_STAGE is cleaned up by
+  # restart_runner_on_failure (the EXIT trap stop_runner set in the caller)
+  # when a failure ends the command mid-flow, and explicitly after runner_back.
   stage="$(guest_stage_dir)"
   RS_STAGE="$stage"
   # shellcheck disable=SC2153  # PROVISION is bin/homefield's, this file is sourced
   limactl copy "$PROVISION" "${INSTANCE}:${stage}/provision.sh" ||
-    { guest_unstage "$stage"; RS_STAGE=""; die "could not copy provision.sh into VM ${INSTANCE}; nothing was changed"; }
-  # Offline before the token is fetched or typed, which can take a while.
-  stop_runner
+    { guest_unstage "$stage"; RS_STAGE=""; die "could not copy provision.sh into VM ${INSTANCE}; nothing was deregistered"; }
+  # The runner is already offline (the caller stopped it right after the idle
+  # check), so the token is fetched without a job being able to start.
   if [ "$on" = 1 ]; then
     # A full removal would ask GitHub to delete a runner it does not have.
     log "GitHub no longer has this runner (id ${id}) at ${url}; removing its registration from the VM only"
@@ -90,9 +90,14 @@ cmd_uninstall() {
   [ "$status" = "Running" ] || limactl start --tty=false "$INSTANCE"
   if is_registered; then
     is_job_running && die "a job is running on ${INSTANCE}; uninstall when it is idle"
+    # Offline straight after the idle check: reading the settings and asking
+    # GitHub whether it still has the runner can take HOMEFIELD_GH_TIMEOUT,
+    # and a job picked up in that window would be cancelled. stop_runner arms
+    # the restart-on-failure trap.
+    stop_runner
     local url="" id="" on=0
     { read -r url || true; read -r id || true; } < <(runner_setting gitHubUrl agentId)
-    [ -n "$url" ] || die "could not read the runner's registration in VM ${INSTANCE}; nothing was changed"
+    [ -n "$url" ] || die "could not read the runner's registration in VM ${INSTANCE}; nothing was deregistered"
     runner_on_github "$url" "$id" || on=$?
     deregister_runner "$url" "$id" "$on"
   else
@@ -111,12 +116,12 @@ R_REG=0
 R_URL=""
 R_ID=""
 R_ON=2
-# reset_inspect: reads the above from a running VM. A running job ends the
-# command, before anything is asked or changed.
-
-# reset_inspect: reads the above from a running VM. A running job ends the
-# command, before anything is asked or changed.
+# reset_inspect [stop]: reads the above from a running VM. A running job ends
+# the command, before anything is asked or changed. With `stop`, the runner
+# goes offline right after that idle check, before its settings and GitHub
+# presence are read, so a job cannot start in between (#238).
 reset_inspect() {
+  local stop="${1:-}"
   R_REG=0
   R_URL=""
   R_ID=""
@@ -124,8 +129,9 @@ reset_inspect() {
   is_registered || return 0
   R_REG=1
   is_job_running && die "a job is running on ${INSTANCE}; reset when it is idle (no runner was touched)"
+  [ "$stop" != stop ] || stop_runner
   { read -r R_URL || true; read -r R_ID || true; } < <(runner_setting gitHubUrl agentId)
-  [ -n "$R_URL" ] || die "could not read the runner's registration in VM ${INSTANCE}; no runner was touched"
+  [ -n "$R_URL" ] || die "could not read the runner's registration in VM ${INSTANCE}; nothing was deregistered"
   R_ON=0
   runner_on_github "$R_URL" "$R_ID" || R_ON=$?
 }
@@ -336,13 +342,19 @@ reset_vm() {
       log "starting VM ${INSTANCE}"
       limactl start --tty=false "$INSTANCE" ||
         die "could not start VM ${INSTANCE} to look for a registered runner; if one registered, remove it on GitHub's runners page, then delete the VM by hand: limactl delete --force ${INSTANCE}"
-      reset_inspect
+      # Started after the confirmation: idle check, stop, then the settings
+      # and GitHub reads, in that order, with no window between.
+      reset_inspect stop
     fi
     if [ "$R_REG" = 1 ]; then
-      # The runner stayed online while the plan was read and confirmed, and may
+      # A runner that was online while the plan was read and confirmed may
       # have taken a job since; nothing has been changed yet.
-      if [ "$RESET_ASKED_EARLY" = 1 ] && is_job_running; then
-        die "a job started on ${INSTANCE} while you were deciding; reset when it is idle (no runner was touched)"
+      if [ "$RESET_ASKED_EARLY" = 1 ]; then
+        if is_job_running; then
+          die "a job started on ${INSTANCE} while you were deciding; reset when it is idle (no runner was touched)"
+        fi
+        # Offline straight after that check, before the deregistration work.
+        stop_runner
       fi
       # Plain command, not a condition: a failure here ends reset with the VM
       # kept and the runner's service back, and nothing after it is done.

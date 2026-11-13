@@ -553,14 +553,14 @@ copy_preset_hooks() {
   # the retired hooks' ownership records would be lost for good — so it dies.
   if guest_stdin sudo test -f "$GUEST_MANIFEST" </dev/null 2>/dev/null; then
     have="$(guest_stdin sudo cat "$GUEST_MANIFEST" </dev/null 2>/dev/null)" ||
-      die "could not read the preset hook manifest of VM ${INSTANCE}; nothing was stopped"
+      die "could not read the preset hook manifest of VM ${INSTANCE}."
   else
     have=""
   fi
   for f in ${PRESET_HOOKS[@]+"${PRESET_HOOKS[@]}"}; do
     base="${f##*/}"
     limactl copy "$f" "${INSTANCE}:${stage}/${base}" </dev/null ||
-      die "could not copy preset hook ${base} into VM ${INSTANCE}; nothing was stopped"
+      die "could not copy preset hook ${base} into VM ${INSTANCE}."
     names="${names:+$names }$base"
   done
   # Only a plain file name of a hook this manifest installed: the manifest
@@ -577,11 +577,11 @@ copy_preset_hooks() {
   for f in ${PRESET_HOOKS[@]+"${PRESET_HOOKS[@]}"}; do
     base="${f##*/}"
     guest_stdin sudo install -D -m 0755 "${stage}/${base}" "${GUEST_HOOKS}/${base}" </dev/null ||
-      die "could not install preset hook ${base} in VM ${INSTANCE}; nothing was stopped"
+      die "could not install preset hook ${base} in VM ${INSTANCE}."
   done
   for base in $removed; do
     guest_stdin sudo rm -f "${GUEST_HOOKS}/${base}" </dev/null ||
-      die "could not remove retired preset hook ${base} in VM ${INSTANCE}; nothing was stopped"
+      die "could not remove retired preset hook ${base} in VM ${INSTANCE}."
     log "${INSTANCE}: removed preset hook ${base}; the preset no longer ships it"
   done
   # The manifest is what the next copy prunes against: the names this copy
@@ -591,10 +591,10 @@ copy_preset_hooks() {
   # fresh install of a preset with no hooks — nothing else creates it — so it
   # is made here.
   guest_stdin sudo install -d -m 0755 "${GUEST_MANIFEST%/*}" </dev/null ||
-    die "could not create ${GUEST_MANIFEST%/*} in VM ${INSTANCE}; nothing was stopped"
+    die "could not create ${GUEST_MANIFEST%/*} in VM ${INSTANCE}."
   # shellcheck disable=SC2086  # unquoted: word splitting puts each name on its own line
   printf '%s\n' $names | guest_stdin sudo tee "$GUEST_MANIFEST" >/dev/null ||
-    die "could not write the preset hook manifest in VM ${INSTANCE}; nothing was stopped"
+    die "could not write the preset hook manifest in VM ${INSTANCE}."
   guest_unstage "$stage"
   trap - RETURN
 }
@@ -603,15 +603,17 @@ copy_preset_hooks() {
 # the VM's saved list but not in the replacement --packages value. Plain
 # --packages replaces the whole list, so these would stop being reinstalled.
 preset_saved_drops() {
-  local replacement=" $1 " d name pkg drops="" tops=()
+  local replacement=" $1 " d name pkg drops="" tops=() saved
   for d in "$PRESETS"/*/; do
     [ -f "$d/packages" ] || continue
     d="${d%/}"
     tops+=("${d##*/}")
   done
   load_presets ${tops[@]+"${tops[@]}"}
+  # One read of the saved list for the whole loop: it is a guest call.
+  saved=" $(runner_extra_packages) "
   for pkg in $PRESET_PKGS; do
-    case " $(runner_extra_packages) " in *" $pkg "*) ;; *) continue ;; esac
+    case "$saved" in *" $pkg "*) ;; *) continue ;; esac
     case "$replacement" in *" $pkg "*) continue ;; esac
     drops="${drops:+$drops }$pkg"
   done
@@ -753,6 +755,12 @@ upgrade_single() {
   if is_job_running && [ "$force" != 1 ]; then
     die "a job is running on ${INSTANCE}; try again when it is idle, or pass --force"
   fi
+  # Offline straight after the idle check, before the preset work below: that
+  # is a stage directory, one copy and one install per hook, and the saved
+  # list read, so a job picked up in the gap would be cancelled by the stop.
+  # stop_runner arms the restart-on-failure trap, so a failure from here on
+  # gives the service back (#238).
+  stop_runner
   # Presets add to the saved list (and to any --packages), so nothing a VM had
   # stops being reinstalled. Plain --packages still replaces the whole list;
   # say which preset names that takes out of it.
@@ -770,7 +778,6 @@ upgrade_single() {
       log "warning: --packages replaces the saved list; preset packages not in it will stop being reinstalled (hooks stay): $dropped"
     fi
   fi
-  stop_runner
   local env=()
   if [ ${#UP_PRESETS[@]} -gt 0 ]; then
     env+=(RUNNER_EXTRA_PACKAGES="$merged")
