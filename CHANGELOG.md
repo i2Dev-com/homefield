@@ -22,6 +22,9 @@ fail, such as a new guard in the routing expression, bumps the minor version
   images" section shows the builder creation a job needs
   ([#241](https://github.com/i2Dev-com/homefield/issues/241)).
 
+- The Homebrew tap formula (`formula/homefield.rb`): `brew tap i2Dev-com/homefield && brew install homefield` installs the tool from the release tarball, with the tarball's SHA256 verified, so `brew upgrade` is the update path for the host tool (the VM upgrade stays `homefield upgrade`; [#246](https://github.com/i2Dev-com/homefield/issues/246)). The release automation in
+  [`.github/workflows/tap-release.yml`](.github/workflows/tap-release.yml) updates the formula's url, version and sha256 from the release tarball on every release and commits them to the tap repository — a tap repository that does not exist yet only warns, so the formula can land in this repository first. The formula's url, version and sha256 placeholders stay in sync (checked by `tests/release-refs.sh`).
+
 ### CI
 
 - Every suite now runs in CI: the workflow loops over `routing-guard/tests/run.sh`

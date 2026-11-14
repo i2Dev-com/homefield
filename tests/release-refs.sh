@@ -51,6 +51,30 @@ check_text "tests/adopt.sh's guard fixture is ${release}" tests/adopt.sh "action
 check_text "tests/adopt.sh's guide URL is at ${release}" tests/adopt.sh "blob/${release}/docs/adopting.md"
 check_text "tests/adopt.sh's mode-release default is ${release}" tests/adopt.sh "HOMEFIELD_MODE_RELEASE=\"\${HOMEFIELD_MODE_RELEASE:-${release}}\""
 
+# The formula is the tap template: the release automation rewrites its version,
+# url and sha256 together from the same release, so the placeholders stay in
+# sync — the url's version is the version the formula carries, and the sha256
+# is the 64-hex placeholder the filled formula gets.
+sha256_ok() {
+  local s="$1"
+  [ ${#s} -eq 64 ] || { echo no; return 0; }
+  case "$s" in *[!0-9a-f]*) echo no ;; *) echo yes ;; esac
+}
+formula="formula/homefield.rb"
+if [ -f "$formula" ]; then
+  version="$(sed -n 's/^  version "\([^"]*\)".*/\1/p' "$formula" | head -1)"
+  url="$(sed -n 's/^  url "\([^"]*\)".*/\1/p' "$formula" | head -1)"
+  url_version="$(printf '%s' "$url" | sed 's|^.*tar\.gz/v\([^"]*\).*|\1|')"
+  sha256="$(sed -n 's/^  sha256 "\([^"]*\)".*/\1/p' "$formula" | head -1)"
+  record "formula's version and its url version are the same placeholder" "$version" "$url_version"
+  record "formula's url is the release tarball install.sh fetches" "yes" "$(has "$url" "codeload.github.com/i2Dev-com/homefield/tar.gz")"
+  record "formula's sha256 is a 64-hex placeholder" "yes" "$(sha256_ok "$sha256")"
+else
+  record "formula's version and its url version are the same placeholder" "skip" "no"
+  record "formula's url is the release tarball install.sh fetches" "skip" "no"
+  record "formula's sha256 is a 64-hex placeholder" "skip" "no"
+fi
+
 # No tagged install one-liner in a current-facing file may name another
 # release. CHANGELOG.md and tasks/ keep history and are not scanned.
 stale=""

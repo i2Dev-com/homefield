@@ -1,0 +1,33 @@
+name: Tap release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  tap-release:
+    name: Update the tap formula
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      # The token that can write to the tap repository: gh reads it from the
+      # environment (never from the command line, which is how the token stays
+      # out of the job log and of every process list), and
+      # bin/cmd-tap-release.sh also reads it from the environment for the git
+      # push. Set it as TAP_TOKEN on the tap repository; see docs/tap.md.
+      GH_TOKEN: ${{ secrets.TAP_TOKEN }}
+    steps:
+      - name: Check out this repository
+        uses: actions/checkout@v7
+
+      - name: Update the tap formula
+        env:
+          # The formula template is in this checkout; the tap repository is
+          # cloned, updated and committed by bin/cmd-tap-release.sh.
+          TAP_REPO: i2Dev-com/homebrew-homefield
+        run: |
+          set -euo pipefail
+          bash bin/cmd-tap-release.sh "$GITHUB_REF_NAME"
