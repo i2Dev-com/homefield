@@ -59,6 +59,18 @@ curl -fsSL https://raw.githubusercontent.com/i2Dev-com/homefield/v0.5.3/install.
 
 It asks a few questions and does the rest:
 
+Or, once the tap is published, with Homebrew — it verifies the release tarball's
+SHA256, so the formula is a trustwin over the one-liner, and `brew upgrade` is
+the update path for the host tool (the VM upgrade stays `homefield upgrade`):
+
+```bash
+brew tap i2Dev-com/homefield && brew install homefield
+```
+
+(The tap is created when the next release is cut: it ships the formula from the
+release tarball, and the formula's url, version and sha256 are updated by the
+release automation for every release.)
+
 1. **Homebrew and `gh` login.** Missing Lima or `gh`, or a logged-out `gh`:
    one question each (the `brew` commands it will run; the `gh auth login`
    scopes), then it carries on.
@@ -237,6 +249,7 @@ pull-request code away from the Mac it runs on.
 | [docs/adopting.md](docs/adopting.md) | Routing a repository: the seven steps, the guard, `adopt` and its pull request |
 | [docs/runbook.md](docs/runbook.md) | Operating it: setup, runner group, switching, failure modes, maintenance, moving, removal |
 | [docs/security.md](docs/security.md) | The routing guard's contract, and the bypasses found and fixed so far |
+| [docs/tap.md](docs/tap.md) | The Homebrew tap: the formula template, the release automation and the `TAP_TOKEN` secret |
 | [docs/cli.md](docs/cli.md) | Every command, option, exit code and environment variable — for scripts and AI agents |
 | [CHANGELOG.md](CHANGELOG.md) | What each release changed, and how to upgrade |
 
