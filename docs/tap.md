@@ -21,12 +21,14 @@ runs `bin/cmd-tap-release.sh <tag>` on `release: published`:
 
 ## The token
 
-`TAP_TOKEN` is the token that can write to the tap repository: it is set as a
-secret on the tap repository, and the workflow passes it to the job as
-`GH_TOKEN`. `bin/cmd-tap-release.sh` reads `GH_TOKEN` from the environment only
-— a git credential helper writes it into the credentials store when git needs
-credentials to push, so the token is never on a command line, and it stays out
-of the job log and of every process list.
+`TAP_TOKEN` is the token that can write to the tap repository. The workflow
+runs in this repository, so `TAP_TOKEN` is a secret **of i2Dev-com/homefield**
+(a secret on the tap repository would be invisible to it); the token itself
+must have write access to i2Dev-com/homebrew-homefield. The workflow passes it
+to the job as `GH_TOKEN`. `bin/cmd-tap-release.sh` reads `GH_TOKEN` from the
+environment only — a git credential helper writes it into the credentials store
+when git needs credentials to push, so the token is never on a command line,
+and it stays out of the job log and of every process list.
 
 ## The release process
 

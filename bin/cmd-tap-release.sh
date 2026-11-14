@@ -104,8 +104,14 @@ tap_release() {
 
   # Clone the tap repository with gh (the token is in the environment). If the
   # tap repository does not exist yet, the tap is not there: warn and carry on
-  # without the update, so the formula can land in this repository first.
-  if ! gh repo clone "$TAP_REPO" "$work/tap" -- --force; then
+  # without the update, so the formula can land in this repository first. Any
+  # other clone failure is real and must not read as "no tap": ask gh whether
+  # the repository exists before deciding which of the two this is.
+  if ! gh repo clone "$TAP_REPO" "$work/tap" -- --depth 1; then
+    if gh repo view "$TAP_REPO" --json name >/dev/null 2>&1 </dev/null; then
+      echo "homefield: cloning $TAP_REPO failed; the formula is not updated" >&2
+      return 1
+    fi
     echo "homefield: the tap repository $TAP_REPO does not exist yet: the formula is not updated" >&2
     return 0
   fi

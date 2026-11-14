@@ -79,16 +79,19 @@ printf '%s  %s\n' "$SHA256_FOR_CURL" "$1"
 EOF
 
 # gh: a stub that creates the tap repository for the clone, and fails (a tap
-# repository that does not exist yet) when GH_TAP_FAIL is set.
+# repository that does not exist yet) when GH_TAP_FAIL is set. A clone failure
+# makes the code probe the repository with gh repo view: GH_TAP_FAIL keeps
+# that failing too (the tap does not exist), GH_TAP_CLONE_FAIL makes only the
+# clone fail (the tap exists; a real clone failure).
 fake_stub "$stubs" gh CALLS <<'EOF'
 case "$*" in
   *repo\ clone*)
-    if [ -n "${GH_TAP_FAIL:-}" ]; then
+    if [ -n "${GH_TAP_FAIL:-}" ] || [ -n "${GH_TAP_CLONE_FAIL:-}" ]; then
       echo "gh: repository not found: $TAP_REPO" >&2
       exit 128
     fi
     # The destination is the argument before --: the call is
-    # gh repo clone <repo> <dest> -- --force.
+    # gh repo clone <repo> <dest> -- --depth 1.
     dest=""
     for a in $*; do
       [ "$a" = -- ] && break
@@ -96,6 +99,10 @@ case "$*" in
     done
     mkdir -p "$dest/formula"
     cp "$TAP_TEMPLATE" "$dest/formula/homefield.rb"
+    ;;
+  *repo\ view*)
+    [ -n "${GH_TAP_FAIL:-}" ] && exit 1
+    echo '{"name":"homebrew-homefield"}'
     ;;
   *)
     ;;
@@ -159,7 +166,8 @@ record "the formula carries a version" "0.0.0" "$version"
 record "the url carries the same version placeholder" "yes" "$(has "$url" "tar.gz/v${version}")"
 record "the url is the release tarball install.sh fetches" "yes" "$(has "$url" "codeload.github.com/i2Dev-com/homefield/tar.gz")"
 record "the formula's sha256 is a 64-hex placeholder" "yes" "$(sha256_ok "$sha256")"
-record "the formula installs bin/homefield" "yes" "$(has "$(cat "$formula")" 'bin.install "homefield"')"
+record "the formula installs the runtime tree under libexec" "yes" "$(has "$(cat "$formula")" 'libexec.install %w[bin vm tools]')"
+record "the formula exposes a PATH wrapper" "yes" "$(has "$(cat "$formula")" '(bin/"homefield").write')"
 record "the formula tests homefield version" "yes" "$(has "$(cat "$formula")" 'system bin/"homefield", "version"')"
 
 # ── The release update ───────────────────────────────────────────────────────
@@ -198,5 +206,13 @@ record "the missing tap is not a failure" "0" "$rc"
 record "the warning is printed" "yes" "$(has "$out" "the tap repository $TAP_REPO does not exist yet")"
 record "the formula is not written" "no" "$([ -e "$work/warn/tap" ] && echo yes || echo no)"
 record "no update is committed" "0" "$(called '^git commit')"
+
+# ── A real clone failure is a failure, not the missing-tap warning ──────────
+
+echo "a real clone failure"
+run_release GH_TAP_CLONE_FAIL=1 v0.5.4 "$work/clonfail"
+record "a clone failure of an existing tap fails the release" "1" "$rc"
+record "the missing-tap warning is not printed" "no" "$(has "$out" "does not exist yet")"
+record "the clone-failure message is printed" "yes" "$(has "$out" "cloning $TAP_REPO failed")"
 
 summary

@@ -22,9 +22,17 @@ class Homefield < Formula
   sha256 "0000000000000000000000000000000000000000000000000000000000000000"
 
   def install
-    # The tarball ships bin/homefield: the executable that the wrapper on the
-    # user's PATH execs from its installed directory.
-    bin.install "homefield"
+    # The tarball's executable is bin/homefield, and it resolves its root
+    # relative to itself (it sources bin/lib/*.sh, and the commands need
+    # vm/ and tools/). Install the runtime tree under libexec, preserving the
+    # layout, and expose a wrapper on the PATH that execs it: installing
+    # bin/homefield alone would put a script on the PATH whose relative
+    # resolution finds nothing.
+    libexec.install %w[bin vm tools]
+    (bin/"homefield").write <<~EOS
+      #!/bin/bash
+      exec "#{libexec}/bin/homefield" "$@"
+    EOS
   end
 
   test do

@@ -17,7 +17,10 @@ jobs:
       # environment (never from the command line, which is how the token stays
       # out of the job log and of every process list), and
       # bin/cmd-tap-release.sh also reads it from the environment for the git
-      # push. Set it as TAP_TOKEN on the tap repository; see docs/tap.md.
+      # push. This workflow runs in THIS repository, so TAP_TOKEN is a secret
+      # of i2Dev-com/homefield (a secret on the tap repository would be
+      # invisible here); the token itself must have write access to
+      # i2Dev-com/homebrew-homefield. See docs/tap.md.
       GH_TOKEN: ${{ secrets.TAP_TOKEN }}
     steps:
       - name: Check out this repository
