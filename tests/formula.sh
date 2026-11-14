@@ -193,9 +193,9 @@ record "the tarball's sha256 is computed" "1" "$(called '^sha256sum')"
 record "the formula is added" "1" "$(called '^git add')"
 record "the formula is committed" "1" "$(called '^git -c .*commit')"
 record "the formula is pushed" "1" "$(called '^git push')"
-record "the formula in the tap has the new values" "$new_version" "$(formula_value "$work/release/tap/formula/homefield.rb" version)"
-record "the formula in the tap has the new url" "$new_version" "$(formula_value "$work/release/tap/formula/homefield.rb" url | sed 's|^.*tar\.gz/v\([^"]*\).*|\1|')"
-record "the formula in the tap has the new sha256" "$new_sha256" "$(formula_value "$work/release/tap/formula/homefield.rb" sha256)"
+record "the formula in the tap has the new values" "$new_version" "$(formula_value "$work/release/tap/Formula/homefield.rb" version)"
+record "the formula in the tap has the new url" "$new_version" "$(formula_value "$work/release/tap/Formula/homefield.rb" url | sed 's|^.*tar\.gz/v\([^"]*\).*|\1|')"
+record "the formula in the tap has the new sha256" "$new_sha256" "$(formula_value "$work/release/tap/Formula/homefield.rb" sha256)"
 record "the release summary is printed" "yes" "$(has "$out" "the formula of $TAP_REPO is updated for v0.5.4")"
 
 # ── The no-tap-repo warning ──────────────────────────────────────────────────
