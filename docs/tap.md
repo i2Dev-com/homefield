@@ -9,7 +9,8 @@ whose formula is updated by the release automation on every release.
 
 `formula/homefield.rb` in this repository is the template the tap carries. On
 every release it is filled with the release's values and committed to the tap
-repository by the release automation in
+repository as `Formula/homefield.rb` (capitalized — the directory name
+Homebrew discovers on a case-sensitive checkout) by the release automation in
 [`.github/workflows/tap-release.yml`](.github/workflows/tap-release.yml), which
 runs `bin/cmd-tap-release.sh <tag>` on `release: published`:
 

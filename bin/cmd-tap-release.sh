@@ -61,7 +61,7 @@ release_sha256() {
 
 # update_formula <template> <tag> <sha256> [dest]: rewrites the url, the
 # version and the sha256 of the formula template with the release's values, and
-# writes the filled formula to dest (the tap repository's formula/). The url
+# writes the filled formula to dest (the tap repository's Formula/, capitalized as Homebrew requires). The url
 # carries the tag, the version the bare version: the release automation rewrites
 # all three from the same release, so the two stay in sync.
 update_formula() {
@@ -119,7 +119,7 @@ tap_release() {
   # Update the formula with the release's url/version/sha256: the url carries
   # the tag, the version the bare version (derived from it), the sha256 the
   # tarball's.
-  update_formula "$TEMPLATE" "$tag" "$sha256" "$work/tap/formula/homefield.rb"
+  update_formula "$TEMPLATE" "$tag" "$sha256" "$work/tap/Formula/homefield.rb"
 
   # Commit and push it to the tap repository.
   cd "$work/tap" || return 1

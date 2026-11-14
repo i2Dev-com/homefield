@@ -97,8 +97,8 @@ case "$*" in
       [ "$a" = -- ] && break
       dest="$a"
     done
-    mkdir -p "$dest/formula"
-    cp "$TAP_TEMPLATE" "$dest/formula/homefield.rb"
+    mkdir -p "$dest/Formula"
+    cp "$TAP_TEMPLATE" "$dest/Formula/homefield.rb"
     ;;
   *repo\ view*)
     [ -n "${GH_TAP_FAIL:-}" ] && exit 1
