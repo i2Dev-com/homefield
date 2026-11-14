@@ -77,4 +77,41 @@ fi
 verdict="$([ "$want" = "$got" ] && echo same || printf 'expression %s, provision.sh %s' "$want" "$got")"
 record "the registered labels match the expression's fromJSON list" same "$verdict"
 
+# The arch dimension is part of the same contract: routing_guard.py builds the
+# expression's third label from --arch, validated against its ARCHS list, while
+# provision.sh registers a fixed arch (arm64 — the only VM it provisions, and
+# the only value `homefield adopt` accepts). Pin both halves so an arch value
+# that is not a valid runner label (casing, a new entry) cannot slip through:
+# every ARCHS value must reach the expression's label list verbatim, and the
+# provisioned arch's list must stay the one that matches the registration.
+case_labels() {
+  printf '%s\n' "$1" | python3 -c 'import ast,json,re,sys; text=sys.stdin.read(); m=re.search(r"fromJSON\((.*?)\)", text); assert m is not None, "no fromJSON list in the expression"; print(",".join(json.loads(ast.literal_eval(m.group(1)))))'
+}
+archs="$(python3 -c "import sys; sys.path.insert(0, '$ROOT/routing-guard'); from routing_guard import ARCHS; print(' '.join(ARCHS))")"
+[ -n "$archs" ] || { echo "tests: could not read ARCHS from routing_guard.py" >&2; exit 1; }
+for arch in $archs; do
+  expr_arch="$(python3 "$ROOT/routing-guard/routing_guard.py" --print-expression --label "$label_default" --arch "$arch")"
+  arch_labels="$(case_labels "$expr_arch")"
+  third="$(printf '%s\n' "$arch_labels" | cut -d, -f3)"
+  verdict="$third"
+  [ "$third" = "$arch" ] || verdict="expression's third label is $third, arch is $arch"
+  record "arch $arch reaches the expression's label list" "$arch" "$verdict"
+done
+# The provisioned arch (arm64) is the registration contract; the other ARCHS
+# value must NOT match what provision.sh registers, so the suites also catch a
+# provision.sh that starts registering a foreign arch.
+for arch in $archs; do
+  expr_arch="$(python3 "$ROOT/routing-guard/routing_guard.py" --print-expression --label "$label_default" --arch "$arch")"
+  arch_labels="$(case_labels "$expr_arch")"
+  got_arch="$(norm_labels "$arch_labels")"
+  want_arch="$(norm_labels "$prov_labels")"
+  if [ "$arch" = arm64 ]; then
+    record "arm64 expression matches the registered labels" same \
+      "$([ "$got_arch" = "$want_arch" ] && echo same || printf 'expression %s, provision.sh %s' "$got_arch" "$want_arch")"
+  else
+    record "non-provisioned arch ($arch) does not match the registered labels" differ \
+      "$([ "$got_arch" != "$want_arch" ] && echo differ || echo "expression matches the registration")"
+  fi
+done
+
 summary
