@@ -117,7 +117,8 @@ maintenance() {
   [ $# -gt 0 ] && shift
   # REBOOT_REQUIRED is one of the run's env assignments; the flag file it
   # names is created here, in the tree the sed points the check at.
-  case "${envs[*]}" in *REBOOT_REQUIRED*) : >"$work/reboot-required" ;; esac
+  # ${envs[*]:-}: bash 3.2 calls an empty array unbound under set -u.
+  case "${envs[*]:-}" in *REBOOT_REQUIRED*) : >"$work/reboot-required" ;; esac
   local cmd=(env -i PATH="$stubs:$PATH" CALLS="$calls" WORK="$work" PAGER=cat)
   [ ${#envs[@]} -gt 0 ] && cmd+=("${envs[@]}")
   sed -e "s|/opt/actions-runner|$work/runner|g" \
