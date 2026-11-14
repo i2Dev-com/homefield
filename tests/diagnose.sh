@@ -385,9 +385,11 @@ if command -v dash >/dev/null 2>&1; then
     "match/match/nomatch/match/match/nomatch" \
     "$(pc "$BASH_BIN" $'\001')/$(pc "$BASH_BIN" 'a"b')/$(pc "$BASH_BIN" plain)/$(pc dash $'\001')/$(pc dash 'a"b')/$(pc dash plain)"
 else
-  record "the json_str fast-path pattern classifies the same under bash and dash" \
+  # dash is not installed here: pin the bash half only, and say so in the
+  # label (never in the compared value — record compares for equality).
+  record "the json_str fast-path pattern classifies under bash (dash not installed; dash half skipped)" \
     "match/match/nomatch" \
-    "$(pc "$BASH_BIN" $'\001')/$(pc "$BASH_BIN" 'a"b')/$(pc "$BASH_BIN" plain) (dash not installed; bash-only)"
+    "$(pc "$BASH_BIN" $'\001')/$(pc "$BASH_BIN" 'a"b')/$(pc "$BASH_BIN" plain)"
 fi
 
 # Real python3 only: on a stock Mac `python3` is a stub that opens an
