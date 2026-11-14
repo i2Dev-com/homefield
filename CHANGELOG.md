@@ -24,6 +24,13 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ### CI
 
+- `tests/label-rule.sh` now pins the arch dimension of the routing contract:
+  every `arch` value `routing_guard.py` accepts must reach the expression's
+  label list verbatim, the provisioned arch (`arm64`) must match what
+  `provision.sh` registers, and a non-provisioned arch (`x64`) must not —
+  so an arch value that is not a valid runner label cannot slip through both
+  suites ([#259](https://github.com/i2Dev-com/homefield/issues/259)).
+
 - Every suite now runs in CI: the workflow loops over `routing-guard/tests/run.sh`
   and `tests/*.sh` (a new suite is in CI by existing) instead of listing suites
   one step at a time — seven suites added since the list was written had never
