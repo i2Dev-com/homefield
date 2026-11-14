@@ -11,6 +11,10 @@
 # gh missing is a failure to fix, gh logged out is a failure too, and a token
 # without admin:org only warns (an organization URL is what needs that scope,
 # a repository URL is registered with repo; `gh auth refresh -s admin:org`).
+# gh >= 2.32 is the version floor: `gh auth status --json hosts` (the account
+# check below, via gh_active_account) and `gh api --jq` (the registration
+# token) need it; an older gh fails here with the upgrade command, not
+# mid-setup with an opaque API error.
 # Lima >= 2.3 is the same check as check_host's.
 PF_NAME=()
 PF_LEVEL=()
@@ -39,6 +43,8 @@ preflight_collect() {
   # `gh auth status` also lists accounts that are not active.
   if ! command -v gh >/dev/null 2>&1; then
     pf_add gh fail "gh (GitHub CLI) not found: run 'brew install gh'"
+  elif ! gh_at_least "$GH_MIN_MAJOR" "$GH_MIN_MINOR"; then
+    pf_add gh fail "gh >= ${GH_MIN_MAJOR}.${GH_MIN_MINOR} required (auth status --json, api --jq), found ${GH_MAJOR:-unknown}.${GH_MINOR:-unknown}: run 'brew upgrade gh'"
   else
     whoami="$(gh_active_account)" || whoami="|"
     login="${whoami%%|*}"

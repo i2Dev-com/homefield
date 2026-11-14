@@ -39,6 +39,11 @@ EOF
         cat >"$dir/gh" <<'EOF'
 #!/bin/sh
 echo "$*" >>"$GH_CALLS"
+# `gh --version` decides preflight's gh-version row (GH_MIN_MAJOR/MINOR).
+if [ "$1" = "--version" ]; then
+  echo "gh version ${GH_VERSION:-2.90.0}"
+  exit 0
+fi
 # `gh auth status --json hosts` exits 0 even when nobody is logged in and
 # prints {"hosts":{}}; the message goes to stderr. --jq prints one line.
 if [ "$1" = "auth" ] && [ "$2" = "status" ]; then
@@ -350,10 +355,31 @@ case_broken_python() {
   fi
 }
 
+# case_gh_too_old: gh resolves but reports a version below the floor
+# (GH_MIN_MAJOR/MINOR in github.sh). That is a FAIL with the upgrade command —
+# an old gh would otherwise surface as an opaque API error mid-setup.
+case_gh_too_old() {
+  local d="$work/gh-old"; ok_stub "$d"
+  preflight "$d" GH_VERSION="2.28.3" GH_JQ_OUT='stub-user|admin:org, repo'
+  if [ "$pf_rc" -eq 1 ] && has "$pf_out" "FAIL  gh >= 2.81 required (auth status --json, api --jq), found 2.28: run 'brew upgrade gh'"; then
+    record "gh below the 2.81 floor: FAIL with the upgrade command, exit 1" "$pf_rc" "1"
+  else
+    record "gh below the 2.81 floor: FAIL with the upgrade command, exit 1" "$pf_rc" "1 (got: $pf_out)"
+  fi
+  # At the floor exactly: OK.
+  preflight "$d" GH_VERSION="2.81.0"
+  if [ "$pf_rc" -eq 0 ] && has "$pf_out" "OK    gh authenticated as"; then
+    record "gh at the 2.81 floor exactly: OK, exit 0" "$pf_rc" "0"
+  else
+    record "gh at the 2.81 floor exactly: OK, exit 0" "$pf_rc" "0 (got: $pf_out)"
+  fi
+}
+
 case_all_pass
 case_missing "limactl missing" limactl "FAIL  Lima not found: run 'brew install lima'"
 case_lima_old
 case_missing "gh missing" gh "FAIL  gh (GitHub CLI) not found: run 'brew install gh'"
+case_gh_too_old
 case_gh_logged_out
 case_gh_logged_out_terminal
 case_gh_uses_helper

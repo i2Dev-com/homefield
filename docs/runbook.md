@@ -357,7 +357,7 @@ runner exchanges it for its own identity at registration. An organization
 token needs an organization owner; a repository token needs the repository's
 owner, or admin access to it in an organization:
 
-- Either `gh api -X POST orgs/<org>/actions/runners/registration-token -q .token`
+- Either `gh api -X POST orgs/<org>/actions/runners/registration-token --jq .token`
   (with the `admin:org` scope), or `repos/<owner>/<repo>/...` for a
   repository.
 - Or the runners page → *New runner → Linux*. The page shows the token in its
@@ -893,7 +893,7 @@ To move the runner to another scope (for example from one repository to the
 organization), re-register it in place. Pass its current `RUNNER_NAME` and
 `RUNNER_LABEL` so it keeps them and no workflow changes are needed.
 `REMOVE` is a remove-token for the **current**
-scope (for a repository: `gh api -X POST repos/<owner>/<repo>/actions/runners/remove-token -q .token`,
+scope (for a repository: `gh api -X POST repos/<owner>/<repo>/actions/runners/remove-token --jq .token`,
 which needs repository admin). `TOKEN` is a registration token for the new
 scope (see "Registration tokens").
 
