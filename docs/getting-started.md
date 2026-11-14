@@ -81,7 +81,7 @@ lookup; they cannot be combined.
 ## Preflight
 
 Before a checkout setup, `homefield preflight` reports on everything the tool
-needs: macOS, Apple Silicon, Lima ≥ 2.3, gh ≥ 2.32 (logged in; the `admin:org`
+needs: macOS, Apple Silicon, Lima ≥ 2.3, gh ≥ 2.81 (logged in; the `admin:org`
 scope is only a warning, since a repository URL does not need it), python3 and
 Homebrew. The gh floor is what the tool's own gh calls need —
 `gh auth status --json hosts` and `gh api --jq` — and preflight names

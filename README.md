@@ -141,10 +141,10 @@ bypasses](docs/security.md).
   preset first ([runbook: Building amd64
   images](docs/runbook.md#building-amd64-images)). Cache keys need
   `runner.arch` ([adopting, step 4](docs/adopting.md#4-fix-cache-keys)).
-- **gh ≥ 2.32.** The tool's own GitHub calls use `gh auth status --json hosts`
-  and `gh api --jq` (the registration-token fetch); `homefield preflight`
-  checks the version and names `brew upgrade gh` when the installed gh is
-  older.
+- **gh ≥ 2.81.** The tool's own GitHub calls use `gh auth status --json hosts`
+  (added in gh 2.81.0) and `gh api --jq` (the registration-token fetch);
+  `homefield preflight` checks the version and names `brew upgrade gh` when
+  the installed gh is older.
 - **Private repositories only.** A pull request runs the workflow files from
   its own branch, so anyone who can open one can change its `runs-on`. See
   [Security model](#security-model).

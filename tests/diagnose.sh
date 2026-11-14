@@ -77,7 +77,7 @@ EOF
 # a group (GH_GRP_<id>) and a group's repositories (GH_REPOS), each failing on its own switch. GH_SLEEP=1 black-holes the call.
 fake_stub "$stubs" gh CALLS <<'EOF'
 case "$*" in
-  "--version") echo "gh version 2.40.0" ;;
+  "--version") echo "gh version 2.90.0" ;;
   "auth status --json hosts"*) echo "${GH_JQ_OUT-stub-user|admin:org, repo}" ;;
   *"-X "*) echo "gh stub: a write must never be called by diagnose" >&2; exit 98 ;;
   *"/actions/runners?"*)

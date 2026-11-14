@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
 # GitHub: accounts, scopes, tokens, runners, runner groups.
 
-# gh is expected at >= 2.32: `gh auth status --json hosts` (gh_active_account,
-# preflight's gh row) and `gh api --jq` (token fetch, account type) are the
-# floor's features, and preflight gates on gh_at_least so an old gh fails with
-# a fix-up command instead of an opaque API error mid-setup.
+# gh is expected at >= 2.81: `gh auth status --json hosts` (gh_active_account,
+# preflight's gh row) landed in 2.81.0 (cli/cli#11544, released 2025-10-01);
+# `gh api --jq` is far older. preflight gates on gh_at_least so an old gh
+# fails with a fix-up command instead of the account check misreading an
+# authenticated user as logged out.
 # GH_MIN_MAJOR/GH_MIN_MINOR are read by cmd-preflight.sh's gh row; the
 # disable matches the file's existing pattern for cross-file reads.
 # shellcheck disable=SC2034
 GH_MIN_MAJOR=2
 # shellcheck disable=SC2034
-GH_MIN_MINOR=32
+GH_MIN_MINOR=81
 
 # gh_major_minor: GH_MAJOR/GH_MIN[OR] from `gh --version`'s first line
 # ("gh version 2.32.1"); empty when unreadable, like lima_major_minor.
