@@ -13,6 +13,12 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ### Added
 
+- A gh version floor: `homefield preflight` now requires **gh ≥ 2.32** — the
+  version where `gh auth status --json hosts` (the account check) and
+  `gh api --jq` (the registration-token fetch) exist. An older gh used to
+  surface only mid-setup, as an opaque "could not fetch token" API error;
+  preflight now fails before the install with `brew upgrade gh` as the fix.
+  `bin/lib/github.sh` also spells out `--jq` instead of the `-q` short form.
 - The `buildx-rosetta` preset: `docker buildx build --platform linux/amd64`
   on the VM ran every amd64 step through BuildKit's bundled QEMU — which dies
   under Apple's Rosetta, so Node-heavy steps segfaulted — while
