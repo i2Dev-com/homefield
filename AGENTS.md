@@ -24,7 +24,7 @@ parts:
   idempotent**: every run is also an upgrade. The guest helpers it installs
   are `vm/guest/` files, staged beside it by `bin/homefield`; they run in the
   guest too, and `tests/guest-scripts.sh` runs two of them against fakes.
-- Run `shellcheck bin/homefield install.sh vm/provision.sh vm/guest/* routing-guard/tests/run.sh tests/*.sh`
+- Run `shellcheck --severity=warning bin/homefield install.sh bin/cmd-*.sh bin/lib/*.sh vm/provision.sh vm/guest/* vm/presets/*/*.sh routing-guard/tests/run.sh tests/*.sh`
   (see CONTRIBUTING.md for the full pre-PR list, which also includes
   `actionlint`); CI runs the same.
 

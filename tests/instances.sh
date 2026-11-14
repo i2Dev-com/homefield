@@ -119,7 +119,7 @@ run vm_instances HOME_DIR="$work/home" LIMA_ROWS='plain Running\nforeign Running
 record "...an unmarked config that is not the default name is left out" "" "$out"
 run vm_instances HOME_DIR="$work/home" LIMA_LIST_FAIL=1
 record "Lima cannot be asked: nothing printed, nonzero so callers take their own path" \
-  "nonzero/" "$(case "$rc" in 0) echo zero ;; *) echo nonzero ;; esac)/$out"
+  "nonzero/" "$(case "$rc" in (0) echo zero ;; (*) echo nonzero ;; esac)/$out"
 
 echo "is_homefield_vm"
 # is_marked <name>: yes when the function says it carries the header.

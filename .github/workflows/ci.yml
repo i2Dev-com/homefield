@@ -32,7 +32,11 @@ jobs:
             "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/${tarball}"
           echo "${SHELLCHECK_SHA256}  ${tarball}" | sha256sum -c -
           tar -xJf "$tarball" "shellcheck-v${SHELLCHECK_VERSION}/shellcheck" --strip-components=1
-          ./shellcheck bin/homefield install.sh vm/provision.sh vm/guest/* routing-guard/tests/run.sh tests/*.sh
+          # The bin/ modules are clean at warning level; two info-level SC2153s in
+          # bin/cmd-preflight.sh remain, so the severity is pinned here.
+          ./shellcheck --severity=warning bin/homefield install.sh bin/cmd-*.sh bin/lib/*.sh \
+            vm/provision.sh vm/guest/* vm/presets/*/*.sh \
+            routing-guard/tests/run.sh tests/*.sh
 
       # Pinned and hash-verified, as actionlint and shellcheck above: the wheel
       # is downloaded, its sha256 checked, and only then installed and run.
@@ -70,71 +74,26 @@ jobs:
           tar -xzf "$tarball" actionlint
           ./actionlint -color
 
-      - name: routing_guard.py fixture suite
-        run: bash routing-guard/tests/run.sh
-
-      - name: Routing label rule, provision.sh and routing_guard.py agree
-        run: bash tests/label-rule.sh
-
-      - name: Release references agree
-        run: bash tests/release-refs.sh
-
-      - name: RUNNER_EXTRA_PACKAGES validation
-        run: bash tests/extra-packages.sh
-
-      - name: RUNNER_URL validation
-        run: bash tests/runner-url.sh
-
-      - name: Guest memory sampler
-        run: bash tests/memwatch.sh
-
-      - name: Workspace ownership hook
-        run: bash tests/workspace-owner.sh
-
-      - name: Host loopback probe
-        run: bash tests/loopback-probe.sh
-
-      - name: provision.sh restarts a runner it stopped
-        run: bash tests/provision-recovery.sh
-
-      - name: homefield uninstall restores the service
-        run: bash tests/uninstall.sh
-
-      - name: homefield reset rolls back an install
-        run: bash tests/reset.sh
-
-      - name: Every VM on this Mac by default
-        run: bash tests/instances.sh
-
-      - name: homefield status without the runner's settings
-        run: bash tests/status.sh
-
-      - name: homefield diagnose report
-        run: bash tests/diagnose.sh
-
-      - name: bin/homefield memory summary
-        run: bash tests/memory-summary.sh
-
-      - name: bin/homefield report
-        run: bash tests/report.sh
-
-      - name: install.sh
-        run: bash tests/install-sh.sh
-
-      - name: Runner group, wait for online, version
-        run: bash tests/runner-group.sh
-
-      - name: Personal account or organization (install)
-        run: bash tests/account-type.sh
-
-      - name: bin/homefield setup
-        run: bash tests/setup.sh
-
-      - name: bin/homefield adopt
-        run: bash tests/adopt.sh
-
-      - name: bin/homefield preflight
-        run: bash tests/preflight.sh
+      # One loop over every suite, so a new tests/*.sh is in CI by existing.
+      # lib.sh and fakes.sh are helpers, not suites. A failing suite does not
+      # stop the others: every failure is reported, and the step fails at the
+      # end.
+      - name: Test suites
+        run: |
+          set -uo pipefail
+          status=0
+          for suite in routing-guard/tests/run.sh tests/*.sh; do
+            case "$suite" in tests/lib.sh | tests/fakes.sh) continue ;; esac
+            echo "::group::$suite"
+            if bash "$suite"; then
+              echo "::endgroup::"
+            else
+              echo "::endgroup::"
+              echo "::error::$suite failed"
+              status=1
+            fi
+          done
+          exit "$status"
 
       # The action as consumers call it, not just the script behind it: inputs
       # through env, $GITHUB_ACTION_PATH resolution, composite wiring.
@@ -145,3 +104,33 @@ jobs:
           jobs: |
             ci.yml:changes
             ci.yml:checks
+
+  # The host-side scripts target macOS's stock bash 3.2 and BSD tools; the
+  # Linux job alone runs them under bash 5 and GNU tools. /bin first on PATH
+  # keeps `bash` at 3.2 (homebrew's newer bash sits later on the runner's
+  # PATH); memwatch.sh skips its run in this setup, its lint part always runs.
+  test-macos:
+    name: Test suites (macOS, bash 3.2)
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Test suites
+        env:
+          PATH: /bin:/usr/bin:/sbin:/usr/sbin:/opt/homebrew/bin:/usr/local/bin
+        run: |
+          set -uo pipefail
+          status=0
+          for suite in routing-guard/tests/run.sh tests/*.sh; do
+            case "$suite" in tests/lib.sh | tests/fakes.sh) continue ;; esac
+            echo "::group::$suite"
+            if bash "$suite"; then
+              echo "::endgroup::"
+            else
+              echo "::endgroup::"
+              echo "::error::$suite failed"
+              status=1
+            fi
+          done
+          exit "$status"

@@ -11,6 +11,17 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ## Unreleased
 
+### CI
+
+- Every suite now runs in CI: the workflow loops over `routing-guard/tests/run.sh`
+  and `tests/*.sh` (a new suite is in CI by existing) instead of listing suites
+  one step at a time — seven suites added since the list was written had never
+  run there ([#236](https://github.com/i2Dev-com/homefield/issues/236)).
+- Shellcheck in CI covers the `bin/cmd-*.sh` and `bin/lib/*.sh` modules and
+  `vm/presets/*/*.sh`, matching the pre-PR list in CONTRIBUTING.md.
+- A `macos-latest` job runs the suites under the stock bash 3.2 the host-side
+  scripts target, with `/bin` first on `PATH`.
+
 ### Fixed
 
 - `homefield adopt --setup`'s pull request, and the workflow comments it

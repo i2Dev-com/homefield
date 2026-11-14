@@ -29,7 +29,15 @@ bash tests/setup.sh                # `bin/homefield setup`: the preflight gate, 
 bash tests/adopt.sh                # `bin/homefield adopt`
 bash tests/preflight.sh            # `bin/homefield preflight`, the pre-install readiness check
 bash tests/preset.sh               # `--preset`: shipped sets, merges, hook copies, refusals
-shellcheck bin/homefield install.sh vm/provision.sh vm/guest/* routing-guard/tests/run.sh vm/presets/*/*.sh tests/*.sh
+bash tests/guest-scripts.sh        # the vm/guest helpers against fakes
+bash tests/help.sh                 # the help surfaces: `--help`, `help`, `help <command>`
+bash tests/parser-parity.sh        # tools/adopt.py and routing_guard.py read a workflow the same
+bash tests/runner-name.sh          # RUNNER_NAME and RUNNER_GROUP validation
+bash tests/start-stop.sh           # `homefield start` and `homefield stop`
+bash tests/status-json.sh          # `homefield status --json`
+shellcheck --severity=warning bin/homefield install.sh bin/cmd-*.sh bin/lib/*.sh \
+  vm/provision.sh vm/guest/* vm/presets/*/*.sh \
+  routing-guard/tests/run.sh tests/*.sh
 actionlint
 ```
 

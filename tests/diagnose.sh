@@ -502,7 +502,7 @@ guest_fs
 diag "${healthy[@]}" LIMA_SECOND=codesamplez --
 record "two VMs: both reported" "yes/yes/no" "$(has "$out" 'VM homefield:')/$(has "$out" 'VM codesamplez:')/$(has "$out" 'other-vm')"
 record "...the prerequisites once, before the VM blocks" "1/first" \
-  "$(printf '%s\n' "$out" | grep -c 'Prerequisites:')/$(case "$(printf '%s\n' "$out" | awk '/^VM /{print NR; exit}')x" in x) echo none ;; *) printf '%s\n' "$out" | awk '/Prerequisites:/{p=NR} /^VM /{if (p && p < NR) print "first"; exit}' ;; esac)"
+  "$(printf '%s\n' "$out" | grep -c 'Prerequisites:')/$(case "$(printf '%s\n' "$out" | awk '/^VM /{print NR; exit}')x" in (x) echo none ;; (*) printf '%s\n' "$out" | awk '/Prerequisites:/{p=NR} /^VM /{if (p && p < NR) print "first"; exit}' ;; esac)"
 record "...each VM's own summary, so two" "2" "$(printf '%s\n' "$out" | grep -c 'Summary: healthy.')"
 record "...exits 0 when both are fine" "0" "$rc"
 
@@ -512,7 +512,7 @@ record "--json: one object with the instances, prerequisites and vms keys" "yes/
 record "...one entry per VM, each a single-VM report without its own prerequisites key" "2/1" \
   "$(printf '%s\n' "$out" | grep -cE '"instance": "(codesamplez|homefield)"')/$(printf '%s\n' "$out" | grep -cF '"prerequisites"')"
 record "...healthy, and it ends with the closing brace" "yes/yes" \
-  "$(has "$out" '"healthy": true')/$(case "$(printf '%s\n' "$out" | tail -n 1)" in \}) echo yes ;; *) echo no ;; esac)"
+  "$(has "$out" '"healthy": true')/$(case "$(printf '%s\n' "$out" | tail -n 1)" in (\}) echo yes ;; (*) echo no ;; esac)"
 
 # A prerequisite that fails is printed once and fails the command, while every
 # VM's own report still runs.
