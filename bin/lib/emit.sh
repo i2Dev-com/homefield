@@ -70,8 +70,11 @@ pf_render_row() {
 # and every control character; the rest, UTF-8 included, passes through.
 json_str() {
   local s="$1" out="" c i n code
+  # POSIX requires a [:class:] to lead its bracket expression; the literals
+  # follow. The class-first form classifies identically under bash and dash
+  # (the guest helpers' shell) — mid-class placement only worked in bash.
   case "$s" in
-    *[\"\\[:cntrl:]]*) ;;
+    *[[:cntrl:]\"\\]*) ;;
     *) printf '"%s"' "$s"; return 0 ;;
   esac
   n=${#s}

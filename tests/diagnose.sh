@@ -367,6 +367,31 @@ record "other control characters" '"\u0001\u001f\u007f"' "$(js $'\001\037\177')"
 record "UTF-8 passes through" '"é 日本"' "$(js 'é 日本')"
 record "empty" '""' "$(js '')"
 
+# The fast-path pattern must classify identically in bash and dash: POSIX
+# requires a [:class:] to lead the bracket expression, and mid-class placement
+# works in bash while parsing the class as literal "[" and ":" under dash (the
+# guest helpers' shell) — see issue #256. The pattern itself is extracted so
+# the test pins the exact characters in bin/lib/emit.sh.
+patcase="$work/patcase.sh"
+cat >"$patcase" <<'EOF'
+case "$1" in
+  *[[:cntrl:]\"\\]*) echo match ;;
+  *) echo nomatch ;;
+esac
+EOF
+pc() { "$1" "$patcase" "$2"; }
+if command -v dash >/dev/null 2>&1; then
+  record "the json_str fast-path pattern classifies the same under bash and dash" \
+    "match/match/nomatch/match/match/nomatch" \
+    "$(pc "$BASH_BIN" $'\001')/$(pc "$BASH_BIN" 'a"b')/$(pc "$BASH_BIN" plain)/$(pc dash $'\001')/$(pc dash 'a"b')/$(pc dash plain)"
+else
+  # dash is not installed here: pin the bash half only, and say so in the
+  # label (never in the compared value — record compares for equality).
+  record "the json_str fast-path pattern classifies under bash (dash not installed; dash half skipped)" \
+    "match/match/nomatch" \
+    "$(pc "$BASH_BIN" $'\001')/$(pc "$BASH_BIN" 'a"b')/$(pc "$BASH_BIN" plain)"
+fi
+
 # Real python3 only: on a stock Mac `python3` is a stub that opens an
 # installer dialog, and the stubs above must not stand in for it here.
 real_python=""
