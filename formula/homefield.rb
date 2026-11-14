@@ -24,11 +24,12 @@ class Homefield < Formula
   def install
     # The tarball's executable is bin/homefield, and it resolves its root
     # relative to itself (it sources bin/lib/*.sh, and the commands need
-    # vm/ and tools/). Install the runtime tree under libexec, preserving the
-    # layout, and expose a wrapper on the PATH that execs it: installing
-    # bin/homefield alone would put a script on the PATH whose relative
-    # resolution finds nothing.
-    libexec.install %w[bin vm tools]
+    # vm/, tools/ and the routing checker that adopt runs at
+    # ROOT/routing-guard/routing_guard.py). Install the runtime tree under
+    # libexec, preserving the layout, and expose a wrapper on the PATH that
+    # execs it: installing bin/homefield alone would put a script on the PATH
+    # whose relative resolution finds nothing.
+    libexec.install %w[bin vm tools routing-guard]
     (bin/"homefield").write <<~EOS
       #!/bin/bash
       exec "#{libexec}/bin/homefield" "$@"

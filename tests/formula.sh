@@ -166,7 +166,7 @@ record "the formula carries a version" "0.0.0" "$version"
 record "the url carries the same version placeholder" "yes" "$(has "$url" "tar.gz/v${version}")"
 record "the url is the release tarball install.sh fetches" "yes" "$(has "$url" "codeload.github.com/i2Dev-com/homefield/tar.gz")"
 record "the formula's sha256 is a 64-hex placeholder" "yes" "$(sha256_ok "$sha256")"
-record "the formula installs the runtime tree under libexec" "yes" "$(has "$(cat "$formula")" 'libexec.install %w[bin vm tools]')"
+record "the formula installs the runtime tree under libexec" "yes" "$(has "$(cat "$formula")" 'libexec.install %w[bin vm tools routing-guard]')"
 record "the formula exposes a PATH wrapper" "yes" "$(has "$(cat "$formula")" '(bin/"homefield").write')"
 record "the formula tests homefield version" "yes" "$(has "$(cat "$formula")" 'system bin/"homefield", "version"')"
 
