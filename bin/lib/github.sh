@@ -1,6 +1,48 @@
 #!/usr/bin/env bash
 # GitHub: accounts, scopes, tokens, runners, runner groups.
 
+# gh is expected at >= 2.32: `gh auth status --json hosts` (gh_active_account,
+# preflight's gh row) and `gh api --jq` (token fetch, account type) are the
+# floor's features, and preflight gates on gh_at_least so an old gh fails with
+# a fix-up command instead of an opaque API error mid-setup.
+# GH_MIN_MAJOR/GH_MIN_MINOR are read by cmd-preflight.sh's gh row; the
+# disable matches the file's existing pattern for cross-file reads.
+# shellcheck disable=SC2034
+GH_MIN_MAJOR=2
+# shellcheck disable=SC2034
+GH_MIN_MINOR=32
+
+# gh_major_minor: GH_MAJOR/GH_MIN[OR] from `gh --version`'s first line
+# ("gh version 2.32.1"); empty when unreadable, like lima_major_minor.
+gh_major_minor() {
+  # Pure parameter expansion, no external commands: a stub PATH (tests,
+  # the install-time preflight) may hold none of head/sed/awk.
+  local line
+  GH_MAJOR=""
+  GH_MINOR=""
+  line="$(gh --version 2>/dev/null </dev/null)" || return 0
+  line="${line%%$'\n'*}"  # first line only
+  line="${line#*version }"
+  case "$line" in
+    [0-9]*.[0-9]*)
+      # shellcheck disable=SC2034  # read by gh_at_least and preflight's message
+      GH_MAJOR="${line%%.*}"
+      # shellcheck disable=SC2034
+      GH_MINOR="${line#*.}"
+      GH_MINOR="${GH_MINOR%%.*}"
+      ;;
+  esac
+}
+
+# gh_at_least MAJOR MINOR: is the installed gh at least that release?
+# The same parse as lima_at_least; an unreadable version answers no.
+gh_at_least() {
+  gh_major_minor
+  [ -n "$GH_MAJOR" ] || return 1
+  if [ "$GH_MAJOR" -gt "$1" ]; then return 0; fi
+  [ "$GH_MAJOR" -eq "$1" ] && [ "$GH_MINOR" -ge "$2" ]
+}
+
 # gh_active_account: "login|scopes" of the active github.com login, "|" when
 # there is none. The one place that asks, for preflight_collect's gh check and
 # setup's offer to log in (offer_gh_login), so the two cannot disagree. gh's own
@@ -189,10 +231,10 @@ get_token() {
   # On an error gh prints the error body to stdout, so only its exit status
   # says whether this is a token.
   if command -v gh >/dev/null; then
-    if out="$(gh api -X POST "${scope}/actions/runners/${kind}-token" -q .token 2>/dev/null)"; then
+    if out="$(gh api -X POST "${scope}/actions/runners/${kind}-token" --jq .token 2>/dev/null)"; then
       token="$out"
     elif [[ "$scope" == orgs/* ]] && offer_scope_refresh &&
-      out="$(gh api -X POST "${scope}/actions/runners/${kind}-token" -q .token 2>/dev/null)"; then
+      out="$(gh api -X POST "${scope}/actions/runners/${kind}-token" --jq .token 2>/dev/null)"; then
       token="$out"
     fi
   fi
@@ -222,7 +264,7 @@ owner_type() {
   local out type=""
   # gh when it works, else the public API with curl (no python3 needed: a
   # stock Mac only has the stub that offers to install it).
-  if command -v gh >/dev/null && out="$(gh api "users/${1}" -q .type 2>/dev/null </dev/null)"; then
+  if command -v gh >/dev/null && out="$(gh api "users/${1}" --jq .type 2>/dev/null </dev/null)"; then
     type="$out"
   elif out="$(curl -fsS "https://api.github.com/users/${1}" 2>/dev/null </dev/null)"; then
     type="$(printf '%s\n' "$out" | sed -n 's/^ *"type": *"\([A-Za-z]*\)".*/\1/p' | head -1)"

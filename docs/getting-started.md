@@ -81,8 +81,11 @@ lookup; they cannot be combined.
 ## Preflight
 
 Before a checkout setup, `homefield preflight` reports on everything the tool
-needs: macOS, Apple Silicon, Lima ≥ 2.3, gh (logged in; the `admin:org` scope is
-only a warning, since a repository URL does not need it), python3 and Homebrew.
+needs: macOS, Apple Silicon, Lima ≥ 2.3, gh ≥ 2.32 (logged in; the `admin:org`
+scope is only a warning, since a repository URL does not need it), python3 and
+Homebrew. The gh floor is what the tool's own gh calls need —
+`gh auth status --json hosts` and `gh api --jq` — and preflight names
+`brew upgrade gh` when the installed gh is older.
 It exits 0 when every check passes and 1 otherwise, naming the command that
 fixes each failure (`brew install lima`, `gh auth login`, and so on); `setup`
 prints it first and stops on any failure, while `install` prints it and then
