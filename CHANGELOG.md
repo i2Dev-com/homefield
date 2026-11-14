@@ -35,6 +35,13 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ### Fixed
 
+- `bin/lib/emit.sh`'s `json_str` fast-path pattern is now POSIX-clean: the
+  `[:cntrl:]` class leads its bracket expression with the quote and backslash
+  literals after it. The old mid-class placement worked in bash but parses the
+  class as literal `[` and `:` under dash (the guest helpers' shell), and
+  `tests/diagnose.sh` now pins that the pattern classifies identically under
+  both shells ([#256](https://github.com/i2Dev-com/homefield/issues/256)).
+
 - `homefield adopt --setup`'s pull request, and the workflow comments it
   writes, now link to the adoption guide at the installed release instead of
   a relative `docs/adopting.md` that does not exist in the consumer's
