@@ -40,12 +40,19 @@ take seconds, but each one is billed a full minute.
 
 Keep hosted:
 
-- Docker image builds (x86-64 images, GHA build cache).
 - Anything with cloud or production credentials.
 - Anything that only runs on push or schedule. By default the expression
   routes pull requests only, so those would never use the runner anyway. They
   can be routed ([routing options](#routing-options)), but then they depend on
   the Mac being awake, and a deploy gated on CI can queue behind it.
+
+Docker image builds of x86-64 images can move: Rosetta translates amd64
+containers, and the `buildx-rosetta` preset makes `docker buildx build
+--platform linux/amd64` run under Rosetta instead of BuildKit's bundled QEMU,
+which segfaults Node-heavy steps
+([runbook: Building amd64 images](runbook.md#building-amd64-images)). The
+`type=gha` buildx cache from the VM is untested, so a build that leans on it
+stays hosted for now.
 
 The [parity table](runbook.md#what-the-vm-has-compared-with-a-hosted-runner)
 in the runbook compares eight dimensions — privileges, apt packages, CLI tools,

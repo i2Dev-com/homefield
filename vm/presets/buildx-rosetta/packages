@@ -1,0 +1,4 @@
+# The buildx-rosetta preset adds no apt packages: docker with the buildx
+# plugin is installed by provision.sh before the hooks run, and the fix ships
+# as the hook beside this file. This file exists so the preset is listable
+# and include-able; see the runbook, "Building amd64 images".

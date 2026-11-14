@@ -11,6 +11,17 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ## Unreleased
 
+### Added
+
+- The `buildx-rosetta` preset: `docker buildx build --platform linux/amd64`
+  on the VM ran every amd64 step through BuildKit's bundled QEMU — which dies
+  under Apple's Rosetta, so Node-heavy steps segfaulted — while
+  `docker run --platform linux/amd64` worked. The preset provisions a
+  BuildKit image with the QEMU emulator removed, pinned by digest, so amd64
+  build steps exec directly under Rosetta; the runbook's new "Building amd64
+  images" section shows the builder creation a job needs
+  ([#241](https://github.com/i2Dev-com/homefield/issues/241)).
+
 ### CI
 
 - Every suite now runs in CI: the workflow loops over `routing-guard/tests/run.sh`
