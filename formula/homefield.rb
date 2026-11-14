@@ -30,6 +30,14 @@ class Homefield < Formula
     # execs it: installing bin/homefield alone would put a script on the PATH
     # whose relative resolution finds nothing.
     libexec.install %w[bin vm tools routing-guard]
+    # The version command reads .homefield-ref in the root; a Homebrew install
+    # has neither that file from install.sh nor a .git checkout, so record the
+    # release identity here. No commit: the version command skips its update
+    # check, brew upgrade being the update path.
+    (libexec/".homefield-ref").write <<~EOS
+      repo=i2Dev-com/homefield
+      ref=v#{version}
+    EOS
     (bin/"homefield").write <<~EOS
       #!/bin/bash
       exec "#{libexec}/bin/homefield" "$@"

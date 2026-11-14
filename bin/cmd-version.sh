@@ -122,7 +122,13 @@ cmd_version() {
       esac
     done <"$ROOT/.homefield-ref"
     echo "homefield ${ref:-unknown}${commit:+ (${commit:0:7})}, installed from ${repo:-unknown} in ${ROOT}"
-    update_check "$repo" "$ref" "$commit"
+    # A Homebrew install (the formula's .homefield-ref) records no commit and
+    # updates through brew upgrade, so there is nothing for the check to say:
+    # an empty commit skips it, silently. The if (not `&&`) keeps the branch's
+    # exit status 0 when the check is skipped.
+    if [ -n "$commit" ]; then
+      update_check "$repo" "$ref" "$commit"
+    fi
   elif git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1; then
     echo "homefield $(git -C "$ROOT" describe --always), from a checkout in ${ROOT}"
   else

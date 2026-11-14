@@ -168,6 +168,8 @@ record "the url is the release tarball install.sh fetches" "yes" "$(has "$url" "
 record "the formula's sha256 is a 64-hex placeholder" "yes" "$(sha256_ok "$sha256")"
 record "the formula installs the runtime tree under libexec" "yes" "$(has "$(cat "$formula")" 'libexec.install %w[bin vm tools routing-guard]')"
 record "the formula exposes a PATH wrapper" "yes" "$(has "$(cat "$formula")" '(bin/"homefield").write')"
+f_body="$(cat "$formula")"
+record "the formula records the release identity for the version command" "yes" "$([ "$(has "$f_body" '(libexec/".homefield-ref").write')" = yes ] && [ "$(has "$f_body" 'ref=v#{version}')" = yes ] && [ "$(grep -c '^commit=' "$formula")" -eq 0 ] && echo yes || echo no)"
 record "the formula tests homefield version" "yes" "$(has "$(cat "$formula")" 'system bin/"homefield", "version"')"
 
 # ── The release update ───────────────────────────────────────────────────────

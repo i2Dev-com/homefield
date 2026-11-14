@@ -598,6 +598,12 @@ out="$(env -i PATH="$work/nogh" "$BASH" "$work/inst/bin/homefield" version 2>&1)
 record "an install.sh copy reports its ref, short commit and source" "homefield v0.1.0 (0123456), installed from acme/tool in $work/inst" "${out%%$'\n'*}"
 out="$(env -i PATH="$stubs" GIT_CEILING_DIRECTORIES="$work" "$BASH" "$work/bare/bin/homefield" version 2>&1)"
 record "neither a ref file nor a checkout" "homefield (version unknown), in $work/bare" "$out"
+# A Homebrew install (the formula's .homefield-ref) records no commit: the
+# version line stands, and the update check is skipped silently (brew upgrade
+# is the update path).
+printf 'repo=i2Dev-com/homefield\nref=v0.9.9\n' >"$work/bare/.homefield-ref"
+out="$(env -i PATH="$stubs" GIT_CEILING_DIRECTORIES="$work" "$BASH" "$work/bare/bin/homefield" version 2>&1)"
+record "a Homebrew-style ref file: the version line, no update-check noise" "homefield v0.9.9, installed from i2Dev-com/homefield in $work/bare" "$out"
 : >"$calls"
 out="$(env -i PATH="$stubs" CALLS="$calls" "$BASH" "$ROOT/bin/homefield" version 2>&1)"
 record "a checkout says so, and asks gh nothing" "yes/0" "$(has "$out" 'from a checkout in')/$(called 'gh api')"
@@ -721,6 +727,6 @@ record "an answer that is not a commit: could not check, exit 0" "0/yes" "$rc/$(
 
 printf 'repo=acme/tool\nref=v0.1.0\ncommit=\n' >"$work/inst/.homefield-ref"
 version_run V_COMMIT="$new"
-record "no commit recorded: could not check, the API is not asked" "0/yes/0/0" "$rc/$(has "$out" 'could not check for updates (.homefield-ref records no commit)')/$(called 'gh api')/$(called 'commits/')"
+record "no commit recorded: the update check is skipped, the API is not asked" "0/no/0/0" "$rc/$(has "$out" 'could not check for updates')/$(called 'gh api')/$(called 'commits/')"
 
 summary
