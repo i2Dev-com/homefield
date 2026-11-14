@@ -387,7 +387,7 @@ passes hosted but fails locally.
 | CLI tools | AWS CLI, Azure CLI, Google Cloud CLI, SAM CLI, GitHub CLI | none installed | Hook or apt (`gh` is in noble, older than the image's). `awscli` has no noble candidate, so the AWS CLI v2 bundle comes in by hook; `--preset hosted` installs both. Azure, gcloud and SAM are usually easier through their own actions |
 | Browsers | Chrome, Chromium, Firefox and Edge, with drivers and OS libraries | no browser binary; OS libraries at job time through `--with-deps`, or pre-provisioned | Playwright and Puppeteer download their own browser, and `--with-deps` installs the OS libraries now that `runner` has sudo ([Browsers](#browsers)). Pre-provisioning them saves time and network only for a tool that then installs without `--with-deps`. Jobs that drive Chrome, Firefox or Edge directly stay hosted |
 | Languages | Node, Python, Java, Ruby, PHP, Rust and more, each pinned by the image | `python3` 3.12 (same as Ubuntu 24.04); no Node, Java, Ruby, PHP or Rust | Setup actions (`actions/setup-node`, `setup-*`) work here and give the job its version. A job that assumes a bare `node`, `npm` or `java` needs it provisioned (noble's `nodejs` is 18.19, against the image's Node 22; `--preset hosted` installs that major), or stays hosted |
-| Architecture | x86-64 by default; `ubuntu-24.04-arm` is a hosted image too | arm64 | x86-64 image builds stay hosted ([#21](https://github.com/i2Dev-com/homefield/issues/21)); arm jobs can point `fallback` at `ubuntu-24.04-arm` ([routing options](adopting.md#routing-options)) |
+| Architecture | x86-64 by default; `ubuntu-24.04-arm` is a hosted image too | arm64, with x86-64 binaries and `linux/amd64` containers translated by Apple's Rosetta ([#21](https://github.com/i2Dev-com/homefield/issues/21)) | `docker run --platform linux/amd64` and x86-64 ELF files work as they are. `docker buildx build --platform linux/amd64` needs the `buildx-rosetta` preset first ([Building amd64 images](#building-amd64-images)); without it, BuildKit's bundled QEMU segfaults Node-heavy steps. Arm jobs can point `fallback` at `ubuntu-24.04-arm` ([routing options](adopting.md#routing-options)) |
 | State between jobs | a fresh VM for every job | one VM, used in turn by every allowed repository ([Trust boundary](#trust-boundary)) | Cleanup and workspace ownership keep it usable, not clean. Anything a job leaves is visible to the next, including what it does through `sudo`: a package it apt-installs stays, and the daily maintenance upgrades it with the rest, and a service it enables starts on every boot. The VM drifts from `RUNNER_EXTRA_PACKAGES` that way ([Maintenance](#maintenance)) |
 | Versions | the image is rebuilt weekly | apt packages upgrade in the daily maintenance, and the runner self-updates ([Maintenance](#maintenance)) | Anything whose version matters: pin it with a setup action or an explicit install, on both sides |
 
@@ -405,6 +405,7 @@ editing the script. Per-job toolchains (`actions/setup-node`,
 ```bash
 bin/homefield upgrade --instance homefield --preset browsers   # the twelve Chromium OS libraries below
 bin/homefield upgrade --instance homefield --preset hosted     # browsers + CLI tools + Node, all of it
+bin/homefield upgrade --instance homefield --preset buildx-rosetta  # amd64 image builds under Rosetta, below
 ```
 
 `hosted` is `browsers`, then noble's `gh`, `shellcheck`, `sqlite3`, `xvfb` and
@@ -422,6 +423,40 @@ every provisioning run, so what they installed survives later upgrades. They
 install whatever upstream serves at provision time (the hosted image rebuilds
 weekly), so anything version-critical still pins itself with a setup action or
 an explicit install.
+
+**Building amd64 images.** Rosetta translates x86-64 binaries in the VM, so
+`docker run --platform linux/amd64` works as the VM ships. A buildx
+docker-container builder does not reach Rosetta: buildkitd validates each
+platform by running a tiny test binary through its own bundled
+`buildkit-qemu-x86_64`, that dies under the Lima Rosetta mount, and BuildKit
+then wraps every amd64 `RUN` in QEMU — Node-heavy steps segfault
+([moby/buildkit#7052](https://github.com/moby/buildkit/issues/7052),
+[moby/buildkit#7110](https://github.com/moby/buildkit/issues/7110), both open;
+the preset is retired when they close). The `buildx-rosetta` preset provisions
+a BuildKit image with that emulator removed, pinned by digest and rebuilt
+only when the base image moves, so the steps exec directly and the kernel's
+Rosetta handler takes them:
+
+```bash
+bin/homefield upgrade --instance homefield --preset buildx-rosetta
+```
+
+and the job creates the builder itself — `docker/setup-buildx-action` cannot
+do this part, because with `driver-opts: image=` it always runs `docker pull`
+first and fails on a local image with `pull access denied`:
+
+```yaml
+- name: Create the Rosetta-aware builder
+  run: |
+    printf '[worker.oci]\nplatforms = ["linux/arm64", "linux/amd64"]\n' > bk.toml
+    docker buildx create --name hf --driver docker-container \
+      --driver-opt image=buildkit-rosetta --buildkitd-config bk.toml --use
+    docker buildx inspect --bootstrap
+```
+
+A cold amd64 build of a Next.js production image took 48s this way, against
+a median 95s per build step on hosted `ubuntu-latest` with a warm cache
+(#241). `docker buildx rm hf` at the end of the job removes the builder.
 
 **Apt packages:** pass `RUNNER_EXTRA_PACKAGES` when provisioning. The list is
 saved in the guest (`/etc/homefield/extra-packages`), so upgrade runs keep it

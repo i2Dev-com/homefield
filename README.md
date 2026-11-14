@@ -134,9 +134,13 @@ bypasses](docs/security.md).
 
 ## Requirements and limitations
 
-- **Apple Silicon Mac, arm64 jobs.** The VM runs arm64 Linux; x86-64 jobs
-  belong on hosted runners, and cache keys need `runner.arch`
-  ([adopting, step 4](docs/adopting.md#4-fix-cache-keys)).
+- **Apple Silicon Mac, arm64 jobs.** The VM runs arm64 Linux, with x86-64
+  binaries and `linux/amd64` containers translated by Apple's Rosetta:
+  `docker run --platform linux/amd64` works as the VM ships, while
+  `docker buildx build --platform linux/amd64` needs the `buildx-rosetta`
+  preset first ([runbook: Building amd64
+  images](docs/runbook.md#building-amd64-images)). Cache keys need
+  `runner.arch` ([adopting, step 4](docs/adopting.md#4-fix-cache-keys)).
 - **Private repositories only.** A pull request runs the workflow files from
   its own branch, so anyone who can open one can change its `runs-on`. See
   [Security model](#security-model).

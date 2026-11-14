@@ -134,13 +134,74 @@ record "the shipped hooks are executable, as files copied to provision.d must be
   "yes" "$([ -x "$ROOT/vm/presets/hosted/50-awscli.sh" ] && [ -x "$ROOT/vm/presets/hosted/60-nodejs.sh" ] && echo yes || echo no)"
 
 echo
+echo "the buildx-rosetta preset (#241)"
+srun MODE=pkgs PRESET_ARGS=buildx-rosetta --
+record "buildx-rosetta: no apt packages, the hook beside the packages file" \
+  "/70-buildx-rosetta.sh/vm/presets/buildx-rosetta/70-buildx-rosetta.sh" \
+  "$(field pkgs)/$(hooks | paste -sd / -)/$(hookpaths | sed 's|.*\(vm/presets/[^/]*/[^/]*\.sh\)|\1|' | paste -sd / -)"
+record "the hook is executable, as files copied to provision.d must be" \
+  "yes" "$([ -x "$ROOT/vm/presets/buildx-rosetta/70-buildx-rosetta.sh" ] && echo yes || echo no)"
+
+echo
+echo "the buildx-rosetta hook, against docker stubs"
+# The hook runs in the guest (bash 5) but must stay runnable on this host's
+# bash 3.2, which is what runs it here. The stub docker answers
+# `docker image inspect <name> --format ...` from DOCKER_BASE_ID and
+# DOCKER_LABEL, records everything else, and reads docker build's Dockerfile
+# from stdin.
+cat >"$stubs/docker" <<'EOF'
+#!/bin/sh
+printf 'docker %s\n' "$*" >>"$CALLS"
+case "${1:-}" in
+  image)
+    case "${3:-}" in
+      *buildkit:*)
+        # A pull makes the base present for later calls; env cannot carry
+        # between the stub's processes, so the state is a file beside CALLS.
+        if [ -n "${DOCKER_BASE_ID:-}" ]; then printf '%s\n' "$DOCKER_BASE_ID"
+        elif [ -f "$CALLS.base" ]; then cat "$CALLS.base"
+        else exit 1; fi ;;
+      buildkit-rosetta) [ -n "${DOCKER_LABEL:-}" ] && printf '%s\n' "$DOCKER_LABEL" || exit 1 ;;
+      *) exit 1 ;;
+    esac ;;
+  pull) printf '%s\n' "${DOCKER_AFTER_PULL:-sha256:base1}" >"$CALLS.base" ;;
+  build)
+    tr '\n' '|' <&0 >>"$CALLS"; printf '\n' >>"$CALLS" ;;
+  *) exit 1 ;;
+esac
+EOF
+chmod +x "$stubs/docker"
+hook="$ROOT/vm/presets/buildx-rosetta/70-buildx-rosetta.sh"
+hrun() { : >"$calls"; out="$(env -i PATH="$stubs" CALLS="$calls" "$@" "$BASH" "$hook" 2>&1 </dev/null)"; rc=$?; }
+
+hrun DOCKER_BASE_ID=sha256:base1 DOCKER_LABEL=sha256:base1
+record "the built image matches the base: no pull, no build, exit 0" \
+  "exit-0/0/0" \
+  "$([ "$rc" -eq 0 ] && echo exit-0 || echo exit-$rc)/$(called '^docker pull')/$(called '^docker build')"
+
+hrun DOCKER_BASE_ID=sha256:base1
+record "no built image: the base is not pulled (it is there) and the image is built from it, labeled" \
+  "exit-0/0/1/1/1/1" \
+  "$([ "$rc" -eq 0 ] && echo exit-0 || echo exit-$rc)/$(called '^docker pull')/$(called '^docker build')/$(called '^FROM moby/buildkit:buildx-stable-1@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe')/$(called 'RUN rm /usr/bin/buildkit-qemu-x86_64')/$(called '--label homefield.base-id=sha256:base1')"
+
+hrun DOCKER_BASE_ID=sha256:base2 DOCKER_LABEL=sha256:base1
+record "the base moved: the image is rebuilt against the new base, not skipped" \
+  "exit-0/0/1/1/0" \
+  "$([ "$rc" -eq 0 ] && echo exit-0 || echo exit-$rc)/$(called '^docker pull')/$(called '^docker build')/$(called '--label homefield.base-id=sha256:base2')/$(grep -c 'homefield.base-id=sha256:base1' "$calls" || true)"
+
+hrun
+record "neither image is there: the base is pulled first, then the build" \
+  "exit-0/1/1/pull-first" \
+  "$([ "$rc" -eq 0 ] && echo exit-0 || echo exit-$rc)/$(called '^docker pull')/$(called '^docker build')/$(awk '/^docker pull/{p=NR} /^docker build/{b=NR} END{print (p && b && p < b) ? "pull-first" : "build-first"}' "$calls")"
+
+echo
 echo "refusals come before anything is touched"
 srun MODE=pkgs PRESET_ARGS=nope --
 record "an unknown preset names the shipped ones; nothing ran" "nonzero/yes/empty" \
-  "$(nonzero "$rc")/$(has "$out" 'no such preset; shipped presets are browsers hosted')/$([ "$(called .)" -eq 0 ] && echo empty || echo not-empty)"
+  "$(nonzero "$rc")/$(has "$out" 'no such preset; shipped presets are browsers buildx-rosetta hosted')/$([ "$(called .)" -eq 0 ] && echo empty || echo not-empty)"
 srun MODE=upgrade -- cmd_upgrade --preset nope
 record "a bad preset on upgrade: refused before any VM work or stop" "nonzero/yes/0/0/0" \
-  "$(nonzero "$rc")/$(has "$out" 'shipped presets are browsers hosted')/$(called '^stop_runner')/$(called 'limactl copy')/$(called 'ensure_vm')"
+  "$(nonzero "$rc")/$(has "$out" 'shipped presets are browsers buildx-rosetta hosted')/$(called '^stop_runner')/$(called 'limactl copy')/$(called 'ensure_vm')"
 srun MODE=install -- cmd_install --preset nope
 record "a bad preset on install: refused before the VM or preflight report" \
   "nonzero/yes/no/0" \
