@@ -32,6 +32,11 @@ stub_dir() {
       limactl)
         cat >"$dir/limactl" <<'EOF'
 #!/bin/sh
+if [ "$1" = "info" ]; then
+  printf '{"version":"%s","templates":[{"name":"%s","location":"%s"}]}\n' \
+    "${LIMA_VERSION:-2.3.0}" "${LIMA_TPL_NAME:-_images/ubuntu-24.04}" "${LIMA_TPL_PATH:-}"
+  exit 0
+fi
 echo "limactl version ${LIMA_VERSION:-2.3.0}"
 EOF
         ;;
@@ -110,6 +115,44 @@ case "$1" in
 esac
 EOF
         ;;
+      mkdir)
+        cat >"$dir/mkdir" <<'EOF'
+#!/bin/sh
+PATH=/bin:/usr/bin exec mkdir "$@"
+EOF
+        ;;
+      rm)
+        cat >"$dir/rm" <<'EOF'
+#!/bin/sh
+PATH=/bin:/usr/bin exec rm "$@"
+EOF
+        ;;
+      mv)
+        cat >"$dir/mv" <<'EOF'
+#!/bin/sh
+PATH=/bin:/usr/bin exec mv "$@"
+EOF
+        ;;
+      curl)
+        cat >"$dir/curl" <<'EOF'
+#!/bin/sh
+[ -n "${CURL_CALLS:-}" ] && echo "$*" >>"$CURL_CALLS"
+[ -n "${CURL_SLEEP:-}" ] && /bin/sleep "$CURL_SLEEP"
+if [ "${CURL_FAIL:-}" = "1" ]; then
+  echo "curl: download error" >&2
+  exit 22
+fi
+out=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o) out="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+[ -n "$out" ] && printf '%s' "${CURL_BODY:-fake-image-bytes}" >"$out"
+exit 0
+EOF
+        ;;
     esac
     chmod +x "$dir/$cmd"
   done
@@ -138,7 +181,7 @@ preflight() {
   done
   pf_out="$(env PATH="$dir" HOMEFIELD_SOURCE_ONLY=1 \
     GH_HOSTS="${GH_HOSTS-}" GH_JQ_OUT="${GH_JQ_OUT-}" ${env_pairs[@]+"${env_pairs[@]}"} \
-    "$BASH_BIN" -c '. "$1"; color_init'"$color_args"'; cmd_preflight' _ "$ROOT/bin/homefield" 2>&1)"
+    "$BASH_BIN" -c '. "$1"; color_init'"$color_args"'; cmd_preflight' _ "$ROOT/bin/homefield" 2>&1 </dev/null)"
   pf_rc=$?
 }
 
@@ -486,5 +529,157 @@ case_color_no_color_env
 case_color_never
 case_color_env
 case_color_warn_fail
+
+# ── Image cache pre-fetch (#252) ────────────────────────────────────────────
+
+img_sha256() {
+  if command -v shasum >/dev/null 2>&1; then
+    printf '%s' "$1" | shasum -a 256 | awk '{print $1}'
+  else
+    printf '%s' "$1" | sha256sum | awk '{print $1}'
+  fi
+}
+
+IMG_URL="https://example.invalid/ubuntu-24.04-server-cloudimg-arm64.img"
+IMG_PAYLOAD="fake-ubuntu-24.04-arm64-image-bytes"
+IMG_DIGEST="$(img_sha256 "$IMG_PAYLOAD")"
+IMG_URL_HASH="$(img_sha256 "$IMG_URL")"
+
+write_tpl() {
+  cat >"$1" <<YAML
+images:
+- location: "https://example.invalid/ubuntu-24.04-minimal-arm64.img"
+  arch: "aarch64"
+  digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  variant: "minimal"
+- location: "https://example.invalid/ubuntu-24.04-server-amd64.img"
+  arch: "x86_64"
+  digest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  variant: "server"
+- location: "${IMG_URL}"
+  arch: "aarch64"
+  digest: "sha256:${IMG_DIGEST}"
+  variant: "server"
+YAML
+}
+
+yesno() { has "$1" "$2" && echo yes || echo no; }
+
+# shellcheck disable=SC2016
+case_prefetch_non_tty_skips() {
+  local d="$work/pf-nontty" tpl="$work/pf-nontty.yaml" cache="$work/pf-nontty-cache" calls="$work/pf-nontty-curl"
+  stub_dir "$d" limactl gh python3 brew uname sw_vers awk dirname mkdir rm mv curl
+  write_tpl "$tpl"
+  : >"$calls"
+  pf_out="$(env PATH="$d" HOMEFIELD_SOURCE_ONLY=1 LIMA_TPL_PATH="$tpl" HOMEFIELD_LIMA_CACHE_DIR="$cache" CURL_CALLS="$calls" \
+    "$BASH_BIN" -c '. "$1"; color_init; cmd_preflight' _ "$ROOT/bin/homefield" 2>&1 </dev/null)"; pf_rc=$?
+  record "non-terminal default skips image pre-fetch without curl" "0/0/yes" \
+    "$pf_rc/$(wc -l <"$calls" | tr -d ' ')/$(yesno "$pf_out" "All checks passed (6/6).")"
+}
+
+# shellcheck disable=SC2016
+case_prefetch_downloads_and_caches() {
+  local d="$work/pf-fetch" tpl="$work/pf-fetch.yaml" cache="$work/pf-fetch-cache" calls="$work/pf-fetch-curl"
+  stub_dir "$d" limactl gh python3 brew uname sw_vers awk dirname mkdir rm mv curl
+  write_tpl "$tpl"
+  : >"$calls"
+  pf_out="$(env PATH="$d" HOMEFIELD_SOURCE_ONLY=1 LIMA_TPL_PATH="$tpl" HOMEFIELD_LIMA_CACHE_DIR="$cache" CURL_CALLS="$calls" CURL_BODY="$IMG_PAYLOAD" \
+    "$BASH_BIN" -c '. "$1"; color_init; cmd_preflight --prefetch' _ "$ROOT/bin/homefield" 2>&1 </dev/null)"; pf_rc=$?
+  local entry="$cache/download/by-url-sha256/$IMG_URL_HASH"
+  record "--prefetch fetches digest-pinned server image and writes Lima cache layout" "0/1/yes/yes/yes" \
+    "$pf_rc/$(wc -l <"$calls" | tr -d ' ')/$(yesno "$pf_out" "VM image pre-fetched (ubuntu-24.04-server-cloudimg-arm64.img")/$([ -s "$entry/data" ] && [ "$(cat "$entry/url")" = "$IMG_URL" ] && [ "$(cat "$entry/sha256.digest")" = "sha256:$IMG_DIGEST" ] && [ "$(cat "$entry/type")" = "application/octet-stream" ] && echo yes || echo no)/$([ "$(cat "$entry/data")" = "$IMG_PAYLOAD" ] && echo yes || echo no)"
+
+  : >"$calls"
+  pf_out="$(env PATH="$d" HOMEFIELD_SOURCE_ONLY=1 LIMA_TPL_PATH="$tpl" HOMEFIELD_LIMA_CACHE_DIR="$cache" CURL_CALLS="$calls" \
+    "$BASH_BIN" -c '. "$1"; color_init; cmd_preflight --prefetch' _ "$ROOT/bin/homefield" 2>&1 </dev/null)"; pf_rc=$?
+  record "--prefetch hits valid cache and skips curl" "0/0/yes" \
+    "$pf_rc/$(wc -l <"$calls" | tr -d ' ')/$(yesno "$pf_out" "VM image cached")"
+
+  printf 'stale-bad-data' >"$entry/data"
+  : >"$calls"
+  pf_out="$(env PATH="$d" HOMEFIELD_SOURCE_ONLY=1 LIMA_TPL_PATH="$tpl" HOMEFIELD_LIMA_CACHE_DIR="$cache" CURL_CALLS="$calls" CURL_BODY="$IMG_PAYLOAD" \
+    "$BASH_BIN" -c '. "$1"; color_init; cmd_preflight --prefetch' _ "$ROOT/bin/homefield" 2>&1 </dev/null)"; pf_rc=$?
+  record "--prefetch re-fetches when cached digest is stale" "0/1/yes/yes" \
+    "$pf_rc/$(wc -l <"$calls" | tr -d ' ')/$(yesno "$pf_out" "VM image pre-fetched")/$([ "$(cat "$entry/data")" = "$IMG_PAYLOAD" ] && echo yes || echo no)"
+}
+
+# shellcheck disable=SC2016
+case_prefetch_failures_warn_only() {
+  local d="$work/pf-warn" tpl="$work/pf-warn.yaml" cache="$work/pf-warn-cache" calls="$work/pf-warn-curl"
+  stub_dir "$d" limactl gh python3 brew uname sw_vers awk dirname mkdir rm mv curl
+  write_tpl "$tpl"
+  : >"$calls"
+  pf_out="$(env PATH="$d" HOMEFIELD_SOURCE_ONLY=1 LIMA_TPL_PATH="$tpl" HOMEFIELD_LIMA_CACHE_DIR="$cache" CURL_CALLS="$calls" CURL_FAIL=1 \
+    "$BASH_BIN" -c '. "$1"; color_init; cmd_preflight --prefetch' _ "$ROOT/bin/homefield" 2>&1 </dev/null)"; pf_rc=$?
+  local entry="$cache/download/by-url-sha256/$IMG_URL_HASH"
+  local part_left
+  part_left="$( (shopt -s nullglob; set -- "$entry"/data.part*; echo $#) )"
+  record "--prefetch curl failure warns and still exits 0" "0/yes/0/yes" \
+    "$pf_rc/$(yesno "$pf_out" "WARN  VM image pre-fetch failed (download failed)")/$part_left/$([ ! -e "$entry/.prefetch.lock" ] && echo yes || echo no)"
+
+  pf_out="$(env PATH="$d" HOMEFIELD_SOURCE_ONLY=1 LIMA_TPL_PATH="$tpl" HOMEFIELD_LIMA_CACHE_DIR="$cache" CURL_CALLS="$calls" CURL_BODY="wrong-bytes" \
+    "$BASH_BIN" -c '. "$1"; color_init; cmd_preflight --prefetch' _ "$ROOT/bin/homefield" 2>&1 </dev/null)"; pf_rc=$?
+  part_left="$( (shopt -s nullglob; set -- "$entry"/data.part*; echo $#) )"
+  record "--prefetch sha256 mismatch warns, removes partial/data, and exits 0" "0/yes/yes/0/yes" \
+    "$pf_rc/$(yesno "$pf_out" "WARN  VM image pre-fetch failed (sha256 mismatch)")/$([ ! -e "$entry/data" ] && echo yes || echo no)/$part_left/$([ ! -e "$entry/.prefetch.lock" ] && echo yes || echo no)"
+}
+
+# shellcheck disable=SC2016
+case_prefetch_tty_and_flags() {
+  local d="$work/pf-tty" tpl="$work/pf-tty.yaml" cache="$work/pf-tty-cache" calls="$work/pf-tty-curl" out rc
+  stub_dir "$d" limactl gh python3 brew uname sw_vers awk dirname mkdir rm mv curl
+  write_tpl "$tpl"
+  : >"$calls"
+  out="$(env PATH="$d" HOMEFIELD_SOURCE_ONLY=1 HOMEFIELD_LIMA_TEMPLATE="$tpl" HOMEFIELD_LIMA_CACHE_DIR="$cache" CURL_CALLS="$calls" CURL_BODY="$IMG_PAYLOAD" \
+    "$BASH_BIN" -c '. "$1"; have_terminal() { true; }; cmd_preflight --no-prefetch' _ "$ROOT/bin/homefield" 2>&1 </dev/null)"; rc=$?
+  record "--no-prefetch on terminal skips curl" "0/0" "$rc/$(wc -l <"$calls" | tr -d ' ')"
+
+  : >"$calls"
+  out="$(env PATH="$d" HOMEFIELD_SOURCE_ONLY=1 HOMEFIELD_LIMA_TEMPLATE="$tpl" HOMEFIELD_LIMA_CACHE_DIR="$cache" CURL_CALLS="$calls" CURL_BODY="$IMG_PAYLOAD" \
+    "$BASH_BIN" -c '. "$1"; have_terminal() { true; }; cmd_preflight' _ "$ROOT/bin/homefield" 2>&1 </dev/null)"; rc=$?
+  record "terminal without --no-prefetch pre-fetches automatically" "0/1/yes" \
+    "$rc/$(wc -l <"$calls" | tr -d ' ')/$(yesno "$out" "VM image pre-fetched")"
+
+  out="$(env PATH="$d" HOMEFIELD_SOURCE_ONLY=1 \
+    "$BASH_BIN" -c '. "$1"; cmd_preflight --bogus' _ "$ROOT/bin/homefield" 2>&1 </dev/null)"; rc=$?
+  record "unknown preflight option exits nonzero naming help" "nonzero/yes" \
+    "$(nonzero "$rc")/$(yesno "$out" "unknown option --bogus")"
+}
+
+# shellcheck disable=SC2016
+case_prefetch_concurrency_and_lock() {
+  local d="$work/pf-lock" tpl="$work/pf-lock.yaml" cache="$work/pf-lock-cache" calls="$work/pf-lock-curl"
+  local entry="$cache/download/by-url-sha256/$IMG_URL_HASH"
+  local out1="$work/pf-lock-1.out" out2="$work/pf-lock-2.out" pid1 pid2 rc1 rc2 pf_out pf_rc
+  stub_dir "$d" limactl gh python3 brew uname sw_vers awk dirname mkdir rm mv curl
+  write_tpl "$tpl"
+
+  mkdir -p "$entry/.prefetch.lock"
+  printf '999999\n' >"$entry/.prefetch.lock/pid"
+  : >"$calls"
+  pf_out="$(env PATH="$d" HOMEFIELD_SOURCE_ONLY=1 LIMA_TPL_PATH="$tpl" HOMEFIELD_LIMA_CACHE_DIR="$cache" CURL_CALLS="$calls" CURL_BODY="$IMG_PAYLOAD" \
+    "$BASH_BIN" -c '. "$1"; color_init; cmd_preflight --prefetch' _ "$ROOT/bin/homefield" 2>&1 </dev/null)"; pf_rc=$?
+  record "--prefetch recovers stale lock dir and caches image" "0/1/yes/yes/yes" \
+    "$pf_rc/$(wc -l <"$calls" | tr -d ' ')/$(yesno "$pf_out" "VM image pre-fetched")/$([ ! -e "$entry/.prefetch.lock" ] && echo yes || echo no)/$([ "$(cat "$entry/data" 2>/dev/null)" = "$IMG_PAYLOAD" ] && echo yes || echo no)"
+
+  rm -rf "$cache"
+  : >"$calls"
+  env PATH="$d" HOMEFIELD_SOURCE_ONLY=1 LIMA_TPL_PATH="$tpl" HOMEFIELD_LIMA_CACHE_DIR="$cache" CURL_CALLS="$calls" CURL_BODY="$IMG_PAYLOAD" CURL_SLEEP=0.3 \
+    "$BASH_BIN" -c '. "$1"; color_init; cmd_preflight --prefetch' _ "$ROOT/bin/homefield" >"$out1" 2>&1 </dev/null &
+  pid1=$!
+  env PATH="$d" HOMEFIELD_SOURCE_ONLY=1 LIMA_TPL_PATH="$tpl" HOMEFIELD_LIMA_CACHE_DIR="$cache" CURL_CALLS="$calls" CURL_BODY="$IMG_PAYLOAD" CURL_SLEEP=0.3 \
+    "$BASH_BIN" -c '. "$1"; color_init; cmd_preflight --prefetch' _ "$ROOT/bin/homefield" >"$out2" 2>&1 </dev/null &
+  pid2=$!
+  wait "$pid1"; rc1=$?
+  wait "$pid2"; rc2=$?
+  record "concurrent --prefetch serializes download and preserves cached data" "0/0/1/yes/yes" \
+    "$rc1/$rc2/$(wc -l <"$calls" | tr -d ' ')/$([ ! -e "$entry/.prefetch.lock" ] && echo yes || echo no)/$([ "$(cat "$entry/data" 2>/dev/null)" = "$IMG_PAYLOAD" ] && echo yes || echo no)"
+}
+
+case_prefetch_non_tty_skips
+case_prefetch_downloads_and_caches
+case_prefetch_failures_warn_only
+case_prefetch_tty_and_flags
+case_prefetch_concurrency_and_lock
 
 summary

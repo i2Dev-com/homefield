@@ -684,11 +684,11 @@ cmd_install() {
   if [ "$SETUP" = 1 ]; then
     local preflight_rc=0
     offer_gh_login "$url"
-    cmd_preflight || preflight_rc=$?
+    cmd_preflight --no-prefetch || preflight_rc=$?
     [ "$preflight_rc" -eq 0 ] ||
       die "setup stopped: fix the failed checks above and run it again; nothing was created"
   else
-    cmd_preflight || true
+    cmd_preflight --no-prefetch || true
   fi
   check_host
   # Everything that can be checked is checked before anything is created: the

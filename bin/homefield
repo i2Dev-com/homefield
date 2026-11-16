@@ -190,10 +190,11 @@ EOF
 usage_cmd_preflight() {
   cat <<'EOF'
   preflight  Check prerequisites for a fresh install: macOS, Apple Silicon,
-              Lima, gh, python3, brew. Exits 0 when all pass, 1
-              otherwise (with messages pointing to the exact fix command).
+              Lima, gh, python3, brew, and (interactive or --prefetch) cache
+              the Lima VM image. Exits 0 when all checks pass, 1 otherwise
+              (with messages pointing to the exact fix command).
               Designed to be run before install; setup and install call it
-              first (setup stops on a failure, install only reports it).
+              first with --no-prefetch (setup stops on failure, install warns).
 EOF
 }
 usage_cmd_adopt() {
@@ -456,6 +457,18 @@ adopt:
   Needs gh and python3. Does not need the VM.
 EOF
 }
+usage_sec_preflight() {
+  cat <<'EOF'
+preflight:
+  --prefetch         check Lima's image cache and download vm/lima.yaml's
+                     digest-pinned VM image when missing or stale (also on by
+                     default when stdin is a terminal; non-fatal on failure)
+  --no-prefetch      skip the VM image cache check/download (default when stdin
+                     is not a terminal, and how setup/install invoke preflight)
+  Cache dir overrides via HOMEFIELD_LIMA_CACHE_DIR (default
+  ~/Library/Caches/lima) and HOMEFIELD_LIMA_TEMPLATE (template YAML path).
+EOF
+}
 usage_sec_memory() {
   cat <<'EOF'
 memory:
@@ -515,6 +528,7 @@ usage() {
     usage_sec_uninstall \
     usage_sec_reset \
     usage_sec_route \
+    usage_sec_preflight \
     usage_sec_adopt \
     usage_sec_memory \
     usage_sec_report \
@@ -549,7 +563,7 @@ usage_for() {
     route)
       usage_join usage_header usage_cmd_route usage_sec_route usage_options ;;
     preflight)
-      usage_join usage_header usage_cmd_preflight usage_options ;;
+      usage_join usage_header usage_cmd_preflight usage_sec_preflight usage_options ;;
     adopt)
       usage_join usage_header usage_cmd_adopt usage_sec_adopt usage_options ;;
     memory)
@@ -635,7 +649,7 @@ main() {
     case "$arg" in -h | --help) usage_for "$cmd"; return 0 ;; esac
   done
   case "$cmd" in
-    preflight) [ $# -eq 0 ] || die "preflight takes no options (see bin/homefield help)"; cmd_preflight ;;
+    preflight) cmd_preflight "$@" ;;
     setup) cmd_setup "$@" ;;
     install) cmd_install "$@" ;;
     upgrade) cmd_upgrade "$@" ;;
