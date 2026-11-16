@@ -137,6 +137,7 @@ EOF
         cat >"$dir/curl" <<'EOF'
 #!/bin/sh
 [ -n "${CURL_CALLS:-}" ] && echo "$*" >>"$CURL_CALLS"
+[ -n "${CURL_SLEEP:-}" ] && /bin/sleep "$CURL_SLEEP"
 if [ "${CURL_FAIL:-}" = "1" ]; then
   echo "curl: download error" >&2
   exit 22
@@ -611,13 +612,16 @@ case_prefetch_failures_warn_only() {
   pf_out="$(env PATH="$d" HOMEFIELD_SOURCE_ONLY=1 LIMA_TPL_PATH="$tpl" HOMEFIELD_LIMA_CACHE_DIR="$cache" CURL_CALLS="$calls" CURL_FAIL=1 \
     "$BASH_BIN" -c '. "$1"; color_init; cmd_preflight --prefetch' _ "$ROOT/bin/homefield" 2>&1 </dev/null)"; pf_rc=$?
   local entry="$cache/download/by-url-sha256/$IMG_URL_HASH"
-  record "--prefetch curl failure warns and still exits 0" "0/yes/yes" \
-    "$pf_rc/$(yesno "$pf_out" "WARN  VM image pre-fetch failed (download failed)")/$([ ! -e "$entry/data.part" ] && echo yes || echo no)"
+  local part_left
+  part_left="$( (shopt -s nullglob; set -- "$entry"/data.part*; echo $#) )"
+  record "--prefetch curl failure warns and still exits 0" "0/yes/0/yes" \
+    "$pf_rc/$(yesno "$pf_out" "WARN  VM image pre-fetch failed (download failed)")/$part_left/$([ ! -e "$entry/.prefetch.lock" ] && echo yes || echo no)"
 
   pf_out="$(env PATH="$d" HOMEFIELD_SOURCE_ONLY=1 LIMA_TPL_PATH="$tpl" HOMEFIELD_LIMA_CACHE_DIR="$cache" CURL_CALLS="$calls" CURL_BODY="wrong-bytes" \
     "$BASH_BIN" -c '. "$1"; color_init; cmd_preflight --prefetch' _ "$ROOT/bin/homefield" 2>&1 </dev/null)"; pf_rc=$?
-  record "--prefetch sha256 mismatch warns, removes partial/data, and exits 0" "0/yes/yes" \
-    "$pf_rc/$(yesno "$pf_out" "WARN  VM image pre-fetch failed (sha256 mismatch)")/$([ ! -e "$entry/data" ] && [ ! -e "$entry/data.part" ] && echo yes || echo no)"
+  part_left="$( (shopt -s nullglob; set -- "$entry"/data.part*; echo $#) )"
+  record "--prefetch sha256 mismatch warns, removes partial/data, and exits 0" "0/yes/yes/0/yes" \
+    "$pf_rc/$(yesno "$pf_out" "WARN  VM image pre-fetch failed (sha256 mismatch)")/$([ ! -e "$entry/data" ] && echo yes || echo no)/$part_left/$([ ! -e "$entry/.prefetch.lock" ] && echo yes || echo no)"
 }
 
 # shellcheck disable=SC2016
@@ -642,9 +646,40 @@ case_prefetch_tty_and_flags() {
     "$(nonzero "$rc")/$(yesno "$out" "unknown option --bogus")"
 }
 
+# shellcheck disable=SC2016
+case_prefetch_concurrency_and_lock() {
+  local d="$work/pf-lock" tpl="$work/pf-lock.yaml" cache="$work/pf-lock-cache" calls="$work/pf-lock-curl"
+  local entry="$cache/download/by-url-sha256/$IMG_URL_HASH"
+  local out1="$work/pf-lock-1.out" out2="$work/pf-lock-2.out" pid1 pid2 rc1 rc2 pf_out pf_rc
+  stub_dir "$d" limactl gh python3 brew uname sw_vers awk dirname mkdir rm mv curl
+  write_tpl "$tpl"
+
+  mkdir -p "$entry/.prefetch.lock"
+  printf '999999\n' >"$entry/.prefetch.lock/pid"
+  : >"$calls"
+  pf_out="$(env PATH="$d" HOMEFIELD_SOURCE_ONLY=1 LIMA_TPL_PATH="$tpl" HOMEFIELD_LIMA_CACHE_DIR="$cache" CURL_CALLS="$calls" CURL_BODY="$IMG_PAYLOAD" \
+    "$BASH_BIN" -c '. "$1"; color_init; cmd_preflight --prefetch' _ "$ROOT/bin/homefield" 2>&1 </dev/null)"; pf_rc=$?
+  record "--prefetch recovers stale lock dir and caches image" "0/1/yes/yes/yes" \
+    "$pf_rc/$(wc -l <"$calls" | tr -d ' ')/$(yesno "$pf_out" "VM image pre-fetched")/$([ ! -e "$entry/.prefetch.lock" ] && echo yes || echo no)/$([ "$(cat "$entry/data" 2>/dev/null)" = "$IMG_PAYLOAD" ] && echo yes || echo no)"
+
+  rm -rf "$cache"
+  : >"$calls"
+  env PATH="$d" HOMEFIELD_SOURCE_ONLY=1 LIMA_TPL_PATH="$tpl" HOMEFIELD_LIMA_CACHE_DIR="$cache" CURL_CALLS="$calls" CURL_BODY="$IMG_PAYLOAD" CURL_SLEEP=0.3 \
+    "$BASH_BIN" -c '. "$1"; color_init; cmd_preflight --prefetch' _ "$ROOT/bin/homefield" >"$out1" 2>&1 </dev/null &
+  pid1=$!
+  env PATH="$d" HOMEFIELD_SOURCE_ONLY=1 LIMA_TPL_PATH="$tpl" HOMEFIELD_LIMA_CACHE_DIR="$cache" CURL_CALLS="$calls" CURL_BODY="$IMG_PAYLOAD" CURL_SLEEP=0.3 \
+    "$BASH_BIN" -c '. "$1"; color_init; cmd_preflight --prefetch' _ "$ROOT/bin/homefield" >"$out2" 2>&1 </dev/null &
+  pid2=$!
+  wait "$pid1"; rc1=$?
+  wait "$pid2"; rc2=$?
+  record "concurrent --prefetch serializes download and preserves cached data" "0/0/1/yes/yes" \
+    "$rc1/$rc2/$(wc -l <"$calls" | tr -d ' ')/$([ ! -e "$entry/.prefetch.lock" ] && echo yes || echo no)/$([ "$(cat "$entry/data" 2>/dev/null)" = "$IMG_PAYLOAD" ] && echo yes || echo no)"
+}
+
 case_prefetch_non_tty_skips
 case_prefetch_downloads_and_caches
 case_prefetch_failures_warn_only
 case_prefetch_tty_and_flags
+case_prefetch_concurrency_and_lock
 
 summary

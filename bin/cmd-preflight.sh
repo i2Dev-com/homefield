@@ -241,6 +241,7 @@ preflight_resolve_image() {
 # failing preflight: `install` will fetch via Lima as before.
 preflight_image() {
   local resolved url digest_hex url_hash cache_root cache_dir cached_sha part_sha name
+  local lock_dir lock_pid attempts=0 missing_pid=0 max_attempts="${HOMEFIELD_PREFETCH_LOCK_TRIES:-300}" part_file
   if ! resolved="$(preflight_resolve_image)" || [ -z "$resolved" ]; then
     pf_line warn "VM image pre-fetch skipped (could not resolve Lima image template); install will download it"
     return 0
@@ -254,41 +255,92 @@ preflight_image() {
   fi
   cache_root="${HOMEFIELD_LIMA_CACHE_DIR:-$HOME/Library/Caches/lima}"
   cache_dir="${cache_root}/download/by-url-sha256/${url_hash}"
-  if [ -s "$cache_dir/data" ]; then
-    cached_sha="$(pf_sha256_file "$cache_dir/data")" || cached_sha=""
-    if [ "$cached_sha" = "$digest_hex" ]; then
-      pf_line ok "VM image cached (${name}, sha256:${digest_hex:0:12})"
-      return 0
-    fi
-  fi
-  if ! command -v curl >/dev/null 2>&1; then
-    pf_line warn "VM image pre-fetch skipped (curl not found); install will download it"
-    return 0
-  fi
   if ! mkdir -p "$cache_dir"; then
+    if [ -s "$cache_dir/data" ]; then
+      cached_sha="$(pf_sha256_file "$cache_dir/data")" || cached_sha=""
+      if [ "$cached_sha" = "$digest_hex" ]; then
+        pf_line ok "VM image cached (${name}, sha256:${digest_hex:0:12})"
+        return 0
+      fi
+    fi
     pf_line warn "VM image pre-fetch skipped (cannot create cache dir); install will download it"
     return 0
   fi
-  rm -f "$cache_dir/data.part"
-  if ! curl -fSL -o "$cache_dir/data.part" "$url" 2>/dev/null; then
-    rm -f "$cache_dir/data.part"
+
+  lock_dir="$cache_dir/.prefetch.lock"
+  while ! mkdir "$lock_dir" 2>/dev/null; do
+    lock_pid=""
+    if [ -r "$lock_dir/pid" ]; then
+      IFS= read -r lock_pid <"$lock_dir/pid" || lock_pid=""
+    fi
+    if [ -n "$lock_pid" ]; then
+      missing_pid=0
+      case "$lock_pid" in
+        *[!0-9]*)
+          rm -rf "$lock_dir"
+          continue
+          ;;
+      esac
+      if ! kill -0 "$lock_pid" 2>/dev/null; then
+        rm -rf "$lock_dir"
+        continue
+      fi
+    else
+      missing_pid=$((missing_pid + 1))
+      if [ "$missing_pid" -ge 3 ]; then
+        rm -rf "$lock_dir"
+        missing_pid=0
+        continue
+      fi
+    fi
+    attempts=$((attempts + 1))
+    if [ "$attempts" -ge "$max_attempts" ]; then
+      pf_line warn "VM image pre-fetch skipped (cache lock busy); install will download it"
+      return 0
+    fi
+    /bin/sleep 0.1 2>/dev/null || /bin/sleep 1 2>/dev/null || true
+  done
+  printf '%s\n' "$$" >"$lock_dir/pid" 2>/dev/null || true
+
+  if [ -s "$cache_dir/data" ]; then
+    cached_sha="$(pf_sha256_file "$cache_dir/data")" || cached_sha=""
+    if [ "$cached_sha" = "$digest_hex" ]; then
+      rm -rf "$lock_dir"
+      pf_line ok "VM image cached (${name}, sha256:${digest_hex:0:12})"
+      return 0
+    fi
+    rm -f "$cache_dir/data"
+  fi
+  if ! command -v curl >/dev/null 2>&1; then
+    rm -rf "$lock_dir"
+    pf_line warn "VM image pre-fetch skipped (curl not found); install will download it"
+    return 0
+  fi
+  part_file="$cache_dir/data.part.$$"
+  rm -f "$part_file" "$cache_dir/data.part"
+  if ! curl -fSL -o "$part_file" "$url" 2>/dev/null; then
+    rm -f "$part_file"
+    rm -rf "$lock_dir"
     pf_line warn "VM image pre-fetch failed (download failed); install will download it"
     return 0
   fi
-  part_sha="$(pf_sha256_file "$cache_dir/data.part")" || part_sha=""
+  part_sha="$(pf_sha256_file "$part_file")" || part_sha=""
   if [ "$part_sha" != "$digest_hex" ]; then
-    rm -f "$cache_dir/data.part" "$cache_dir/data"
+    rm -f "$part_file" "$cache_dir/data"
+    rm -rf "$lock_dir"
     pf_line warn "VM image pre-fetch failed (sha256 mismatch); install will download it"
     return 0
   fi
   if ! { printf '%s' "$url" >"$cache_dir/url" &&
     printf 'sha256:%s' "$digest_hex" >"$cache_dir/sha256.digest" &&
     printf 'application/octet-stream' >"$cache_dir/type" &&
-    mv -f "$cache_dir/data.part" "$cache_dir/data"; }; then
-    rm -f "$cache_dir/data.part" "$cache_dir/data"
+    mv -f "$part_file" "$cache_dir/data"; }; then
+    rm -f "$part_file" "$cache_dir/data"
+    rm -rf "$lock_dir"
     pf_line warn "VM image pre-fetch failed (could not write cache); install will download it"
     return 0
   fi
+  rm -rf "$lock_dir"
   pf_line ok "VM image pre-fetched (${name}, sha256:${digest_hex:0:12})"
   return 0
 }
