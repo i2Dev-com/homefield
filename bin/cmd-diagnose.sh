@@ -1,5 +1,27 @@
 #!/usr/bin/env bash
 # The diagnose command: collection and the two renderings.
+#
+# ── diagnose ────────────────────────────────────────────────────────────────
+# One read-only report over state the other commands already look at, for the
+# moment an install, upgrade or adopt has gone wrong: the VM (status's checks,
+# plus isolation), the runner group on GitHub's side, and preflight's
+# prerequisites. It collects everything into DG_* first and prints afterwards,
+# so the human and the --json form say the same thing, and --json prints
+# nothing but the JSON on stdout.
+#
+# Read-only is a property to keep: nothing here starts or stops the VM or the
+# runner, registers, or writes. `limactl shell` starts a stopped instance, so
+# the guest is only asked about a VM that lists as Running. Unlike the
+# loopback probe of install, nothing opens a listener on the Mac.
+#
+# Every gh call is bounded by runner_on_github's GH_TIMEOUT, which comes first
+# and decides whether the later ones are made at all: the runner group and its
+# repositories are only read once GitHub has answered it.
+
+# dg_warn <text>: something that could not be checked; not a problem found.
+dg_warn() { DG_WARN+=("$1"); }
+# dg_hint <text>: a next step, for a runner that is otherwise healthy.
+dg_hint() { DG_HINT+=("$1"); }
 
 # What diagnose found. A state is a short word; "skipped" says the question was
 # not asked, and DG_SKIP_WHY why (the first reason the guest checks stopped).

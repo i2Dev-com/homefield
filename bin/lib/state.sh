@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 # The per-VM state file and the installed-tool wrapper helpers.
 
+# The instance's state file on this Mac: what install did that reset has to
+# undo, as `key=value` lines. Today one key, group_created=<org>/<group
+# name>/<group id>, set only when install itself created the runner group (a
+# group that was already there is never recorded, so reset never deletes
+# it). Per instance, and outside the tool's own directory, which install.sh
+# replaces on every update. docs/runbook.md, "Rolling back a failed install".
+state_file() { printf '%s/%s.state' "${HOMEFIELD_STATE_DIR:-$HOME/.local/state/homefield}" "$INSTANCE"; }
+
 # state_get <key>: its value, or nothing. The key goes to awk as data (-v),
 # not into a sed program: only the fixed group_created key made the sed safe.
 state_get() {
@@ -24,6 +32,12 @@ state_set() {
   } >"$tmp" || { rm -f "$tmp"; return 1; }
   mv -f "$tmp" "$f" || { rm -f "$tmp"; return 1; }
 }
+
+# Where install.sh put the tool: the same defaults as install.sh's
+# HOMEFIELD_HOME and pick_bin_dir. install.sh cannot be sourced from here (it
+# runs on load), so the two are kept in step by hand, and tests/reset.sh
+# removes a wrapper that install.sh itself wrote.
+tool_install_dir() { printf '%s' "${HOMEFIELD_HOME:-$HOME/.local/share/homefield}"; }
 
 # tool_bin_dirs: every place the command can be; the Homebrew prefix install.sh
 # found then may not be the one found now.

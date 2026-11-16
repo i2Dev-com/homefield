@@ -53,6 +53,12 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ### Fixed
 
+- Leftover comments, misplaced globals and one-line helpers from the
+  `bin/lib/` and `bin/cmd-*.sh` split
+  ([#194](https://github.com/i2Dev-com/homefield/issues/194)) are moved to
+  their owning modules, interleaved doc blocks untangled and duplicate comments
+  removed with no behavior change
+  ([#239](https://github.com/i2Dev-com/homefield/issues/239)).
 - `isolation_probe`'s mount-count logic is now factored into
   `vm/guest/homefield-mount-count` (POSIX `sh`, `set -eu` with explicit zero
   counters and conditional `pipefail` — no `grep -c` exit-status dance), and
