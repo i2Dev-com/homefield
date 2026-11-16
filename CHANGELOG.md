@@ -13,6 +13,8 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ### Added
 
+- Cost-savings documentation and calculator ([`docs/cost.md`](docs/cost.md), `tools/cost.py`, `tests/cost.sh`): published 2026 hosted runner rates, OS minute multipliers, break-even formula, worked example, and a zero-dependency CLI reading recent `gh` workflow runs to project monthly hosted spend and savings ([#248](https://github.com/i2Dev-com/homefield/issues/248)).
+
 - A gh version floor: `homefield preflight` now requires **gh ≥ 2.81** — the
   version that added `gh auth status --json hosts` (cli/cli#11544, 2025-10-01) —
   which the account check uses; `gh api --jq` (the registration-token fetch)

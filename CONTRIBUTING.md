@@ -22,6 +22,7 @@ bash tests/status.sh               # `bin/homefield status` reports on when the 
 bash tests/diagnose.sh             # `bin/homefield diagnose [--json]`: the read-only report, its problems and fixes
 bash tests/memory-summary.sh       # `bin/homefield memory` summary
 bash tests/report.sh               # `bin/homefield report`
+bash tests/cost.sh                 # `tools/cost.py` monthly cost and savings projection
 bash tests/install-sh.sh           # install.sh
 bash tests/runner-group.sh         # runner group, wait for online, `version`
 bash tests/account-type.sh         # `bin/homefield install`: personal account or organization, --personal / --org

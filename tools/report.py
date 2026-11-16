@@ -54,7 +54,7 @@ def die(message):
     sys.exit(1)
 
 
-def gh_lines(path, jq):
+def gh_lines(path, jq, die=die):
     """JSON objects, one per line of `gh api --paginate PATH --jq JQ`."""
     result = subprocess.run(
         ["gh", "api", "--paginate", path, "--jq", jq],
@@ -76,7 +76,7 @@ def days(first, last):
         day += dt.timedelta(days=1)
 
 
-def fixture_runs(repo, fixture):
+def fixture_runs(repo, fixture, die=die):
     """The fixture's runs for repo, in the shape the live API guarantees:
     runs are objects with their jobs in a list, and every job carries a name
     and a created_at. Anything else is refused with a message, not a
@@ -120,24 +120,27 @@ def fixture_runs(repo, fixture):
     return data[repo]
 
 
-def fetch_repo(repo, first, last):
+def fetch_repo(repo, first, last, fixture=None, die=die):
     """Runs of the repository created from `first` to `last` (dates,
     inclusive), each with its jobs under "jobs"."""
-    fixture = os.environ.get("HOMEFIELD_REPORT_FIXTURE")
+    if fixture is None:
+        fixture = os.environ.get("HOMEFIELD_REPORT_FIXTURE")
     if fixture:
-        return fixture_runs(repo, fixture)
+        return fixture_runs(repo, fixture, die=die)
 
     def runs_of(day):
         span = f"{day}T00:00:00Z..{day}T23:59:59Z"
         return gh_lines(
             f"repos/{repo}/actions/runs?per_page=100&created={span}",
             f".workflow_runs[] | {RUN_FIELDS}",
+            die=die,
         )
 
     def with_jobs(run):
         run["jobs"] = gh_lines(
             f"repos/{repo}/actions/runs/{run['id']}/jobs?per_page=100&filter=all",
             f".jobs[] | {JOB_FIELDS}",
+            die=die,
         )
         return run
 
@@ -346,7 +349,7 @@ def render(data, first, last, label):
     return "\n".join(lines)
 
 
-def parse_date(value):
+def parse_date(value, die=die):
     try:
         return dt.date.fromisoformat(value)
     except ValueError:
