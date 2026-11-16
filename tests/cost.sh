@@ -417,6 +417,39 @@ record "--mode simple moves Dependabot + fork PRs + push Linux (165m) to routabl
   "$(echo "$simple_mode" | pick "f\"{d['repos'][0]['buckets']['routable']['raw_minutes']}/{d['repos'][0]['buckets']['other_hosted']['raw_minutes']}/{d['monthly_projection']['savings']['additional_monthly_usd']:.2f}\"")"
 
 echo
+echo "ubuntu-slim pricing (\$0.002/min, 1x)"
+cat >"$work/slim.json" <<'JSON'
+{
+  "acme/slim": [
+    {
+      "id": 301,
+      "path": ".github/workflows/lint.yml",
+      "event": "pull_request",
+      "branch": "feat/slim",
+      "actor": "alice",
+      "head_repo": "acme/slim",
+      "jobs": [
+        {
+          "id": 3001,
+          "name": "slim-lint",
+          "status": "completed",
+          "conclusion": "success",
+          "created_at": "2026-10-01T10:00:00Z",
+          "started_at": "2026-10-01T10:00:00Z",
+          "completed_at": "2026-10-01T11:00:00Z",
+          "runner_name": "GitHub Actions 1",
+          "labels": ["ubuntu-slim"]
+        }
+      ]
+    }
+  ]
+}
+JSON
+slim_out="$(HOMEFIELD_COST_FIXTURE="$work/slim.json" python3 "$ROOT/tools/cost.py" --repo acme/slim --since 2026-10-01 --until 2026-10-30 --included 0 --json)"
+record "60m ubuntu-slim PR bills \$0.12 (not \$0.36) and routes locally" "60/0/60/0.12/0.12" \
+  "$(echo "$slim_out" | pick "f\"{d['repos'][0]['buckets']['routable']['raw_minutes']}/{d['repos'][0]['buckets']['other_hosted']['raw_minutes']}/{d['repos'][0]['by_os']['linux-slim']['raw_minutes']}/{d['repos'][0]['by_os']['linux-slim']['gross_usd']:.2f}/{d['monthly_projection']['savings']['additional_monthly_usd']:.2f}\"")"
+
+echo
 echo "multi-repo table and isolated python3 -I"
 multi_txt="$(run_fixture --repo acme/app --repo acme/other --since 2026-10-01 --until 2026-10-10 --plan free)"
 rc=$?

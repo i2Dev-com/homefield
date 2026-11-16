@@ -15,6 +15,7 @@ overage per raw minute at the published rate:
 
 | Runner | Pool multiplier | Overage rate | Cost per pool minute | Runs locally with homefield? |
 |---|---|---|---|---|
+| Linux 1-core slim (`ubuntu-slim`) | 1x | `$0.002` / min | `$0.0020` | Yes (`homefield-ci`) |
 | Linux 2-core x64 (`ubuntu-latest`) | 1x | `$0.006` / min | `$0.0060` | Yes (`homefield-ci`) |
 | Linux 2-core arm64 (`ubuntu-*-arm`) | 1x | `$0.005` / min | `$0.0050` | Yes (`homefield-ci`) |
 | Windows 2-core (`windows-latest`) | 2x | `$0.010` / min | `$0.0050` | No (stays hosted) |

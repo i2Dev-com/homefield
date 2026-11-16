@@ -53,9 +53,10 @@ PLANS = {
     "enterprise": 50000,
 }
 
-# Published GitHub-hosted 2-core (3/4-core for macOS) standard rates in USD
-# per raw billed minute and plan minute multipliers.
+# Published GitHub-hosted standard runner rates in USD per raw billed minute
+# and plan minute multipliers.
 RATES = {
+    "linux-slim": (1, 0.002),
     "linux-x64": (1, 0.006),
     "linux-arm64": (1, 0.005),
     "windows": (2, 0.010),
@@ -87,6 +88,14 @@ def os_profile(labels):
     ):
         mult, rate = RATES["linux-arm64"]
         return "linux-arm64", mult, rate
+    if any(
+        item in ("ubuntu-slim", "linux-slim")
+        or item.startswith(("ubuntu-slim-", "linux-slim-"))
+        or item.endswith("-slim")
+        for item in items
+    ):
+        mult, rate = RATES["linux-slim"]
+        return "linux-slim", mult, rate
     mult, rate = RATES["linux-x64"]
     return "linux-x64", mult, rate
 
@@ -163,7 +172,7 @@ def collect_repo(repo, runs, label, mode="guards", dependabot="hosted"):
                 bucket_name = "local"
             else:
                 os_key, mult, rate = os_profile(job.get("labels") or [])
-                if run_routable and os_key in ("linux-x64", "linux-arm64"):
+                if run_routable and os_key in ("linux-x64", "linux-arm64", "linux-slim"):
                     bucket_name = "routable"
                 else:
                     bucket_name = "other_hosted"
@@ -417,7 +426,8 @@ def render(payload):
         "",
         (
             "Rates: Linux x64 $0.006/min (1x), Linux arm64 $0.005/min (1x),"
-            " Windows $0.010/min (2x), macOS $0.062/min (10x); job durations round up."
+            " slim $0.002/min (1x), Windows $0.010/min (2x), macOS $0.062/min (10x);"
+            " job durations round up."
         ),
         (
             "Local jobs are priced at Linux x64 ($0.006/min); "
