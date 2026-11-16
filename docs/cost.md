@@ -127,10 +127,11 @@ python3 tools/cost.py --repo owner/app --mode simple
 ```
 
 By default (`--mode guards --dependabot hosted`), hosted Dependabot
-(`dependabot[bot]` or `dependabot/...` branches) and fork pull-request runs
-stay in `other_hosted` so savings reflect what guarded routing actually
-moves locally. Pass `--dependabot local` or `--mode simple` when estimating for
-those options.
+(`dependabot[bot]` or `dependabot/...` branches), fork pull requests, and
+non-PR events stay in `other_hosted` so savings reflect what guarded routing
+actually moves locally. Pass `--dependabot local` to include Dependabot PRs,
+or `--mode simple` to project savings across all Linux events (pushes, releases,
+Dependabot, and forks; macOS and Windows jobs remain hosted in every mode).
 
 Environment overrides (primarily for tests and offline evaluation):
 

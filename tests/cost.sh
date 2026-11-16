@@ -177,7 +177,7 @@ echo "classification, rates, rounding and scaling"
 # 10-day window -> 3.0x scale to 30 days.
 # acme/app observed:
 #   local       : 61s -> ceil 2m, priced at linux-x64 ($0.012, 2 billed)
-#   routable_pr : 10s ubuntu-latest (1m, $0.006, swarm-pool must not match arm)
+#   routable    : 10s ubuntu-latest (1m, $0.006, swarm-pool must not match arm)
 #                 + 120s ubuntu-24.04-arm (2m, $0.010) + 0s ubuntu-latest (0m) = 3m, $0.016
 #   other_hosted: 180s macos-15 on PR (3m, 30 billed, $0.186) + 240s windows-2025 on push (4m, 8 billed, $0.040)
 #                 = 7m raw, 38 billed, $0.226
@@ -186,10 +186,10 @@ rc=$?
 record "fixture --json succeeds cleanly" "0" "$rc"
 record "window is 10d scaled 3.0x to 30d" "10/30/3.0" \
   "$(echo "$json_out" | pick "f\"{d['window_days']}/{d['projection_days']}/{d['scale_factor']}\"")"
-record "observed buckets classify local/routable_pr/other_hosted + incomplete counts" "2/3/7/1/1/1" \
-  "$(echo "$json_out" | pick "f\"{d['repos'][0]['buckets']['local']['raw_minutes']}/{d['repos'][0]['buckets']['routable_pr']['raw_minutes']}/{d['repos'][0]['buckets']['other_hosted']['raw_minutes']}/{d['repos'][0]['pull_requests']}/{d['repos'][0]['unstarted']}/{d['repos'][0]['pending']}\"")"
+record "observed buckets classify local/routable/other_hosted + incomplete counts" "2/3/7/1/1/1" \
+  "$(echo "$json_out" | pick "f\"{d['repos'][0]['buckets']['local']['raw_minutes']}/{d['repos'][0]['buckets']['routable']['raw_minutes']}/{d['repos'][0]['buckets']['other_hosted']['raw_minutes']}/{d['repos'][0]['pull_requests']}/{d['repos'][0]['unstarted']}/{d['repos'][0]['pending']}\"")"
 record "local ignores runner arm64 label; swarm-pool does not trigger arm64" "0.01/0.02/0.23/0.02/0.01" \
-  "$(echo "$json_out" | pick "f\"{d['repos'][0]['buckets']['local']['gross_usd']:.2f}/{d['repos'][0]['buckets']['routable_pr']['gross_usd']:.2f}/{d['repos'][0]['buckets']['other_hosted']['gross_usd']:.2f}/{d['repos'][0]['by_os']['linux-x64']['gross_usd']:.2f}/{d['repos'][0]['by_os']['linux-arm64']['gross_usd']:.2f}\"")"
+  "$(echo "$json_out" | pick "f\"{d['repos'][0]['buckets']['local']['gross_usd']:.2f}/{d['repos'][0]['buckets']['routable']['gross_usd']:.2f}/{d['repos'][0]['buckets']['other_hosted']['gross_usd']:.2f}/{d['repos'][0]['by_os']['linux-x64']['gross_usd']:.2f}/{d['repos'][0]['by_os']['linux-arm64']['gross_usd']:.2f}\"")"
 # Monthly scenarios (--included 0, scale 3x):
 #   all_hosted    : (2+3+7)*3 = 36 raw, (6+9+114) = 129 billed, gross (0.012+0.016+0.226)*3 = 0.762 -> 0.76
 #   current       : (3+7)*3 = 30 raw, 123 billed, gross 0.242*3 = 0.726 -> 0.73
@@ -367,22 +367,54 @@ cat >"$work/guards.json" <<'JSON'
           "labels": ["ubuntu-latest"]
         }
       ]
+    },
+    {
+      "id": 106,
+      "path": ".github/workflows/main.yml",
+      "event": "push",
+      "branch": "main",
+      "actor": "alice",
+      "head_repo": "acme/app",
+      "jobs": [
+        {
+          "id": 1006,
+          "name": "push-linux",
+          "status": "completed",
+          "conclusion": "success",
+          "created_at": "2026-10-01T15:00:00Z",
+          "started_at": "2026-10-01T15:00:00Z",
+          "completed_at": "2026-10-01T16:00:00Z",
+          "runner_name": "GitHub Actions 5",
+          "labels": ["ubuntu-latest"]
+        },
+        {
+          "id": 1007,
+          "name": "push-win",
+          "status": "completed",
+          "conclusion": "success",
+          "created_at": "2026-10-01T15:00:00Z",
+          "started_at": "2026-10-01T15:00:00Z",
+          "completed_at": "2026-10-01T15:05:00Z",
+          "runner_name": "GitHub Actions 6",
+          "labels": ["windows-2025"]
+        }
+      ]
     }
   ]
 }
 JSON
 
 guards_default="$(HOMEFIELD_COST_FIXTURE="$work/guards.json" python3 "$ROOT/tools/cost.py" --repo acme/app --since 2026-10-01 --until 2026-10-30 --included 0 --json)"
-record "guards mode keeps Dependabot + fork PRs in other_hosted (additional = \$0.00)" "5/0/105/0.00/guards/hosted" \
-  "$(echo "$guards_default" | pick "f\"{d['repos'][0]['buckets']['local']['raw_minutes']}/{d['repos'][0]['buckets']['routable_pr']['raw_minutes']}/{d['repos'][0]['buckets']['other_hosted']['raw_minutes']}/{d['monthly_projection']['savings']['additional_monthly_usd']:.2f}/{d['mode']}/{d['dependabot']}\"")"
+record "guards mode keeps Dependabot + fork PRs + push in other_hosted (additional = \$0.00)" "5/0/170/0.00/guards/hosted" \
+  "$(echo "$guards_default" | pick "f\"{d['repos'][0]['buckets']['local']['raw_minutes']}/{d['repos'][0]['buckets']['routable']['raw_minutes']}/{d['repos'][0]['buckets']['other_hosted']['raw_minutes']}/{d['monthly_projection']['savings']['additional_monthly_usd']:.2f}/{d['mode']}/{d['dependabot']}\"")"
 
 guards_dep="$(HOMEFIELD_COST_FIXTURE="$work/guards.json" python3 "$ROOT/tools/cost.py" --repo acme/app --since 2026-10-01 --until 2026-10-30 --included 0 --dependabot local --json)"
-record "--dependabot local moves Dependabot (70m) to routable_pr, forks (35m) stay hosted" "70/35/0.42" \
-  "$(echo "$guards_dep" | pick "f\"{d['repos'][0]['buckets']['routable_pr']['raw_minutes']}/{d['repos'][0]['buckets']['other_hosted']['raw_minutes']}/{d['monthly_projection']['savings']['additional_monthly_usd']:.2f}\"")"
+record "--dependabot local moves Dependabot (70m) to routable, forks + push (100m) stay hosted" "70/100/0.42" \
+  "$(echo "$guards_dep" | pick "f\"{d['repos'][0]['buckets']['routable']['raw_minutes']}/{d['repos'][0]['buckets']['other_hosted']['raw_minutes']}/{d['monthly_projection']['savings']['additional_monthly_usd']:.2f}\"")"
 
 simple_mode="$(HOMEFIELD_COST_FIXTURE="$work/guards.json" python3 "$ROOT/tools/cost.py" --repo acme/app --since 2026-10-01 --until 2026-10-30 --included 0 --mode simple --json)"
-record "--mode simple moves Dependabot + fork PRs (105m) to routable_pr" "105/0/0.63" \
-  "$(echo "$simple_mode" | pick "f\"{d['repos'][0]['buckets']['routable_pr']['raw_minutes']}/{d['repos'][0]['buckets']['other_hosted']['raw_minutes']}/{d['monthly_projection']['savings']['additional_monthly_usd']:.2f}\"")"
+record "--mode simple moves Dependabot + fork PRs + push Linux (165m) to routable; Windows stays hosted" "165/5/0.99" \
+  "$(echo "$simple_mode" | pick "f\"{d['repos'][0]['buckets']['routable']['raw_minutes']}/{d['repos'][0]['buckets']['other_hosted']['raw_minutes']}/{d['monthly_projection']['savings']['additional_monthly_usd']:.2f}\"")"
 
 echo
 echo "multi-repo table and isolated python3 -I"
@@ -460,7 +492,7 @@ live() {
 COST_TODAY=2026-11-30
 live --repo acme/app --included 0 --json
 record "live: default 30d window and actor/head_repo separation" "0/2/3/4/yes/30" \
-  "$rc/$(echo "$out" | sed -n '/^{/,$p' | pick "f\"{d['repos'][0]['buckets']['local']['raw_minutes']}/{d['repos'][0]['buckets']['routable_pr']['raw_minutes']}/{d['repos'][0]['buckets']['other_hosted']['raw_minutes']}\"")/$(echo "$out" | grep -q 'acme/app: 2 runs, fetching jobs' && echo yes || echo no)/$(grep -c 'actions/runs?per_page=100&created=' "$work/calls")"
+  "$rc/$(echo "$out" | sed -n '/^{/,$p' | pick "f\"{d['repos'][0]['buckets']['local']['raw_minutes']}/{d['repos'][0]['buckets']['routable']['raw_minutes']}/{d['repos'][0]['buckets']['other_hosted']['raw_minutes']}\"")/$(echo "$out" | grep -q 'acme/app: 2 runs, fetching jobs' && echo yes || echo no)/$(grep -c 'actions/runs?per_page=100&created=' "$work/calls")"
 
 live --repo acme/app
 record "live: default window header shows 2026-11-01 to 2026-11-30" "0/yes/yes" \

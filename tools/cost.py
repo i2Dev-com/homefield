@@ -5,9 +5,11 @@ Reads workflow runs and jobs via GitHub CLI (`gh`) using the same API queries
 and fixture format as `tools/report.py`, classifies completed jobs into:
 
   - local        jobs already routed to the homefield runner label
-  - routable_pr  hosted Linux `pull_request` jobs eligible for homefield
-  - other_hosted hosted jobs that remain hosted (non-PR events, or macOS /
-                 Windows jobs on any event)
+  - routable     hosted Linux jobs eligible for homefield under the selected
+                 routing policy (`--mode` / `--dependabot`)
+  - other_hosted hosted jobs that remain hosted (non-routable events or
+                 guarded PRs under `--mode guards`, plus macOS / Windows jobs
+                 on any event)
 
 Durations are rounded up to a whole minute per job (`math.ceil(seconds / 60)`),
 then projected linearly from the sample window to a 30-day month. Monthly plan
@@ -60,7 +62,7 @@ RATES = {
     "macos": (10, 0.062),
 }
 
-BUCKET_NAMES = ("local", "routable_pr", "other_hosted")
+BUCKET_NAMES = ("local", "routable", "other_hosted")
 
 
 def die(message):
@@ -103,12 +105,12 @@ def empty_bucket():
     }
 
 
-def is_routable_pr_run(run, repo, mode, dependabot):
+def is_routable_run(run, repo, mode, dependabot):
     """True when a run's hosted Linux jobs can route to homefield under (mode, dependabot)."""
-    if (run.get("event") or "") != "pull_request":
-        return False
     if mode == "simple":
         return True
+    if (run.get("event") or "") != "pull_request":
+        return False
     if dependabot == "hosted":
         actor = (run.get("actor") or "").lower()
         branch = run.get("branch") or ""
@@ -123,7 +125,7 @@ def is_routable_pr_run(run, repo, mode, dependabot):
 
 def collect_repo(repo, runs, label, mode="guards", dependabot="hosted"):
     """Aggregate observed job counts, raw minutes, billed minutes, and gross
-    USD per bucket (`local`, `routable_pr`, `other_hosted`) for one repository."""
+    USD per bucket (`local`, `routable`, `other_hosted`) for one repository."""
     buckets = {name: empty_bucket() for name in BUCKET_NAMES}
     by_os = {
         os_key: {"raw_minutes": 0, "billed_minutes": 0, "gross_usd": 0.0}
@@ -137,7 +139,7 @@ def collect_repo(repo, runs, label, mode="guards", dependabot="hosted"):
         event = run.get("event") or ""
         if event == "pull_request" and run.get("branch"):
             pr_branches.add(run["branch"])
-        pr_routable = is_routable_pr_run(run, repo, mode, dependabot)
+        run_routable = is_routable_run(run, repo, mode, dependabot)
         for job in run.get("jobs") or []:
             where = report.classify(job, label)
             if where in ("skipped", "other"):
@@ -161,8 +163,8 @@ def collect_repo(repo, runs, label, mode="guards", dependabot="hosted"):
                 bucket_name = "local"
             else:
                 os_key, mult, rate = os_profile(job.get("labels") or [])
-                if pr_routable and os_key in ("linux-x64", "linux-arm64"):
-                    bucket_name = "routable_pr"
+                if run_routable and os_key in ("linux-x64", "linux-arm64"):
+                    bucket_name = "routable"
                 else:
                     bucket_name = "other_hosted"
 
@@ -241,12 +243,12 @@ def project_costs(runs_by_repo, label, window_days, included_minutes, mode="guar
 
     scenarios_raw = {
         "all_hosted": bill_scenario(
-            combine_os_maps(totals["local"], totals["routable_pr"], totals["other_hosted"]),
+            combine_os_maps(totals["local"], totals["routable"], totals["other_hosted"]),
             scale,
             included_minutes,
         ),
         "current": bill_scenario(
-            combine_os_maps(totals["routable_pr"], totals["other_hosted"]),
+            combine_os_maps(totals["routable"], totals["other_hosted"]),
             scale,
             included_minutes,
         ),
@@ -354,8 +356,8 @@ def render(payload):
         "Observed window per repository (raw min and gross USD at hosted rates)",
         "",
         (
-            f"{'repo':<24} {'PRs':>4} {'local min':>10} {'pr-host min':>12}"
-            f" {'other min':>10} {'local eq':>10} {'pr-host':>10} {'other':>10}"
+            f"{'repo':<24} {'PRs':>4} {'local min':>10} {'routable min':>12}"
+            f" {'other min':>10} {'local eq':>10} {'routable':>10} {'other':>10}"
         ),
     ]
 
@@ -368,10 +370,10 @@ def render(payload):
         lines.append(
             f"{item['repo'][:24]:<24} {item['pull_requests']:>4}"
             f" {b['local']['raw_minutes']:>10,}"
-            f" {b['routable_pr']['raw_minutes']:>12,}"
+            f" {b['routable']['raw_minutes']:>12,}"
             f" {b['other_hosted']['raw_minutes']:>10,}"
             f" {fmt_usd(b['local']['gross_usd']):>10}"
-            f" {fmt_usd(b['routable_pr']['gross_usd']):>10}"
+            f" {fmt_usd(b['routable']['gross_usd']):>10}"
             f" {fmt_usd(b['other_hosted']['gross_usd']):>10}"
         )
 
@@ -420,7 +422,7 @@ def render(payload):
         (
             "Local jobs are priced at Linux x64 ($0.006/min); "
             + (
-                "all pull_request Linux jobs treated as routable (--mode simple)."
+                "all Linux jobs treated as routable (--mode simple)."
                 if payload["mode"] == "simple"
                 else (
                     "fork pull_request jobs stay hosted under --mode guards;"
