@@ -145,8 +145,8 @@ record "an apt-get failure: the trap starts the unit back up, exit nonzero" "non
   "$(nonzero "$rc")/$(systemctl_calls 'stop')/$(systemctl_calls 'start')"
 
 if command -v shellcheck >/dev/null; then
-  record "shellcheck of both helpers" "clean" \
-    "$(shellcheck "$ROOT/vm/guest/homefield-cleanup" "$ROOT/vm/guest/homefield-maintenance" >/dev/null 2>&1 && echo clean || echo findings)"
+  record "shellcheck of the guest helpers" "clean" \
+    "$(shellcheck "$ROOT/vm/guest/homefield-cleanup" "$ROOT/vm/guest/homefield-maintenance" "$ROOT/vm/guest/homefield-mount-count" >/dev/null 2>&1 && echo clean || echo findings)"
 else
   echo "  skip shellcheck (not installed)"
 fi

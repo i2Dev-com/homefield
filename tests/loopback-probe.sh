@@ -49,11 +49,17 @@ EOF
 # NC_BIND_FAIL answers nothing at all (our bind never happened because the
 # port was taken); NC_NO_K serves the token on the first connect and then
 # dies with it, as an nc without -k does — the probe must notice the dead
-# listener instead of reading its silence as closed.
+# listener instead of reading its silence as closed; NC_REJECT_K rejects -k
+# on the listener command line; NC_DIE_AFTER_2 survives the two local
+# self-tests and dies before the post-guest survival check.
 cat >"$stubs/nc" <<'EOF'
 #!/bin/sh
 case " $* " in
   *" -l "*)
+    if [ -n "${NC_REJECT_K:-}" ]; then
+      echo "nc: invalid option -- 'k'" >&2
+      exit 1
+    fi
     if [ -n "${NC_BIND_LOST:-}" ]; then
       # The port was already taken: a real nc says so and is gone. (The
       # foreign holder stays quiet here, so the token loop can only see
@@ -70,7 +76,27 @@ case " $* " in
     exec sleep 30
     ;;
   *)
-    [ -z "${NC_BIND_FAIL:-}${NC_BIND_LOST:-}" ] || exit 1
+    [ -z "${NC_BIND_FAIL:-}${NC_BIND_LOST:-}${NC_REJECT_K:-}" ] || exit 1
+    if [ -n "${NC_DIE_AFTER_2:-}" ]; then
+      count=0
+      [ -f "$NC_PIDFILE.count" ] && count="$(cat "$NC_PIDFILE.count")"
+      count=$((count + 1))
+      printf '%s\n' "$count" >"$NC_PIDFILE.count"
+      if [ "$count" -eq 1 ]; then
+        i=0
+        while [ ! -f "$NC_PIDFILE" ] && [ "$i" -lt 100 ]; do sleep 0.01; i=$((i + 1)); done
+        if [ -f "$NC_PIDFILE" ]; then
+          printf '%s' "${NC_ANSWER-${HOMEFIELD_PROBE_TOKEN:-}}"
+          exit 0
+        fi
+        exit 1
+      elif [ "$count" -eq 2 ] && [ -f "$NC_PIDFILE" ]; then
+        kill "$(cat "$NC_PIDFILE")" 2>/dev/null
+        rm -f "$NC_PIDFILE"
+        exit 0
+      fi
+      exit 1
+    fi
     if [ -n "${NC_NO_K:-}" ]; then
       i=0
       while [ ! -f "$NC_PIDFILE" ] && [ "$i" -lt 100 ]; do sleep 0.01; i=$((i + 1)); done
@@ -157,7 +183,7 @@ run_probe() {
     path="$work/no-timeout"
     [ -d "$path" ] || { mkdir -p "$path"; for t in awk bash cat dirname grep limactl mktemp mv nc rm sh sleep; do ln -s "$stubs/$t" "$path/$t"; done; }
   fi
-  rm -f "$work/nc.pid"
+  rm -f "$work/nc.pid" "$work/nc.pid.count"
   # shellcheck disable=SC2016  # the -c script is expanded by the inner bash
   out="$(env -i HOME="$work/home" PATH="$path" NC_PIDFILE="$work/nc.pid" \
     HOMEFIELD_PROBE_TOKEN=probe-token HOMEFIELD_SOURCE_ONLY=1 "${envs[@]+"${envs[@]}"}" \
@@ -165,10 +191,16 @@ run_probe() {
   rc=$?
 }
 
+# run_probe_state [VAR=value ...]: verify_loopback and print LOOPBACK_STATE.
+run_probe_state() {
+  # shellcheck disable=SC2016  # eval body runs in the sourced subshell
+  run_probe "$@" -- eval 'verify_loopback; rc=$?; printf "state=%s\n" "$LOOPBACK_STATE"; exit "$rc"'
+}
+
 echo "loopback probe: the guest-side classification (the real script, a stubbed connect)"
 
-run_probe LIMA_RUN_GUEST=1 PROBE_BASH=refused --
-record "a refused connect is the only closed-1, and it passes" "0/yes" "$rc/$(has "$out" 'loopback probe: closed')"
+run_probe_state LIMA_RUN_GUEST=1 PROBE_BASH=refused
+record "a refused connect is the only closed-1, and it passes" "0/yes/yes" "$rc/$(has "$out" 'loopback probe: closed')/$(has "$out" 'state=verified')"
 run_probe LIMA_RUN_GUEST=1 PROBE_BASH=hang --
 record "the 3 s connect timeout is closed too" "0/yes" "$rc/$(has "$out" 'loopback probe: closed')"
 run_probe LIMA_RUN_GUEST=1 PROBE_BASH=dnsfail --
@@ -200,25 +232,33 @@ record "...an explicit hostLoopback: true is the same" "0/yes" \
   "$rc/$(has "$out" 'does not show networkOpts.hostLoopback: false')"
 set_config "$work/config-blocks.yaml" homefield
 
-NO_NC=1 run_probe --
-record "no nc: the probe skips itself and says the exposure stands" "0/yes/no" \
-  "$rc/$(has "$out" 'probe skipped (no nc on PATH)')/$(has "$out" 'probe: closed')"
+NO_NC=1 run_probe_state
+record "no nc: the probe skips itself and says the exposure stands" "0/yes/no/yes" \
+  "$rc/$(has "$out" 'probe skipped (no nc on PATH)')/$(has "$out" 'probe: closed')/$(has "$out" 'state=not-verified')"
 
 run_probe NC_BIND_FAIL=1 --
 record "a port that answers nothing (bind lost): skipped, never read as closed" "0/yes/no" \
   "$rc/$(has "$out" 'probe skipped (nothing answered')/$(has "$out" 'probe: closed')"
 
-run_probe NC_BIND_LOST=1 --
-record "the listener itself reports the port was taken: named, not guessed" "0/yes/yes/no" \
-  "$rc/$(has "$out" 'already taken: the probe')/$(has "$out" 'could not bind it')/$(has "$out" 'probe: closed')"
+run_probe_state NC_BIND_LOST=1
+record "the listener itself reports the port was taken: named, not guessed" "0/yes/yes/no/yes" \
+  "$rc/$(has "$out" 'already taken: the probe')/$(has "$out" 'could not bind it')/$(has "$out" 'probe: closed')/$(has "$out" 'state=skipped')"
 
 run_probe NC_ANSWER=some-other-service --
 record "a foreign answer on the port is not the probe's listener (review #135 P2)" "0/yes/no" \
   "$rc/$(has "$out" 'answered, but not with the token: another service holds the port')/$(has "$out" 'probe: closed')"
 
-run_probe NC_NO_K=1 LIMA_RUN_GUEST=1 PROBE_BASH=refused --
-record "a listener that dies with the self-test: skipped, never a false closed" "0/yes/no" \
-  "$rc/$(has "$out" 'died after one connection')/$(has "$out" 'probe: closed')"
+run_probe_state NC_NO_K=1 LIMA_RUN_GUEST=1 PROBE_BASH=refused
+record "a listener that dies with the self-test: not verified, never a false closed" "0/yes/yes/no/yes" \
+  "$rc/$(has "$out" 'probe not verified')/$(has "$out" 'died after one connection')/$(has "$out" 'probe: closed')/$(has "$out" 'state=not-verified')"
+
+run_probe_state NC_REJECT_K=1 LIMA_RUN_GUEST=1 PROBE_BASH=refused
+record "nc rejects -k on listener start: not verified, never skipped" "0/yes/no/no/yes" \
+  "$rc/$(has "$out" 'probe not verified (nc does not support -k)')/$(has "$out" 'probe skipped')/$(has "$out" 'probe: closed')/$(has "$out" 'state=not-verified')"
+
+run_probe_state NC_DIE_AFTER_2=1 LIMA_RUN_GUEST=1 PROBE_BASH=refused
+record "listener dies before guest check finishes: not verified, never a false closed" "0/yes/no/yes" \
+  "$rc/$(has "$out" 'probe not verified (the nc listener died before the guest check finished')/$(has "$out" 'probe: closed')/$(has "$out" 'state=not-verified')"
 
 run_probe PROBE_GUEST_FAIL=1 --
 record "the guest cannot be asked: no clear answer, never read as closed" "0/yes/no" \
@@ -239,6 +279,36 @@ record "the instance's own config decides, not homefield's" "0/yes" \
 run_probe LIMA_RUN_GUEST=1 PROBE_BASH=open LIMA_VER=2.3.0 HOMEFIELD_INSTANCE=missing-vm --
 record "an instance whose config cannot be read: warned, never fatal" "0/yes" \
   "$rc/$(has "$out" 'does not show networkOpts.hostLoopback: false')"
+
+echo "mount-count helper (vm/guest/homefield-mount-count)"
+mount_stubs="$work/mount-stubs"
+mkdir -p "$mount_stubs"
+cat >"$mount_stubs/mount" <<'EOF'
+#!/bin/sh
+[ -z "${MOUNT_FAIL:-}" ] || { echo "mount: cannot read /proc/mounts" >&2; exit 1; }
+printf '%s' "${MOUNT_OUT:-}"
+EOF
+chmod +x "$mount_stubs/mount"
+mount_shells=("$BASH" "/bin/sh")
+dash_bin="$(command -v dash 2>/dev/null || true)"
+[ -z "$dash_bin" ] || mount_shells+=("$dash_bin")
+for msh in "${mount_shells[@]}"; do
+  mname="${msh##*/}"
+  out="$(env -i PATH="$mount_stubs" MOUNT_OUT="" "$msh" "$ROOT/vm/guest/homefield-mount-count" 2>&1 </dev/null)"; rc=$?
+  record "$mname: empty mount output is 0" "0/0" "$rc/$out"
+  out="$(env -i PATH="$mount_stubs" MOUNT_OUT=$'proc on /proc type proc (rw)\n' "$msh" "$ROOT/vm/guest/homefield-mount-count" 2>&1 </dev/null)"; rc=$?
+  record "$mname: no host mounts is 0" "0/0" "$rc/$out"
+  out="$(env -i PATH="$mount_stubs" MOUNT_OUT=$'mount0 on /Users type virtiofs (rw)\nshare1 on /mnt/a type 9p (rw)\nssh0 on /mnt/b type fuse.sshfs (rw)\nrev0 on /mnt/c type reverse-sshfs (rw)\n' "$msh" "$ROOT/vm/guest/homefield-mount-count" 2>&1 </dev/null)"; rc=$?
+  record "$mname: virtiofs/9p/sshfs/reverse-sshfs counted" "0/4" "$rc/$out"
+  out="$(env -i PATH="$mount_stubs" MOUNT_OUT=$'vz-rosetta on /mnt/lima-rosetta type virtiofs (rw,relatime)\nproc on /proc type proc (rw)\n' "$msh" "$ROOT/vm/guest/homefield-mount-count" 2>&1 </dev/null)"; rc=$?
+  record "$mname: single rosetta share excluded" "0/0" "$rc/$out"
+  out="$(env -i PATH="$mount_stubs" MOUNT_OUT=$'vz-rosetta on /mnt/evil type virtiofs (rw,relatime)\n' "$msh" "$ROOT/vm/guest/homefield-mount-count" 2>&1 </dev/null)"; rc=$?
+  record "$mname: rosetta at wrong path counts" "0/1" "$rc/$out"
+  out="$(env -i PATH="$mount_stubs" MOUNT_OUT=$'vz-rosetta on /mnt/lima-rosetta type virtiofs (rw,relatime)\nvz-rosetta on /mnt/lima-rosetta type virtiofs (rw,relatime)\n' "$msh" "$ROOT/vm/guest/homefield-mount-count" 2>&1 </dev/null)"; rc=$?
+  record "$mname: duplicate rosetta share counts" "0/2" "$rc/$out"
+  out="$(env -i PATH="$mount_stubs" MOUNT_FAIL=1 "$msh" "$ROOT/vm/guest/homefield-mount-count" 2>/dev/null </dev/null)"; rc=$?
+  record "$mname: failing mount exits 3 with no count" "3/" "$rc/$out"
+done
 
 echo "lima_at_least"
 version_case() {

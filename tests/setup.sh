@@ -132,7 +132,7 @@ if [ "${PF:-pass}" != real ]; then
   }
 fi
 have_terminal() { [ "${TTY:-}" = 1 ]; }
-verify_isolation() { echo "verify_isolation" >>"$CALLS"; log "isolation verified: no host data mounts"; }
+verify_isolation() { echo "verify_isolation" >>"$CALLS"; LOOPBACK_STATE="${STUB_LOOPBACK_STATE:-}"; log "isolation verified: no host data mounts"; }
 is_registered() { [ "${REGISTERED:-no}" = yes ]; }
 cmd_upgrade() { echo "cmd_upgrade $*" >>"$CALLS"; log "upgrade ran"; }
 get_token() { echo tok123; }
@@ -327,6 +327,10 @@ record "...install's closing text is not printed" "no" "$(has "$out" 'Registered
 record "...the summary comes after the wait for the runner" "yes" \
   "$(has "${out%%✓ VM homefield created*}" 'is online: labels')"
 record "...the group was recorded for reset" "group_created=acme/homefield-ci/7" "$(cat "$state/homefield.state" 2>/dev/null)"
+
+srun STUB_LOOPBACK_STATE=not-verified GH_GROUPS="$work/groups-none" GH_REPOS='' -- cmd_setup --url $org
+record "...when the loopback probe could not verify, the isolation line flags it" "0/yes/no/1" \
+  "$rc/$(has "$out" '! Isolation verified (no host data mounts); host loopback not verified')/$(has "$out" '✓ Isolation verified (no host data mounts)')/$(marks '!')"
 
 srun GH_REPOS=$'acme/app\nacme/api\n' -- cmd_setup --url $org
 record "an existing selected group: said to exist, not to be created" "yes/no/0" \
