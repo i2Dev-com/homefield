@@ -13,6 +13,7 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ### Added
 
+- Tag-protection ruleset and SHA-pinning guidance ([`.github/rulesets/protect-release-tags.json`](.github/rulesets/protect-release-tags.json), [`README.md`](README.md#versioning), [`docs/adopting.md`](docs/adopting.md#3-add-the-guard), [`docs/security.md`](docs/security.md)): defines an importable `refs/tags/v*` GitHub ruleset blocking tag deletion, updates, and non-fast-forward moves, and explains when and why to pin `routing-guard` to an immutable 40-character commit SHA ([#240](https://github.com/i2Dev-com/homefield/issues/240)).
 - Cost-savings documentation and calculator ([`docs/cost.md`](docs/cost.md), `tools/cost.py`, `tests/cost.sh`): published 2026 hosted runner rates, OS minute multipliers, break-even formula, worked example, and a zero-dependency CLI reading recent `gh` workflow runs to project monthly hosted spend and savings ([#248](https://github.com/i2Dev-com/homefield/issues/248)).
 - One-PR demo workflow guide and template ([docs/demo.md](docs/demo.md)): new
   adopters can verify the local runner and routing guard end-to-end in a
