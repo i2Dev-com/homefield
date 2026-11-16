@@ -139,7 +139,15 @@ a deliberate, reviewed change.
 
 - it uses `i2Dev-com/homefield/routing-guard@v0.5.3`, the release your
   installed `homefield` checks with (`homefield version` shows it), or a full
-  commit SHA. Another release, `@v0` or `@main` do not count;
+  40-character commit SHA (`uses: i2Dev-com/homefield/routing-guard@<40-char-sha> # v0.5.3`).
+  Another release, `@v0` or `@main` do not count;
+  **Why choose a full commit SHA:** a Git tag is only as immutable as the
+  upstream repository's tag protections (see
+  [`.github/rulesets/protect-release-tags.json`](../.github/rulesets/protect-release-tags.json)),
+  whereas a full 40-character SHA binds your workflow to one exact tree object
+  regardless of repository settings or compromised release credentials.
+  Dependabot's `github-actions` ecosystem updates both tagged and SHA-pinned
+  `uses:` lines (and keeps a `# vX.Y.Z` version comment up to date).
 - it is in a workflow that runs on `pull_request` (not `pull_request_target`,
   not push-only);
 - neither the step nor its job has `if: false` or `continue-on-error: true`: a

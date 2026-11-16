@@ -38,6 +38,10 @@ Weaknesses are reported privately — see
 AI-assisted read-only audits and fixed; each section says who was affected
 and what consumers do. The invariant that drives the pin advice: **a
 workflow that passes the current release's check ran guarded before.**
+Release tags (`v*`) follow [`.github/rulesets/protect-release-tags.json`](../.github/rulesets/protect-release-tags.json)
+(blocking tag deletions, updates, and non-fast-forward moves), and consumers
+who want cryptographic immutability independent of upstream tag rules can pin
+the action to a full 40-character commit SHA instead of a tag.
 
 ## A `runs-on` key written in other valid YAML
 

@@ -208,7 +208,8 @@ rule is defence in depth: what keeps strangers off the runner is that only
 private repositories can reach it. Registration tokens reach the VM on stdin,
 never on a command line. The full table: [runbook: Trust
 boundary](docs/runbook.md#trust-boundary); the guard's contract and its past
-bypasses: [docs/security.md](docs/security.md).
+bypasses: [docs/security.md](docs/security.md); the code-level security
+invariant map and independent-audit call: [docs/security-audit.md](docs/security-audit.md).
 
 ## Cost
 
@@ -257,6 +258,7 @@ pull-request code away from the Mac it runs on.
 | [docs/adopting.md](docs/adopting.md) | Routing a repository: the seven steps, the guard, `adopt` and its pull request |
 | [docs/runbook.md](docs/runbook.md) | Operating it: setup, runner group, switching, failure modes, maintenance, moving, removal |
 | [docs/security.md](docs/security.md) | The routing guard's contract, and the bypasses found and fixed so far |
+| [docs/security-audit.md](docs/security-audit.md) | Code-level invariant map, GitHub hardening alignment, and researcher audit invitation |
 | [docs/tap.md](docs/tap.md) | The Homebrew tap: the formula template, the release automation and the `TAP_TOKEN` secret |
 | [docs/cli.md](docs/cli.md) | Every command, option, exit code and environment variable — for scripts and AI agents |
 | [docs/cost.md](docs/cost.md) | Hosted runner rates, break-even math and the `tools/cost.py` savings calculator |
@@ -281,9 +283,14 @@ human in the loop:
 ## Versioning
 
 Releases are exact semver tags (`v0.1.0`, `v0.2.1`, `v0.3.0`), and a tag is
-never moved. Pin an exact tag, such as `routing-guard@v0.3.0` (Dependabot's
-`github-actions` ecosystem can bump it for you), or a full commit SHA. There
-is no floating major tag to follow.
+never moved (backed by the `refs/tags/v*` ruleset in
+[`.github/rulesets/protect-release-tags.json`](.github/rulesets/protect-release-tags.json),
+which blocks tag deletion, updates, and non-fast-forward moves). Pin an exact
+tag, such as `routing-guard@v0.3.0`, or a full 40-character commit SHA
+(`uses: i2Dev-com/homefield/routing-guard@<40-char-sha> # v0.5.3`) — a commit
+SHA binds your workflow cryptographically to one tree without depending on
+upstream tag rules, and Dependabot's `github-actions` ecosystem updates either
+form for you. There is no floating major tag to follow.
 
 While the version is 0.x, a change that makes a previously passing workflow
 fail, such as a new guard in the expression, bumps the minor version
