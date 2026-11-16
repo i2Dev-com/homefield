@@ -53,6 +53,14 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ### Fixed
 
+- `isolation_probe`'s mount-count logic is now factored into
+  `vm/guest/homefield-mount-count` (POSIX `sh`, `set -eu` with explicit zero
+  counters and conditional `pipefail` — no `grep -c` exit-status dance), and
+  the `#18` loopback probe now verifies `nc -k` support and listener survival
+  after the guest check, reporting `probe not verified` (and flagging the
+  `homefield setup` summary line with `!`) rather than a silent `probe skipped`
+  when `nc` lacks `-k` or dies early
+  ([#258](https://github.com/i2Dev-com/homefield/issues/258)).
 - `bin/lib/emit.sh`'s `json_str` fast-path pattern is now POSIX-clean: the
   `[:cntrl:]` class leads its bracket expression with the quote and backslash
   literals after it. The old mid-class placement worked in bash but parses the

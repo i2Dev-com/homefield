@@ -169,7 +169,9 @@ SETUP=0
 SETUP_VM_WAS=""
 
 # setup_vm_lines: the VM and its isolation. Both are facts by the time this is
-# called: ensure_vm left the VM running, and verify_isolation dies otherwise.
+# called: ensure_vm left the VM running, and verify_isolation dies otherwise;
+# when the #18 loopback probe could not verify the boundary (e.g. nc lacks
+# -k), the summary flags it instead of reporting a plain pass.
 setup_vm_lines() {
   if [ -z "$SETUP_VM_WAS" ]; then
     echo "✓ VM ${INSTANCE} created (Running)"
@@ -178,7 +180,11 @@ setup_vm_lines() {
   else
     echo "✓ VM ${INSTANCE} already existed (${SETUP_VM_WAS}); started"
   fi
-  echo "✓ Isolation verified (no host data mounts)"
+  if [ "${LOOPBACK_STATE:-}" = "not-verified" ]; then
+    echo "! Isolation verified (no host data mounts); host loopback not verified"
+  else
+    echo "✓ Isolation verified (no host data mounts)"
+  fi
 }
 
 # setup_group_line <group> <slug>: the runner group, by what ensure_group found.

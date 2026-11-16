@@ -181,23 +181,25 @@ isolation_fail() {
   return "$1"
 }
 
+# The guest script lives in vm/guest/homefield-mount-count (executed via
+# sh -c because isolation_probe runs on an unprovisioned VM too). It counts
+# *host data* mounts matching virtiofs/9p/sshfs/reverse-sshfs, excluding at
+# most one read-only Rosetta share (`vz-rosetta on /mnt/lima-rosetta type
+# virtiofs`, #21), and exits 3 if `mount` fails.
+isolation_mount_script() {
+  local line trimmed
+  while IFS= read -r line || [ -n "$line" ]; do
+    trimmed="${line#"${line%%[![:space:]]*}"}"
+    case "$trimmed" in '' | '#'*) continue ;; esac
+    printf '%s\n' "$line"
+  done <"$GUEST_DIR/homefield-mount-count"
+}
+
 isolation_probe() {
-  local mounts users=0
+  local mounts users=0 script
   ISOLATION_WHY=""
   ISOLATION_SUFFIX=""
-  # mount is run on its own: in a pipe its failure would be hidden, and grep
-  # would count nothing in its empty output. grep -c exits 1 for a count of 0,
-  # which is an answer; a status above 1 is not.
-  #
-  # The count is of *host data* mounts. The one expected exception is #21's
-  # Rosetta share: with vmOpts.vz.rosetta enabled, Lima shares Apple's
-  # translator read-only as `vz-rosetta on /mnt/lima-rosetta type virtiofs`.
-  # The share carries Apple's two runtime files and nothing of the host's —
-  # writes into it fail — so the exact line is excluded, once: a second
-  # rosetta line, or one at another path, counts as a host mount. Everything
-  # else matching virtiofs/9p/sshfs/reverse-sshfs is host data and refuses.
-  # shellcheck disable=SC2016  # the guest's shell expands these, not this one
-  if ! mounts="$(guest sh -c 'out="$(mount)" || exit 3; total=$(printf "%s\n" "$out" | grep -Ec "virtiofs|9p|sshfs|reverse-sshfs") || [ "$?" -le 1 ] || exit 3; ros=$(printf "%s\n" "$out" | grep -Ec "^vz-rosetta on /mnt/lima-rosetta type virtiofs ") || [ "$?" -le 1 ] || exit 3; if [ "$ros" -le 1 ]; then echo $((total - ros)); else echo "$total"; fi')"; then
+  if ! script="$(isolation_mount_script)" || ! mounts="$(guest sh -c "$script")"; then
     isolation_fail 2 "could not run the isolation check in VM ${INSTANCE}" "; is it running? (see docs/runbook.md, Setup)" || return
   fi
   case "$mounts" in
@@ -242,13 +244,21 @@ loopback_cleanup() {
   trap - INT TERM
 }
 
+# Result of the most recent verify_loopback run: "verified", "open", "skipped",
+# or "not-verified" (empty before verify_loopback has run). Read by setup's
+# summary so an unverified loopback boundary is never reported as a plain pass.
+# shellcheck disable=SC2034  # read by cmd-install.sh's setup_vm_lines
+LOOPBACK_STATE=""
+
 # loopback_listen: bind the throwaway listener on the Mac's 127.0.0.1 and
 # prove the port is this probe's. Leaves LB_PORT, LB_TOKEN, LB_TOKENFILE,
-# LB_ERRFILE and LB_LISTENER. Returns 0 with the listener up (the INT/TERM
-# trap armed, so a Ctrl-C cannot orphan it); 1 with the probe skipped — the
-# reason printed, everything cleaned up. The caller treats a skip as a pass.
+# LB_ERRFILE, LB_LISTENER and LOOPBACK_STATE. Returns 0 with the listener up
+# (the INT/TERM trap armed, so a Ctrl-C cannot orphan it); 1 when the probe did
+# not complete (LOOPBACK_STATE is "skipped" or "not-verified") — the reason
+# printed, everything cleaned up. The caller treats a non-zero return as a
+# non-fatal warning.
 loopback_listen() {
-  local port got i ok bind_lost
+  local port got i ok bind_lost no_k
   port=$((20000 + RANDOM % 20000))
   # What answers on the port must be provably this probe's listener: nc
   # serves this token from its stdin, and a local connect that reads it
@@ -258,6 +268,7 @@ loopback_listen() {
   LB_TOKEN="${HOMEFIELD_PROBE_TOKEN:-homefield-probe-$$-$port}"
   LB_TOKENFILE="$(mktemp)" || LB_TOKENFILE=""
   if [ -z "$LB_TOKENFILE" ]; then
+    LOOPBACK_STATE="skipped"
     echo "homefield: warning: #18 probe skipped (no temp file for the port token); assume the guest can still reach the Mac's loopback (docs/runbook.md, Host loopback exposure)" >&2
     return 1
   fi
@@ -268,6 +279,7 @@ loopback_listen() {
   LB_ERRFILE="$(mktemp)" || LB_ERRFILE=""
   if [ -z "$LB_ERRFILE" ]; then
     rm -f "$LB_TOKENFILE"
+    LOOPBACK_STATE="skipped"
     echo "homefield: warning: #18 probe skipped (no temp file for the listener's report); assume the guest can still reach the Mac's loopback (docs/runbook.md, Host loopback exposure)" >&2
     return 1
   fi
@@ -296,14 +308,23 @@ loopback_listen() {
     # liveness check cannot see this before the reap (an exited child is
     # still kill -0-able as a zombie), and that is why no check lives in
     # the loop above. The file is read before loopback_cleanup removes it.
-    bind_lost=0
-    if [ -s "$LB_ERRFILE" ] && grep -qi "Address already in use" "$LB_ERRFILE"; then bind_lost=1; fi
+    bind_lost=0 no_k=0
+    if [ -s "$LB_ERRFILE" ]; then
+      if grep -qi "Address already in use" "$LB_ERRFILE"; then bind_lost=1; fi
+      if grep -Eqi "(illegal|invalid|unrecognized|unknown) option" "$LB_ERRFILE"; then no_k=1; fi
+    fi
     loopback_cleanup "$LB_LISTENER" "$LB_TOKENFILE" "$LB_ERRFILE"
     if [ -n "$got" ]; then
+      LOOPBACK_STATE="skipped"
       echo "homefield: warning: #18 probe skipped (127.0.0.1:${port} answered, but not with the token: another service holds the port); assume the guest can still reach the Mac's loopback (docs/runbook.md, Host loopback exposure)" >&2
+    elif [ "$no_k" = 1 ]; then
+      LOOPBACK_STATE="not-verified"
+      echo "homefield: warning: #18 probe not verified (nc does not support -k); assume the guest can still reach the Mac's loopback (docs/runbook.md, Host loopback exposure)" >&2
     elif [ "$bind_lost" = 1 ]; then
+      LOOPBACK_STATE="skipped"
       echo "homefield: warning: #18 probe skipped (127.0.0.1:${port} was already taken: the probe's listener could not bind it); assume the guest can still reach the Mac's loopback (docs/runbook.md, Host loopback exposure)" >&2
     else
+      LOOPBACK_STATE="skipped"
       echo "homefield: warning: #18 probe skipped (nothing answered on 127.0.0.1:${port}; is the port in use?); assume the guest can still reach the Mac's loopback (docs/runbook.md, Host loopback exposure)" >&2
     fi
     return 1
@@ -322,8 +343,9 @@ loopback_listen() {
     sleep 0.2
   done
   if [ "$ok" != 1 ]; then
+    LOOPBACK_STATE="not-verified"
     loopback_cleanup "$LB_LISTENER" "$LB_TOKENFILE" ""
-    echo "homefield: warning: #18 probe skipped (the nc listener died after one connection; does it support -k?); assume the guest can still reach the Mac's loopback (docs/runbook.md, Host loopback exposure)" >&2
+    echo "homefield: warning: #18 probe not verified (the nc listener died after one connection; does it support -k?); assume the guest can still reach the Mac's loopback (docs/runbook.md, Host loopback exposure)" >&2
     return 1
   fi
   return 0
@@ -339,6 +361,7 @@ loopback_interpret() {
   local answer="$1" config asks_closed
   case "$answer" in
     open)
+      LOOPBACK_STATE="open"
       config="${LIMA_HOME:-$HOME/.lima}/${INSTANCE}/lima.yaml"
       asks_closed=0
       [ -f "$config" ] && grep -Eq '^[[:space:]]*hostLoopback:[[:space:]]*false' "$config" && asks_closed=1
@@ -352,9 +375,11 @@ loopback_interpret() {
       echo "homefield: warning: #18: jobs in VM ${INSTANCE} can reach the Mac's loopback; its stored config does not show networkOpts.hostLoopback: false (absent, or unreadable): recreate the VM, or stop it and add the setting with limactl edit (docs/runbook.md, Host loopback exposure)" >&2
       ;;
     closed-1|closed-124)
+      LOOPBACK_STATE="verified"
       log "loopback probe: closed (the guest cannot reach the Mac's 127.0.0.1)"
       ;;
     *)
+      LOOPBACK_STATE="not-verified"
       echo "homefield: warning: #18 probe got no clear answer from VM ${INSTANCE} (answer: ${answer:-none}); assume it can reach the Mac's loopback (docs/runbook.md, Host loopback exposure)" >&2
       ;;
   esac
@@ -377,6 +402,7 @@ loopback_interpret() {
 # and the guest's side of the probe.
 verify_loopback() {
   local answer
+  LOOPBACK_STATE="not-verified"
   if ! command -v nc >/dev/null 2>&1; then
     echo "homefield: warning: #18 probe skipped (no nc on PATH); assume the guest can still reach the Mac's loopback (docs/runbook.md, Host loopback exposure)" >&2
     return 0
@@ -391,6 +417,16 @@ verify_loopback() {
   # else); an empty answer is the limactl call having failed.
   # shellcheck disable=SC2016  # the guest's shell expands these, not this one
   answer="$(guest sh -c 'if ! command -v timeout >/dev/null 2>&1 || ! command -v bash >/dev/null 2>&1 || ! command -v grep >/dev/null 2>&1; then echo tools; else out=$(timeout 3 bash -c "exec 3<>/dev/tcp/host.lima.internal/$1" 2>&1); rc=$?; if [ "$rc" = 0 ]; then echo open; elif [ "$rc" = 124 ]; then echo closed-124; elif [ "$rc" = 1 ] && printf %s "$out" | grep -q "Connection refused"; then echo closed-1; else echo "unknown-$rc"; fi; fi' sh "$LB_PORT")" || answer=""
+  case "$answer" in
+    closed-1|closed-124)
+      if ! nc -w 2 127.0.0.1 "$LB_PORT" >/dev/null 2>&1; then
+        LOOPBACK_STATE="not-verified"
+        loopback_cleanup "$LB_LISTENER" "$LB_TOKENFILE" ""
+        echo "homefield: warning: #18 probe not verified (the nc listener died before the guest check finished; does it support -k?); assume the guest can still reach the Mac's loopback (docs/runbook.md, Host loopback exposure)" >&2
+        return 0
+      fi
+      ;;
+  esac
   loopback_cleanup "$LB_LISTENER" "$LB_TOKENFILE" ""
   loopback_interpret "$answer"
   return 0
