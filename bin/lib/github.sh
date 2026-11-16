@@ -375,6 +375,12 @@ prepare_registration() {
   check_name_free "$url" "$name" "$replace"
 }
 
+# ── Runner name ─────────────────────────────────────────────────────────────
+# The guest's hostname, lima-<instance>, is the same on every Mac, so a second
+# Mac registering under it would take the first one's registration (#52). The
+# default is this Mac's local hostname plus the instance instead: unique per
+# Mac on a network, and it says which machine a runner is on.
+#
 # default_name: prints <local hostname>-<instance>, lower case, with anything
 # but letters, digits, '.', '_' and '-' replaced by '-'.
 default_name() {
@@ -493,6 +499,11 @@ find_runner_group() {
   return 1
 }
 
+# ── Runner group ────────────────────────────────────────────────────────────
+# The group is what keeps an organization's other repositories off the runner
+# (docs/runbook.md, "Runner group"), so install makes sure it exists before
+# the runner joins it, instead of leaving that to a manual step.
+#
 # group_unchecked <group> <why>: the group could not be checked or created.
 # Registering anyway would put the runner in a group nobody has looked at, or
 # fail at the end, so ask first (default no); without a terminal, stop.
@@ -507,6 +518,13 @@ group_unchecked() {
     *) die "stopped: create the group ${1}, then run this again" ;;
   esac
 }
+
+# group_assumed <group> <why>: with --group-exists, a group gh cannot list is
+# taken as there, and the closing message still says it is unchecked. Only for
+# a group gh could not look at: a list that worked and lacks it is not
+# overridden. Registration fails if the group is missing after all.
+# shellcheck disable=SC2034  # GROUP_EXISTS is set by cmd-install's --group-exists
+GROUP_EXISTS=0
 
 group_assumed() {
   [ "$GROUP_EXISTS" = 1 ] || return 1
@@ -534,6 +552,16 @@ group_wide() {
   [ "$3" != true ] || why="${why:+${why}, and }public repositories can use it"
   printf '%s' "$why"
 }
+
+# What ensure_group found, for the closing message: "personal" (a personal
+# account has no groups), "repo" (no groups), "default" (every repository in
+# the org), "wide" (warned about), "narrow", "created" or "unchecked".
+# shellcheck disable=SC2034  # read by cmd-install.sh's group lines
+GROUP_STATE=""
+# The id of the group GROUP_STATE "narrow" or "created" is about (empty when
+# unknown, or for any other state), for the listing of its repositories.
+# shellcheck disable=SC2034  # read by cmd-install.sh and cmd-adopt.sh
+GROUP_ID=""
 
 # ensure_group <url> <group>: for an organization URL, finds the group by name
 # and warns when it is wider than it should be, or creates it. A repository
@@ -633,24 +661,6 @@ ensure_group() {
     echo "homefield: warning: could not record that this install created the runner group ${group} (${org}); reset will not delete it, so remove it by hand if you roll back (docs/runbook.md, \"Rolling back a failed install\")" >&2
   log "created runner group ${group}. No repository can use it yet: homefield adopt --repo <owner>/<repo> adds one (docs/adopting.md, step 5)"
 }
-
-# group_assumed <group> <why>: with --group-exists, a group gh cannot list is
-# What ensure_group found, for the closing message: "personal" (a personal
-# The id of the group GROUP_STATE "narrow" or "created" is about (empty when
-
-# taken as there, and the closing message still says it is unchecked. Only for
-# a group gh could not look at: a list that worked and lacks it is not
-# overridden. Registration fails if the group is missing after all.
-# shellcheck disable=SC2034  # GROUP_EXISTS is set by cmd-install's --group-exists
-GROUP_EXISTS=0
-
-# account has no groups), "repo" (no groups), "default" (every repository in
-# the org), "wide" (warned about), "narrow", "created" or "unchecked".
-# shellcheck disable=SC2034  # read by cmd-install.sh's group lines
-GROUP_STATE=""
-# unknown, or for any other state), for the listing of its repositories.
-# shellcheck disable=SC2034  # read by cmd-install.sh and cmd-adopt.sh
-GROUP_ID=""
 
 # ── Run and variable calls shared by adopt and route ───────────────────────
 

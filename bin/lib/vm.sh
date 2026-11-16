@@ -30,6 +30,10 @@ check_host() {
   fi
 }
 
+# check_instance: INSTANCE is a name Lima accepts (ValidateInstName, Lima 1.2
+# on; 1.1 checks the same characters and length, not the .yml/.yaml ending),
+# the same check as install.sh's. Anything else would reach limactl as an
+# option (--help) or a path.
 check_instance() {
   local re='^[A-Za-z0-9]+([._-][A-Za-z0-9]+)*$'
   [[ "$INSTANCE" =~ $re && ${#INSTANCE} -le 76 && ! "$INSTANCE" =~ [.][Yy][Aa]?[Mm][Ll]$ ]] ||
@@ -56,6 +60,12 @@ vm_status() {
   return 0
 }
 
+# The line every HomeField VM's stored Lima config starts with: lima.yaml is
+# copied from vm/lima.yaml when the VM is created, comments included, and it has
+# carried this header since v0.1.0. Other Lima instances on a dev Mac do not,
+# so listing all of them would report VMs HomeField never made.
+HF_VM_MARKER='# Lima VM for the local GitHub Actions runner.'
+
 # is_homefield_vm <name>: whether that instance's stored config carries it.
 is_homefield_vm() {
   local f="${LIMA_HOME:-$HOME/.lima}/$1/lima.yaml" first=""
@@ -80,6 +90,11 @@ vm_instances() {
   done <<<"$rows"
   printf '%s' "$found"
 }
+
+# instance_command <name> [command args...]: this tool, one VM, as its own
+# process. A single-instance run keeps its errexit and die semantics intact,
+# and a failure on one VM cannot change the state of the next.
+HF_SELF="$ROOT/bin/homefield"
 
 instance_command() {
   local name="$1"; shift
@@ -153,6 +168,12 @@ refuse_unnamed_vm() {
   die "${cmd}: this Mac has HomeField VMs (${names}); name the one to act on with --instance <name>"
 }
 
+# vm_lookup: vm_status into VM_STATUS (empty: no VM), for the commands that act
+# on "no VM": create one, or report that there is none. A Lima that could not be
+# asked ends the command (install would otherwise register a runner group and
+# then fail to create a VM that exists). Not a $(...), so die ends the command.
+VM_STATUS=""
+
 vm_lookup() {
   VM_STATUS="$(vm_status)" || die "could not ask Lima about VM ${INSTANCE} (limactl list failed, or lists it without a status); stopping here"
 }
@@ -174,6 +195,27 @@ ensure_vm() {
     limactl start --tty=false "$INSTANCE"
   fi
 }
+
+# --workdir /: the host's working directory does not exist in the guest, which
+# has no mounts. stdin is closed, or `limactl shell` would swallow whatever is
+# typed ahead, such as a token meant for the prompt; guest_stdin is for the
+# two calls that feed a token in on purpose.
+guest() { limactl shell --workdir / "$INSTANCE" "$@" </dev/null; }
+guest_stdin() { limactl shell --workdir / "$INSTANCE" "$@"; }
+
+# The VM is the isolation boundary, so nothing runs in it until it is shown to
+# have no host data mounts and no view of the Mac's home directories. A guest
+# command that cannot run at all is reported as such: treating its empty
+# output as "no mounts found" would misread a broken VM as a safe one. The
+# one expected mount is Apple's read-only Rosetta share (#21), which
+# isolation_probe excludes by its exact line.
+#
+# isolation_probe is the check itself, for the callers that report instead of
+# stopping (diagnose): 0 verified, 1 broken (host mounts, or /Users visible),
+# 2 the guest could not be asked. It prints nothing; ISOLATION_WHY says what it
+# found, and ISOLATION_SUFFIX is what verify_isolation adds to that in its die.
+ISOLATION_WHY=""
+ISOLATION_SUFFIX=""
 
 isolation_fail() {
   ISOLATION_WHY="$2"
@@ -473,6 +515,10 @@ guest_has_file() {
   guest_probe sudo 'if test -f "$1"; then echo yes; else echo no; fi' "$1"
 }
 
+# registered: 0 if the runner is registered, 1 if not, 2 if the VM could not be
+# asked. Commands that act on the answer call is_registered instead.
+registered() { guest_has_file "$RUNNER_HOME/.runner"; }
+
 # is_registered: registered, for the commands that act on "no". A VM that could
 # not be asked ends the command: read as "not registered", it would let
 # uninstall delete the VM and leave the registration on GitHub, and let install
@@ -585,6 +631,11 @@ runner_setting() {
   guest sudo python3 -c 'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8-sig")); print(*(d.get(k, "") for k in sys.argv[2:]), sep="\n")' \
     "$RUNNER_HOME/.runner" "$@"
 }
+
+# runner_version: the runner version provision.sh installed, or "unknown".
+runner_version() { guest sudo cat "$RUNNER_HOME/.provisioned-version" 2>/dev/null || echo unknown; }
+# runner_extra_packages: the saved extra apt packages, on one line.
+runner_extra_packages() { guest sh -c 'cat /etc/homefield/extra-packages 2>/dev/null | tr "\n" " "'; }
 
 # What status and diagnose both say about a registered runner, from the VM.
 # load_runner_settings: the runner's name, URL and id into RS_NAME / RS_URL /
