@@ -14,7 +14,12 @@ fail, such as a new guard in the routing expression, bumps the minor version
 ### Added
 
 - Cost-savings documentation and calculator ([`docs/cost.md`](docs/cost.md), `tools/cost.py`, `tests/cost.sh`): published 2026 hosted runner rates, OS minute multipliers, break-even formula, worked example, and a zero-dependency CLI reading recent `gh` workflow runs to project monthly hosted spend and savings ([#248](https://github.com/i2Dev-com/homefield/issues/248)).
-
+- One-PR demo workflow guide and template ([docs/demo.md](docs/demo.md)): new
+  adopters can verify the local runner and routing guard end-to-end in a
+  single pull request before modifying existing CI workflows;
+  `tests/release-refs.sh` validates the template against `routing_guard.py`
+  (and `actionlint`) and checks that its action pin matches the current release
+  ([#253](https://github.com/i2Dev-com/homefield/issues/253)).
 - A gh version floor: `homefield preflight` now requires **gh ≥ 2.81** — the
   version that added `gh auth status --json hosts` (cli/cli#11544, 2025-10-01) —
   which the account check uses; `gh api --jq` (the registration-token fetch)
@@ -55,6 +60,12 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ### Fixed
 
+- Leftover comments, misplaced globals and one-line helpers from the
+  `bin/lib/` and `bin/cmd-*.sh` split
+  ([#194](https://github.com/i2Dev-com/homefield/issues/194)) are moved to
+  their owning modules, interleaved doc blocks untangled and duplicate comments
+  removed with no behavior change
+  ([#239](https://github.com/i2Dev-com/homefield/issues/239)).
 - `isolation_probe`'s mount-count logic is now factored into
   `vm/guest/homefield-mount-count` (POSIX `sh`, `set -eu` with explicit zero
   counters and conditional `pipefail` — no `grep -c` exit-status dance), and

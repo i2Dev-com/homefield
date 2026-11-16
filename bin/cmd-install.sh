@@ -287,6 +287,17 @@ setup_summary() {
   setup_next_steps "$group" "$slug"
 }
 
+# adopt's arguments for the routing pull request setup offers: the one place
+# to add a flag to. Set by setup_routing_args. --wait carries on in the same
+# run once the pull request is merged (#156). The label and group the runner
+# was registered with (cmd_install sets SETUP_LABEL and SETUP_GROUP from
+# --label and --group, empty when not given) go along: the pull request must
+# route on the label this runner carries, and the adopt that follows must look
+# at the group it joined.
+SETUP_ROUTING_ARGS=()
+SETUP_LABEL=""
+SETUP_GROUP=""
+
 setup_routing_args() {
   SETUP_ROUTING_ARGS=(--repo "$1" --setup --wait)
   [ -z "$SETUP_LABEL" ] || SETUP_ROUTING_ARGS+=(--label "$SETUP_LABEL")
@@ -472,6 +483,12 @@ preset_list() {
   printf '%s' "${names# }"
 }
 
+HOOK_NAMES=" "
+SEEN_PRESETS=""
+
+# _preset_load <name>: the work behind load_presets. Recursive so that an
+# `include` puts the other preset's packages where it is written, and a name
+# already loaded (an include cycle) is skipped rather than followed again.
 _preset_load() {
   local name="$1" dir line words pkg f base
   case "$SEEN_PRESETS" in *" $name "*) return ;; esac
@@ -1313,17 +1330,3 @@ cmd_stop() {
   [ $# -eq 0 ] || die "stop takes no options besides --instance"
   vm_dispatch stop stop_single
 }
-
-HOOK_NAMES=" "
-
-# adopt's arguments for the routing pull request setup offers: the one place
-# to add a flag to. Set by setup_routing_args. --wait carries on in the same
-# run once the pull request is merged (#156). The label and group the runner
-# was registered with (cmd_install sets SETUP_LABEL and SETUP_GROUP from
-# --label and --group, empty when not given) go along: the pull request must
-# route on the label this runner carries, and the adopt that follows must look
-# at the group it joined.
-SETUP_ROUTING_ARGS=()
-SETUP_LABEL=""
-SETUP_GROUP=""
-SEEN_PRESETS=""

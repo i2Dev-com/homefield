@@ -85,7 +85,8 @@ release automation for every release.)
 
 From then on the routed jobs of that repository's pull requests run on your
 Mac. The detail behind each step — account types, preflight, tokens,
-troubleshooting — is in [getting-started.md](docs/getting-started.md).
+troubleshooting — is in [getting-started.md](docs/getting-started.md). Try it
+first with a one-PR demo workflow: [docs/demo.md](docs/demo.md).
 
 **Later:**
 
@@ -251,6 +252,7 @@ pull-request code away from the Mac it runs on.
 | Document | What it covers |
 |---|---|
 | [docs/getting-started.md](docs/getting-started.md) | The first install in detail: the one-liner, `setup`, account types, preflight, tokens, troubleshooting |
+| [docs/demo.md](docs/demo.md) | Try HomeField in 5 minutes: one-PR demo workflow to prove the runner and guard before routing real CI |
 | [docs/adopting.md](docs/adopting.md) | Routing a repository: the seven steps, the guard, `adopt` and its pull request |
 | [docs/runbook.md](docs/runbook.md) | Operating it: setup, runner group, switching, failure modes, maintenance, moving, removal |
 | [docs/security.md](docs/security.md) | The routing guard's contract, and the bypasses found and fixed so far |

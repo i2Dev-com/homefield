@@ -126,10 +126,6 @@ SETUP_FILE = "homefield-routing.yml"
 GUARD_WORKFLOW_NAME = "HomeField routing"
 # A GitHub-hosted image name as routing_guard.py's HOSTED reads it (keep the
 # two in step): what a job must ask for today to be routable by setup.
-# A deliberate opt-in built on the CI_RUNNER switch, in either shape: what a
-# job already carrying routing asks for, so setup in simple mode does not
-# rewrite it. A drift the guard refuses also matches here — setup lists such
-# a job and the guard check before anything is sent refuses it, rather than
 HOSTED_RUNS = re.compile(
     r"""^(\[\s*)?(['"]?)(ubuntu|windows|macos)-[a-z0-9._-]+\2(?(1)\s*\])$""",
     re.IGNORECASE,

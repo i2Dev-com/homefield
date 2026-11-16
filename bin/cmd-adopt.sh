@@ -1,5 +1,14 @@
 #!/usr/bin/env bash
 # The adopt command: routing a repository's workflows to the runner.
+#
+# ── adopt ───────────────────────────────────────────────────────────────────
+# Everything docs/adopting.md asks for that is not a workflow edit: a check that
+# the routing is merged, the runner group's access list, and the switch. The
+# group and the switch both wait for the routing: a repository that can reach
+# the runner before its jobs carry the guarded expression has nothing keeping
+# the runner to pull requests from its own branches.
+
+adopt_warn() { echo "homefield: warning: $(color_wrap 2 "$*")" >&2; }
 
 # Set by the steps below, for the ones after them and the summary.
 ADOPT_TMP=""
@@ -211,19 +220,6 @@ adopt_events_key() {
   printf '%s' "$key"
 }
 
-# adopt_routing_check <dir> <label> <label_given>: sets ADOPT_READY (1 when a
-# usable routing-guard step is there, passes, and at least one job is routed),
-# ADOPT_REASONS (why not), ADOPT_LABEL, ADOPT_EVENTS, ADOPT_DEPENDABOT,
-# ADOPT_FALLBACK and ADOPT_ROUTED. The workflows' own guard says which label,
-# options and jobs to expect; --events, --dependabot and --fallback arrive as
-# ADOPT_FLAG_EVENTS, ADOPT_FLAG_DEPENDABOT and ADOPT_FLAG_FALLBACK (empty when
-# not given) and are held to the guard the way --label is. The guard's arch is
-# read too, and refused unless arm64: adopt sets up the arm64 VM, and there is
-# no flag to change that (#21 is the x86-64 future). The checks are routing_guard.py,
-# the same script the guard runs in CI, with the step's own arch, so what they
-# report is what CI runs. A usable step is the action pinned to
-# this copy's release or a commit, in a workflow that runs on pull requests
-# (tools/adopt.py says which are).
 # adopt_routing_init <label>: sets the outcome globals the check reports
 # through — ADOPT_READY, ADOPT_REASONS, ADOPT_NOTES, ADOPT_LABEL, ADOPT_EVENTS,
 # ADOPT_DEPENDABOT, ADOPT_FALLBACK, ADOPT_MODE, ADOPT_GUARDS, ADOPT_ROUTED —
@@ -615,6 +611,31 @@ adopt_verify_commands() {
   echo "  gh run rerun <run-id> --repo $1"
 }
 
+# 1 once a report of the jobs was printed (what the last line of adopt says).
+# shellcheck disable=SC2034  # read by cmd-adopt.sh's final line above
+ADOPT_VERIFIED=0
+
+# adopt_verify_poll <owner/repo> <run-id> <attempt>: reads the jobs of the
+# re-run (every job whose run_attempt is greater than <attempt>) into
+# ADOPT_VERIFY_ROWS until each has a runner or is completed, or the tries run
+# out. Jobs of the previous attempt can still be listed just after the re-run;
+# verify-jobs leaves them out. A job behind another one (a reusable workflow
+# called after a job it needs) may not be listed until that one is done, so while
+# the run is still going the poll does not settle before a job that asked for
+# the routing label is listed: a hosted job alone says nothing about the
+# routing. The run's status is read each time, into ADOPT_VERIFY_RUN_STATUS.
+# Returns 1, after saying why, when gh or the answer fails.
+ADOPT_VERIFY_RUN_STATUS=""
+
+# adopt_verify (#149) is docs/adopting.md step 6 done for you: it re-runs the
+# repository's latest pull-request run and reports, from the jobs API, where
+# each job landed. A job counts as local when the labels it asked for hold the
+# routing label: adopt works from any machine, so the runner's name is not
+# looked up in the VM. ADOPT_VERIFY_TRIES and ADOPT_VERIFY_INTERVAL are seams
+# for the tests, as ONLINE_WAIT_TRIES and ONLINE_WAIT_INTERVAL are.
+ADOPT_VERIFY_TRIES=${ADOPT_VERIFY_TRIES:-18}
+ADOPT_VERIFY_INTERVAL=${ADOPT_VERIFY_INTERVAL:-10}
+
 adopt_verify_poll() {
   local repo="$1" id="$2" attempt="$3" tries=0 settled has_local label_lc _name jstatus _conclusion runner labels
   label_lc="$(printf '%s' "$ADOPT_LABEL" | tr '[:upper:]' '[:lower:]')"
@@ -868,31 +889,59 @@ adopt_write_denied() {
   fi
 }
 
-# adopt_setup <owner/repo> <label> <jobs> <dry>: the --setup path, the
-# workflow edits of docs/adopting.md steps 1-4 opened as a pull request. The
-# plan comes from tools/adopt.py setup over the same downloaded workflows a
-# normal adopt checks; it is verified with routing_guard.py before anything
-# leaves the Mac, then written to SETUP_BRANCH through the Contents API and
-# opened with POST /pulls. Nothing here touches the runner group or CI_RUNNER:
-# that is step 5, after the pull request is merged. Needs gh with write access
-# to the repository; needs no VM.
-#
-# The expression's shape (--mode): --guards asks for the guarded one; without
-# it, a guard already in the repository keeps its own shape and a repository
-# without one gets simple — the shape a personal repository reads at a
-# glance. events and dependabot have no effect in simple mode, which routes
-# every event, so they are refused there.
-# State adopt_setup's helpers hand each other: ADOPT_SETUP_EXPR, the
-# expression tools/adopt.py setup writes into the workflows; ADOPT_SETUP_OPTS,
-# its options; ADOPT_SETUP_GOPTS, the options the guard check of the staged
-# files runs with; and the plan's outcome, ADOPT_SETUP_ROUTED (the planned
-# jobs, comma-joined) and ADOPT_SETUP_FILES (the files it touches, one per
-# line). The pull request body and the staged-files check read them.
+# State adopt_setup's helpers hand each other and the EXIT cleanup:
+# ADOPT_SETUP_EXPR (written into the workflows), ADOPT_SETUP_OPTS (options),
+# ADOPT_SETUP_GOPTS (guard check options), ADOPT_SETUP_ROUTED (comma-joined
+# jobs), ADOPT_SETUP_FILES (touched files, one per line), plus SETUP_BRANCH,
+# SETUP_MSG, ADOPT_PLAIN_CMD and wait/interrupt state. The pull request body
+# and the staged-files check read them.
+# The branch `adopt --setup` writes its pull request from (#124). A fixed
+# name keeps a re-run pointed at the same pull request; an existing branch is
+# refused rather than rewritten.
+SETUP_BRANCH="homefield/route-to-local"
+SETUP_MSG="Route CI jobs to the local HomeField runner"
 ADOPT_SETUP_EXPR=""
 ADOPT_SETUP_OPTS=()
 ADOPT_SETUP_GOPTS=()
 ADOPT_SETUP_ROUTED=""
 ADOPT_SETUP_FILES=""
+ADOPT_SETUP_REPO=""
+# the plain adopt to run once the routing pull request is merged: this run's
+# repo, and its --label and --group when given (cmd_adopt sets it)
+ADOPT_PLAIN_CMD=""
+ADOPT_SETUP_BRANCH_MADE=0
+ADOPT_SETUP_PR_MADE=0
+# 1 while the POST that opens the pull request is in flight: the pull request
+# may exist although adopt has not seen the answer, so the branch must stay.
+ADOPT_SETUP_PR_PENDING=0
+# The pull request adopt_setup opened, for --wait to poll.
+ADOPT_SETUP_PR_URL=""
+ADOPT_SETUP_PR_NUMBER=""
+# --wait: set by cmd_adopt; how often the pull request is read, in seconds
+# (tests set the interval to 0 or a value with a stub sleep); and the sleep in
+# flight, which an interrupt takes down.
+ADOPT_WAIT=0
+ADOPT_WAIT_INTERVAL=${ADOPT_WAIT_INTERVAL:-10}
+[ "$ADOPT_WAIT_INTERVAL" -ge 0 ] 2>/dev/null || ADOPT_WAIT_INTERVAL=10
+ADOPT_WAIT_SLEEPER=""
+# Set once the wait saw the pull request merged.
+ADOPT_WAIT_MERGED=0
+# Set once adopt_switch returned: after that only the optional --verify is left.
+ADOPT_SWITCH_DONE=0
+# 1 once cmd_adopt installed the INT and TERM handler (a --setup run).
+ADOPT_HANDLER=0
+# The pid of the process that started this adopt, when that is not the user's
+# terminal: setup_route_repo sets it to setup's pid. Empty for a standalone
+# adopt, which has no parent to watch.
+ADOPT_PARENT_PID=""
+# What adopt --setup --wait exits with when it fails after opening the pull
+# request (setup_route_repo reads them): ADOPT_EXIT_OPEN while it is not
+# merged, ADOPT_EXIT_MERGED once it is. Ctrl-C and SIGTERM keep 130 and 143.
+# Every other failure, and every run without --wait, exits 1 as before.
+# shellcheck disable=SC2034  # read by cmd-install.sh's setup_route_repo
+ADOPT_EXIT_OPEN=4
+# shellcheck disable=SC2034  # read by cmd-install.sh's setup_route_repo
+ADOPT_EXIT_MERGED=5
 
 # adopt_setup_expression <label>: resolves the expression's shape and the
 # routing_guard.py invocations the plan and its check run with, into
@@ -1331,78 +1380,3 @@ cmd_adopt() {
     log "still by hand: open a pull request and check the jobs ran on the local runner, add any tools they lack, and note why a job stays hosted if you want to (docs/adopting.md, steps 6 and 7)"
   fi
 }
-
-# 1 once a report of the jobs was printed (what the last line of adopt says).
-ADOPT_VERIFIED=0
-
-# adopt_verify_poll <owner/repo> <run-id> <attempt>: reads the jobs of the
-# re-run (every job whose run_attempt is greater than <attempt>) into
-# ADOPT_VERIFY_ROWS until each has a runner or is completed, or the tries run
-# out. Jobs of the previous attempt can still be listed just after the re-run;
-# verify-jobs leaves them out. A job behind another one (a reusable workflow
-# called after a job it needs) may not be listed until that one is done, so while
-# the run is still going the poll does not settle before a job that asked for
-# the routing label is listed: a hosted job alone says nothing about the
-# routing. The run's status is read each time, into ADOPT_VERIFY_RUN_STATUS.
-# Returns 1, after saying why, when gh or the answer fails.
-ADOPT_VERIFY_RUN_STATUS=""
-
-
-
-
-# The branch `adopt --setup` writes its pull request from (#124). A fixed
-# name keeps a re-run pointed at the same pull request; an existing branch is
-# refused rather than rewritten.
-SETUP_BRANCH="homefield/route-to-local"
-SETUP_MSG="Route CI jobs to the local HomeField runner"
-
-
-# adopt_verify (#149) is docs/adopting.md step 6 done for you: it re-runs the
-# repository's latest pull-request run and reports, from the jobs API, where
-# each job landed. A job counts as local when the labels it asked for hold the
-# routing label: adopt works from any machine, so the runner's name is not
-# looked up in the VM. ADOPT_VERIFY_TRIES and ADOPT_VERIFY_INTERVAL are seams
-# for the tests, as ONLINE_WAIT_TRIES and ONLINE_WAIT_INTERVAL are.
-ADOPT_VERIFY_TRIES=${ADOPT_VERIFY_TRIES:-18}
-ADOPT_VERIFY_INTERVAL=${ADOPT_VERIFY_INTERVAL:-10}
-# What adopt_setup has done so far, for the EXIT cleanup it installs.
-ADOPT_SETUP_REPO=""
-# the plain adopt to run once the routing pull request is merged: this run's
-# repo, and its --label and --group when given (cmd_adopt sets it)
-ADOPT_PLAIN_CMD=""
-ADOPT_SETUP_BRANCH_MADE=0
-ADOPT_SETUP_PR_MADE=0
-# 1 while the POST that opens the pull request is in flight: the pull request
-# may exist although adopt has not seen the answer, so the branch must stay.
-ADOPT_SETUP_PR_PENDING=0
-# The pull request adopt_setup opened, for --wait to poll.
-ADOPT_SETUP_PR_URL=""
-ADOPT_SETUP_PR_NUMBER=""
-# --wait: set by cmd_adopt; how often the pull request is read, in seconds
-# (tests set the interval to 0 or a value with a stub sleep); and the sleep in
-# flight, which an interrupt takes down.
-ADOPT_WAIT=0
-ADOPT_WAIT_INTERVAL=${ADOPT_WAIT_INTERVAL:-10}
-[ "$ADOPT_WAIT_INTERVAL" -ge 0 ] 2>/dev/null || ADOPT_WAIT_INTERVAL=10
-ADOPT_WAIT_SLEEPER=""
-# Set once the wait saw the pull request merged.
-ADOPT_WAIT_MERGED=0
-# Set once adopt_switch returned: after that only the optional --verify is left.
-ADOPT_SWITCH_DONE=0
-# 1 once cmd_adopt installed the INT and TERM handler (a --setup run).
-ADOPT_HANDLER=0
-# The pid of the process that started this adopt, when that is not the user's
-# terminal: setup_route_repo sets it to setup's pid. Empty for a standalone
-# adopt, which has no parent to watch.
-ADOPT_PARENT_PID=""
-# What adopt --setup --wait exits with when it fails after opening the pull
-# request (setup_route_repo reads them): ADOPT_EXIT_OPEN while it is not
-# merged, ADOPT_EXIT_MERGED once it is. Ctrl-C and SIGTERM keep 130 and 143.
-# Every other failure, and every run without --wait, exits 1 as before.
-# shellcheck disable=SC2034  # read by cmd-install.sh's setup_route_repo
-ADOPT_EXIT_OPEN=4
-ADOPT_EXIT_MERGED=5
-
-# _preset_load <name>: the work behind load_presets. Recursive so that an
-# `include` puts the other preset's packages where it is written, and a name
-# already loaded (an include cycle) is skipped rather than followed again.

@@ -1,6 +1,17 @@
 #!/usr/bin/env bash
 # Presentation: colors, die/log, the JSON emitters shared by diagnose.
 
+# ── Color ───────────────────────────────────────────────────────────────────
+# Colors are for the severity markers (OK/WARN/FAIL, warnings, errors) and
+# only when the user will actually see them: the default (auto) colors a
+# terminal and leaves a pipe alone, because every consumer of piped output —
+# the test suites' substring matches, a `grep homefield`, CI logs — wants the
+# plain text. HOMEFIELD_COLOR=always forces colors into a pipe (NO_COLOR beats
+# it, as the no-color.org convention), --color=never beats the variable, and
+# --color=always beats both being unset. Each level's marker keeps its plain
+# word (OK, WARN, FAIL, warning:) so `--color=never` output is byte-identical
+# to the pre-color output and scrapers of either form never see an escape.
+HF_ANSI_OFF=1
 # color_init [args...]: scan the option list once, before any output. Called
 # from main with the command's arguments; a sourced bin/homefield (tests) calls
 # it through the emitters below, so the level of a marker never depends on
@@ -40,10 +51,26 @@ hf_color() {
   fi
 }
 
+color_wrap() { # color_wrap <code> <text>: <text> wrapped in <code>, or bare
+  if [ "$HF_ANSI_OFF" = 0 ]; then
+    printf '%s%s%s' "$(hf_color "$1")" "$2" "$(hf_color 0)"
+  else
+    printf '%s' "$2"
+  fi
+}
+
+log() { echo "homefield: $*"; }
+
 die() {
   echo "homefield: $(color_wrap 3 "$*")" >&2
   exit 1
 }
+
+# have_terminal: stdin is a terminal to ask on (a seam for the tests).
+have_terminal() { [ -t 0 ]; }
+
+# lower <text>: in lower case (bash 3.2 has no ${var,,}).
+lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 
 pf_add() {
   PF_NAME+=("$1")
@@ -92,6 +119,9 @@ json_str() {
   done
   printf '"%s"' "$out"
 }
+
+# json_nstr <text>: json_str, or null for an empty text.
+json_nstr() { if [ -n "$1" ]; then json_str "$1"; else printf null; fi; }
 
 # json_bool <yes|no|true|false>: true or false; null for anything else.
 json_bool() {

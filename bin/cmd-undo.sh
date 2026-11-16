@@ -165,12 +165,22 @@ reset_load_group() {
   fi
 }
 
+# ── reset ───────────────────────────────────────────────────────────────────
+# reset rolls back a complete or half-finished install of one instance: the
+# runner's registration, the VM and the runner group install created, and with
+# --remove-tool the tool itself. It works from what exists now, so a failed
+# install, an uninstall that stopped partway and a VM deleted by hand are all
+# one case; nothing existing is a no-op. What it removes is in the plan it
+# prints and asks about before any change, and in the report it ends with.
+#
 # What reset did, one line each, printed at the end. RESET_RC is the exit
 # status (1 once a requested step failed); RG_KEEP 1 keeps the state file,
 # because a group it records still exists.
 REPORT=()
 RESET_RC=0
 RG_KEEP=0
+
+rep() { REPORT+=("$1"); }
 
 # group_kept <why> [problem]: the group stays, and so does its record, so that
 # a later reset can still delete it. With a second argument it is a failure.
