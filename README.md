@@ -282,9 +282,14 @@ human in the loop:
 ## Versioning
 
 Releases are exact semver tags (`v0.1.0`, `v0.2.1`, `v0.3.0`), and a tag is
-never moved. Pin an exact tag, such as `routing-guard@v0.3.0` (Dependabot's
-`github-actions` ecosystem can bump it for you), or a full commit SHA. There
-is no floating major tag to follow.
+never moved (backed by the `refs/tags/v*` ruleset in
+[`.github/rulesets/protect-release-tags.json`](.github/rulesets/protect-release-tags.json),
+which blocks tag deletion, updates, and non-fast-forward moves). Pin an exact
+tag, such as `routing-guard@v0.3.0`, or a full 40-character commit SHA
+(`uses: i2Dev-com/homefield/routing-guard@<40-char-sha> # v0.5.3`) — a commit
+SHA binds your workflow cryptographically to one tree without depending on
+upstream tag rules, and Dependabot's `github-actions` ecosystem updates either
+form for you. There is no floating major tag to follow.
 
 While the version is 0.x, a change that makes a previously passing workflow
 fail, such as a new guard in the expression, bumps the minor version
