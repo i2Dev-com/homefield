@@ -241,7 +241,9 @@ preflight_resolve_image() {
 # failing preflight: `install` will fetch via Lima as before.
 preflight_image() {
   local resolved url digest_hex url_hash cache_root cache_dir cached_sha part_sha name
-  local lock_dir lock_pid attempts=0 missing_pid=0 max_attempts="${HOMEFIELD_PREFETCH_LOCK_TRIES:-300}" part_file
+  local lock_dir lock_pid owner_pid pid_tmp attempts=0 missing_pid=0
+  local max_attempts="${HOMEFIELD_PREFETCH_LOCK_TRIES:-300}"
+  local max_missing="${HOMEFIELD_PREFETCH_MISSING_PID_TRIES:-50}" part_file
   if ! resolved="$(preflight_resolve_image)" || [ -z "$resolved" ]; then
     pf_line warn "VM image pre-fetch skipped (could not resolve Lima image template); install will download it"
     return 0
@@ -268,39 +270,60 @@ preflight_image() {
   fi
 
   lock_dir="$cache_dir/.prefetch.lock"
-  while ! mkdir "$lock_dir" 2>/dev/null; do
-    lock_pid=""
-    if [ -r "$lock_dir/pid" ]; then
-      IFS= read -r lock_pid <"$lock_dir/pid" || lock_pid=""
-    fi
-    if [ -n "$lock_pid" ]; then
-      missing_pid=0
-      case "$lock_pid" in
-        *[!0-9]*)
+  pid_tmp="$cache_dir/.pid.$$"
+  printf '%s\n' "$$" >"$pid_tmp" 2>/dev/null || true
+  while true; do
+    while ! mkdir "$lock_dir" 2>/dev/null; do
+      lock_pid=""
+      if [ -r "$lock_dir/pid" ]; then
+        IFS= read -r lock_pid <"$lock_dir/pid" || lock_pid=""
+      fi
+      if [ -n "$lock_pid" ]; then
+        missing_pid=0
+        case "$lock_pid" in
+          *[!0-9]*)
+            rm -rf "$lock_dir"
+            continue
+            ;;
+        esac
+        if ! kill -0 "$lock_pid" 2>/dev/null; then
           rm -rf "$lock_dir"
           continue
-          ;;
-      esac
-      if ! kill -0 "$lock_pid" 2>/dev/null; then
-        rm -rf "$lock_dir"
-        continue
+        fi
+      else
+        missing_pid=$((missing_pid + 1))
+        if [ "$missing_pid" -ge "$max_missing" ]; then
+          rm -rf "$lock_dir"
+          missing_pid=0
+          continue
+        fi
       fi
-    else
-      missing_pid=$((missing_pid + 1))
-      if [ "$missing_pid" -ge 3 ]; then
-        rm -rf "$lock_dir"
-        missing_pid=0
-        continue
+      attempts=$((attempts + 1))
+      if [ "$attempts" -ge "$max_attempts" ]; then
+        rm -f "$pid_tmp"
+        pf_line warn "VM image pre-fetch skipped (cache lock busy); install will download it"
+        return 0
       fi
+      /bin/sleep 0.1 2>/dev/null || /bin/sleep 1 2>/dev/null || true
+    done
+    mv -f "$pid_tmp" "$lock_dir/pid" 2>/dev/null || printf '%s\n' "$$" >"$lock_dir/pid" 2>/dev/null || true
+    owner_pid=""
+    if [ -r "$lock_dir/pid" ]; then
+      IFS= read -r owner_pid <"$lock_dir/pid" || owner_pid=""
+    fi
+    if [ "$owner_pid" = "$$" ]; then
+      rm -f "$pid_tmp"
+      break
     fi
     attempts=$((attempts + 1))
     if [ "$attempts" -ge "$max_attempts" ]; then
+      rm -f "$pid_tmp"
       pf_line warn "VM image pre-fetch skipped (cache lock busy); install will download it"
       return 0
     fi
+    printf '%s\n' "$$" >"$pid_tmp" 2>/dev/null || true
     /bin/sleep 0.1 2>/dev/null || /bin/sleep 1 2>/dev/null || true
   done
-  printf '%s\n' "$$" >"$lock_dir/pid" 2>/dev/null || true
 
   if [ -s "$cache_dir/data" ]; then
     cached_sha="$(pf_sha256_file "$cache_dir/data")" || cached_sha=""
