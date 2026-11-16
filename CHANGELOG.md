@@ -13,6 +13,7 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ### Added
 
+- VM image pre-fetch in `homefield preflight` ([`bin/cmd-preflight.sh`](bin/cmd-preflight.sh), `#252`): when prerequisites pass (on a terminal or with `--prefetch`; skipped by `--no-prefetch` and during `setup`/`install`), `preflight` checks Lima's download cache for `vm/lima.yaml`'s digest-pinned Ubuntu image and pre-fetches + SHA-256 verifies it when missing or stale (failures warn without blocking).
 - Cost-savings documentation and calculator ([`docs/cost.md`](docs/cost.md), `tools/cost.py`, `tests/cost.sh`): published 2026 hosted runner rates, OS minute multipliers, break-even formula, worked example, and a zero-dependency CLI reading recent `gh` workflow runs to project monthly hosted spend and savings ([#248](https://github.com/i2Dev-com/homefield/issues/248)).
 - One-PR demo workflow guide and template ([docs/demo.md](docs/demo.md)): new
   adopters can verify the local runner and routing guard end-to-end in a

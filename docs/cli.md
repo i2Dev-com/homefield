@@ -23,9 +23,10 @@ agents that drive the tool without a human in the loop. The guides:
   Mac by default; `--instance NAME` (before or after the command, or
   `$HOMEFIELD_INSTANCE`) narrows them to one. `install`/`setup` create and
   act on exactly the instance they are given.
-- **Read-only first.** `status`, `diagnose`, `preflight`, `memory`,
-  `version` and `report` change nothing. `route` and `adopt` take `--dry-run`
-  (and `adopt --setup` opens nothing until you merge its pull request).
+- **Read-only first.** `status`, `diagnose`, `preflight --no-prefetch` (and
+  non-terminal `preflight`), `memory`, `version` and `report` change nothing.
+  `route` and `adopt` take `--dry-run` (and `adopt --setup` opens nothing until
+  you merge its pull request).
 - **Secrets.** Registration tokens reach the VM on stdin, never on a command
   line; nothing a command prints is a credential.
 
@@ -43,7 +44,7 @@ agents that drive the tool without a human in the loop. The guides:
 | `uninstall` | Deregister the runner and delete one VM | Refuses to guess with more than one VM: `--instance` is required |
 | `reset` | Roll back an install, complete or half-finished | Asks first; `HOMEFIELD_YES=1` answers yes; a no-op when nothing to undo |
 | `route` | Switch repositories' routed jobs to hosted or local (`CI_RUNNER`) | `route hosted` also re-runs stuck runs; `--dry-run` |
-| `preflight` | Check prerequisites for a fresh install | Exits 0 when all pass, 1 otherwise, naming the fix |
+| `preflight` | Check prerequisites for a fresh install | `--prefetch` / `--no-prefetch` controls VM image caching (default: on for a terminal, off otherwise; failed fetch warns only); exits 0 when prerequisites pass, 1 otherwise |
 | `adopt` | Prepare a repository: check the routing, add it to the group, switch it on | `--setup` opens the routing pull request; `--wait` carries on after the merge; refuses a public repository |
 | `memory` | Every VM's memory use: average and peak per day, out-of-memory kills | `--days N` (default 7); fails for a VM it cannot ask |
 | `report` | Queue wait, duration and minutes of jobs, local against hosted | `--json`; one API call per run, so allow a few minutes a month |
@@ -58,6 +59,8 @@ agents that drive the tool without a human in the loop. The guides:
 | `HOMEFIELD_GH_TIMEOUT` | Seconds a GitHub call waits before "not checked" (default 15) |
 | `HOMEFIELD_COLOR` | `always` colors piped output; `NO_COLOR` (any value) turns color off everywhere |
 | `HOMEFIELD_STATE_DIR` | Where the per-instance state files live (default `~/.local/state/homefield`) |
+| `HOMEFIELD_LIMA_CACHE_DIR` | Lima's download cache root for `preflight` image caching (default `~/Library/Caches/lima`) |
+| `HOMEFIELD_LIMA_TEMPLATE` | Override the Lima template YAML path checked by `preflight` image pre-fetching |
 | `HOMEFIELD_SOURCE_ONLY=1` | Internal: source `bin/homefield` for its functions, run nothing |
 
 ## Machine-readable output (`--json`)

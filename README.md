@@ -157,7 +157,8 @@ bypasses](docs/security.md).
 - **gh ≥ 2.81.** The tool's own GitHub calls use `gh auth status --json hosts`
   (added in gh 2.81.0) and `gh api --jq` (the registration-token fetch);
   `homefield preflight` checks the version and names `brew upgrade gh` when
-  the installed gh is older.
+  the installed gh is older (`preflight` can also pre-fetch the Lima VM image
+  into Lima's cache before `install`).
 - **Private repositories only.** A pull request runs the workflow files from
   its own branch, so anyone who can open one can change its `runs-on`. See
   [Security model](#security-model).
