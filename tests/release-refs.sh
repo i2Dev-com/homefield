@@ -41,6 +41,10 @@ pins="$(grep -oE 'i2Dev-com/homefield/routing-guard@v[0-9]+\.[0-9]+\.[0-9]+' doc
 pins="${pins% }"
 record "docs/adopting.md pins only ${release}" "${action}" "${pins}"
 
+pins="$(grep -oE 'i2Dev-com/homefield/routing-guard@v[0-9]+\.[0-9]+\.[0-9]+' docs/demo.md | sort -u | tr '\n' ' ')"
+pins="${pins% }"
+record "docs/demo.md pins only ${release}" "${action}" "${pins}"
+
 # The suite fixtures that encode the default release must move with it.
 check_text "tests/install-sh.sh expects the default gh tarball at ${release}" tests/install-sh.sh "tarball/${release}\$"
 check_text "tests/install-sh.sh expects the default codeload URL at ${release}" tests/install-sh.sh "tar.gz/${release}"
@@ -78,7 +82,7 @@ fi
 # No tagged install one-liner in a current-facing file may name another
 # release. CHANGELOG.md and tasks/ keep history and are not scanned.
 stale=""
-for f in install.sh README.md docs/cli.md docs/adopting.md tests/runner-group.sh; do
+for f in install.sh README.md docs/cli.md docs/adopting.md docs/demo.md tests/runner-group.sh; do
   [ -f "$f" ] || continue
   while IFS= read -r url; do
     [ -n "$url" ] || continue
@@ -89,5 +93,28 @@ for f in install.sh README.md docs/cli.md docs/adopting.md tests/runner-group.sh
   done < <(grep -oE '/homefield/v[0-9]+\.[0-9]+\.[0-9]+/install\.sh' "$f" || true)
 done
 record "every tagged install one-liner names ${release}" "" "${stale# }"
+
+# The demo workflow template in docs/demo.md must pass routing_guard.py (and
+# actionlint when installed) so the one-PR template never drifts out of date.
+work="$(mktemp -d)"
+trap 'rm -rf "${work:?}"' EXIT
+mkdir -p "$work/demo-wf"
+# shellcheck disable=SC2016  # backticks are literal markdown fences, not command substitution
+awk '/^```yaml$/{f=1;next} /^```$/{if(f) exit} f{print}' docs/demo.md >"$work/demo-wf/homefield-demo.yml"
+record "docs/demo.md embeds a non-empty demo workflow" yes "$([ -s "$work/demo-wf/homefield-demo.yml" ] && echo yes || echo no)"
+rg_out=""
+if rg_out="$(python3 -I "$ROOT/routing-guard/routing_guard.py" --workflows-dir "$work/demo-wf" --jobs "homefield-demo.yml:demo" 2>&1)"; then
+  record "docs/demo.md workflow passes routing_guard.py" clean clean
+else
+  record "docs/demo.md workflow passes routing_guard.py" clean "failed (${rg_out})"
+fi
+if command -v actionlint >/dev/null 2>&1; then
+  al_out=""
+  if al_out="$(actionlint "$work/demo-wf/homefield-demo.yml" 2>&1)"; then
+    record "docs/demo.md workflow passes actionlint" clean clean
+  else
+    record "docs/demo.md workflow passes actionlint" clean "failed (${al_out})"
+  fi
+fi
 
 summary
