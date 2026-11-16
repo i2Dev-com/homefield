@@ -222,7 +222,8 @@ while the VM runs (it holds its configured memory, 5 GiB by default).
 GitHub announced a per-minute platform charge for self-hosted runners on
 private repositories for March 2026, then postponed it indefinitely. Check
 [GitHub's Actions billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions)
-for the current terms.
+for the current terms. See [docs/cost.md](docs/cost.md) for the rate table,
+break-even math and `tools/cost.py` savings calculator.
 
 ## Alternatives
 
@@ -257,6 +258,7 @@ pull-request code away from the Mac it runs on.
 | [docs/security.md](docs/security.md) | The routing guard's contract, and the bypasses found and fixed so far |
 | [docs/tap.md](docs/tap.md) | The Homebrew tap: the formula template, the release automation and the `TAP_TOKEN` secret |
 | [docs/cli.md](docs/cli.md) | Every command, option, exit code and environment variable — for scripts and AI agents |
+| [docs/cost.md](docs/cost.md) | Hosted runner rates, break-even math and the `tools/cost.py` savings calculator |
 | [CHANGELOG.md](CHANGELOG.md) | What each release changed, and how to upgrade |
 
 ## For AI agents

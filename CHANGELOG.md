@@ -13,6 +13,7 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ### Added
 
+- Cost-savings documentation and calculator ([`docs/cost.md`](docs/cost.md), `tools/cost.py`, `tests/cost.sh`): published 2026 hosted runner rates, OS minute multipliers, break-even formula, worked example, and a zero-dependency CLI reading recent `gh` workflow runs to project monthly hosted spend and savings ([#248](https://github.com/i2Dev-com/homefield/issues/248)).
 - One-PR demo workflow guide and template ([docs/demo.md](docs/demo.md)): new
   adopters can verify the local runner and routing guard end-to-end in a
   single pull request before modifying existing CI workflows;
