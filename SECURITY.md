@@ -16,6 +16,18 @@ inside the guest is ideal.
 We aim to acknowledge reports within a week and to credit reporters unless
 they'd rather not be.
 
+## Audit and researcher invitation
+
+HomeField's four security invariants (reviewed `runs-on` expressions,
+fail-closed line scanner, guest isolation verification, and stdin-only token
+handling) are mapped line-by-line to code and test suites in
+[the security audit and invariant map](docs/security-audit.md).
+
+Independent security researchers and reviewers are explicitly invited to audit
+`routing-guard/`, `vm/lima.yaml`, `vm/provision.sh`, and `bin/`. No separate PGP
+key is needed — submit findings through GitHub's private vulnerability reporting
+flow above, and let us know whether and how you would like to be credited.
+
 ## What is in scope
 
 - Escaping the VM, or reading the host's files or credentials from it.

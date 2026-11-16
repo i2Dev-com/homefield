@@ -207,7 +207,8 @@ rule is defence in depth: what keeps strangers off the runner is that only
 private repositories can reach it. Registration tokens reach the VM on stdin,
 never on a command line. The full table: [runbook: Trust
 boundary](docs/runbook.md#trust-boundary); the guard's contract and its past
-bypasses: [docs/security.md](docs/security.md).
+bypasses: [docs/security.md](docs/security.md); the code-level security
+invariant map and independent-audit call: [docs/security-audit.md](docs/security-audit.md).
 
 ## Cost
 
@@ -256,6 +257,7 @@ pull-request code away from the Mac it runs on.
 | [docs/adopting.md](docs/adopting.md) | Routing a repository: the seven steps, the guard, `adopt` and its pull request |
 | [docs/runbook.md](docs/runbook.md) | Operating it: setup, runner group, switching, failure modes, maintenance, moving, removal |
 | [docs/security.md](docs/security.md) | The routing guard's contract, and the bypasses found and fixed so far |
+| [docs/security-audit.md](docs/security-audit.md) | Code-level invariant map, GitHub hardening alignment, and researcher audit invitation |
 | [docs/tap.md](docs/tap.md) | The Homebrew tap: the formula template, the release automation and the `TAP_TOKEN` secret |
 | [docs/cli.md](docs/cli.md) | Every command, option, exit code and environment variable — for scripts and AI agents |
 | [docs/cost.md](docs/cost.md) | Hosted runner rates, break-even math and the `tools/cost.py` savings calculator |
