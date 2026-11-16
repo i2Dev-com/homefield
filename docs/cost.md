@@ -120,7 +120,17 @@ python3 tools/cost.py --repo owner/app --since 2026-11-01 --until 2026-11-15 --i
 
 # Machine-readable JSON output
 python3 tools/cost.py --repo owner/app --json
+
+# Match --dependabot local or --mode simple routing (include Dependabot / fork PRs)
+python3 tools/cost.py --repo owner/app --dependabot local
+python3 tools/cost.py --repo owner/app --mode simple
 ```
+
+By default (`--mode guards --dependabot hosted`), hosted Dependabot
+(`dependabot[bot]` or `dependabot/...` branches) and fork pull-request runs
+stay in `other_hosted` so savings reflect what guarded routing actually
+moves locally. Pass `--dependabot local` or `--mode simple` when estimating for
+those options.
 
 Environment overrides (primarily for tests and offline evaluation):
 

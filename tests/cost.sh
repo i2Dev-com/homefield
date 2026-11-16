@@ -259,6 +259,132 @@ record "under included quota (Enterprise 50,000): \$0.00 bill and \$0.00 savings
   "$(echo "$worked_ent" | pick "f\"{d['included_minutes']}/{d['monthly_projection']['scenarios']['all_hosted']['net_usd']:.2f}/{d['monthly_projection']['savings']['total_monthly_usd']:.2f}\"")"
 
 echo
+echo "routing guards: Dependabot and fork PR exclusions"
+cat >"$work/guards.json" <<'JSON'
+{
+  "acme/app": [
+    {
+      "id": 101,
+      "path": ".github/workflows/ci.yml",
+      "event": "pull_request",
+      "branch": "feat/same-repo",
+      "actor": "alice",
+      "head_repo": "acme/app",
+      "jobs": [
+        {
+          "id": 1001,
+          "name": "local-job",
+          "status": "completed",
+          "conclusion": "success",
+          "created_at": "2026-10-01T10:00:00Z",
+          "started_at": "2026-10-01T10:00:00Z",
+          "completed_at": "2026-10-01T10:05:00Z",
+          "runner_name": "lima",
+          "labels": ["self-hosted", "linux", "arm64", "homefield-ci"]
+        }
+      ]
+    },
+    {
+      "id": 102,
+      "path": ".github/workflows/ci.yml",
+      "event": "pull_request",
+      "branch": "bump/deps",
+      "actor": "dependabot[bot]",
+      "head_repo": "acme/app",
+      "jobs": [
+        {
+          "id": 1002,
+          "name": "dep-actor",
+          "status": "completed",
+          "conclusion": "success",
+          "created_at": "2026-10-01T11:00:00Z",
+          "started_at": "2026-10-01T11:00:00Z",
+          "completed_at": "2026-10-01T12:00:00Z",
+          "runner_name": "GitHub Actions 1",
+          "labels": ["ubuntu-latest"]
+        }
+      ]
+    },
+    {
+      "id": 103,
+      "path": ".github/workflows/ci.yml",
+      "event": "pull_request",
+      "branch": "dependabot/npm/lodash",
+      "actor": "bob",
+      "head_repo": "acme/app",
+      "jobs": [
+        {
+          "id": 1003,
+          "name": "dep-branch",
+          "status": "completed",
+          "conclusion": "success",
+          "created_at": "2026-10-01T12:00:00Z",
+          "started_at": "2026-10-01T12:00:00Z",
+          "completed_at": "2026-10-01T12:10:00Z",
+          "runner_name": "GitHub Actions 2",
+          "labels": ["ubuntu-latest"]
+        }
+      ]
+    },
+    {
+      "id": 104,
+      "path": ".github/workflows/ci.yml",
+      "event": "pull_request",
+      "branch": "patch-1",
+      "actor": "contributor",
+      "head_repo": "stranger/app",
+      "jobs": [
+        {
+          "id": 1004,
+          "name": "fork-pr",
+          "status": "completed",
+          "conclusion": "success",
+          "created_at": "2026-10-01T13:00:00Z",
+          "started_at": "2026-10-01T13:00:00Z",
+          "completed_at": "2026-10-01T13:20:00Z",
+          "runner_name": "GitHub Actions 3",
+          "labels": ["ubuntu-latest"]
+        }
+      ]
+    },
+    {
+      "id": 105,
+      "path": ".github/workflows/ci.yml",
+      "event": "pull_request",
+      "branch": "deleted-fork",
+      "actor": "contributor",
+      "head_repo": null,
+      "jobs": [
+        {
+          "id": 1005,
+          "name": "null-head-repo",
+          "status": "completed",
+          "conclusion": "success",
+          "created_at": "2026-10-01T14:00:00Z",
+          "started_at": "2026-10-01T14:00:00Z",
+          "completed_at": "2026-10-01T14:15:00Z",
+          "runner_name": "GitHub Actions 4",
+          "labels": ["ubuntu-latest"]
+        }
+      ]
+    }
+  ]
+}
+JSON
+
+guards_default="$(HOMEFIELD_COST_FIXTURE="$work/guards.json" python3 "$ROOT/tools/cost.py" --repo acme/app --since 2026-10-01 --until 2026-10-30 --included 0 --json)"
+record "guards mode keeps Dependabot + fork PRs in other_hosted (additional = \$0.00)" "5/0/105/0.00/guards/hosted" \
+  "$(echo "$guards_default" | pick "f\"{d['repos'][0]['buckets']['local']['raw_minutes']}/{d['repos'][0]['buckets']['routable_pr']['raw_minutes']}/{d['repos'][0]['buckets']['other_hosted']['raw_minutes']}/{d['monthly_projection']['savings']['additional_monthly_usd']:.2f}/{d['mode']}/{d['dependabot']}\"")"
+
+guards_dep="$(HOMEFIELD_COST_FIXTURE="$work/guards.json" python3 "$ROOT/tools/cost.py" --repo acme/app --since 2026-10-01 --until 2026-10-30 --included 0 --dependabot local --json)"
+record "--dependabot local moves Dependabot (70m) to routable_pr, forks (35m) stay hosted" "70/35/0.42" \
+  "$(echo "$guards_dep" | pick "f\"{d['repos'][0]['buckets']['routable_pr']['raw_minutes']}/{d['repos'][0]['buckets']['other_hosted']['raw_minutes']}/{d['monthly_projection']['savings']['additional_monthly_usd']:.2f}\"")"
+
+simple_mode="$(HOMEFIELD_COST_FIXTURE="$work/guards.json" python3 "$ROOT/tools/cost.py" --repo acme/app --since 2026-10-01 --until 2026-10-30 --included 0 --mode simple --json)"
+record "--mode simple moves Dependabot + fork PRs (105m) to routable_pr" "105/0/0.63" \
+  "$(echo "$simple_mode" | pick "f\"{d['repos'][0]['buckets']['routable_pr']['raw_minutes']}/{d['repos'][0]['buckets']['other_hosted']['raw_minutes']}/{d['monthly_projection']['savings']['additional_monthly_usd']:.2f}\"")"
+
+echo
 echo "multi-repo table and isolated python3 -I"
 multi_txt="$(run_fixture --repo acme/app --repo acme/other --since 2026-10-01 --until 2026-10-10 --plan free)"
 rc=$?
@@ -314,10 +440,14 @@ exit 0
 STUB
 chmod +x "$stubs/gh"
 
-printf '%s\n' '{"id": 2001, "path": ".github/workflows/ci.yml", "event": "pull_request", "created_at": "2026-11-30T10:00:00Z", "branch": "feat/cost"}' >"$work/runs/2026-11-30.txt"
+printf '%s\n%s\n' \
+  '{"id": 2001, "path": ".github/workflows/ci.yml", "event": "pull_request", "created_at": "2026-11-30T10:00:00Z", "branch": "feat/cost", "actor": "alice", "head_repo": "acme/app"}' \
+  '{"id": 2002, "path": ".github/workflows/ci.yml", "event": "pull_request", "created_at": "2026-11-30T11:00:00Z", "branch": "bump/deps", "actor": "dependabot[bot]", "head_repo": "acme/app"}' >"$work/runs/2026-11-30.txt"
 printf '%s\n%s\n' \
   '{"id": 201, "name": "local-test", "status": "completed", "conclusion": "success", "created_at": "2026-11-30T10:00:00Z", "started_at": "2026-11-30T10:00:00Z", "completed_at": "2026-11-30T10:02:00Z", "runner_name": "lima", "labels": ["self-hosted", "linux", "arm64", "homefield-ci"]}' \
   '{"id": 202, "name": "hosted-lint", "status": "completed", "conclusion": "success", "created_at": "2026-11-30T10:00:00Z", "started_at": "2026-11-30T10:00:00Z", "completed_at": "2026-11-30T10:03:00Z", "runner_name": "GitHub Actions 1", "labels": ["ubuntu-latest"]}' >"$work/jobs/jobs-2001.txt"
+printf '%s\n' \
+  '{"id": 203, "name": "dep-hosted", "status": "completed", "conclusion": "success", "created_at": "2026-11-30T11:00:00Z", "started_at": "2026-11-30T11:00:00Z", "completed_at": "2026-11-30T11:04:00Z", "runner_name": "GitHub Actions 2", "labels": ["ubuntu-latest"]}' >"$work/jobs/jobs-2002.txt"
 
 live() {
   : >"$work/calls"
@@ -328,9 +458,13 @@ live() {
 }
 
 COST_TODAY=2026-11-30
+live --repo acme/app --included 0 --json
+record "live: default 30d window and actor/head_repo separation" "0/2/3/4/yes/30" \
+  "$rc/$(echo "$out" | sed -n '/^{/,$p' | pick "f\"{d['repos'][0]['buckets']['local']['raw_minutes']}/{d['repos'][0]['buckets']['routable_pr']['raw_minutes']}/{d['repos'][0]['buckets']['other_hosted']['raw_minutes']}\"")/$(echo "$out" | grep -q 'acme/app: 2 runs, fetching jobs' && echo yes || echo no)/$(grep -c 'actions/runs?per_page=100&created=' "$work/calls")"
+
 live --repo acme/app
-record "live: default window is 30 days ending HOMEFIELD_COST_TODAY" "0/yes/yes/30" \
-  "$rc/$(echo "$out" | grep -q '2026-11-01 to 2026-11-30 (30d -> 30d/mo, scale 1.00x)' && echo yes || echo no)/$(echo "$out" | grep -q 'acme/app: 1 runs, fetching jobs' && echo yes || echo no)/$(grep -c 'actions/runs?per_page=100&created=' "$work/calls")"
+record "live: default window header shows 2026-11-01 to 2026-11-30" "0/yes/yes" \
+  "$rc/$(echo "$out" | grep -q '2026-11-01 to 2026-11-30 (30d -> 30d/mo, scale 1.00x)' && echo yes || echo no)/$(echo "$out" | grep -q 'acme/app: 2 runs, fetching jobs' && echo yes || echo no)"
 
 GH_FAIL=1 live --repo acme/app --since 2026-11-29 --until 2026-11-30
 record "live: gh failure exits cleanly without traceback" "nonzero/yes/no" \

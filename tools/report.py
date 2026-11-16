@@ -41,7 +41,8 @@ TIME_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 SLOW_QUEUE_SECONDS = 5 * 60
 
 RUN_FIELDS = (
-    "{id, path, event, created_at, branch: .head_branch}"
+    "{id, path, event, created_at, branch: .head_branch,"
+    " actor: .actor.login, head_repo: .head_repository.full_name}"
 )
 JOB_FIELDS = (
     "{id, name, status, conclusion, created_at, started_at, completed_at,"

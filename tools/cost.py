@@ -22,17 +22,25 @@ calling GitHub; tests/cost.sh uses it. HOMEFIELD_COST_TODAY=<YYYY-MM-DD> pins
 
 import argparse
 import datetime as dt
+import importlib.util
 import json
 import math
 import os
 import re
 import sys
 
-_TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
-if _TOOLS_DIR not in sys.path:
-    sys.path.insert(0, _TOOLS_DIR)
 
-import report  # noqa: E402
+def _load_report():
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "report.py")
+    spec = importlib.util.spec_from_file_location("report", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"could not load {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+report = _load_report()
 
 DAYS_PER_MONTH = 30
 
@@ -95,7 +103,25 @@ def empty_bucket():
     }
 
 
-def collect_repo(runs, label):
+def is_routable_pr_run(run, repo, mode, dependabot):
+    """True when a run's hosted Linux jobs can route to homefield under (mode, dependabot)."""
+    if (run.get("event") or "") != "pull_request":
+        return False
+    if mode == "simple":
+        return True
+    if dependabot == "hosted":
+        actor = (run.get("actor") or "").lower()
+        branch = run.get("branch") or ""
+        if actor == "dependabot[bot]" or branch.startswith("dependabot/"):
+            return False
+    if "head_repo" in run:
+        head_repo = run["head_repo"]
+        if not head_repo or head_repo.lower() != repo.lower():
+            return False
+    return True
+
+
+def collect_repo(repo, runs, label, mode="guards", dependabot="hosted"):
     """Aggregate observed job counts, raw minutes, billed minutes, and gross
     USD per bucket (`local`, `routable_pr`, `other_hosted`) for one repository."""
     buckets = {name: empty_bucket() for name in BUCKET_NAMES}
@@ -111,6 +137,7 @@ def collect_repo(runs, label):
         event = run.get("event") or ""
         if event == "pull_request" and run.get("branch"):
             pr_branches.add(run["branch"])
+        pr_routable = is_routable_pr_run(run, repo, mode, dependabot)
         for job in run.get("jobs") or []:
             where = report.classify(job, label)
             if where in ("skipped", "other"):
@@ -134,7 +161,7 @@ def collect_repo(runs, label):
                 bucket_name = "local"
             else:
                 os_key, mult, rate = os_profile(job.get("labels") or [])
-                if event == "pull_request" and os_key in ("linux-x64", "linux-arm64"):
+                if pr_routable and os_key in ("linux-x64", "linux-arm64"):
                     bucket_name = "routable_pr"
                 else:
                     bucket_name = "other_hosted"
@@ -194,13 +221,13 @@ def combine_os_maps(*buckets):
     return combined
 
 
-def project_costs(runs_by_repo, label, window_days, included_minutes):
+def project_costs(runs_by_repo, label, window_days, included_minutes, mode="guards", dependabot="hosted"):
     scale = DAYS_PER_MONTH / window_days
     repo_entries = []
     totals = {name: empty_bucket() for name in BUCKET_NAMES}
 
     for repo, runs in runs_by_repo.items():
-        collected = collect_repo(runs, label)
+        collected = collect_repo(repo, runs, label, mode=mode, dependabot=dependabot)
         repo_entries.append({"repo": repo, **collected})
         for name in BUCKET_NAMES:
             src = collected["buckets"][name]
@@ -302,7 +329,7 @@ def round_repo_entry(entry):
 def fmt_min(value):
     rounded = round(value, 1)
     if abs(rounded - round(rounded)) < 0.05:
-        return f"{int(round(rounded)):,}"
+        return f"{round(rounded):,}"
     return f"{rounded:,.1f}"
 
 
@@ -321,7 +348,7 @@ def render(payload):
             f"Cost projection from {payload['since']} to {payload['until']}"
             f" ({payload['window_days']}d -> {payload['projection_days']}d/mo, scale {scale:.2f}x),"
             f" plan {payload['plan']} ({payload['included_minutes']:,} included min/mo),"
-            f" label {payload['label']}"
+            f" mode {payload['mode']}, dependabot {payload['dependabot']}, label {payload['label']}"
         ),
         "",
         "Observed window per repository (raw min and gross USD at hosted rates)",
@@ -391,8 +418,17 @@ def render(payload):
             " Windows $0.010/min (2x), macOS $0.062/min (10x); job durations round up."
         ),
         (
-            "Local jobs are priced at Linux x64 ($0.006/min); routable PR counts"
-            " hosted Linux pull_request jobs (forks/Dependabot stay hosted in guards mode)."
+            "Local jobs are priced at Linux x64 ($0.006/min); "
+            + (
+                "all pull_request Linux jobs treated as routable (--mode simple)."
+                if payload["mode"] == "simple"
+                else (
+                    "fork pull_request jobs stay hosted under --mode guards;"
+                    " Dependabot PRs treated as routable (--dependabot local)."
+                    if payload["dependabot"] == "local"
+                    else "forks and Dependabot pull_request jobs stay hosted (--mode guards --dependabot hosted)."
+                )
+            )
         ),
     ]
     if unstarted or pending:
@@ -411,6 +447,8 @@ def main(argv=None):
     parser.add_argument("--label", default="homefield-ci")
     parser.add_argument("--plan", choices=tuple(PLANS), default="free")
     parser.add_argument("--included", type=int, help="override monthly included minutes for the account")
+    parser.add_argument("--mode", choices=("guards", "simple"), default="guards")
+    parser.add_argument("--dependabot", choices=("hosted", "local"), default="hosted")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
 
@@ -446,7 +484,14 @@ def main(argv=None):
         for repo in args.repo
     }
 
-    projected = project_costs(runs_by_repo, label, window_days, included)
+    projected = project_costs(
+        runs_by_repo,
+        label,
+        window_days,
+        included,
+        mode=args.mode,
+        dependabot=args.dependabot,
+    )
     payload = {
         "since": str(first),
         "until": str(last),
@@ -456,6 +501,8 @@ def main(argv=None):
         "label": label,
         "plan": args.plan,
         "included_minutes": included,
+        "mode": args.mode,
+        "dependabot": args.dependabot,
         "repos": [round_repo_entry(entry) for entry in projected["repos"]],
         "monthly_projection": projected["monthly_projection"],
     }
