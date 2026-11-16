@@ -82,15 +82,29 @@ Accept the verify prompt (or open another pull request):
 
 ## 3. Route real workflows and remove the demo
 
-Once the demo passes on your Mac, route your real CI jobs:
+Once the demo passes on your Mac, replace it with routing for your real CI
+workflows without dropping your routing guard (`homefield adopt --setup` reuses
+an existing usable guard step in `.github/workflows` instead of creating a new
+guard workflow):
 
-```bash
-homefield adopt --setup --wait --repo <owner>/<repo>
-```
+1. Delete `.github/workflows/homefield-demo.yml` first, then run:
 
-That opens a pull request adding routing to your pull-request jobs, waits for
-you to merge it, and verifies the jobs on the local runner. Once your real
-workflows are routed, delete `.github/workflows/homefield-demo.yml`.
+   ```bash
+   homefield adopt --setup --wait --repo <owner>/<repo>
+   ```
+
+   Because no guard workflow remains, `--setup` creates a dedicated
+   `.github/workflows/homefield-routing.yml` alongside the routed jobs, opens a
+   pull request, waits for you to merge it, and verifies the jobs on the local
+   runner.
+
+If you run `homefield adopt --setup --wait` while `.github/workflows/homefield-demo.yml`
+still exists, `--setup` updates the `routing-guard` step inside
+`homefield-demo.yml` instead of creating `homefield-routing.yml`. In that case,
+move the `routing-guard` job into a permanent workflow (such as
+`.github/workflows/homefield-routing.yml`) and remove `homefield-demo.yml:demo`
+from its `jobs:` list before deleting `.github/workflows/homefield-demo.yml`, so
+your routed workflows keep their routing check.
 
 For routing options, simple vs. guarded mode, and operating the runner, see:
 
