@@ -83,28 +83,30 @@ Accept the verify prompt (or open another pull request):
 ## 3. Route real workflows and remove the demo
 
 Once the demo passes on your Mac, replace it with routing for your real CI
-workflows without dropping your routing guard (`homefield adopt --setup` reuses
-an existing usable guard step in `.github/workflows` instead of creating a new
+workflows without dropping your routing guard (`homefield adopt --setup` reads
+`.github/workflows` on GitHub's **default branch** — never unmerged local
+edits — and reuses an existing usable guard step instead of creating a new
 guard workflow):
 
-1. Delete `.github/workflows/homefield-demo.yml` first, then run:
+1. Either delete `.github/workflows/homefield-demo.yml` on your **default
+   branch** first (commit, push, and merge that deletion), then run:
 
    ```bash
    homefield adopt --setup --wait --repo <owner>/<repo>
    ```
 
-   Because no guard workflow remains, `--setup` creates a dedicated
-   `.github/workflows/homefield-routing.yml` alongside the routed jobs, opens a
-   pull request, waits for you to merge it, and verifies the jobs on the local
-   runner.
+   Because no guard workflow remains on the default branch, `--setup` creates
+   a dedicated `.github/workflows/homefield-routing.yml` alongside the routed
+   jobs, opens a pull request, waits for you to merge it, and verifies the
+   jobs on the local runner.
 
-If you run `homefield adopt --setup --wait` while `.github/workflows/homefield-demo.yml`
-still exists, `--setup` updates the `routing-guard` step inside
-`homefield-demo.yml` instead of creating `homefield-routing.yml`. In that case,
-move the `routing-guard` job into a permanent workflow (such as
-`.github/workflows/homefield-routing.yml`) and remove `homefield-demo.yml:demo`
-from its `jobs:` list before deleting `.github/workflows/homefield-demo.yml`, so
-your routed workflows keep their routing check.
+2. Or run `homefield adopt --setup --wait --repo <owner>/<repo>` while
+   `homefield-demo.yml` is still on the default branch, and in the pull
+   request `--setup` opens, move the `routing-guard` job into a permanent
+   workflow (such as `.github/workflows/homefield-routing.yml`), remove
+   `homefield-demo.yml:demo` from its `jobs:` list, and delete
+   `.github/workflows/homefield-demo.yml` before merging so your routed
+   workflows keep their routing check.
 
 For routing options, simple vs. guarded mode, and operating the runner, see:
 
