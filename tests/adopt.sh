@@ -47,6 +47,9 @@ hang() {
 }
 hang "${GH_HANG:-}" "" "${GH_HANG_SECS:-30}"
 hang "${GH_HANG2:-}" 2 "${GH_HANG2_SECS:-30}"
+if [ -n "${GH_TOKEN:-}" ]; then
+  echo "TOKEN:${GH_TOKEN}" >>"$state/gh_tokens"
+fi
 case "$*" in
   # gh auth status (gh_active_account): GH_AUTH is "login|scopes" the way the
   # real gh answers, empty when nobody is logged in, GH_AUTH_FAIL a gh that
@@ -228,7 +231,7 @@ case "$*" in
     ;;
 esac
 EOF
-for t in awk basename cat dirname git grep head ls mkdir mktemp rm sed sleep tr wc jq; do [ -x "$stubs/$t" ] || ln -sf "$(command -v "$t")" "$stubs/$t"; done
+for t in awk basename cat dirname git grep head ls mkdir mktemp rm sed sleep tr wc jq openssl; do [ -x "$stubs/$t" ] || ln -sf "$(command -v "$t")" "$stubs/$t"; done
 # mktemp -d without a template puts the directory in TMPDIR on Linux but not on
 # macOS; the explicit template makes both land in $TMPDIR, where a test can
 # look for what a run left behind.
@@ -2248,5 +2251,133 @@ record "docs/adopting.md shows the expression for events push" "yes" "$(has "$ad
 pinned="$(python3 -B -I -c 'import sys; sys.path.insert(0, sys.argv[1]); import adopt; print(adopt.ACTION)' "$ROOT/tools")"
 record "docs/adopting.md pins the same routing-guard as the snippet" "yes" "$(has "$adopting" "uses: $pinned")"
 record "README.md pins the same routing-guard as the snippet" "yes" "$(has "$readme" "uses: $pinned")"
+
+# ── GitHub App authentication (#250) ───────────────────────────────────────
+echo "github-app"
+openssl genrsa -out "$work/test-app-key.pem" 2048 2>/dev/null
+
+cat >"$work/mock_app_server.py" <<'PY'
+import http.server
+import sys
+
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def _send(self, code, body):
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Connection", "close")
+        self.end_headers()
+        if body:
+            self.wfile.write(body)
+        self.wfile.flush()
+
+    def do_GET(self):
+        auth = self.headers.get("Authorization", "")
+        if not auth.startswith("Bearer "):
+            self._send(401, b'{"message":"Unauthorized"}')
+            return
+
+        path = self.path
+        if path == "/repos/acme/app/installation":
+            self._send(200, b'{"id": 4242}')
+        elif path == "/repos/orginstall/app/installation":
+            self._send(404, b'{"message":"Not Found"}')
+        elif path == "/orgs/orginstall/installation":
+            self._send(200, b'{"id": 8484}')
+        else:
+            self._send(404, b'{"message":"Not Found"}')
+
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length", "0") or "0")
+        if length:
+            self.rfile.read(length)
+        auth = self.headers.get("Authorization", "")
+        if not auth.startswith("Bearer "):
+            self._send(401, b'{"message":"Unauthorized"}')
+            return
+
+        if self.path in ("/app/installations/4242/access_tokens", "/app/installations/8484/access_tokens"):
+            self._send(201, b'{"token":"ghs_mock_app_token_12345","expires_at":"2026-11-17T01:00:00Z"}')
+        else:
+            self._send(404, b'{"message":"Not Found"}')
+
+    def log_message(self, format, *args):
+        pass
+
+
+class Server(http.server.ThreadingHTTPServer):
+    daemon_threads = True
+    allow_reuse_address = True
+
+
+server = Server(("127.0.0.1", 0), Handler)
+port = server.server_address[1]
+with open(sys.argv[1], "w") as f:
+    f.write(str(port))
+server.serve_forever()
+PY
+
+"$python_exe" "$work/mock_app_server.py" "$work/mock_port" &
+mock_pid=$!
+trap 'kill "$mock_pid" 2>/dev/null || true; rm -rf "$work"' EXIT
+
+while [ ! -f "$work/mock_port" ]; do sleep 0.05; done
+mock_api_url="http://127.0.0.1:$(cat "$work/mock_port")"
+
+adopt -- --app-id 12345
+record "adopt --app-id without key: fails" "nonzero/yes" "$(nonzero "$rc")/$(has "$out" "--app-id needs --app-key-file")"
+
+adopt -- --app-key-file "$work/test-app-key.pem"
+record "adopt --app-key-file without --app-id: fails" "nonzero/yes" "$(nonzero "$rc")/$(has "$out" "--app-key-file needs --app-id")"
+
+adopt -- --app-id notanid --app-key-file "$work/test-app-key.pem"
+record "adopt non-numeric --app-id: fails" "nonzero/yes" "$(nonzero "$rc")/$(has "$out" "--app-id must be a numeric GitHub App ID")"
+
+adopt -- --app-id 12345 --app-key-file "$work/nonexistent.pem"
+record "adopt nonexistent key file: fails" "nonzero/yes" "$(nonzero "$rc")/$(has "$out" "private key file not found")"
+
+adopt -- --app-id 12345 --app-key-file "-----BEGIN RSA PRIVATE KEY-----..."
+record "adopt inline PEM on CLI: fails" "nonzero/yes" "$(nonzero "$rc")/$(has "$out" "never the key material inline on the command line")"
+
+app_out="$(env GITHUB_API_URL="$mock_api_url" "$python_exe" -I "$ROOT/tools/adopt.py" app-token --app-id 12345 --repo acme/app <"$work/test-app-key.pem")"; app_rc=$?
+record "adopt.py app-token: outputs token" "0/ghs_mock_app_token_12345" "$app_rc/$app_out"
+
+app_out="$(env GITHUB_API_URL="$mock_api_url" "$python_exe" -I "$ROOT/tools/adopt.py" app-token --app-id 12345 --repo uninstalled/app <"$work/test-app-key.pem" 2>&1)"; app_rc=$?
+record "adopt.py app-token uninstalled: fails with clear message" "nonzero/yes" "$(nonzero "$app_rc")/$(has "$app_out" "is not installed on uninstalled/app or organization uninstalled")"
+
+app_out="$("$python_exe" -I "$ROOT/tools/adopt.py" app-token --app-id 12345 --repo acme/app --key-file "-----BEGIN RSA PRIVATE KEY-----" 2>&1)"; app_rc=$?
+record "adopt.py app-token rejects inline key in --key-file" "nonzero/yes" "$(nonzero "$app_rc")/$(has "$app_out" "must be a file path, not key material")"
+
+rm -f "$work/gh_tokens"
+run_fn GITHUB_API_URL="$mock_api_url" GH_GROUPS="$work/groups-selected" GH_MEMBERS="$work/members-other" GH_WF="$work/wf-ready" \
+  -- cmd_adopt --repo acme/app --app-id 12345 --app-key-file "$work/test-app-key.pem"
+record "adopt with GitHub App key file: exits 0" "0" "$rc"
+record "...authenticated using minted token" "yes" "$(has "$out" "authenticated as GitHub App")"
+record "...token was passed to gh via GH_TOKEN" "yes" "$(grep -q 'ghs_mock_app_token_12345' "$work/gh_tokens" 2>/dev/null && echo yes || echo no)"
+record "...private key never entered argv" "0" "$(called 'BEGIN RSA PRIVATE KEY')"
+
+run_fn GITHUB_API_URL="$mock_api_url" GH_GROUPS="$work/groups-selected" GH_MEMBERS="$work/members-other" GH_WF="$work/wf-ready" \
+  -- eval "cmd_adopt --repo acme/app --app-id 12345 --app-key-stdin <$(printf '%q' "$work/test-app-key.pem")"
+record "adopt with --app-key-stdin: exits 0" "0" "$rc"
+
+run_fn GITHUB_API_URL="$mock_api_url" GH_GROUPS="$work/groups-selected" GH_MEMBERS="$work/members-other" GH_WF="$work/wf-ready" \
+  -- eval "cmd_adopt --repo acme/app --app-id 12345 --app-key-file - <$(printf '%q' "$work/test-app-key.pem")"
+record "adopt with --app-key-file -: exits 0" "0" "$rc"
+
+run_fn GITHUB_API_URL="$mock_api_url" GH_GROUPS="$work/groups-selected" GH_MEMBERS="$work/members-other" GH_WF="$work/wf-ready" \
+  -- cmd_adopt --repo acme/app --app 12345 --app-key-file "$work/test-app-key.pem"
+record "adopt with --app alias: exits 0" "0" "$rc"
+
+run_fn GITHUB_API_URL="$mock_api_url" GH_GROUPS="$work/groups-selected" GH_MEMBERS="$work/members-other" GH_WF="$work/wf-ready" \
+  -- cmd_adopt --repo orginstall/app --app-id 12345 --app-key-file "$work/test-app-key.pem"
+record "adopt falls back to org installation when repo installation is 404" "0" "$([ "$rc" -eq 0 ] && echo 0 || echo "$rc ($out)")"
+
+run_fn GITHUB_API_URL="$mock_api_url" GH_GROUPS="$work/groups-selected" GH_MEMBERS="$work/members-other" GH_WF="$work/wf-ready" \
+  -- cmd_adopt --repo uninstalled/app --app-id 12345 --app-key-file "$work/test-app-key.pem"
+record "adopt uninstalled App: fails with clear message" "nonzero/yes" "$(nonzero "$rc")/$(has "$out" "is not installed on uninstalled/app or organization uninstalled")"
+
+kill "$mock_pid" 2>/dev/null || true
+wait "$mock_pid" 2>/dev/null || true
 
 summary

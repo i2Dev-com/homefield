@@ -201,7 +201,8 @@ usage_cmd_adopt() {
   cat <<'EOF'
   adopt      Prepare a repository to use the runner: check that its routing is
              merged, and only then give it access to the runner group and
-             switch it to local. Refuses a public repository.
+             switch it to local. Supports GitHub App authentication
+             (--app-id / --app-key-file). Refuses a public repository.
 EOF
 }
 usage_cmd_memory() {
@@ -366,6 +367,15 @@ usage_sec_adopt() {
   cat <<'EOF'
 adopt:
   --repo OWNER/REPO  the repository to adopt (required, one)
+  --app-id ID        authenticate with GitHub as a GitHub App (numeric App ID;
+                     needs --app-key-file or --app-key-stdin). adopt mints a
+                     short-lived installation access token for the target
+                     repository
+  --app-key-file PATH
+                     path to the GitHub App private key PEM file, or '-' to
+                     read from stdin (never inline on the command line)
+  --app-key-stdin    shorthand for '--app-key-file -': read the GitHub App
+                     private key PEM from stdin
   --label LABEL      routing label (default homefield-ci; a routing-guard step
                      with another label in the workflows is used as it is)
   --guards           generate and check the guarded (multi-clause) expression.

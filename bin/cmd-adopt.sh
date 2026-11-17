@@ -28,6 +28,9 @@ ADOPT_LABEL_OK=""
 ADOPT_GUARDS=0
 ADOPT_ROUTED=""
 ADOPT_WORKFLOWS=0
+ADOPT_APP_ID=""
+ADOPT_ORIG_GH_TOKEN=""
+ADOPT_ORIG_GH_TOKEN_SET=""
 
 # Shell <-> Python row contracts. tools/adopt.py parses and prints; this
 # script consumes its stdout. Keep these schemas next to the producers when
@@ -840,6 +843,11 @@ adopt_setup_exit() {
   local rc=$?
   adopt_setup_cleanup
   rm -rf "$ADOPT_TMP"
+  if [ -n "$ADOPT_ORIG_GH_TOKEN_SET" ]; then
+    export GH_TOKEN="$ADOPT_ORIG_GH_TOKEN"
+  else
+    unset GH_TOKEN
+  fi
   [ "$rc" -ne 0 ] && [ "$rc" -ne 130 ] && [ "$rc" -ne 143 ] &&
     [ "$ADOPT_WAIT" = 1 ] && [ "$ADOPT_SETUP_PR_MADE" = 1 ] || return 0
   if [ "$ADOPT_WAIT_MERGED" = 1 ]; then exit "$ADOPT_EXIT_MERGED"; fi
@@ -883,7 +891,11 @@ adopt_workflow_scope() {
 # without its interrupted note (the adopt.sh interrupt tests caught it).
 adopt_write_denied() {
   if grep -q 404 "$3"; then
-    printf 'adopt: setup: GitHub refused to write .github/workflows/%s (404): the token gh is using most likely lacks the workflow scope, which Contents writes under .github/workflows/ need. Add it to gh%s login: gh auth refresh -h github.com -s workflow (a GITHUB_TOKEN or GH_TOKEN must carry the scope itself)\n' "$1" "'"
+    if [ -n "${ADOPT_APP_ID:-}" ]; then
+      printf 'adopt: setup: GitHub refused to write .github/workflows/%s (404): the GitHub App token lacks workflow permissions (Repository permissions -> Workflows: Read and write). Update the App permissions and re-install it on %s\n' "$1" "$2"
+    else
+      printf 'adopt: setup: GitHub refused to write .github/workflows/%s (404): the token gh is using most likely lacks the workflow scope, which Contents writes under .github/workflows/ need. Add it to gh%s login: gh auth refresh -h github.com -s workflow (a GITHUB_TOKEN or GH_TOKEN must carry the scope itself)\n' "$1" "'"
+    fi
   else
     printf 'adopt: setup: could not write .github/workflows/%s to %s on %s: %s\n' "$1" "${SETUP_BRANCH}" "$2" "$(head -1 "$3")"
   fi
@@ -1275,11 +1287,18 @@ cmd_adopt() {
   local repo="" nrepo=0 label="homefield-ci" label_given=0 group="homefield-ci" jobs="" switch=1 dry=0 setup=0 entry out
   local verify=ask
   local wait_timeout="" wait_minutes=60
+  local app_id="" app_key_file="" app_token=""
+  ADOPT_APP_ID=""
+  ADOPT_ORIG_GH_TOKEN="${GH_TOKEN:-}"
+  ADOPT_ORIG_GH_TOKEN_SET="${GH_TOKEN+1}"
   ADOPT_FLAG_EVENTS="" ADOPT_FLAG_DEPENDABOT="" ADOPT_FLAG_FALLBACK="" ADOPT_FLAG_GUARDS=0
   ADOPT_WAIT=0 ADOPT_WAIT_MERGED=0 ADOPT_SWITCH_DONE=0 ADOPT_HANDLER=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --repo) repo="${2:?--repo needs a value}"; nrepo=$((nrepo + 1)); shift 2 ;;
+      --app | --app-id) app_id="${2:?--app-id needs a value}"; shift 2 ;;
+      --app-key-file) app_key_file="${2:?--app-key-file needs a value}"; shift 2 ;;
+      --app-key-stdin) app_key_file="-"; shift ;;
       --label) label="${2:?--label needs a value}"; label_given=1; shift 2 ;;
       --events) ADOPT_FLAG_EVENTS="${2:?--events needs a value}"; shift 2 ;;
       --dependabot) ADOPT_FLAG_DEPENDABOT="${2:?--dependabot needs a value}"; shift 2 ;;
@@ -1302,9 +1321,29 @@ cmd_adopt() {
   [[ "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die "adopt: --repo must be <owner>/<repo>, got: $repo"
   [[ "$label" =~ ^[A-Za-z0-9._-]+$ ]] || die "adopt: --label must be one label"
   [ -n "$group" ] || die "adopt: --group needs a name"
+  if [ -n "$app_id" ] || [ -n "$app_key_file" ]; then
+    [ -n "$app_id" ] || die "adopt: --app-key-file needs --app-id"
+    [ -n "$app_key_file" ] || die "adopt: --app-id needs --app-key-file (or --app-key-stdin)"
+    [[ "$app_id" =~ ^[0-9]+$ ]] || die "adopt: --app-id must be a numeric GitHub App ID; got: $app_id"
+    case "$app_key_file" in
+      *"BEGIN"*"KEY"*) die "adopt: --app-key-file takes a file path or '-' for stdin, never the key material inline on the command line" ;;
+    esac
+    if [ "$app_key_file" != "-" ]; then
+      [ -f "$app_key_file" ] || die "adopt: private key file not found: $app_key_file"
+    fi
+    ADOPT_APP_ID="$app_id"
+  fi
   ADOPT_PLAIN_CMD="homefield adopt --repo $(printf '%q' "$repo")"
   [ "$label_given" = 0 ] || ADOPT_PLAIN_CMD="$ADOPT_PLAIN_CMD --label $(printf '%q' "$label")"
   [ "$group" = homefield-ci ] || ADOPT_PLAIN_CMD="$ADOPT_PLAIN_CMD --group $(printf '%q' "$group")"
+  if [ -n "$app_id" ]; then
+    ADOPT_PLAIN_CMD="$ADOPT_PLAIN_CMD --app-id $(printf '%q' "$app_id")"
+    if [ "$app_key_file" = "-" ]; then
+      ADOPT_PLAIN_CMD="$ADOPT_PLAIN_CMD --app-key-stdin"
+    else
+      ADOPT_PLAIN_CMD="$ADOPT_PLAIN_CMD --app-key-file $(printf '%q' "$app_key_file")"
+    fi
+  fi
   if [ -n "$wait_timeout" ]; then
     [[ "$wait_timeout" =~ ^[1-9][0-9]{0,5}$ ]] || die "adopt: --wait-timeout is a whole number of minutes, 1 or more; got: $wait_timeout"
     [ "$ADOPT_WAIT" = 1 ] || die "adopt: --wait-timeout only goes with --wait"
@@ -1318,6 +1357,7 @@ cmd_adopt() {
   done
   command -v gh >/dev/null || die "adopt needs gh (https://cli.github.com)"
   command -v python3 >/dev/null || die "adopt needs python3"
+  [ -z "$app_id" ] || command -v openssl >/dev/null || die "adopt --app-id needs openssl"
   # The same label and option rules as the guard, and a message from it when
   # they fail. The shape is resolved later — an existing guard's own mode wins
   # over the default — so both validators run here: the simple one always
@@ -1335,7 +1375,15 @@ cmd_adopt() {
   [ "$dry" = 0 ] || log "dry run: nothing will be changed"
 
   ADOPT_TMP="$(mktemp -d)"
-  trap 'rm -rf "$ADOPT_TMP"' EXIT
+  adopt_cleanup() {
+    rm -rf "$ADOPT_TMP"
+    if [ -n "$ADOPT_ORIG_GH_TOKEN_SET" ]; then
+      export GH_TOKEN="$ADOPT_ORIG_GH_TOKEN"
+    else
+      unset GH_TOKEN
+    fi
+  }
+  trap adopt_cleanup EXIT
   if [ "$setup" = 1 ]; then
     # Ctrl-C and SIGTERM end a --setup run in any phase with a note that says
     # where things stand and exit 130 or 143 (adopt_interrupted), instead of
@@ -1344,6 +1392,19 @@ cmd_adopt() {
     trap 'adopt_interrupted 130' INT
     trap 'adopt_interrupted 143' TERM
     ADOPT_HANDLER=1
+  fi
+  if [ -n "$app_id" ]; then
+    log "authenticating as GitHub App ID ${app_id} for ${repo}..."
+    if [ "$app_key_file" = "-" ]; then
+      app_token="$(python3 -I "$ROOT/tools/adopt.py" app-token --app-id "$app_id" --repo "$repo" 2>"$ADOPT_TMP/app-token.err")" ||
+        die "adopt: $(head -1 "$ADOPT_TMP/app-token.err")"
+    else
+      app_token="$(python3 -I "$ROOT/tools/adopt.py" app-token --app-id "$app_id" --repo "$repo" <"$app_key_file" 2>"$ADOPT_TMP/app-token.err")" ||
+        die "adopt: $(head -1 "$ADOPT_TMP/app-token.err")"
+    fi
+    [ -n "$app_token" ] || die "adopt: GitHub App token minting returned an empty token"
+    export GH_TOKEN="$app_token"
+    log "authenticated as GitHub App (minted installation token)"
   fi
   adopt_repository "$repo"
   adopt_fetch_workflows "$repo" "$ADOPT_BRANCH" "$ADOPT_TMP/workflows"
