@@ -1094,8 +1094,7 @@ def mint_jwt(app_id: int, key_pem: bytes) -> str:
         proc = subprocess.run(
             ["openssl", "dgst", "-sha256", "-sign", tf_name],
             input=signing_input,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             check=False,
         )
         if proc.returncode != 0:
@@ -1325,7 +1324,7 @@ def main():
         try:
             token = fetch_installation_token(args.app_id, args.repo, key_pem)
             print(token)
-        except Exception as err:
+        except (RuntimeError, ValueError, OSError) as err:
             print(f"adopt.py: app-token: {err}", file=sys.stderr)
             return 1
     else:
