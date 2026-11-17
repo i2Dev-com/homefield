@@ -188,6 +188,11 @@ record "status with loopback_state=not-verified: prints loopback: not verified" 
 printf 'loopback_state=open\n' >"$work/state/homefield.state"
 status HOMEFIELD_STATE_DIR="$work/state" SETTING_OUT='my-mac-homefield\nhttps://github.com/acme\n42\n'
 record "status with loopback_state=open: prints loopback: OPEN" "0/yes" "$rc/$(has "$out" 'loopback: OPEN')"
+
+printf 'loopback_state=skipped\n' >"$work/state/homefield.state"
+status HOMEFIELD_STATE_DIR="$work/state" SETTING_OUT='my-mac-homefield\nhttps://github.com/acme\n42\n'
+record "status with loopback_state=skipped: prints loopback: not verified with upgrade hint" "0/yes/yes" \
+  "$rc/$(has "$out" 'loopback: not verified')/$(has "$out" 'homefield upgrade')"
 rm -rf "$work/state"
 
 summary

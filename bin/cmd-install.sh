@@ -1038,8 +1038,11 @@ st_render_human() {
   case "$ST_LB_STATE" in
     verified) echo "loopback: verified" ;;
     not-verified) echo "loopback: not verified" ;;
+    skipped) echo "loopback: not verified (${ST_LB_DETAIL})" ;;
     stale) echo "loopback: stale (${ST_LB_DETAIL})" ;;
     open) echo "loopback: OPEN (${ST_LB_DETAIL})" ;;
+    unknown) ;;
+    *) echo "loopback: ${ST_LB_STATE}${ST_LB_DETAIL:+ (${ST_LB_DETAIL})}" ;;
   esac
   if [ "$ST_ASKFAIL" = 1 ]; then
     echo "runner: unknown (could not ask the VM)"
