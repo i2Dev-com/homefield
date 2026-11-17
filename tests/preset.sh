@@ -68,6 +68,8 @@ guest_stdin() {
     *"cat /etc/homefield/preset-hooks"*)
       if [ -n "${GUEST_CAT_FAIL:-}" ]; then echo "cat: read error" >&2; exit 1; fi
       printf '%s\n' "${GUEST_HAVE:-}" ;;
+    *"sudo tee "*)
+      cat >/dev/null ;;
   esac
 }
 runner_extra_packages() { echo runner_extra_packages >>"$CALLS"; printf '%s' "${SAVED:-}"; }

@@ -616,7 +616,7 @@ copy_preset_hooks() {
   guest_stdin sudo install -d -m 0755 "${GUEST_MANIFEST%/*}" </dev/null ||
     die "could not create ${GUEST_MANIFEST%/*} in VM ${INSTANCE}."
   # shellcheck disable=SC2086  # unquoted: word splitting puts each name on its own line
-  printf '%s\n' $names | guest_stdin sudo tee "$GUEST_MANIFEST" >/dev/null ||
+  guest_stdin sudo tee "$GUEST_MANIFEST" >/dev/null <<<"$(printf '%s\n' $names)" ||
     die "could not write the preset hook manifest in VM ${INSTANCE}."
   guest_unstage "$stage"
   trap - RETURN

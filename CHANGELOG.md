@@ -11,6 +11,10 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ## Unreleased
 
+### Fixed
+
+- Intermittent SIGPIPE / `pipefail` race in `copy_preset_hooks` and `tests/preset.sh` ([`bin/cmd-install.sh`](bin/cmd-install.sh), `tests/preset.sh`, [#274](https://github.com/i2Dev-com/homefield/issues/274)): feeds the preset hook manifest to `guest_stdin sudo tee` via here-string instead of a pipe and drains stdin in `tests/preset.sh`'s `guest_stdin` mock.
+
 ### Added
 
 - Surface host-loopback probe state in `status` and `diagnose` ([`bin/lib/vm.sh`](bin/lib/vm.sh), [`bin/cmd-install.sh`](bin/cmd-install.sh), [`bin/cmd-diagnose.sh`](bin/cmd-diagnose.sh), [`docs/cli.md`](docs/cli.md), [#265](https://github.com/i2Dev-com/homefield/issues/265)): `verify_loopback` persists its verdict (`loopback_state`) and the installed Lima version (`loopback_lima_version`) in the instance state file. `homefield status` / `status --json` surface the recorded state, and `diagnose` / `diagnose --json` report recorded loopback status without binding a listener on the Mac (warning on `not-verified`/`stale`/`skipped`, failing on `open`, and treating pre-existing VMs without a recorded verdict as `unknown`).
