@@ -425,6 +425,24 @@ online but will not take them. A repository-scoped runner, or one in the
 Default group, needs nothing here. Then set the variable:
 `gh variable set CI_RUNNER --repo <owner>/<repo> --body local`.
 
+### Authenticating as a GitHub App
+
+For automated adoption in CI/CD pipelines or hosts without an interactive `gh` login, `homefield adopt` can authenticate as a GitHub App using a numeric App ID and PEM private key (from a file path or stdin, never on the command line):
+
+```bash
+# Read the private key from a file:
+homefield adopt --repo <owner>/<repo> --app-id 12345 --app-key-file /path/to/key.pem
+
+# Or stream the private key over stdin:
+cat /path/to/key.pem | homefield adopt --repo <owner>/<repo> --app-id 12345 --app-key-stdin
+```
+
+`adopt` mints an RS256 JWT via `openssl`, looks up the App's installation on `<owner>/<repo>` (or `<owner>` for org-wide installations), exchanges it for a short-lived installation access token, and sets `GH_TOKEN` for the duration of the run.
+
+**Required App permissions:**
+- **Repository permissions:** *Administration* (Read & write), *Contents* (Read & write, for `--setup`), *Variables* (Read & write, for `CI_RUNNER`), *Workflows* (Read & write, for `.github/workflows/`), *Pull requests* (Read & write, for `--setup`), and *Actions* (Read & write, for `--verify`).
+- **Organization permissions:** *Organization self-hosted runners* (Read & write, when adding the repository to an organization runner group).
+
 ## 6. Run it
 
 1. Open or re-run a PR, and confirm that the job log's *Runner name* is the
