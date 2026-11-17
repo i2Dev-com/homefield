@@ -15,6 +15,7 @@
 #   bin/homefield adopt --repo <owner>/<repo> [--jobs "ci.yml:lint,..."] [--setup [--wait [--wait-timeout MIN]]] [--guards] [--events E] [--dependabot hosted|local] [--fallback IMAGE] [--no-switch] [--dry-run]
 #   bin/homefield memory [--days N]
 #   bin/homefield report --repo <owner>/<repo> [--repo ...] [--since DATE]
+#   bin/homefield update [--check] [--allow-minor]
 #   bin/homefield version
 #
 # install.sh puts this on the PATH as `homefield`; the messages below say
@@ -219,6 +220,14 @@ usage_cmd_report() {
              local against hosted, from the GitHub API.
 EOF
 }
+usage_cmd_update() {
+  cat <<'EOF'
+  update     Update this installed tool and every idle VM to the latest patch
+             release (or branch head), then verify with diagnose. Refuses if a
+             job is running or on a minor/major bump unless --allow-minor;
+             rolls back on failure.
+EOF
+}
 usage_cmd_version() {
   cat <<'EOF'
   version    Show which version of this tool is installed, and whether a
@@ -244,6 +253,7 @@ usage_commands() {
   usage_cmd_adopt
   usage_cmd_memory
   usage_cmd_report
+  usage_cmd_update
   usage_cmd_version
 }
 
@@ -307,6 +317,13 @@ upgrade:
                      Unlike --packages it never replaces the saved list
                      (docs/runbook.md, "Adding tools")
   --force            upgrade even while a job is running (the job is cancelled)
+EOF
+}
+usage_sec_update() {
+  cat <<'EOF'
+update:
+  --check            report whether an update is available without applying it
+  --allow-minor      allow minor/major bumps (may change the routing expression)
 EOF
 }
 usage_sec_diagnose() {
@@ -533,6 +550,7 @@ usage() {
   usage_join usage_header usage_commands usage_options \
     usage_sec_install \
     usage_sec_upgrade \
+    usage_sec_update \
     usage_sec_diagnose \
     usage_sec_status \
     usage_sec_uninstall \
@@ -580,6 +598,8 @@ usage_for() {
       usage_join usage_header usage_cmd_memory usage_sec_memory usage_options ;;
     report)
       usage_join usage_header usage_cmd_report usage_sec_report usage_options ;;
+    update)
+      usage_join usage_header usage_cmd_update usage_sec_update usage_options ;;
     version)
       usage_join usage_header usage_cmd_version usage_options ;;
     *)
@@ -648,7 +668,7 @@ main() {
   color_init ${COLOR_ARG:+"$COLOR_ARG"} "$cmd"
   # Only the commands that act on the VM: preflight, route, adopt, report and
   # version never use it, so a stale HOMEFIELD_INSTANCE does not stop them.
-  case "$cmd" in setup | install | upgrade | status | start | stop | diagnose | uninstall | reset | memory) check_instance ;; esac
+  case "$cmd" in setup | install | upgrade | update | status | start | stop | diagnose | uninstall | reset | memory) check_instance ;; esac
   set -- "${rest[@]+"${rest[@]}"}"
   # <command> --help (or -h) prints that command's help, before the command's
   # own parser sees the flag: no command takes -h for anything else. --help
@@ -673,6 +693,7 @@ main() {
     adopt) cmd_adopt "$@" ;;
     memory) cmd_memory "$@" ;;
     report) cmd_report "$@" ;;
+    update) cmd_update "$@" ;;
     version | --version) cmd_version "$@" ;;
     help)
       # help (no argument): the full reference. help <command>: that command's

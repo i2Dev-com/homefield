@@ -71,6 +71,23 @@ brew tap i2Dev-com/homefield && brew install homefield
 release tarball, and the formula's url, version and sha256 are updated by the
 release automation for every release.)
 
+For `install.sh` installs, `homefield update` automates updating the host tool
+and every idle VM in one step:
+
+- `homefield update --check` reports whether a newer release is available without
+  changing anything.
+- `homefield update` applies patch releases automatically after confirming every
+  running target VM is idle (failing closed if a job is running or cannot be
+  asked), upgrades each VM, and verifies with `homefield diagnose`. Minor/major
+  bumps are refused unless `--allow-minor` is passed (they may change the
+  routing expression; read [CHANGELOG.md](CHANGELOG.md) first).
+- Git checkouts (`git pull`) and Homebrew installs (`brew upgrade homefield` +
+  `homefield upgrade`) are refused by `homefield update`.
+- On any `upgrade`, `diagnose`, or interruption failure after swapping the host
+  tool, `homefield update` restores the previous host tool copy and re-verifies
+  with `homefield diagnose` (host-tool rollback does not undo guest-side
+  provisioning changes already applied).
+
 1. **Homebrew and `gh` login.** Missing Lima or `gh`, or a logged-out `gh`:
    one question each (the `brew` commands it will run; the `gh auth login`
    scopes), then it carries on.
