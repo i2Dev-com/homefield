@@ -964,11 +964,13 @@ runner_report_human() {
 ST_CREATED="" ST_STATUS="" ST_REG="unknown" ST_GH="not_checked" ST_GH_STATUS=""
 ST_SVC="unknown" ST_UNIT="" ST_JOB="unknown" ST_VER="" ST_NPM="unknown"
 ST_PKGS_STATE="unknown" ST_PKGS="" ST_ASKFAIL=0 ST_REMOVED=0
+ST_LB_STATE="unknown" ST_LB_DETAIL=""
 
 st_collect() {
   ST_CREATED=""; ST_STATUS=""; ST_REG="unknown" ST_GH="not_checked" ST_GH_STATUS=""
   ST_SVC="unknown" ST_UNIT="" ST_JOB="unknown" ST_VER="" ST_NPM="unknown"
   ST_PKGS_STATE="unknown" ST_PKGS=""; ST_ASKFAIL=0; ST_REMOVED=0
+  ST_LB_STATE="unknown"; ST_LB_DETAIL=""
   local job=0 npm=0
   # Always 0: the ask-fail case is ST_STATUS empty (a `return 1` here would
   # end status_single under set -e, before it renders anything).
@@ -982,6 +984,9 @@ st_collect() {
   fi
   ST_CREATED="yes"
   [ "$ST_STATUS" = "Running" ] || return 0
+  loopback_recorded_state
+  ST_LB_STATE="$LB_RECORDED_STATE"
+  ST_LB_DETAIL="$LB_RECORDED_DETAIL"
   runner_report_collect
   ST_ASKFAIL="$RR_ASKFAIL"; ST_REMOVED="$RR_REMOVED"
   if [ "$RR_ASKFAIL" = 0 ] && [ "$RR_NOTREG" = 0 ]; then
@@ -1030,6 +1035,12 @@ st_render_human() {
   fi
   echo "VM ${INSTANCE}: ${ST_STATUS}"
   [ "$ST_STATUS" = "Running" ] || return 0
+  case "$ST_LB_STATE" in
+    verified) echo "loopback: verified" ;;
+    not-verified) echo "loopback: not verified" ;;
+    stale) echo "loopback: stale (${ST_LB_DETAIL})" ;;
+    open) echo "loopback: OPEN (${ST_LB_DETAIL})" ;;
+  esac
   if [ "$ST_ASKFAIL" = 1 ]; then
     echo "runner: unknown (could not ask the VM)"
     return 1
@@ -1114,10 +1125,12 @@ st_render_json() {
   printf '  "version": %s,\n' "$(json_nstr "$ST_VER")"
   printf '  "npm": %s,\n' "$(json_str "$ST_NPM")"
   if [ "$ST_PKGS_STATE" = listed ]; then
-    printf '  "extra_packages": %s\n' "$(json_words "$ST_PKGS")"
+    printf '  "extra_packages": %s,\n' "$(json_words "$ST_PKGS")"
   else
-    printf '  "extra_packages": null\n'
+    printf '  "extra_packages": null,\n'
   fi
+  printf '  "loopback": {"state": %s, "detail": %s}\n' \
+    "$(json_str "$ST_LB_STATE")" "$(json_nstr "$ST_LB_DETAIL")"
   printf '}\n'
 }
 

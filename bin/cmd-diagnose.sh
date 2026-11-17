@@ -26,7 +26,8 @@ dg_hint() { DG_HINT+=("$1"); }
 # What diagnose found. A state is a short word; "skipped" says the question was
 # not asked, and DG_SKIP_WHY why (the first reason the guest checks stopped).
 DG_CREATED="" DG_VM_STATUS="" DG_GUEST="" DG_SKIP_WHY=""
-DG_ISO="" DG_ISO_WHY="" DG_REG="" DG_NAME="" DG_URL="" DG_ID=""
+DG_ISO="" DG_ISO_WHY="" DG_LB="skipped" DG_LB_DETAIL=""
+DG_REG="" DG_NAME="" DG_URL="" DG_ID=""
 DG_GH="" DG_GH_WHY="" DG_GH_STATUS="" DG_GH_BUSY=""
 DG_SVC="" DG_UNIT="" DG_VER="" DG_PKGS_STATE="" DG_PKGS="" DG_NPM=""
 DG_SCOPE="" DG_GROUP="" DG_GROUP_WHY="" DG_GROUP_NAME="" DG_GROUP_ID=""
@@ -35,7 +36,8 @@ DG_P_CHECK=() DG_P_MSG=() DG_P_FIX=() DG_WARN=() DG_HINT=()
 
 dg_reset() {
   DG_CREATED="unknown" DG_VM_STATUS="" DG_GUEST="skipped" DG_SKIP_WHY=""
-  DG_ISO="skipped" DG_ISO_WHY="" DG_REG="skipped" DG_NAME="" DG_URL="" DG_ID=""
+  DG_ISO="skipped" DG_ISO_WHY="" DG_LB="skipped" DG_LB_DETAIL=""
+  DG_REG="skipped" DG_NAME="" DG_URL="" DG_ID=""
   DG_GH="skipped" DG_GH_WHY="" DG_GH_STATUS="" DG_GH_BUSY=""
   DG_SVC="skipped" DG_UNIT="" DG_VER="" DG_PKGS_STATE="skipped" DG_PKGS="" DG_NPM="skipped"
   DG_SCOPE="" DG_GROUP="skipped" DG_GROUP_WHY="" DG_GROUP_NAME="" DG_GROUP_ID=""
@@ -70,6 +72,25 @@ dg_collect_guest() {
       DG_SKIP_WHY="the VM could not be asked"
       dg_problem isolation "$ISOLATION_WHY" "limactl shell ${INSTANCE} true shows why the VM does not answer"
       return 0
+      ;;
+  esac
+  loopback_recorded_state
+  DG_LB="$LB_RECORDED_STATE"
+  DG_LB_DETAIL="$LB_RECORDED_DETAIL"
+  case "$DG_LB" in
+    open)
+      dg_problem loopback "VM ${INSTANCE} reaches the Mac's loopback (docs/runbook.md, \"Host loopback exposure\")" "recreate the VM or run bin/homefield upgrade --instance ${INSTANCE}"
+      ;;
+    not-verified)
+      dg_warn "host loopback boundary not verified for VM ${INSTANCE}; assume it can reach the Mac's loopback (run 'bin/homefield upgrade --instance ${INSTANCE}')"
+      ;;
+    stale)
+      dg_warn "host loopback probe for VM ${INSTANCE} is stale (${DG_LB_DETAIL})"
+      ;;
+    skipped)
+      dg_warn "host loopback probe was skipped for VM ${INSTANCE}; assume it can reach the Mac's loopback (run 'bin/homefield upgrade --instance ${INSTANCE}')"
+      ;;
+    verified|unknown|*)
       ;;
   esac
   rc=0
@@ -337,6 +358,14 @@ dg_render_human() {
       failed) echo "  - Isolation: $(color_wrap 3 "BROKEN") (${DG_ISO_WHY})" ;;
       *) echo "  - Isolation: unknown (${DG_ISO_WHY})" ;;
     esac
+    case "$DG_LB" in
+      verified) echo "  - Loopback: verified (closed)" ;;
+      open) echo "  - Loopback: $(color_wrap 3 "OPEN") (${DG_LB_DETAIL})" ;;
+      not-verified) echo "  - Loopback: $(color_wrap 2 "not verified") (${DG_LB_DETAIL})" ;;
+      stale) echo "  - Loopback: $(color_wrap 2 "stale") (${DG_LB_DETAIL})" ;;
+      skipped) echo "  - Loopback: $(color_wrap 2 "skipped") (${DG_LB_DETAIL})" ;;
+      unknown|*) echo "  - Loopback: not checked (pre-dates probe recording)" ;;
+    esac
     case "$DG_REG" in
       yes)
         if [ -n "$DG_NAME" ] && [ -n "$DG_URL" ]; then
@@ -444,6 +473,7 @@ dg_render_json() {
   printf '    "guest_checked": %s,\n' "$([ "$DG_GUEST" = checked ] && echo true || echo false)"
   printf '    "skipped_reason": %s,\n' "$(json_nstr "$DG_SKIP_WHY")"
   printf '    "isolation": {"state": %s, "detail": %s},\n' "$(json_str "$DG_ISO")" "$(json_nstr "$DG_ISO_WHY")"
+  printf '    "loopback": {"state": %s, "detail": %s},\n' "$(json_str "$DG_LB")" "$(json_nstr "$DG_LB_DETAIL")"
   printf '    "registered": %s,\n' "$(json_bool "$DG_REG")"
   if [ "$DG_REG" = yes ]; then
     printf '    "runner": {"name": %s, "id": %s, "url": %s},\n' "$(json_nstr "$DG_NAME")" "$(json_nstr "$DG_ID")" "$(json_nstr "$DG_URL")"

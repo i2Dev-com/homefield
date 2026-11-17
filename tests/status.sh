@@ -176,4 +176,18 @@ record "...exits 0 when every VM is fine" "0" "$rc"
 status INSTANCES='codesamplez\nhomefield' CHILD_RC=1
 record "one run fails: the other still reported, exit 1" "1/yes" "$rc/$(has "$out" 'VM codesamplez: Running')"
 
+mkdir -p "$work/state"
+printf 'loopback_state=verified\n' >"$work/state/homefield.state"
+status HOMEFIELD_STATE_DIR="$work/state" SETTING_OUT='my-mac-homefield\nhttps://github.com/acme\n42\n'
+record "status with loopback_state=verified: prints loopback: verified" "0/yes" "$rc/$(has "$out" 'loopback: verified')"
+
+printf 'loopback_state=not-verified\n' >"$work/state/homefield.state"
+status HOMEFIELD_STATE_DIR="$work/state" SETTING_OUT='my-mac-homefield\nhttps://github.com/acme\n42\n'
+record "status with loopback_state=not-verified: prints loopback: not verified" "0/yes" "$rc/$(has "$out" 'loopback: not verified')"
+
+printf 'loopback_state=open\n' >"$work/state/homefield.state"
+status HOMEFIELD_STATE_DIR="$work/state" SETTING_OUT='my-mac-homefield\nhttps://github.com/acme\n42\n'
+record "status with loopback_state=open: prints loopback: OPEN" "0/yes" "$rc/$(has "$out" 'loopback: OPEN')"
+rm -rf "$work/state"
+
 summary

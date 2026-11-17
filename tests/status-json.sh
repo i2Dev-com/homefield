@@ -237,4 +237,27 @@ stat "${healthy[@]}" LIMA_SECOND=codesamplez LIMA_STATUS= -- --json
 record "one VM, non-default name: the JSON names it" "codesamplez/True/0" \
   "$(json_field "$out" 'd["instance"]')/$(json_field "$out" 'd["healthy"]')/$rc"
 
+rm -rf "$home/.local/state/homefield"
+stat "${healthy[@]}" -- --json
+record "loopback: unknown when state file absent" "unknown" \
+  "$(json_field "$out" 'd["loopback"]["state"]')"
+
+mkdir -p "$home/.lima/homefield" "$home/.local/state/homefield"
+printf 'networkOpts:\n  hostLoopback: false\n' >"$home/.lima/homefield/lima.yaml"
+printf 'loopback_state=verified\nloopback_lima_version=2.3.0\n' >"$home/.local/state/homefield/homefield.state"
+stat "${healthy[@]}" -- --json
+record "loopback: verified in json when recorded" "verified" \
+  "$(json_field "$out" 'd["loopback"]["state"]')"
+
+printf 'loopback_state=not-verified\nloopback_lima_version=2.3.0\n' >"$home/.local/state/homefield/homefield.state"
+stat "${healthy[@]}" -- --json
+record "loopback: not-verified in json when recorded" "not-verified" \
+  "$(json_field "$out" 'd["loopback"]["state"]')"
+
+printf 'loopback_state=verified\nloopback_lima_version=2.2.0\n' >"$home/.local/state/homefield/homefield.state"
+stat "${healthy[@]}" -- --json
+record "loopback: stale in json when Lima upgraded" "stale" \
+  "$(json_field "$out" 'd["loopback"]["state"]')"
+rm -rf "$home/.local/state/homefield"
+
 summary
