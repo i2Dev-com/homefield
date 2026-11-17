@@ -45,7 +45,7 @@ agents that drive the tool without a human in the loop. The guides:
 | `reset` | Roll back an install, complete or half-finished | Asks first; `HOMEFIELD_YES=1` answers yes; a no-op when nothing to undo |
 | `route` | Switch repositories' routed jobs to hosted or local (`CI_RUNNER`) | `route hosted` also re-runs stuck runs; `--dry-run` |
 | `preflight` | Check prerequisites for a fresh install | `--prefetch` / `--no-prefetch` controls VM image caching (default: on for a terminal, off otherwise; failed fetch warns only); exits 0 when prerequisites pass, 1 otherwise |
-| `adopt` | Prepare a repository: check the routing, add it to the group, switch it on | `--setup` opens the routing pull request; `--wait` carries on after the merge; refuses a public repository |
+| `adopt` | Prepare a repository: check the routing, add it to the group, switch it on | `--setup` opens the routing pull request; `--wait` carries on after the merge; `--app-id` / `--app-key-file` for GitHub App auth; refuses a public repository |
 | `memory` | Every VM's memory use: average and peak per day, out-of-memory kills | `--days N` (default 7); fails for a VM it cannot ask |
 | `report` | Queue wait, duration and minutes of jobs, local against hosted | `--json`; one API call per run, so allow a few minutes a month |
 | `version` | The installed version, and whether a newer release exists (read from GitHub's public API; a private fork set with `HOMEFIELD_REPO` is not checked) | |
@@ -168,6 +168,9 @@ homefield route hosted --repo <owner>/<repo>
 # Preview a routing change without touching anything:
 homefield route hosted --repo <owner>/<repo> --dry-run
 homefield adopt --repo <owner>/<repo> --dry-run
+
+# Adopt a repository using GitHub App authentication (key file or stdin):
+homefield adopt --repo <owner>/<repo> --app-id 12345 --app-key-file /etc/github-app.pem
 
 # What did the VM's memory do this week?
 homefield memory --days 7

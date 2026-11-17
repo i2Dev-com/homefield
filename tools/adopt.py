@@ -73,8 +73,13 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
+import tempfile
+import time
+import urllib.error
 import urllib.parse
+import urllib.request
 
 # The release the snippet adopt prints pins, and that docs/adopting.md and the
 # README tell consumers to pin; tests/adopt.sh checks that the docs still say
@@ -1057,6 +1062,135 @@ def verify_jobs(text, after):
     return rows
 
 
+def b64url_encode(data: bytes) -> str:
+    """Encode bytes to base64url string without trailing '=' padding."""
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+
+
+def mint_jwt(app_id: int, key_pem: bytes) -> str:
+    """Mint an RS256 JWT for GitHub App authentication using openssl."""
+    if b"-----BEGIN" not in key_pem or b"PRIVATE KEY-----" not in key_pem:
+        raise ValueError(
+            "private key does not appear to be a valid PEM private key "
+            "(must contain -----BEGIN ... PRIVATE KEY-----)"
+        )
+    now = int(time.time())
+    header = {"alg": "RS256", "typ": "JWT"}
+    payload = {
+        "iss": app_id,
+        "iat": now - 60,
+        "exp": now + 540,
+    }
+    header_b64 = b64url_encode(json.dumps(header, separators=(",", ":")).encode("utf-8"))
+    payload_b64 = b64url_encode(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+    signing_input = f"{header_b64}.{payload_b64}".encode("ascii")
+
+    with tempfile.NamedTemporaryFile(mode="wb", prefix="hf-appkey-", delete=False) as tf:
+        tf_name = tf.name
+        tf.write(key_pem)
+
+    try:
+        os.chmod(tf_name, 0o600)
+        proc = subprocess.run(
+            ["openssl", "dgst", "-sha256", "-sign", tf_name],
+            input=signing_input,
+            capture_output=True,
+            check=False,
+        )
+        if proc.returncode != 0:
+            err = proc.stderr.decode("utf-8", errors="replace").strip()
+            raise RuntimeError(f"openssl failed to sign JWT with private key: {err}")
+        sig_b64 = b64url_encode(proc.stdout)
+        return f"{header_b64}.{payload_b64}.{sig_b64}"
+    finally:
+        try:
+            os.remove(tf_name)
+        except OSError:
+            pass
+
+
+def fetch_installation_token(app_id: int, repo: str, key_pem: bytes) -> str:
+    """Mint a GitHub App installation token for the given owner/repo."""
+    if "/" not in repo:
+        raise ValueError(f"invalid repository format (expected owner/repo): {repo}")
+    owner, repo_name = repo.split("/", 1)
+    jwt_token = mint_jwt(app_id, key_pem)
+
+    api_url = os.environ.get("GITHUB_API_URL", "https://api.github.com").rstrip("/")
+    headers = {
+        "Authorization": f"Bearer {jwt_token}",
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "homefield-adopt",
+    }
+
+    installation_id = None
+    repo_url = f"{api_url}/repos/{owner}/{repo_name}/installation"
+    req = urllib.request.Request(repo_url, headers=headers, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            installation_id = data.get("id")
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            org_url = f"{api_url}/orgs/{owner}/installation"
+            org_req = urllib.request.Request(org_url, headers=headers, method="GET")
+            try:
+                with urllib.request.urlopen(org_req, timeout=30) as org_resp:
+                    org_data = json.loads(org_resp.read().decode("utf-8"))
+                    installation_id = org_data.get("id")
+            except urllib.error.HTTPError as org_e:
+                if org_e.code == 404:
+                    raise RuntimeError(
+                        f"GitHub App (ID {app_id}) is not installed on {owner}/{repo_name} or organization {owner}. "
+                        "Install the App on the repository or organization first."
+                    ) from None
+                body = org_e.read().decode("utf-8", errors="replace").strip()
+                raise RuntimeError(
+                    f"GitHub API error fetching org installation ({org_e.code}): {body}"
+                ) from None
+            except urllib.error.URLError as org_u:
+                raise RuntimeError(f"failed to connect to GitHub API ({api_url}): {org_u.reason}") from None
+        elif e.code == 401:
+            raise RuntimeError(
+                f"GitHub App authentication failed (HTTP 401): verify that App ID {app_id} and the private key match."
+            ) from None
+        else:
+            body = e.read().decode("utf-8", errors="replace").strip()
+            raise RuntimeError(
+                f"GitHub API error fetching repository installation ({e.code}): {body}"
+            ) from None
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"failed to connect to GitHub API ({api_url}): {e.reason}") from None
+
+    if not installation_id:
+        raise RuntimeError(f"could not determine installation ID for App {app_id} on {repo}")
+
+    token_url = f"{api_url}/app/installations/{installation_id}/access_tokens"
+    token_req = urllib.request.Request(
+        token_url,
+        data=b"{}",
+        headers={
+            **headers,
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(token_req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            token = data.get("token")
+            if not token:
+                raise RuntimeError("GitHub API response did not contain an access token")
+            return token
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace").strip()
+        raise RuntimeError(
+            f"GitHub API error minting installation token ({e.code}): {body}"
+        ) from None
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"failed to connect to GitHub API ({api_url}): {e.reason}") from None
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -1090,6 +1224,10 @@ def main():
     sub.add_parser("verify-attempt")
     sub.add_parser("verify-status")
     sub.add_parser("verify-jobs").add_argument("attempt", type=int)
+    p_app = sub.add_parser("app-token")
+    p_app.add_argument("--app-id", type=int, required=True)
+    p_app.add_argument("--repo", required=True)
+    p_app.add_argument("--key-file", default=None)
     args = ap.parse_args()
 
     if args.cmd in ("guards", "cache-keys", "setup") and not os.path.isdir(args.dir):
@@ -1169,6 +1307,25 @@ def main():
                     print(row)
         except (ValueError, AttributeError) as err:
             print(f"adopt.py: {args.cmd}: {err}", file=sys.stderr)
+            return 1
+    elif args.cmd == "app-token":
+        if args.key_file:
+            if "BEGIN" in args.key_file and "KEY" in args.key_file:
+                print("adopt.py: app-token: --key-file must be a file path, not key material", file=sys.stderr)
+                return 1
+            if not os.path.isfile(args.key_file):
+                print(f"adopt.py: app-token: key file not found: {args.key_file}", file=sys.stderr)
+                return 1
+            with open(args.key_file, "rb") as fh:
+                key_pem = fh.read()
+        else:
+            key_pem = sys.stdin.buffer.read()
+
+        try:
+            token = fetch_installation_token(args.app_id, args.repo, key_pem)
+            print(token)
+        except (RuntimeError, ValueError, OSError) as err:
+            print(f"adopt.py: app-token: {err}", file=sys.stderr)
             return 1
     else:
         print(urllib.parse.quote(args.text, safe=""))
