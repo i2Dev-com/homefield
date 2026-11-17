@@ -548,4 +548,28 @@ record "a failed prerequisite: exit 1, said to affect every VM" "1/yes" \
   "$rc/$(has "$err" 'prerequisite check(s) failed above')"
 record "...and both reports still printed" "yes/yes" "$(has "$out" 'VM homefield:')/$(has "$out" 'VM codesamplez:')"
 
+rm -rf "$home/.local/state/homefield"
+mkdir -p "$home/.local/state/homefield"
+guest_fs
+printf 'loopback_state=verified\nloopback_lima_version=2.3.0\n' >"$home/.local/state/homefield/homefield.state"
+diag "${healthy[@]}" --
+record "diagnose loopback=verified: human line and Summary: healthy." "0/yes/yes" \
+  "$rc/$(has "$out" '  - Loopback: verified (closed)')/$(has "$out" 'Summary: healthy.')"
+
+printf 'loopback_state=not-verified\nloopback_lima_version=2.3.0\n' >"$home/.local/state/homefield/homefield.state"
+diag "${healthy[@]}" --
+record "diagnose loopback=not-verified: warning and qualified summary" "0/yes/yes" \
+  "$rc/$(has "$out" '  - Loopback: not verified')/$(has "$out" 'Summary: healthy as far as it could be checked.')"
+
+printf 'loopback_state=open\nloopback_lima_version=2.3.0\n' >"$home/.local/state/homefield/homefield.state"
+diag "${healthy[@]}" --
+record "diagnose loopback=open: problem found and exit 1" "1/yes/yes" \
+  "$rc/$(has "$out" '  - Loopback: OPEN')/$(has "$out" 'Summary: 1 problem found.')"
+
+printf 'loopback_state=verified\nloopback_lima_version=2.2.0\n' >"$home/.local/state/homefield/homefield.state"
+diag "${healthy[@]}" --
+record "diagnose loopback=stale: warning and qualified summary" "0/yes/yes" \
+  "$rc/$(has "$out" '  - Loopback: stale')/$(has "$out" 'Summary: healthy as far as it could be checked.')"
+rm -rf "$home/.local/state/homefield"
+
 summary

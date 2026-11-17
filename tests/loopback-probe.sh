@@ -140,7 +140,7 @@ chmod +x "$stubs/limactl" "$stubs/nc" "$stubs/timeout" "$stubs/bash"
 # cat/mv/rm are used by the nc stub itself, mktemp/awk/dirname/grep/sleep
 # by the code under test, sh/timeout/bash by a run-guest script; a missing
 # tool would hide as a silent failure.
-for t in awk cat dirname grep mktemp mv rm sleep sh; do ln -s "$(command -v "$t")" "$stubs/$t"; done
+for t in awk cat dirname grep mkdir mktemp mv rm sleep sh; do ln -s "$(command -v "$t")" "$stubs/$t"; done
 
 # The VM's stored config, as limactl create writes it under ~/.lima/<name>/.
 cat >"$work/config-blocks.yaml" <<'EOF'
@@ -323,5 +323,36 @@ version_case no 2.2.0 2 3
 version_case yes 2.10.0 2 3
 version_case yes 3.0.0 2 3
 version_case no garbage 2 3
+
+echo "loopback_record_verdict and loopback_recorded_state (#265)"
+rm -rf "$work/home/.local/state/homefield"
+# shellcheck disable=SC2016
+run_probe LIMA_RUN_GUEST=1 PROBE_BASH=refused LIMA_VER=2.3.0 -- eval 'verify_loopback >/dev/null 2>&1; printf "%s/%s\n" "$(state_get loopback_state)" "$(state_get loopback_lima_version)"'
+record "verify_loopback persists verdict and Lima version" "verified/2.3.0" "$out"
+
+rm -rf "$work/home/.local/state/homefield"
+# shellcheck disable=SC2016
+out="$(env -i HOME="$work/home" PATH="$stubs" HOMEFIELD_SOURCE_ONLY=1 LIMA_VER=2.3.0 \
+  "$BASH" -c '. "$1"; INSTANCE=homefield; loopback_recorded_state; printf "%s\n" "$LB_RECORDED_STATE"' _ "$ROOT/bin/homefield" 2>&1)"
+record "loopback_recorded_state: missing state is unknown" "unknown" "$out"
+
+mkdir -p "$work/home/.local/state/homefield"
+printf 'loopback_state=verified\nloopback_lima_version=2.2.0\n' >"$work/home/.local/state/homefield/homefield.state"
+# shellcheck disable=SC2016
+out="$(env -i HOME="$work/home" PATH="$stubs" HOMEFIELD_SOURCE_ONLY=1 LIMA_VER=2.3.0 \
+  "$BASH" -c '. "$1"; INSTANCE=homefield; loopback_recorded_state; printf "%s\n" "$LB_RECORDED_STATE"' _ "$ROOT/bin/homefield" 2>&1)"
+record "loopback_recorded_state: older Lima version is stale" "stale" "$out"
+
+printf 'loopback_state=not-verified\nloopback_lima_version=2.3.0\n' >"$work/home/.local/state/homefield/homefield.state"
+# shellcheck disable=SC2016
+out="$(env -i HOME="$work/home" PATH="$stubs" HOMEFIELD_SOURCE_ONLY=1 LIMA_VER=2.3.0 \
+  "$BASH" -c '. "$1"; INSTANCE=homefield; loopback_recorded_state; printf "%s\n" "$LB_RECORDED_STATE"' _ "$ROOT/bin/homefield" 2>&1)"
+record "loopback_recorded_state: not-verified preserved" "not-verified" "$out"
+
+printf 'loopback_state=open\nloopback_lima_version=2.3.0\n' >"$work/home/.local/state/homefield/homefield.state"
+# shellcheck disable=SC2016
+out="$(env -i HOME="$work/home" PATH="$stubs" HOMEFIELD_SOURCE_ONLY=1 LIMA_VER=2.3.0 \
+  "$BASH" -c '. "$1"; INSTANCE=homefield; loopback_recorded_state; printf "%s\n" "$LB_RECORDED_STATE"' _ "$ROOT/bin/homefield" 2>&1)"
+record "loopback_recorded_state: open preserved" "open" "$out"
 
 summary

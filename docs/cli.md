@@ -77,6 +77,7 @@ produce, and print nothing else on stdout.
   "vm": {"created": true, "status": "Running", "guest_checked": true,
           "skipped_reason": null,
           "isolation": {"state": "closed", "detail": null},
+          "loopback": {"state": "verified", "detail": "closed (the guest cannot reach the Mac's 127.0.0.1)"},
           "registered": true,
           "runner": {"name": "my-mac-homefield", "id": "42", "url": "https://github.com/acme"},
           "on_github": {"state": "listed", "status": "online", "busy": false, "detail": null},
@@ -113,13 +114,15 @@ the notes that are not problems.
   "job": {"state": "idle"},
   "version": "2.338.0",
   "npm": "ok",
-  "extra_packages": ["libpq-dev"]
+  "extra_packages": ["libpq-dev"],
+  "loopback": {"state": "verified", "detail": "closed (the guest cannot reach the Mac's 127.0.0.1)"}
 }
 ```
 
 `on_github.state` is `listed`, `not_listed`, `timeout` or `not_checked`;
 `job.state` is `running`, `idle` or `unknown`; `npm` is `ok`, `broken` or
-`unknown`. `healthy` is false when a fact that must be answerable was not (a
+`unknown`; `loopback.state` is `verified`, `not-verified`, `open`, `stale`,
+`skipped` or `unknown`. `healthy` is false when a fact that must be answerable was not (a
 job or npm state unknown, the runner removed from GitHub, the VM unaskable) —
 the same facts the exit status carries. For every VM on the Mac, the wrapper
 is `{"instances": [...], "healthy": <bool>, "vms": [<object>...]}`.

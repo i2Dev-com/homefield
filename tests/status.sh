@@ -59,10 +59,11 @@ guest() {
 }
 cmd_status
 EOF
+mkdir -p "$work/home" "$work/lima"
 # status [VAR=value ...]: out and rc.
 status() {
   : >"$work/gh-calls"
-  out="$(env "$@" bash "$work/harness.sh" 2>&1 </dev/null)"
+  out="$(env HOME="$work/home" LIMA_HOME="$work/lima" "$@" bash "$work/harness.sh" 2>&1 </dev/null)"
   rc=$?
 }
 # rest: the lines after the runner line, all of them or not.
@@ -175,5 +176,25 @@ record "...each run gets its instance as --instance" "yes/yes" \
 record "...exits 0 when every VM is fine" "0" "$rc"
 status INSTANCES='codesamplez\nhomefield' CHILD_RC=1
 record "one run fails: the other still reported, exit 1" "1/yes" "$rc/$(has "$out" 'VM codesamplez: Running')"
+
+mkdir -p "$work/state" "$work/lima/homefield"
+printf 'networkOpts:\n  hostLoopback: false\n' >"$work/lima/homefield/lima.yaml"
+printf 'loopback_state=verified\n' >"$work/state/homefield.state"
+status HOMEFIELD_STATE_DIR="$work/state" SETTING_OUT='my-mac-homefield\nhttps://github.com/acme\n42\n'
+record "status with loopback_state=verified: prints loopback: verified" "0/yes" "$rc/$(has "$out" 'loopback: verified')"
+
+printf 'loopback_state=not-verified\n' >"$work/state/homefield.state"
+status HOMEFIELD_STATE_DIR="$work/state" SETTING_OUT='my-mac-homefield\nhttps://github.com/acme\n42\n'
+record "status with loopback_state=not-verified: prints loopback: not verified" "0/yes" "$rc/$(has "$out" 'loopback: not verified')"
+
+printf 'loopback_state=open\n' >"$work/state/homefield.state"
+status HOMEFIELD_STATE_DIR="$work/state" SETTING_OUT='my-mac-homefield\nhttps://github.com/acme\n42\n'
+record "status with loopback_state=open: prints loopback: OPEN" "0/yes" "$rc/$(has "$out" 'loopback: OPEN')"
+
+printf 'loopback_state=skipped\n' >"$work/state/homefield.state"
+status HOMEFIELD_STATE_DIR="$work/state" SETTING_OUT='my-mac-homefield\nhttps://github.com/acme\n42\n'
+record "status with loopback_state=skipped: prints loopback: not verified with upgrade hint" "0/yes/yes" \
+  "$rc/$(has "$out" 'loopback: not verified')/$(has "$out" 'homefield upgrade')"
+rm -rf "$work/state"
 
 summary

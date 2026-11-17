@@ -292,6 +292,83 @@ loopback_cleanup() {
 # shellcheck disable=SC2034  # read by cmd-install.sh's setup_vm_lines
 LOOPBACK_STATE=""
 
+# loopback_record_verdict: persist LOOPBACK_STATE and current LIMA_VERSION
+# into the instance state file when INSTANCE and state_set are available.
+loopback_record_verdict() {
+  [ -n "${INSTANCE:-}" ] || return 0
+  command -v state_set >/dev/null 2>&1 || return 0
+  [ -n "${LIMA_VERSION:-}" ] || lima_major_minor 2>/dev/null || true
+  state_set loopback_state "$LOOPBACK_STATE" 2>/dev/null || true
+  [ -z "${LIMA_VERSION:-}" ] || state_set loopback_lima_version "$LIMA_VERSION" 2>/dev/null || true
+}
+
+# Read-only recorded #18 loopback verdict (LB_RECORDED_STATE, LB_RECORDED_DETAIL).
+LB_RECORDED_STATE=""
+LB_RECORDED_DETAIL=""
+
+loopback_recorded_state() {
+  LB_RECORDED_STATE="unknown"
+  LB_RECORDED_DETAIL=""
+  local rec_state rec_ver curr_ver config asks_closed=0
+  rec_state="$(state_get loopback_state 2>/dev/null || true)"
+  rec_ver="$(state_get loopback_lima_version 2>/dev/null || true)"
+  curr_ver="${LIMA_VERSION:-}"
+  if [ -z "$curr_ver" ] && command -v limactl >/dev/null 2>&1; then
+    lima_major_minor 2>/dev/null || true
+    curr_ver="${LIMA_VERSION:-}"
+  fi
+
+  config="${LIMA_HOME:-$HOME/.lima}/${INSTANCE}/lima.yaml"
+  if [ -f "$config" ] && grep -Eq '^[[:space:]]*hostLoopback:[[:space:]]*false' "$config"; then
+    asks_closed=1
+  fi
+
+  if [ -z "$rec_state" ]; then
+    LB_RECORDED_STATE="unknown"
+    LB_RECORDED_DETAIL="not recorded (run 'bin/homefield upgrade --instance ${INSTANCE}' to probe)"
+    return 0
+  fi
+
+  if [ -n "$rec_ver" ] && [ -n "$curr_ver" ] && [ "$rec_ver" != "$curr_ver" ]; then
+    LB_RECORDED_STATE="stale"
+    LB_RECORDED_DETAIL="probe recorded under Lima ${rec_ver}, current Lima is ${curr_ver} (run 'bin/homefield upgrade --instance ${INSTANCE}')"
+    return 0
+  fi
+
+  case "$rec_state" in
+    verified)
+      if [ -f "$config" ] && [ "$asks_closed" = 0 ]; then
+        LB_RECORDED_STATE="stale"
+        LB_RECORDED_DETAIL="stored config does not show networkOpts.hostLoopback: false"
+      else
+        LB_RECORDED_STATE="verified"
+        LB_RECORDED_DETAIL="closed (the guest cannot reach the Mac's 127.0.0.1)"
+      fi
+      ;;
+    open)
+      LB_RECORDED_STATE="open"
+      if [ "$asks_closed" = 1 ]; then
+        LB_RECORDED_DETAIL="guest reaches Mac loopback despite hostLoopback: false"
+      else
+        LB_RECORDED_DETAIL="guest reaches Mac loopback; stored config does not show hostLoopback: false"
+      fi
+      ;;
+    not-verified)
+      LB_RECORDED_STATE="not-verified"
+      LB_RECORDED_DETAIL="probe did not verify boundary; assume guest can reach Mac loopback (run 'bin/homefield upgrade --instance ${INSTANCE}')"
+      ;;
+    skipped)
+      LB_RECORDED_STATE="skipped"
+      LB_RECORDED_DETAIL="probe skipped during setup/upgrade (run 'bin/homefield upgrade --instance ${INSTANCE}')"
+      ;;
+    *)
+      LB_RECORDED_STATE="$rec_state"
+      LB_RECORDED_DETAIL=""
+      ;;
+  esac
+  return 0
+}
+
 # loopback_listen: bind the throwaway listener on the Mac's 127.0.0.1 and
 # prove the port is this probe's. Leaves LB_PORT, LB_TOKEN, LB_TOKENFILE,
 # LB_ERRFILE, LB_LISTENER and LOOPBACK_STATE. Returns 0 with the listener up
@@ -404,6 +481,7 @@ loopback_interpret() {
   case "$answer" in
     open)
       LOOPBACK_STATE="open"
+      loopback_record_verdict
       config="${LIMA_HOME:-$HOME/.lima}/${INSTANCE}/lima.yaml"
       asks_closed=0
       [ -f "$config" ] && grep -Eq '^[[:space:]]*hostLoopback:[[:space:]]*false' "$config" && asks_closed=1
@@ -447,9 +525,13 @@ verify_loopback() {
   LOOPBACK_STATE="not-verified"
   if ! command -v nc >/dev/null 2>&1; then
     echo "homefield: warning: #18 probe skipped (no nc on PATH); assume the guest can still reach the Mac's loopback (docs/runbook.md, Host loopback exposure)" >&2
+    loopback_record_verdict
     return 0
   fi
-  loopback_listen || return 0
+  if ! loopback_listen; then
+    loopback_record_verdict
+    return 0
+  fi
   # The guest's side: a TCP connect to the same port. bash's /dev/tcp exits
   # 1 for a refused connect AND for a name that did not resolve, so status
   # alone is not a boundary: only bash's own "Connection refused" message
@@ -465,12 +547,14 @@ verify_loopback() {
         LOOPBACK_STATE="not-verified"
         loopback_cleanup "$LB_LISTENER" "$LB_TOKENFILE" ""
         echo "homefield: warning: #18 probe not verified (the nc listener died before the guest check finished; does it support -k?); assume the guest can still reach the Mac's loopback (docs/runbook.md, Host loopback exposure)" >&2
+        loopback_record_verdict
         return 0
       fi
       ;;
   esac
   loopback_cleanup "$LB_LISTENER" "$LB_TOKENFILE" ""
   loopback_interpret "$answer"
+  loopback_record_verdict
   return 0
 }
 
