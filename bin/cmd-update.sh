@@ -4,10 +4,24 @@
 UPD_CHECK=0
 UPD_ALLOW_MINOR=0
 UPD_WORK=""
+UPD_SWAPPED=0
 
-# update_cleanup: removes staging/backup temp dir on exit.
+# update_cleanup: restores the backup if interrupted mid-transaction, and
+# removes the staging dir only when no un-restored backup remains.
 update_cleanup() {
-  [ -z "$UPD_WORK" ] || [ ! -d "$UPD_WORK" ] || rm -rf "$UPD_WORK"
+  [ -n "$UPD_WORK" ] && [ -d "$UPD_WORK" ] || return 0
+  if [ "$UPD_SWAPPED" = 1 ] && [ -d "$UPD_WORK/backup" ]; then
+    echo "homefield: update interrupted; restoring previous copy from ${UPD_WORK}/backup" >&2
+    if [ -e "$ROOT" ]; then
+      mv "$ROOT" "$UPD_WORK/failed" 2>/dev/null || true
+    fi
+    if ! mv "$UPD_WORK/backup" "$ROOT" 2>/dev/null; then
+      echo "homefield: could not restore ${ROOT}; backup preserved at ${UPD_WORK}/backup" >&2
+      return 0
+    fi
+    UPD_SWAPPED=0
+  fi
+  rm -rf "$UPD_WORK"
 }
 
 # update_parse_args: parses --check and --allow-minor.
@@ -240,6 +254,7 @@ update_rollback() {
     mv "$ROOT" "$work/failed" || true
   fi
   mv "$backup" "$ROOT" || die "update: rollback failed: could not restore ${ROOT} from ${backup}"
+  UPD_SWAPPED=0
   for vm in ${UPD_VMS[@]+"${UPD_VMS[@]}"}; do
     if ! "${BASH:-bash}" "$ROOT/bin/homefield" ${COLOR_ARG:+"$COLOR_ARG"} --instance "$vm" diagnose </dev/null; then
       verify_rc=1
@@ -294,6 +309,8 @@ cmd_update() {
   update_check_idle
 
   trap update_cleanup EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
   UPD_WORK="$(mktemp -d "$(dirname "$ROOT")/.homefield-update.XXXXXX")"
   update_fetch_tarball "$UPD_REPO" "$UPD_TARGET_REF" "$UPD_WORK/homefield.tar.gz"
   update_stage "$UPD_REPO" "$UPD_TARGET_REF" "$UPD_WORK/homefield.tar.gz" "$UPD_WORK/new"
@@ -306,6 +323,7 @@ cmd_update() {
     mv "$UPD_WORK/backup" "$ROOT" || true
     die "update: could not move new copy into ${ROOT}"
   fi
+  UPD_SWAPPED=1
 
   local vm
   for vm in ${UPD_VMS[@]+"${UPD_VMS[@]}"}; do
@@ -324,8 +342,9 @@ cmd_update() {
     fi
   done
 
+  UPD_SWAPPED=0
   update_cleanup
   UPD_WORK=""
-  trap - EXIT
+  trap - EXIT INT TERM
   log "updated homefield to ${UPD_TARGET_REF}${UPD_TARGET_COMMIT:+ (${UPD_TARGET_COMMIT:0:7})}"
 }

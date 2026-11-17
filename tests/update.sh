@@ -247,4 +247,26 @@ ref_after="$(cat "$CASE_DIR/tool/.homefield-ref")"
 calls="$(cat "$CALL_LOG")"
 record "rollback on diagnose failure: nonzero, restored .homefield-ref, re-ran diagnose" "nonzero/yes/yes/yes" "$(nonzero "$rc")/$(has "$out" "post-update diagnose failed")/$(has "$ref_after" "ref=v0.5.3")/$(has "$calls" "OLD_DIAGNOSE:")"
 
+# 12. Interrupted update (SIGTERM during upgrade) restores backup
+setup_env sigterm_rollback
+printf 'repo=i2Dev-com/homefield\nref=v0.5.3\ncommit=%s\n' "$AAA" >"$CASE_DIR/tool/.homefield-ref"
+TAR_TERM="$TMP/term.tar.gz"
+term_stage="$TMP/pkg-term"
+rm -rf "$term_stage"
+mkdir -p "$term_stage/homefield-${BBB}/bin" "$term_stage/homefield-${BBB}/vm"
+touch "$term_stage/homefield-${BBB}/vm/lima.yaml" "$term_stage/homefield-${BBB}/vm/provision.sh"
+cat >"$term_stage/homefield-${BBB}/bin/homefield" <<'EOF'
+#!/usr/bin/env bash
+kill -TERM "$PPID"
+sleep 5
+EOF
+chmod +x "$term_stage/homefield-${BBB}/bin/homefield"
+tar -czf "$TAR_TERM" -C "$term_stage" "homefield-${BBB}"
+STUB_TARBALL="$TAR_TERM"
+STUB_TAGS_JSON=$'[\n  {\n    "name": "v0.5.4"\n  },\n  {\n    "name": "v0.5.3"\n  }\n]'
+STUB_JOB_RC=1
+out="$(run_update)"; rc=$?
+ref_after="$(cat "$CASE_DIR/tool/.homefield-ref")"
+record "interrupted update (SIGTERM): restores backup .homefield-ref" "nonzero/yes/yes" "$(nonzero "$rc")/$(has "$out" "update interrupted; restoring previous copy")/$(has "$ref_after" "ref=v0.5.3")"
+
 summary
