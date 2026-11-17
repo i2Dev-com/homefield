@@ -11,6 +11,10 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ## Unreleased
 
+### Fixed
+
+- Intermittent SIGPIPE / `pipefail` race in `copy_preset_hooks` and `tests/preset.sh` ([`bin/cmd-install.sh`](bin/cmd-install.sh), `tests/preset.sh`, [#274](https://github.com/i2Dev-com/homefield/issues/274)): feeds the preset hook manifest to `guest_stdin sudo tee` via here-string instead of a pipe and drains stdin in `tests/preset.sh`'s `guest_stdin` mock.
+
 ### Added
 
 - VM image pre-fetch in `homefield preflight` ([`bin/cmd-preflight.sh`](bin/cmd-preflight.sh), `#252`): when prerequisites pass (on a terminal or with `--prefetch`; skipped by `--no-prefetch` and during `setup`/`install`), `preflight` checks Lima's download cache for `vm/lima.yaml`'s digest-pinned Ubuntu image and pre-fetches + SHA-256 verifies it when missing or stale (failures warn without blocking).
