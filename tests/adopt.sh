@@ -2298,6 +2298,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
 
         if self.path in ("/app/installations/4242/access_tokens", "/app/installations/8484/access_tokens"):
+            if len(sys.argv) > 2:
+                with open(sys.argv[2], "a") as tf:
+                    tf.write("mint\n")
             self._send(201, b'{"token":"ghs_mock_app_token_12345","expires_at":"2026-11-17T01:00:00Z"}')
         else:
             self._send(404, b'{"message":"Not Found"}')
@@ -2318,7 +2321,7 @@ with open(sys.argv[1], "w") as f:
 server.serve_forever()
 PY
 
-"$python_exe" "$work/mock_app_server.py" "$work/mock_port" &
+"$python_exe" "$work/mock_app_server.py" "$work/mock_port" "$work/app_token_mints" &
 mock_pid=$!
 trap 'kill "$mock_pid" 2>/dev/null || true; rm -rf "$work"' EXIT
 
@@ -2376,6 +2379,17 @@ record "adopt falls back to org installation when repo installation is 404" "0" 
 run_fn GITHUB_API_URL="$mock_api_url" GH_GROUPS="$work/groups-selected" GH_MEMBERS="$work/members-other" GH_WF="$work/wf-ready" \
   -- cmd_adopt --repo uninstalled/app --app-id 12345 --app-key-file "$work/test-app-key.pem"
 record "adopt uninstalled App: fails with clear message" "nonzero/yes" "$(nonzero "$rc")/$(has "$out" "is not installed on uninstalled/app or organization uninstalled")"
+
+: >"$work/app_token_mints"
+printf 'open\nmerged\n' >"$work/pr-seq"
+rm -f "$work/pr_polls" "$work/pr_merged" "$work/branch-homefield_route-to-local"
+run_fn GITHUB_API_URL="$mock_api_url" HOMEFIELD_APP_TOKEN_TTL=0 ADOPT_WAIT_INTERVAL=0 GH_PR_SEQ="$work/pr-seq" \
+  GH_GROUPS="$work/groups-selected" GH_MEMBERS="$work/members-other" GH_WF="$work/wf-noguard" GH_WF_MERGED="$work/wf-ready" \
+  -- cmd_adopt --repo acme/app --app-id 12345 --app-key-file "$work/test-app-key.pem" --setup --wait
+mints="$(wc -l <"$work/app_token_mints" | tr -d ' ')"
+record "adopt --setup --wait with expired App token refreshes during wait and post-merge" "0/yes" \
+  "$rc/$([ "$mints" -ge 3 ] && echo yes || echo "no ($mints)")"
+rm -f "$work/branch-homefield_route-to-local" "$work/pr_polls" "$work/pr_merged"
 
 kill "$mock_pid" 2>/dev/null || true
 wait "$mock_pid" 2>/dev/null || true

@@ -440,7 +440,7 @@ cat /path/to/key.pem | homefield adopt --repo <owner>/<repo> --app-id 12345 --ap
 `adopt` mints an RS256 JWT via `openssl`, looks up the App's installation on `<owner>/<repo>` (or `<owner>` for org-wide installations), exchanges it for a short-lived installation access token, and sets `GH_TOKEN` for the duration of the run.
 
 **Required App permissions:**
-- **Repository permissions:** *Administration* (Read & write), *Contents* (Read & write, for `--setup`), *Workflows* (Read & write, for `.github/workflows/`), *Pull requests* (Read & write, for `--setup`), and *Actions* (Read & write, for `--verify`).
+- **Repository permissions:** *Administration* (Read & write), *Contents* (Read & write, for `--setup`), *Variables* (Read & write, for `CI_RUNNER`), *Workflows* (Read & write, for `.github/workflows/`), *Pull requests* (Read & write, for `--setup`), and *Actions* (Read & write, for `--verify`).
 - **Organization permissions:** *Organization self-hosted runners* (Read & write, when adding the repository to an organization runner group).
 
 ## 6. Run it

@@ -29,6 +29,9 @@ ADOPT_GUARDS=0
 ADOPT_ROUTED=""
 ADOPT_WORKFLOWS=0
 ADOPT_APP_ID=""
+ADOPT_APP_REPO=""
+ADOPT_APP_KEY_PATH=""
+ADOPT_APP_TOKEN_TS=0
 ADOPT_ORIG_GH_TOKEN=""
 ADOPT_ORIG_GH_TOKEN_SET=""
 
@@ -1253,6 +1256,7 @@ adopt_wait_merged() {
   log "waiting for ${url} to be merged (up to ${minutes} min). Ctrl-C is safe: nothing is switched while waiting, and you can carry on by hand once it is merged: ${hand}"
   while :; do
     adopt_check_parent
+    adopt_ensure_fresh_app_token
     polls=$((polls + 1))
     # An answer is a state of open or closed and a merged_at (or "-"), tab-separated.
     if row="$(gh api "repos/${repo}/pulls/${number}" --jq '[.state, (.merged_at // "-")] | @tsv' 2>"$ADOPT_TMP/err" </dev/null)" &&
@@ -1283,12 +1287,35 @@ adopt_wait_merged() {
   log "${url} is merged; carrying on with what adopt does after the merge"
 }
 
+# adopt_mint_app_token / adopt_ensure_fresh_app_token: mint a short-lived
+# GitHub App installation token and refresh it before its 1-hour expiry during
+# long --setup --wait runs.
+adopt_mint_app_token() {
+  local app_token
+  app_token="$(python3 -I "$ROOT/tools/adopt.py" app-token --app-id "$ADOPT_APP_ID" --repo "$ADOPT_APP_REPO" <"$ADOPT_APP_KEY_PATH" 2>"$ADOPT_TMP/app-token.err")" ||
+    die "adopt: $(head -1 "$ADOPT_TMP/app-token.err")"
+  [ -n "$app_token" ] || die "adopt: GitHub App token minting returned an empty token"
+  ADOPT_APP_TOKEN_TS="$SECONDS"
+  export GH_TOKEN="$app_token"
+}
+
+adopt_ensure_fresh_app_token() {
+  [ -n "${ADOPT_APP_ID:-}" ] || return 0
+  local ttl="${HOMEFIELD_APP_TOKEN_TTL:-3000}"
+  if [ $((SECONDS - ADOPT_APP_TOKEN_TS)) -ge "$ttl" ]; then
+    adopt_mint_app_token
+  fi
+}
+
 cmd_adopt() {
   local repo="" nrepo=0 label="homefield-ci" label_given=0 group="homefield-ci" jobs="" switch=1 dry=0 setup=0 entry out
   local verify=ask
   local wait_timeout="" wait_minutes=60
-  local app_id="" app_key_file="" app_token=""
+  local app_id="" app_key_file=""
   ADOPT_APP_ID=""
+  ADOPT_APP_REPO=""
+  ADOPT_APP_KEY_PATH=""
+  ADOPT_APP_TOKEN_TS=0
   ADOPT_ORIG_GH_TOKEN="${GH_TOKEN:-}"
   ADOPT_ORIG_GH_TOKEN_SET="${GH_TOKEN+1}"
   ADOPT_FLAG_EVENTS="" ADOPT_FLAG_DEPENDABOT="" ADOPT_FLAG_FALLBACK="" ADOPT_FLAG_GUARDS=0
@@ -1394,16 +1421,15 @@ cmd_adopt() {
     ADOPT_HANDLER=1
   fi
   if [ -n "$app_id" ]; then
-    log "authenticating as GitHub App ID ${app_id} for ${repo}..."
+    ADOPT_APP_REPO="$repo"
     if [ "$app_key_file" = "-" ]; then
-      app_token="$(python3 -I "$ROOT/tools/adopt.py" app-token --app-id "$app_id" --repo "$repo" 2>"$ADOPT_TMP/app-token.err")" ||
-        die "adopt: $(head -1 "$ADOPT_TMP/app-token.err")"
+      ADOPT_APP_KEY_PATH="$ADOPT_TMP/app-key.pem"
+      (umask 077 && cat >"$ADOPT_APP_KEY_PATH") || die "adopt: could not read private key from stdin"
     else
-      app_token="$(python3 -I "$ROOT/tools/adopt.py" app-token --app-id "$app_id" --repo "$repo" <"$app_key_file" 2>"$ADOPT_TMP/app-token.err")" ||
-        die "adopt: $(head -1 "$ADOPT_TMP/app-token.err")"
+      ADOPT_APP_KEY_PATH="$app_key_file"
     fi
-    [ -n "$app_token" ] || die "adopt: GitHub App token minting returned an empty token"
-    export GH_TOKEN="$app_token"
+    log "authenticating as GitHub App ID ${app_id} for ${repo}..."
+    adopt_mint_app_token
     log "authenticated as GitHub App (minted installation token)"
   fi
   adopt_repository "$repo"
@@ -1422,6 +1448,7 @@ cmd_adopt() {
       return 0
     fi
     adopt_wait_merged "$repo" "$wait_minutes"
+    adopt_ensure_fresh_app_token
     rm -rf "${ADOPT_TMP:?}/workflows"
     adopt_repository "$repo"
     adopt_fetch_workflows "$repo" "$ADOPT_BRANCH" "$ADOPT_TMP/workflows"
