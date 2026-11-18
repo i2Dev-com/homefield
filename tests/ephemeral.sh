@@ -346,6 +346,30 @@ st_body="$(cat "$WORK/state/homefield.state")"
 record "retry install --ephemeral when already registered (ephemeral): reconciles actual guest settings" "0/yes/yes" "$ephem_retry_rc/$(has "$st_body" "ephemeral=1")/$(has "$st_body" "ephemeral_url=https://github.com/acme")"
 
 # shellcheck disable=SC2016  # inner bash -c expands $REPO_ROOT
+env -i HOME="$WORK/home" PATH="$STUBS" REPO_ROOT="$REPO_ROOT" CALLS="$CALLS" HOMEFIELD_STATE_DIR="$WORK/state" /bin/bash -c '
+  HOMEFIELD_SOURCE_ONLY=1
+  . "$REPO_ROOT/bin/homefield"
+  check_host() { :; }
+  verify_isolation() { :; }
+  ensure_vm() { :; }
+  cmd_preflight() { return 0; }
+  is_registered() { return 0; }
+  guest_has_file() { return 0; }
+  upgrade_registered() { :; }
+  runner_setting() {
+    for k in "$@"; do
+      case "$k" in
+        gitHubUrl) echo "https://github.com/acme" ;;
+        agentName) echo "test-mac-homefield" ;;
+      esac
+    done
+  }
+  cmd_install --url https://github.com/acme --org --ephemeral --group unapplied-grp --label unapplied-lbl
+' >/dev/null 2>&1
+st_body="$(cat "$WORK/state/homefield.state")"
+record "upgrade existing ephemeral with empty defaults: does not overwrite with unapplied flags" "no/no" "$(has "$st_body" "unapplied-grp")/$(has "$st_body" "unapplied-lbl")"
+
+# shellcheck disable=SC2016  # inner bash -c expands $REPO_ROOT
 pers_out="$(env -i HOME="$WORK/home" PATH="$STUBS" REPO_ROOT="$REPO_ROOT" CALLS="$CALLS" HOMEFIELD_STATE_DIR="$WORK/state" /bin/bash -c '
   HOMEFIELD_SOURCE_ONLY=1
   . "$REPO_ROOT/bin/homefield"

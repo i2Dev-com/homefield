@@ -778,15 +778,16 @@ cmd_install() {
     for p in ${presets[@]+"${presets[@]}"}; do args+=(--preset "$p"); done
     upgrade_registered "${args[@]+"${args[@]}"}"
     if [ "$ephemeral" = 1 ]; then
-      local r_url="" r_name="" cur_group="" cur_label=""
+      local r_url="" r_name="" was_eph=""
       { IFS= read -r r_url || true; IFS= read -r r_name || true; } < <(runner_setting gitHubUrl agentName 2>/dev/null || true)
-      cur_group="$(state_get ephemeral_group)"
-      cur_label="$(state_get ephemeral_label)"
+      was_eph="$(state_get ephemeral)"
       state_set ephemeral 1
       state_set ephemeral_url "${r_url:-$url}"
       state_set ephemeral_name "${r_name:-$name}"
-      state_set ephemeral_group "${cur_group:-$group}"
-      state_set ephemeral_label "${cur_label:-$label}"
+      if [ "$was_eph" != "1" ]; then
+        state_set ephemeral_group "$group"
+        state_set ephemeral_label "$label"
+      fi
       state_set ephemeral_error ""
     fi
     [ "$SETUP" != 1 ] || setup_upgrade_summary
