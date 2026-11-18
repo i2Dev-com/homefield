@@ -214,4 +214,10 @@ hrun cmd_install --url https://github.com/other-org --org
 st_body="$(cat "$WORK/state/homefield.state")"
 record "persistent install after ephemeral: clears ephemeral=1 and ephemeral_url" "0/yes/no" "$rc/$(has "$st_body" "ephemeral=0")/$(has "$st_body" "https://github.com/acme")"
 
+# 11. Ephemeral install without --group/--label overwrites prior custom values
+hrun cmd_install --url https://github.com/acme --org --ephemeral --group old-grp --label old-lbl
+hrun cmd_install --url https://github.com/acme --org --ephemeral
+st_body="$(cat "$WORK/state/homefield.state")"
+record "ephemeral install with defaults: overwrites prior custom group and label" "0/no/no" "$rc/$(has "$st_body" "old-grp")/$(has "$st_body" "old-lbl")"
+
 summary

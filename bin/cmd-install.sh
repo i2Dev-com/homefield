@@ -802,9 +802,9 @@ cmd_install() {
   if [ "$ephemeral" = 1 ]; then
     state_set ephemeral 1
     state_set ephemeral_url "$url"
-    [ -z "$name" ] || state_set ephemeral_name "$name"
-    [ -z "$group" ] || state_set ephemeral_group "$group"
-    [ -z "$label" ] || state_set ephemeral_label "$label"
+    state_set ephemeral_name "$name"
+    state_set ephemeral_group "$group"
+    state_set ephemeral_label "$label"
     state_set ephemeral_error ""
   elif [ "$(state_get ephemeral)" = "1" ]; then
     state_set ephemeral 0
