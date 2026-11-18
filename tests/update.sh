@@ -343,11 +343,11 @@ record "--schedule status: reports installed and loaded=yes" "0/yes" "$rc/$(has 
 out="$(run_update --schedule remove)"; rc=$?
 record "--schedule remove: unloads and deletes plist" "0/yes/no" "$rc/$(has "$out" "removed update schedule")/$([ -f "$plist" ] && echo yes || echo no)"
 
-# 19. --schedule install preserves --instance, HOMEFIELD_STATE_DIR, and LIMA_HOME
+# 19. --schedule install preserves --instance, HOMEFIELD_STATE_DIR, and LIMA_HOME (with XML escaping)
 setup_env schedule_overrides
-out="$(env -i HOME="$CASE_DIR/home" PATH="$CASE_DIR/stubs:$PATH" UPD_CALL_LOG="$CALL_LOG" HOMEFIELD_STATE_DIR="$CASE_DIR/custom_state" HOMEFIELD_LAUNCH_AGENTS_DIR="$CASE_DIR/launch_agents" LIMA_HOME="$CASE_DIR/custom_lima" bash "$CASE_DIR/tool/bin/homefield" --instance runner-2 update --schedule install 2>&1 </dev/null)"; rc=$?
+out="$(env -i HOME="$CASE_DIR/home" PATH="$CASE_DIR/stubs:$PATH" UPD_CALL_LOG="$CALL_LOG" HOMEFIELD_STATE_DIR="$CASE_DIR/custom_state" HOMEFIELD_LAUNCH_AGENTS_DIR="$CASE_DIR/launch_agents" LIMA_HOME="$CASE_DIR/lima<1>&2" bash "$CASE_DIR/tool/bin/homefield" --instance runner-2 update --schedule install 2>&1 </dev/null)"; rc=$?
 plist="$CASE_DIR/launch_agents/com.homefield.update.plist"
 plist_body="$(cat "$plist")"
-record "--schedule install with overrides: preserves --instance, STATE_DIR, and LIMA_HOME" "0/yes/yes/yes/yes" "$rc/$(has "$plist_body" "<string>--instance</string>")/$(has "$plist_body" "<string>runner-2</string>")/$(has "$plist_body" "<string>${CASE_DIR}/custom_state</string>")/$(has "$plist_body" "<string>${CASE_DIR}/custom_lima</string>")"
+record "--schedule install with overrides: preserves --instance, STATE_DIR, and escaped LIMA_HOME" "0/yes/yes/yes/yes" "$rc/$(has "$plist_body" "<string>--instance</string>")/$(has "$plist_body" "<string>runner-2</string>")/$(has "$plist_body" "<string>${CASE_DIR}/custom_state</string>")/$(has "$plist_body" "<string>${CASE_DIR}/lima&lt;1&gt;&amp;2</string>")"
 
 summary
