@@ -786,7 +786,7 @@ run_provision() {
   # The uninstall path stages provision.sh alone and runs ensure-service, which
   # needs none of them.
   limactl copy -r "$GUEST_DIR" "${INSTANCE}:${stage}/guest"
-  printf '%s' "$input" | guest_stdin sudo "$@" bash "${stage}/provision.sh"
+  printf '%s' "$input" | guest_stdin sudo "$@" bash "${stage}/provision.sh" ${PROVISION_CMD:+"$PROVISION_CMD"}
   guest_unstage "$stage"
   trap - RETURN
 }

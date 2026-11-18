@@ -376,6 +376,16 @@ and armed maintenance timers (`homefield-cleanup.timer` and
 (docker, runner, timers)` or `! Warm-up incomplete (...)`). To re-check a
 running VM later, run `homefield status` or `homefield diagnose`.
 
+**Ephemeral mode (`--ephemeral`).** By default, the runner is persistent across
+jobs. Pass `--ephemeral` to `homefield install` / `setup` (recommended on
+throwaway VMs) to register with `config.sh --ephemeral` (one job per
+registration). After a job finishes, `homefield re-register` (or `homefield
+re-register --watch`) fetches a fresh one-hour token on the host via `gh`, pipes
+it on stdin to `provision.sh re-register`, and restarts the service. Trade-off:
+each job incurs a few seconds of cold registration instead of reusing a
+persistent registration. If re-registration fails, the runner is left visibly
+offline (`homefield status` reports the error).
+
 ## What the VM has, compared with a hosted runner
 
 The bar for switching a job is that it runs the same on the VM as on a hosted

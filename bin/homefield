@@ -7,6 +7,7 @@
 #   bin/homefield setup [--url https://github.com/<org>[/<repo>]] [options]
 #   bin/homefield install [--url https://github.com/<org>[/<repo>]] [options]
 #   bin/homefield upgrade [--packages "..."] [--force]
+#   bin/homefield re-register [--watch [--interval SEC] [--max-cycles N]]
 #   bin/homefield status
 #   bin/homefield diagnose [--json]
 #   bin/homefield uninstall [--keep-vm]
@@ -120,6 +121,13 @@ usage_cmd_upgrade() {
              unless --force; the others are still upgraded. A VM that cannot
              be asked whether one is is skipped too. Exits 0 only when every
              VM was upgraded.
+EOF
+}
+usage_cmd_re_register() {
+  cat <<'EOF'
+  re-register  Re-register an ephemeral runner with a fresh one-hour token
+               (fetched on the host and piped on stdin). With --watch, polls and
+               re-registers automatically after each job completes.
 EOF
 }
 usage_cmd_status() {
@@ -242,6 +250,7 @@ usage_commands() {
   usage_cmd_setup
   usage_cmd_install
   usage_cmd_upgrade
+  usage_cmd_re_register
   usage_cmd_status
   usage_cmd_start
   usage_cmd_stop
@@ -306,6 +315,7 @@ install (and setup, which takes the same options):
   --cpus N           VM CPUs, when creating it (default: vm/lima.yaml)
   --memory GIB       VM memory in GiB, when creating it (default: vm/lima.yaml)
   --no-autostart     do not start the VM at login
+  --ephemeral        register for one job per registration (use with re-register)
 EOF
 }
 usage_sec_upgrade() {
@@ -317,6 +327,14 @@ upgrade:
                      Unlike --packages it never replaces the saved list
                      (docs/runbook.md, "Adding tools")
   --force            upgrade even while a job is running (the job is cancelled)
+EOF
+}
+usage_sec_re_register() {
+  cat <<'EOF'
+re-register:
+  --watch            poll and re-register automatically after each job completes
+  --interval SEC     seconds between --watch polls (default 10)
+  --max-cycles N     stop --watch after N poll cycles (default 0 = unlimited)
 EOF
 }
 usage_sec_update() {
@@ -554,6 +572,7 @@ usage() {
   usage_join usage_header usage_commands usage_options \
     usage_sec_install \
     usage_sec_upgrade \
+    usage_sec_re_register \
     usage_sec_update \
     usage_sec_diagnose \
     usage_sec_status \
@@ -580,6 +599,8 @@ usage_for() {
       usage_join usage_header usage_cmd_install usage_sec_install usage_options usage_tokens ;;
     upgrade)
       usage_join usage_header usage_cmd_upgrade usage_sec_upgrade usage_options ;;
+    re-register)
+      usage_join usage_header usage_cmd_re_register usage_sec_re_register usage_options usage_tokens ;;
     status)
       usage_join usage_header usage_cmd_status usage_sec_status usage_options ;;
     start)
@@ -672,7 +693,7 @@ main() {
   color_init ${COLOR_ARG:+"$COLOR_ARG"} "$cmd"
   # Only the commands that act on the VM: preflight, route, adopt, report and
   # version never use it, so a stale HOMEFIELD_INSTANCE does not stop them.
-  case "$cmd" in setup | install | upgrade | update | status | start | stop | diagnose | uninstall | reset | memory) check_instance ;; esac
+  case "$cmd" in setup | install | upgrade | re-register | update | status | start | stop | diagnose | uninstall | reset | memory) check_instance ;; esac
   set -- "${rest[@]+"${rest[@]}"}"
   # <command> --help (or -h) prints that command's help, before the command's
   # own parser sees the flag: no command takes -h for anything else. --help
@@ -687,6 +708,7 @@ main() {
     setup) cmd_setup "$@" ;;
     install) cmd_install "$@" ;;
     upgrade) cmd_upgrade "$@" ;;
+    re-register) cmd_re_register "$@" ;;
     status) cmd_status "$@" ;;
     start) cmd_start "$@" ;;
     stop) cmd_stop "$@" ;;

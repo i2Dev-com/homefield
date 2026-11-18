@@ -81,6 +81,7 @@ RUNNER_SHA256="628b4a7258487b80c1d3c221095a7ded349f5ae0175fd3dfab708d07428f041b"
 RUNNER_URL="${RUNNER_URL:-}"
 RUNNER_NAME="${RUNNER_NAME:-$(hostname)}"
 RUNNER_LABEL="${RUNNER_LABEL:-homefield-ci}"
+RUNNER_EPHEMERAL="${RUNNER_EPHEMERAL:-0}"
 # Org registrations join the runner group that limits which repositories may
 # use the runner (docs/runbook.md, "Runner group"). Without one the runner
 # lands in Default, usable by every repository in the organization. Runner
@@ -279,6 +280,83 @@ if [ ! -t 0 ]; then
       *) echo "provision.sh: ignoring an unrecognised line on stdin" >&2 ;;
     esac
   done
+fi
+
+# config.sh reads `--token` from ACTIONS_RUNNER_INPUT_TOKEN when the flag is
+# absent, which keeps the token off its command line. --preserve-env passes
+# just that one variable through sudo.
+runner_config() {
+  local token="$1"
+  shift
+  ACTIONS_RUNNER_INPUT_TOKEN="$token" \
+    sudo --preserve-env=ACTIONS_RUNNER_INPUT_TOKEN -u "$RUNNER_USER" \
+    "$RUNNER_HOME/config.sh" "$@"
+}
+
+re_register() {
+  [ -n "$RUNNER_URL" ] || { echo "provision.sh: re-register needs RUNNER_URL" >&2; return 1; }
+  [ -n "$RUNNER_TOKEN" ] || { echo "provision.sh: re-register needs RUNNER_TOKEN on stdin" >&2; return 1; }
+  if pgrep -f "[R]unner.Worker" >/dev/null 2>&1; then
+    echo "provision.sh: a job is running; refusing re-register" >&2
+    return 1
+  fi
+  if [ -f "$RUNNER_HOME/.service" ]; then
+    local old_svc=""
+    old_svc="$(cat "$RUNNER_HOME/.service" 2>/dev/null)" || true
+    if [ -n "$old_svc" ] && systemctl is-active --quiet "$old_svc" 2>/dev/null; then
+      systemctl stop "$old_svc" || true
+    fi
+    (cd "$RUNNER_HOME" && ./svc.sh uninstall) >/dev/null 2>&1 || true
+  fi
+  rm -f "$RUNNER_HOME/.runner" "$RUNNER_HOME/.credentials" "$RUNNER_HOME/.credentials_rsaparams"
+  local group_args=()
+  if [ -n "$RUNNER_GROUP" ]; then
+    group_args+=(--runnergroup "$RUNNER_GROUP")
+  fi
+  runner_config "$RUNNER_TOKEN" \
+    --unattended \
+    --url "$RUNNER_URL" \
+    --name "$RUNNER_NAME" \
+    --labels "$RUNNER_LABELS" \
+    "${group_args[@]}" \
+    --work _work \
+    --ephemeral
+  RUNNER_TOKEN=""
+  : >"$RUNNER_HOME/.ephemeral"
+  chmod 644 "$RUNNER_HOME/.ephemeral"
+  ensure_service
+  local hook_line="ACTIONS_RUNNER_HOOK_JOB_STARTED=/usr/local/sbin/homefield-job-started.sh"
+  if ! grep -qx "$hook_line" "$RUNNER_HOME/.env" 2>/dev/null; then
+    local env_new=""
+    env_new="$(mktemp)"
+    if [ -f "$RUNNER_HOME/.env" ]; then
+      grep -v '^ACTIONS_RUNNER_HOOK_JOB_STARTED=' "$RUNNER_HOME/.env" >"$env_new" || [ $? = 1 ]
+    fi
+    echo "$hook_line" >>"$env_new"
+    install -o "$RUNNER_USER" -g "$RUNNER_USER" -m 644 "$env_new" "$RUNNER_HOME/.env"
+    rm -f "$env_new"
+  fi
+  local svc_unit="" i ready=0
+  svc_unit="$(cat "$RUNNER_HOME/.service")"
+  systemctl restart "$svc_unit"
+  for ((i = 0; i < 30; i++)); do
+    if journalctl -u "$svc_unit" -n 50 --no-pager 2>/dev/null | grep -q "Listening for Jobs"; then
+      ready=1
+      break
+    fi
+    systemctl is-active --quiet "$svc_unit" || break
+    sleep 1
+  done
+  if [ "$ready" != "1" ] || ! systemctl is-active --quiet "$svc_unit"; then
+    systemctl stop "$svc_unit" 2>/dev/null || true
+    echo "provision.sh: re-registered runner did not start listening for jobs" >&2
+    return 1
+  fi
+  echo "provision.sh: ephemeral runner re-registered at ${RUNNER_URL}"
+}
+if [ "${1:-}" = re-register ]; then
+  re_register
+  exit
 fi
 
 # ── What this run has to do ─────────────────────────────────────────────────
@@ -554,16 +632,6 @@ install_sudoers /etc/sudoers.d/homefield-runner 'runner ALL=(ALL) NOPASSWD: ALL'
 sudo -u "$RUNNER_USER" sudo -n true
 
 # ── Registration + service ──────────────────────────────────────────────────
-# config.sh reads `--token` from ACTIONS_RUNNER_INPUT_TOKEN when the flag is
-# absent, which keeps the token off its command line. --preserve-env passes
-# just that one variable through sudo.
-runner_config() {
-  local token="$1"
-  shift
-  ACTIONS_RUNNER_INPUT_TOKEN="$token" \
-    sudo --preserve-env=ACTIONS_RUNNER_INPUT_TOKEN -u "$RUNNER_USER" \
-    "$RUNNER_HOME/config.sh" "$@"
-}
 if [ "$move" = "1" ]; then
   if [ -f "$RUNNER_HOME/.service" ]; then
     (cd "$RUNNER_HOME" && ./svc.sh uninstall)
@@ -584,13 +652,24 @@ if [ ! -f "$RUNNER_HOME/.runner" ]; then
   # already using the name, wherever that runs (#52), and it keeps that
   # registration's runner group, ignoring --runnergroup (actions/runner#4091),
   # which could put the runner in Default. A taken name fails here instead.
+  local_ephemeral_args=()
+  if [ "$RUNNER_EPHEMERAL" = "1" ]; then
+    local_ephemeral_args+=(--ephemeral)
+  fi
   runner_config "$RUNNER_TOKEN" \
     --unattended \
     --url "$RUNNER_URL" \
     --name "$RUNNER_NAME" \
     --labels "$RUNNER_LABELS" \
     "${group_args[@]}" \
+    ${local_ephemeral_args[@]+"${local_ephemeral_args[@]}"} \
     --work _work
+  if [ "$RUNNER_EPHEMERAL" = "1" ]; then
+    : >"$RUNNER_HOME/.ephemeral"
+    chmod 644 "$RUNNER_HOME/.ephemeral"
+  else
+    rm -f "$RUNNER_HOME/.ephemeral"
+  fi
 fi
 RUNNER_TOKEN=""
 RUNNER_REMOVE_TOKEN=""

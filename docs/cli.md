@@ -35,8 +35,9 @@ agents that drive the tool without a human in the loop. The guides:
 | Command | What it does | Notes for scripts |
 |---|---|---|
 | `setup` | The whole first-time setup in one command: preflight (stops on a failure), then install, then a summary and next steps; on a terminal it offers the routing pull request | Takes install's options; on a registered instance it upgrades |
-| `install` | Create the VM, provision it, register the runner; for an organization, create the runner group and wait for online | The lower-level command `setup` runs; reports preflight, does not stop on it |
+| `install` | Create the VM, provision it, register the runner; for an organization, create the runner group and wait for online | The lower-level command `setup` runs; reports preflight, does not stop on it; `--ephemeral` registers one job per registration |
 | `upgrade` | Re-run provisioning on a registered runner: packages, hooks, runner binary | Refuses (and skips) a VM with a job running, unless `--force` |
+| `re-register` | Re-register an `--ephemeral` runner with a fresh one-hour token (piped on stdin) | `--watch` polls and re-registers after each job completes; on failure leaves runner visibly offline |
 | `status` | Each VM, its registration, the GitHub listing, the service, the job, npm | `--json`; exits 0 only when every VM answered well |
 | `start` | Boot each VM, then report whether its runner is taking jobs | Exits 0 when every runner is online |
 | `stop` | Stop each VM | Refuses a VM with a job running; stopping an already stopped VM is not an error |
