@@ -236,6 +236,12 @@ usage_cmd_update() {
              rolls back on failure.
 EOF
 }
+usage_cmd_fleet() {
+  cat <<'EOF'
+  fleet      Fleet-wide status (with --json) and start/stop across every
+             HomeField VM on this Mac.
+EOF
+}
 usage_cmd_version() {
   cat <<'EOF'
   version    Show which version of this tool is installed, and whether a
@@ -262,6 +268,7 @@ usage_commands() {
   usage_cmd_adopt
   usage_cmd_memory
   usage_cmd_report
+  usage_cmd_fleet
   usage_cmd_update
   usage_cmd_version
 }
@@ -554,6 +561,16 @@ without one, pass --group-exists for a group you created and checked by hand.
 EOF
 }
 
+usage_sec_fleet() {
+  cat <<'EOF'
+Fleet options (`fleet [status|start|stop] [--json]`):
+  status     Show one row per HomeField VM and fleet totals (default)
+  start      Boot every HomeField VM and print the fleet status summary
+  stop       Stop every HomeField VM (refused while a job is running)
+  --json     Print fleet status and totals as JSON (with `fleet` or `fleet status`)
+EOF
+}
+
 # usage_join <pieces...>: the pieces with one blank line between, the full
 # text's own separators.
 usage_join() {
@@ -583,6 +600,7 @@ usage() {
     usage_sec_adopt \
     usage_sec_memory \
     usage_sec_report \
+    usage_sec_fleet \
     usage_tokens
 }
 
@@ -623,6 +641,8 @@ usage_for() {
       usage_join usage_header usage_cmd_memory usage_sec_memory usage_options ;;
     report)
       usage_join usage_header usage_cmd_report usage_sec_report usage_options ;;
+    fleet)
+      usage_join usage_header usage_cmd_fleet usage_sec_fleet usage_options ;;
     update)
       usage_join usage_header usage_cmd_update usage_sec_update usage_options ;;
     version)
@@ -656,6 +676,7 @@ Commands:
   adopt      Prepare a repository to use the runner
   memory     Show every VM's memory use from its per-minute log
   report     Queue wait, duration and minutes of jobs, local against hosted
+  fleet      Fleet-wide status (with --json) and start/stop across all VMs
   version    Show the installed version, and whether a newer one exists
 
 Run `bin/homefield help <command>` for a command's options, `bin/homefield
@@ -693,7 +714,7 @@ main() {
   color_init ${COLOR_ARG:+"$COLOR_ARG"} "$cmd"
   # Only the commands that act on the VM: preflight, route, adopt, report and
   # version never use it, so a stale HOMEFIELD_INSTANCE does not stop them.
-  case "$cmd" in setup | install | upgrade | re-register | update | status | start | stop | diagnose | uninstall | reset | memory) check_instance ;; esac
+  case "$cmd" in setup | install | upgrade | re-register | update | status | start | stop | diagnose | uninstall | reset | memory | fleet) check_instance ;; esac
   set -- "${rest[@]+"${rest[@]}"}"
   # <command> --help (or -h) prints that command's help, before the command's
   # own parser sees the flag: no command takes -h for anything else. --help
@@ -719,6 +740,7 @@ main() {
     adopt) cmd_adopt "$@" ;;
     memory) cmd_memory "$@" ;;
     report) cmd_report "$@" ;;
+    fleet) cmd_fleet "$@" ;;
     update) cmd_update "$@" ;;
     version | --version) cmd_version "$@" ;;
     help)
