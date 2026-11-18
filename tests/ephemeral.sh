@@ -176,7 +176,7 @@ printf '{"agentName":"old-runner"}\n' >"$REREG_WORK/runner/.runner"
 printf '{"scheme":"OAuth"}\n' >"$REREG_WORK/runner/.credentials"
 printf 'actions.runner.test.service\n' >"$REREG_WORK/runner/.service"
 REREG_FN="$WORK/rereg_fn.sh"
-sed -n '/^re_register()/,/^if /p' "$REPO_ROOT/vm/provision.sh" | sed '$d' >"$REREG_FN"
+sed -n '/^REREG_BACKUP_DIR=/,/^if /p' "$REPO_ROOT/vm/provision.sh" | sed '$d' >"$REREG_FN"
 rereg_calls="$REREG_WORK/calls.log"
 : >"$rereg_calls"
 # shellcheck disable=SC2016  # inner bash -c expands its own vars
@@ -230,5 +230,41 @@ st_out="$(env -i HOME="$WORK/home" PATH="$STUBS" REPO_ROOT="$REPO_ROOT" HOMEFIEL
   st_render_human
 ' 2>&1)"
 record "status render with ST_REG=no and ephemeral_error: shows mode and ERROR" "yes/yes" "$(has "$st_out" "mode: ephemeral")/$(has "$st_out" "ephemeral: ERROR (re-registration failed)")"
+
+# 13. provision.sh re_register restores via EXIT trap even if rm fails under set -e
+: >"$rereg_calls"
+# shellcheck disable=SC2016  # inner bash -c expands its own vars
+rm_fail_rc=0
+env -i \
+  PATH="$STUBS" \
+  RUNNER_HOME="$REREG_WORK/runner" \
+  RUNNER_URL="https://github.com/acme" \
+  RUNNER_TOKEN="tok-new" \
+  RUNNER_NAME="test-runner" \
+  RUNNER_LABELS="self-hosted,linux,arm64,homefield-ci" \
+  RUNNER_GROUP="" \
+  RUNNER_USER="runner" \
+  REREG_CALLS="$rereg_calls" \
+  /bin/bash -c '
+    set -euo pipefail
+    pgrep() { return 1; }
+    systemctl() {
+      case "${1:-}" in
+        is-active) return 0 ;;
+        *) return 0 ;;
+      esac
+    }
+    rm() {
+      case "$*" in
+        *".runner"*) return 42 ;;
+        *) command rm "$@" ;;
+      esac
+    }
+    ensure_service() { echo "ensure_service:$*" >>"$REREG_CALLS"; return 0; }
+    . "$1"
+    re_register
+  ' _ "$REREG_FN" >/dev/null 2>&1 || rm_fail_rc=$?
+rereg_log="$(cat "$rereg_calls")"
+record "provision.sh re_register rm failure: EXIT trap restores and calls ensure_service --start" "42/yes" "$rm_fail_rc/$(has "$rereg_log" "ensure_service:--start")"
 
 summary

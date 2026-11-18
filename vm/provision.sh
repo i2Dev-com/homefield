@@ -293,6 +293,28 @@ runner_config() {
     "$RUNNER_HOME/config.sh" "$@"
 }
 
+REREG_BACKUP_DIR=""
+REREG_HAD_REG=0
+REREG_WAS_ACTIVE=0
+re_register_restore() {
+  local rf
+  [ -n "$REREG_BACKUP_DIR" ] && [ -d "$REREG_BACKUP_DIR" ] || return 0
+  for rf in .runner .credentials .credentials_rsaparams .env; do
+    if [ -f "$REREG_BACKUP_DIR/$rf" ]; then
+      cp -p "$REREG_BACKUP_DIR/$rf" "$RUNNER_HOME/$rf" || true
+    fi
+  done
+  if [ "$REREG_HAD_REG" = "1" ]; then
+    if [ "$REREG_WAS_ACTIVE" = "1" ]; then
+      ensure_service --start >/dev/null 2>&1 || true
+    else
+      ensure_service >/dev/null 2>&1 || true
+    fi
+  fi
+  rm -rf "$REREG_BACKUP_DIR" || true
+  REREG_BACKUP_DIR=""
+}
+
 re_register() {
   [ -n "$RUNNER_URL" ] || { echo "provision.sh: re-register needs RUNNER_URL" >&2; return 1; }
   [ -n "$RUNNER_TOKEN" ] || { echo "provision.sh: re-register needs RUNNER_TOKEN on stdin" >&2; return 1; }
@@ -300,39 +322,26 @@ re_register() {
     echo "provision.sh: a job is running; refusing re-register" >&2
     return 1
   fi
-  local backup_dir="" had_reg=0 was_active=0 old_svc="" f
-  backup_dir="$(mktemp -d)"
+  local old_svc="" f
+  REREG_BACKUP_DIR="$(mktemp -d)"
+  REREG_HAD_REG=0
+  REREG_WAS_ACTIVE=0
   for f in .runner .credentials .credentials_rsaparams .env; do
     if [ -f "$RUNNER_HOME/$f" ]; then
-      cp -p "$RUNNER_HOME/$f" "$backup_dir/$f"
-      [ "$f" != ".runner" ] || had_reg=1
+      cp -p "$RUNNER_HOME/$f" "$REREG_BACKUP_DIR/$f"
+      [ "$f" != ".runner" ] || REREG_HAD_REG=1
     fi
   done
+  trap re_register_restore EXIT
+
   if [ -f "$RUNNER_HOME/.service" ]; then
     old_svc="$(cat "$RUNNER_HOME/.service" 2>/dev/null)" || true
     if [ -n "$old_svc" ] && systemctl is-active --quiet "$old_svc" 2>/dev/null; then
-      was_active=1
+      REREG_WAS_ACTIVE=1
       systemctl stop "$old_svc" || true
     fi
     (cd "$RUNNER_HOME" && ./svc.sh uninstall) >/dev/null 2>&1 || true
   fi
-
-  re_register_restore() {
-    local rf
-    for rf in .runner .credentials .credentials_rsaparams .env; do
-      if [ -f "$backup_dir/$rf" ]; then
-        cp -p "$backup_dir/$rf" "$RUNNER_HOME/$rf" || true
-      fi
-    done
-    if [ "$had_reg" = "1" ]; then
-      if [ "$was_active" = "1" ]; then
-        ensure_service --start >/dev/null 2>&1 || true
-      else
-        ensure_service >/dev/null 2>&1 || true
-      fi
-    fi
-    rm -rf "$backup_dir"
-  }
 
   rm -f "$RUNNER_HOME/.runner" "$RUNNER_HOME/.credentials" "$RUNNER_HOME/.credentials_rsaparams"
   local group_args=()
@@ -384,11 +393,12 @@ re_register() {
   done
   if [ "$ready" != "1" ] || ! systemctl is-active --quiet "$svc_unit"; then
     systemctl stop "$svc_unit" 2>/dev/null || true
-    re_register_restore
     echo "provision.sh: re-registered runner did not start listening for jobs" >&2
     return 1
   fi
-  rm -rf "$backup_dir"
+  trap - EXIT
+  rm -rf "$REREG_BACKUP_DIR"
+  REREG_BACKUP_DIR=""
   echo "provision.sh: ephemeral runner re-registered at ${RUNNER_URL}"
 }
 if [ "${1:-}" = re-register ]; then
