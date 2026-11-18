@@ -367,6 +367,16 @@ update_schedule() {
       dir="$(dirname "$plist")"
       state_dir="$(update_state_dir)"
       mkdir -p "$dir" "$state_dir"
+      local inst_xml="" env_xml=""
+      if [ "$EXPLICIT_INSTANCE" = 1 ]; then
+        inst_xml="    <string>--instance</string>"$'\n'"    <string>$(update_xml_escape "$INSTANCE")</string>"$'\n'
+      fi
+      if [ -n "${HOMEFIELD_STATE_DIR:-}" ]; then
+        env_xml="${env_xml}    <key>HOMEFIELD_STATE_DIR</key>"$'\n'"    <string>$(update_xml_escape "$HOMEFIELD_STATE_DIR")</string>"$'\n'
+      fi
+      if [ -n "${LIMA_HOME:-}" ]; then
+        env_xml="${env_xml}    <key>LIMA_HOME</key>"$'\n'"    <string>$(update_xml_escape "$LIMA_HOME")</string>"$'\n'
+      fi
       cat >"$plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -377,7 +387,7 @@ update_schedule() {
   <key>ProgramArguments</key>
   <array>
     <string>$(update_xml_escape "$ROOT/bin/homefield")</string>
-    <string>update</string>
+${inst_xml}    <string>update</string>
     <string>--auto</string>
   </array>
   <key>StartInterval</key>
@@ -392,7 +402,7 @@ update_schedule() {
     <string>${interval}</string>
     <key>HOMEFIELD_AUTO_UPDATE_MINOR</key>
     <string>$(update_xml_escape "$minor_val")</string>
-  </dict>
+${env_xml}  </dict>
   <key>StandardOutPath</key>
   <string>$(update_xml_escape "$state_dir/update.log")</string>
   <key>StandardErrorPath</key>
