@@ -16,7 +16,7 @@ trap 'rm -rf "$TMP"' EXIT
 
 STUBS="$TMP/stubs"
 mkdir -p "$STUBS"
-for t in awk bash cat cut dirname git grep head mktemp mv rm mkdir sed sh sleep tr wc; do
+for t in awk bash cat cp cut dirname git grep head mktemp mv rm mkdir sed sh sleep tr wc; do
   ln -s "$(command -v "$t")" "$STUBS/$t"
 done
 
@@ -139,5 +139,74 @@ record "--watch while service running: does not re-register" "0/no" "$rc/$(has "
 STUB_SVC_RC=1 STUB_JOB_RC=1 hrun cmd_re_register --watch --interval 0 --max-cycles 1
 calls="$(cat "$CALLS")"
 record "--watch when service stopped (job finished): re-registers" "0/yes/yes" "$rc/$(has "$out" "finished a job; re-registering")/$(has "$calls" "cmd=re-register")"
+
+# 8. Real run_provision propagates guest_stdin failure inside cmd_re_register
+REAL_PROV_HARNESS="$WORK/real_prov_harness.sh"
+cat >"$REAL_PROV_HARNESS" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+HOMEFIELD_SOURCE_ONLY=1
+. "$REPO_ROOT/bin/homefield"
+check_host() { :; }
+verify_isolation() { :; }
+ensure_vm() { :; }
+is_job_running() { return 1; }
+get_token() { printf 'stub-tok-123\n'; }
+guest_stage_dir() { echo "/tmp/stage-1"; }
+guest_unstage() { :; }
+guest_stdin() { return 42; }
+runner_setting() { echo "test-mac-homefield"; }
+wait_online() { :; }
+cmd_re_register
+EOF
+state_set_err_out="$(env -i \
+  HOME="$WORK/home" \
+  PATH="$STUBS" \
+  REPO_ROOT="$REPO_ROOT" \
+  HOMEFIELD_STATE_DIR="$WORK/state" \
+  bash "$REAL_PROV_HARNESS" 2>&1 </dev/null)"
+real_prov_rc=$?
+st_body="$(cat "$WORK/state/homefield.state")"
+record "real run_provision: guest_stdin failure propagates and sets ephemeral_error" "nonzero/yes/yes" "$(nonzero "$real_prov_rc")/$(has "$state_set_err_out" "re-register: failed on homefield")/$(has "$st_body" "ephemeral_error=re-registration failed")"
+
+# 9. provision.sh re_register restores previous registration on config.sh failure
+REREG_WORK="$TMP/rereg"
+mkdir -p "$REREG_WORK/runner"
+printf '{"agentName":"old-runner"}\n' >"$REREG_WORK/runner/.runner"
+printf '{"scheme":"OAuth"}\n' >"$REREG_WORK/runner/.credentials"
+printf 'actions.runner.test.service\n' >"$REREG_WORK/runner/.service"
+REREG_FN="$WORK/rereg_fn.sh"
+sed -n '/^re_register()/,/^if /p' "$REPO_ROOT/vm/provision.sh" | sed '$d' >"$REREG_FN"
+rereg_calls="$REREG_WORK/calls.log"
+: >"$rereg_calls"
+# shellcheck disable=SC2016  # inner bash -c expands its own vars
+rereg_out="$(env -i \
+  PATH="$STUBS" \
+  RUNNER_HOME="$REREG_WORK/runner" \
+  RUNNER_URL="https://github.com/acme" \
+  RUNNER_TOKEN="tok-new" \
+  RUNNER_NAME="test-runner" \
+  RUNNER_LABELS="self-hosted,linux,arm64,homefield-ci" \
+  RUNNER_GROUP="" \
+  RUNNER_USER="runner" \
+  REREG_CALLS="$rereg_calls" \
+  bash -c '
+    set -euo pipefail
+    pgrep() { return 1; }
+    systemctl() {
+      case "${1:-}" in
+        is-active) return 0 ;;
+        *) echo "systemctl:$*" >>"$REREG_CALLS"; return 0 ;;
+      esac
+    }
+    runner_config() { echo "runner_config" >>"$REREG_CALLS"; return 1; }
+    ensure_service() { echo "ensure_service:$*" >>"$REREG_CALLS"; return 0; }
+    . "$1"
+    re_register
+  ' _ "$REREG_FN" 2>&1)"
+rereg_rc=$?
+restored_runner="$(cat "$REREG_WORK/runner/.runner" 2>/dev/null || true)"
+rereg_log="$(cat "$rereg_calls")"
+record "provision.sh re_register failure: restores .runner and calls ensure_service --start" "nonzero/yes/yes/yes" "$(nonzero "$rereg_rc")/$(has "$rereg_out" "restored previous state")/$(has "$restored_runner" "old-runner")/$(has "$rereg_log" "ensure_service:--start")"
 
 summary

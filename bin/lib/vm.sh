@@ -781,12 +781,12 @@ run_provision() {
   shift
   stage="$(guest_stage_dir)"
   trap 'guest_unstage "$stage"' RETURN
-  limactl copy "$PROVISION" "${INSTANCE}:${stage}/provision.sh"
+  limactl copy "$PROVISION" "${INSTANCE}:${stage}/provision.sh" || return $?
   # The guest helpers provision.sh installs from its own directory (vm/guest/).
   # The uninstall path stages provision.sh alone and runs ensure-service, which
   # needs none of them.
-  limactl copy -r "$GUEST_DIR" "${INSTANCE}:${stage}/guest"
-  printf '%s' "$input" | guest_stdin sudo "$@" bash "${stage}/provision.sh" ${PROVISION_CMD:+"$PROVISION_CMD"}
+  limactl copy -r "$GUEST_DIR" "${INSTANCE}:${stage}/guest" || return $?
+  printf '%s' "$input" | guest_stdin sudo "$@" bash "${stage}/provision.sh" ${PROVISION_CMD:+"$PROVISION_CMD"} || return $?
   guest_unstage "$stage"
   trap - RETURN
 }

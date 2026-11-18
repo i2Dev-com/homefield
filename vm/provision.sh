@@ -300,31 +300,65 @@ re_register() {
     echo "provision.sh: a job is running; refusing re-register" >&2
     return 1
   fi
+  local backup_dir="" had_reg=0 was_active=0 old_svc="" f
+  backup_dir="$(mktemp -d)"
+  for f in .runner .credentials .credentials_rsaparams .env; do
+    if [ -f "$RUNNER_HOME/$f" ]; then
+      cp -p "$RUNNER_HOME/$f" "$backup_dir/$f"
+      [ "$f" != ".runner" ] || had_reg=1
+    fi
+  done
   if [ -f "$RUNNER_HOME/.service" ]; then
-    local old_svc=""
     old_svc="$(cat "$RUNNER_HOME/.service" 2>/dev/null)" || true
     if [ -n "$old_svc" ] && systemctl is-active --quiet "$old_svc" 2>/dev/null; then
+      was_active=1
       systemctl stop "$old_svc" || true
     fi
     (cd "$RUNNER_HOME" && ./svc.sh uninstall) >/dev/null 2>&1 || true
   fi
+
+  re_register_restore() {
+    local rf
+    for rf in .runner .credentials .credentials_rsaparams .env; do
+      if [ -f "$backup_dir/$rf" ]; then
+        cp -p "$backup_dir/$rf" "$RUNNER_HOME/$rf" || true
+      fi
+    done
+    if [ "$had_reg" = "1" ]; then
+      if [ "$was_active" = "1" ]; then
+        ensure_service --start >/dev/null 2>&1 || true
+      else
+        ensure_service >/dev/null 2>&1 || true
+      fi
+    fi
+    rm -rf "$backup_dir"
+  }
+
   rm -f "$RUNNER_HOME/.runner" "$RUNNER_HOME/.credentials" "$RUNNER_HOME/.credentials_rsaparams"
   local group_args=()
   if [ -n "$RUNNER_GROUP" ]; then
     group_args+=(--runnergroup "$RUNNER_GROUP")
   fi
-  runner_config "$RUNNER_TOKEN" \
+  if ! runner_config "$RUNNER_TOKEN" \
     --unattended \
     --url "$RUNNER_URL" \
     --name "$RUNNER_NAME" \
     --labels "$RUNNER_LABELS" \
     "${group_args[@]}" \
     --work _work \
-    --ephemeral
+    --ephemeral; then
+    RUNNER_TOKEN=""
+    re_register_restore
+    echo "provision.sh: config.sh failed during re-register; restored previous state" >&2
+    return 1
+  fi
   RUNNER_TOKEN=""
   : >"$RUNNER_HOME/.ephemeral"
   chmod 644 "$RUNNER_HOME/.ephemeral"
-  ensure_service
+  if ! ensure_service; then
+    re_register_restore
+    return 1
+  fi
   local hook_line="ACTIONS_RUNNER_HOOK_JOB_STARTED=/usr/local/sbin/homefield-job-started.sh"
   if ! grep -qx "$hook_line" "$RUNNER_HOME/.env" 2>/dev/null; then
     local env_new=""
@@ -338,7 +372,7 @@ re_register() {
   fi
   local svc_unit="" i ready=0
   svc_unit="$(cat "$RUNNER_HOME/.service")"
-  systemctl restart "$svc_unit"
+  systemctl restart "$svc_unit" || true
   for ((i = 0; i < 30; i++)); do
     if journalctl -u "$svc_unit" -n 50 --no-pager 2>/dev/null | grep -q "Listening for Jobs"; then
       ready=1
@@ -349,9 +383,11 @@ re_register() {
   done
   if [ "$ready" != "1" ] || ! systemctl is-active --quiet "$svc_unit"; then
     systemctl stop "$svc_unit" 2>/dev/null || true
+    re_register_restore
     echo "provision.sh: re-registered runner did not start listening for jobs" >&2
     return 1
   fi
+  rm -rf "$backup_dir"
   echo "provision.sh: ephemeral runner re-registered at ${RUNNER_URL}"
 }
 if [ "${1:-}" = re-register ]; then
