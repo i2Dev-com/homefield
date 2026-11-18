@@ -771,6 +771,16 @@ cmd_install() {
     local p
     for p in ${presets[@]+"${presets[@]}"}; do args+=(--preset "$p"); done
     upgrade_registered "${args[@]+"${args[@]}"}"
+    if [ "$ephemeral" = 1 ]; then
+      local r_url="" r_name=""
+      { IFS= read -r r_url || true; IFS= read -r r_name || true; } < <(runner_setting gitHubUrl agentName 2>/dev/null || true)
+      state_set ephemeral 1
+      state_set ephemeral_url "${url:-$r_url}"
+      state_set ephemeral_name "${name:-$r_name}"
+      state_set ephemeral_group "$group"
+      state_set ephemeral_label "$label"
+      state_set ephemeral_error ""
+    fi
     [ "$SETUP" != 1 ] || setup_upgrade_summary
     return
   fi
@@ -1515,15 +1525,34 @@ cmd_re_register() {
     return
   fi
 
-  [ "$(state_get ephemeral)" = "1" ] ||
-    die "re-register --watch: ${INSTANCE} is not configured in ephemeral mode"
+  local watch_vms=() list="" vm
+  if [ "$EXPLICIT_INSTANCE" = 1 ]; then
+    [ "$(state_get ephemeral)" = "1" ] ||
+      die "re-register --watch: ${INSTANCE} is not configured in ephemeral mode"
+    watch_vms=("$INSTANCE")
+  else
+    if list="$(vm_instances)"; then
+      while IFS= read -r vm; do
+        [ -n "$vm" ] || continue
+        INSTANCE="$vm"
+        [ "$(state_get ephemeral)" = "1" ] && watch_vms+=("$vm")
+      done <<<"$list"
+    elif [ "$(state_get ephemeral)" = "1" ]; then
+      watch_vms=("$INSTANCE")
+    fi
+    [ ${#watch_vms[@]} -gt 0 ] ||
+      die "re-register --watch: no ephemeral VM found"
+  fi
   local cycle=0
   while :; do
     cycle=$((cycle + 1))
-    if ! is_job_running && ! runner_service_state; then
-      log "ephemeral runner ${INSTANCE} finished a job; re-registering"
-      re_register_single
-    fi
+    for vm in "${watch_vms[@]}"; do
+      INSTANCE="$vm"
+      if ! is_job_running && ! runner_service_state; then
+        log "ephemeral runner ${INSTANCE} finished a job; re-registering"
+        re_register_single
+      fi
+    done
     if [ "$max_cycles" -gt 0 ] && [ "$cycle" -ge "$max_cycles" ]; then
       break
     fi

@@ -319,4 +319,48 @@ env -i \
 retry_log="$(cat "$retry_calls")"
 record "provision.sh re_register retry after ensure_service failure: reuses registration without re-running config" "0/no/yes/no" "$retry_rc/$(has "$retry_log" "runner_config")/$(has "$retry_log" "ensure_service:ok")/$([ -f "$RETRY_WORK/runner/.re-register-pending" ] && echo yes || echo no)"
 
+# 15. Retrying install --ephemeral on already-registered VM reconciles ephemeral state
+rm -rf "$WORK/state"/*
+# shellcheck disable=SC2016  # inner bash -c expands $REPO_ROOT
+env -i HOME="$WORK/home" PATH="$STUBS" REPO_ROOT="$REPO_ROOT" CALLS="$CALLS" HOMEFIELD_STATE_DIR="$WORK/state" /bin/bash -c '
+  HOMEFIELD_SOURCE_ONLY=1
+  . "$REPO_ROOT/bin/homefield"
+  check_host() { :; }
+  verify_isolation() { :; }
+  ensure_vm() { :; }
+  cmd_preflight() { return 0; }
+  is_registered() { return 0; }
+  upgrade_registered() { :; }
+  runner_setting() {
+    for k in "$@"; do
+      case "$k" in
+        gitHubUrl) echo "https://github.com/acme" ;;
+        agentName) echo "test-mac-homefield" ;;
+      esac
+    done
+  }
+  cmd_install --url https://github.com/acme --org --ephemeral
+' >/dev/null 2>&1; ephem_retry_rc=$?
+st_body="$(cat "$WORK/state/homefield.state")"
+record "retry install --ephemeral when already registered: reconciles ephemeral state" "0/yes/yes" "$ephem_retry_rc/$(has "$st_body" "ephemeral=1")/$(has "$st_body" "ephemeral_url=https://github.com/acme")"
+
+# 16. re-register --watch discovers non-default ephemeral instance via vm_instances
+rm -rf "$WORK/state"/*
+mkdir -p "$WORK/home/.lima/custom-eph"
+printf '# Lima VM for the local GitHub Actions runner.\n' >"$WORK/home/.lima/custom-eph/lima.yaml"
+printf 'ephemeral=1\nephemeral_url=https://github.com/acme\n' >"$WORK/state/custom-eph.state"
+: >"$CALLS"
+# shellcheck disable=SC2016  # inner bash -c expands $REPO_ROOT/$INSTANCE/$CALLS
+env -i HOME="$WORK/home" PATH="$STUBS" REPO_ROOT="$REPO_ROOT" CALLS="$CALLS" HOMEFIELD_STATE_DIR="$WORK/state" /bin/bash -c '
+  HOMEFIELD_SOURCE_ONLY=1
+  . "$REPO_ROOT/bin/homefield"
+  vm_instances() { printf "custom-eph\n"; }
+  is_job_running() { return 1; }
+  runner_service_state() { return 1; }
+  re_register_single() { echo "rereg:$INSTANCE" >>"$CALLS"; }
+  cmd_re_register --watch --interval 0 --max-cycles 1
+' >/dev/null 2>&1; watch_rc=$?
+watch_calls="$(cat "$CALLS")"
+record "re-register --watch discovers non-default ephemeral instance" "0/yes" "$watch_rc/$(has "$watch_calls" "rereg:custom-eph")"
+
 summary
