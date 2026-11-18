@@ -209,4 +209,9 @@ restored_runner="$(cat "$REREG_WORK/runner/.runner" 2>/dev/null || true)"
 rereg_log="$(cat "$rereg_calls")"
 record "provision.sh re_register failure: restores .runner and calls ensure_service --start" "nonzero/yes/yes/yes" "$(nonzero "$rereg_rc")/$(has "$rereg_out" "restored previous state")/$(has "$restored_runner" "old-runner")/$(has "$rereg_log" "ensure_service:--start")"
 
+# 10. Persistent install clears previous ephemeral metadata
+hrun cmd_install --url https://github.com/other-org --org
+st_body="$(cat "$WORK/state/homefield.state")"
+record "persistent install after ephemeral: clears ephemeral=1 and ephemeral_url" "0/yes/no" "$rc/$(has "$st_body" "ephemeral=0")/$(has "$st_body" "https://github.com/acme")"
+
 summary

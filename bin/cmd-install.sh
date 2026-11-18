@@ -806,6 +806,13 @@ cmd_install() {
     [ -z "$group" ] || state_set ephemeral_group "$group"
     [ -z "$label" ] || state_set ephemeral_label "$label"
     state_set ephemeral_error ""
+  elif [ "$(state_get ephemeral)" = "1" ]; then
+    state_set ephemeral 0
+    state_set ephemeral_url ""
+    state_set ephemeral_name ""
+    state_set ephemeral_group ""
+    state_set ephemeral_label ""
+    state_set ephemeral_error ""
   fi
   [ "$autostart" = 1 ] && enable_autostart
   # The name and id the runner registered under, read back from its config.

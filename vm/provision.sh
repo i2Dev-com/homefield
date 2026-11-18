@@ -344,7 +344,7 @@ re_register() {
     --url "$RUNNER_URL" \
     --name "$RUNNER_NAME" \
     --labels "$RUNNER_LABELS" \
-    "${group_args[@]}" \
+    ${group_args[@]+"${group_args[@]}"} \
     --work _work \
     --ephemeral; then
     RUNNER_TOKEN=""
@@ -370,11 +370,12 @@ re_register() {
     install -o "$RUNNER_USER" -g "$RUNNER_USER" -m 644 "$env_new" "$RUNNER_HOME/.env"
     rm -f "$env_new"
   fi
-  local svc_unit="" i ready=0
+  local svc_unit="" i ready=0 since=""
   svc_unit="$(cat "$RUNNER_HOME/.service")"
+  since="$(date '+%Y-%m-%d %H:%M:%S')"
   systemctl restart "$svc_unit" || true
   for ((i = 0; i < 30; i++)); do
-    if journalctl -u "$svc_unit" -n 50 --no-pager 2>/dev/null | grep -q "Listening for Jobs"; then
+    if journalctl -u "$svc_unit" --since "$since" --no-pager 2>/dev/null | grep -q "Listening for Jobs"; then
       ready=1
       break
     fi
