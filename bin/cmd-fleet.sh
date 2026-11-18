@@ -40,11 +40,16 @@ fleet_status() {
   while IFS= read -r inst; do
     [ -n "$inst" ] || continue
     INSTANCE="$inst"
+    # st_collect does not clear ST_NAME/ST_URL/ST_ID when a VM is stopped or unregistered.
+    ST_NAME="" ST_GH_STATUS=""
     st_collect
 
     local vm_state="${ST_STATUS:-not created}"
     local runner_name="${ST_NAME:-—}"
     local gh_state="${ST_GH:-—}"
+    if [ "$gh_state" = "listed" ]; then
+      gh_state="${ST_GH_STATUS:-unknown}"
+    fi
     local svc_state="${ST_SVC:-—}"
     local job_state="${ST_JOB:-—}"
     local mode="persistent"

@@ -32,7 +32,15 @@ cat > "$TMP/bin/gh" <<'EOF'
 #!/usr/bin/env bash
 exit 0
 EOF
-chmod +x "$TMP/bin/limactl" "$TMP/bin/gh"
+cat > "$TMP/bin/uname" <<'EOF'
+#!/usr/bin/env bash
+case "${1-}" in
+  -s) echo "Darwin" ;;
+  -m) echo "arm64" ;;
+  *) /usr/bin/uname "$@" ;;
+esac
+EOF
+chmod +x "$TMP/bin/limactl" "$TMP/bin/gh" "$TMP/bin/uname"
 
 # Source bin/homefield in a subshell-safe way.
 HOMEFIELD_SOURCE_ONLY=1
@@ -51,26 +59,29 @@ vm_instances() {
 
 # shellcheck disable=SC2034
 st_collect() {
+  ST_GH_STATUS=""
   case "$MOCK_MODE:$INSTANCE" in
     multi:homefield-1)
       ST_STATUS="Running"
       ST_NAME="mac-1"
-      ST_GH="online"
-      ST_SVC="active"
+      ST_GH="listed"
+      ST_GH_STATUS="online"
+      ST_SVC="running"
       ST_JOB="idle"
       ;;
     multi:homefield-2)
-      ST_STATUS="Running"
-      ST_NAME="mac-2"
-      ST_GH="offline"
-      ST_SVC="inactive"
-      ST_JOB="—"
+      # Simulate a stopped VM where real st_collect returns without resetting ST_NAME.
+      ST_STATUS="Stopped"
+      ST_GH="not_checked"
+      ST_SVC="unknown"
+      ST_JOB="unknown"
       ;;
     busy:homefield-1|single:homefield-1)
       ST_STATUS="Running"
       ST_NAME="mac-1"
-      ST_GH="online"
-      ST_SVC="active"
+      ST_GH="listed"
+      ST_GH_STATUS="online"
+      ST_SVC="running"
       ST_JOB="running"
       ;;
   esac
@@ -109,8 +120,8 @@ import json, sys
 d = json.loads(sys.argv[1])
 assert d["total"] == 2 and d["online"] == 1 and d["idle"] == 1 and d["busy"] == 0 and d["offline"] == 1
 assert len(d["vms"]) == 2
-assert d["vms"][0]["instance"] == "homefield-1" and d["vms"][0]["mode"] == "persistent"
-assert d["vms"][1]["instance"] == "homefield-2" and d["vms"][1]["mode"] == "ephemeral"
+assert d["vms"][0]["instance"] == "homefield-1" and d["vms"][0]["github"] == "online" and d["vms"][0]["mode"] == "persistent"
+assert d["vms"][1]["instance"] == "homefield-2" and d["vms"][1]["runner"] == "—" and d["vms"][1]["github"] == "not_checked" and d["vms"][1]["mode"] == "ephemeral"
 print("ok")
 ' "$out" 2>/dev/null || echo bad)"
 record "fleet status --json: valid schema and counts" "ok" "$json_ok"
