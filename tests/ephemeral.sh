@@ -16,7 +16,7 @@ trap 'rm -rf "$TMP"' EXIT
 
 STUBS="$TMP/stubs"
 mkdir -p "$STUBS"
-for t in awk bash cat cp cut dirname git grep head mktemp mv rm mkdir sed sh sleep tr wc; do
+for t in awk bash cat cp cut date dirname git grep head mktemp mv rm mkdir sed sh sleep tr wc; do
   ln -s "$(command -v "$t")" "$STUBS/$t"
 done
 
@@ -266,5 +266,57 @@ env -i \
   ' _ "$REREG_FN" >/dev/null 2>&1 || rm_fail_rc=$?
 rereg_log="$(cat "$rereg_calls")"
 record "provision.sh re_register rm failure: EXIT trap restores and calls ensure_service --start" "42/yes" "$rm_fail_rc/$(has "$rereg_log" "ensure_service:--start")"
+
+# 14. provision.sh re_register reuses completed registration when ensure_service fails and is retried
+RETRY_WORK="$TMP/rereg-retry"
+mkdir -p "$RETRY_WORK/runner"
+retry_calls="$RETRY_WORK/calls.log"
+: >"$retry_calls"
+# shellcheck disable=SC2016  # inner bash -c expands its own vars
+env -i \
+  PATH="$STUBS" \
+  RUNNER_HOME="$RETRY_WORK/runner" \
+  RUNNER_URL="https://github.com/acme" \
+  RUNNER_TOKEN="tok-1" \
+  RUNNER_NAME="test-runner" \
+  RUNNER_LABELS="self-hosted,linux,arm64,homefield-ci" \
+  RUNNER_GROUP="" \
+  RUNNER_USER="runner" \
+  RETRY_CALLS="$retry_calls" \
+  /bin/bash -c '
+    set -euo pipefail
+    pgrep() { return 1; }
+    systemctl() { return 0; }
+    runner_config() { echo "runner_config" >>"$RETRY_CALLS"; : >"$RUNNER_HOME/.runner"; return 0; }
+    ensure_service() { echo "ensure_service:fail" >>"$RETRY_CALLS"; return 1; }
+    . "$1"
+    re_register
+  ' _ "$REREG_FN" >/dev/null 2>&1 || true
+: >"$retry_calls"
+# shellcheck disable=SC2016  # inner bash -c expands its own vars
+retry_rc=0
+env -i \
+  PATH="$STUBS" \
+  RUNNER_HOME="$RETRY_WORK/runner" \
+  RUNNER_URL="https://github.com/acme" \
+  RUNNER_TOKEN="tok-2" \
+  RUNNER_NAME="test-runner" \
+  RUNNER_LABELS="self-hosted,linux,arm64,homefield-ci" \
+  RUNNER_GROUP="" \
+  RUNNER_USER="runner" \
+  RETRY_CALLS="$retry_calls" \
+  /bin/bash -c '
+    set -euo pipefail
+    pgrep() { return 1; }
+    systemctl() { return 0; }
+    journalctl() { echo "Listening for Jobs"; }
+    install() { :; }
+    runner_config() { echo "runner_config" >>"$RETRY_CALLS"; return 1; }
+    ensure_service() { echo "ensure_service:ok" >>"$RETRY_CALLS"; printf "actions.runner.test.service\n" >"$RUNNER_HOME/.service"; return 0; }
+    . "$1"
+    re_register
+  ' _ "$REREG_FN" >/dev/null 2>&1 || retry_rc=$?
+retry_log="$(cat "$retry_calls")"
+record "provision.sh re_register retry after ensure_service failure: reuses registration without re-running config" "0/no/yes/no" "$retry_rc/$(has "$retry_log" "runner_config")/$(has "$retry_log" "ensure_service:ok")/$([ -f "$RETRY_WORK/runner/.re-register-pending" ] && echo yes || echo no)"
 
 summary

@@ -296,19 +296,22 @@ runner_config() {
 REREG_BACKUP_DIR=""
 REREG_HAD_REG=0
 REREG_WAS_ACTIVE=0
+REREG_CONFIG_DONE=0
 re_register_restore() {
   local rf
   [ -n "$REREG_BACKUP_DIR" ] && [ -d "$REREG_BACKUP_DIR" ] || return 0
-  for rf in .runner .credentials .credentials_rsaparams .env; do
-    if [ -f "$REREG_BACKUP_DIR/$rf" ]; then
-      cp -p "$REREG_BACKUP_DIR/$rf" "$RUNNER_HOME/$rf" || true
-    fi
-  done
-  if [ "$REREG_HAD_REG" = "1" ]; then
-    if [ "$REREG_WAS_ACTIVE" = "1" ]; then
-      ensure_service --start >/dev/null 2>&1 || true
-    else
-      ensure_service >/dev/null 2>&1 || true
+  if [ "$REREG_CONFIG_DONE" = "0" ]; then
+    for rf in .runner .credentials .credentials_rsaparams .env; do
+      if [ -f "$REREG_BACKUP_DIR/$rf" ]; then
+        cp -p "$REREG_BACKUP_DIR/$rf" "$RUNNER_HOME/$rf" || true
+      fi
+    done
+    if [ "$REREG_HAD_REG" = "1" ]; then
+      if [ "$REREG_WAS_ACTIVE" = "1" ]; then
+        ensure_service --start >/dev/null 2>&1 || true
+      else
+        ensure_service >/dev/null 2>&1 || true
+      fi
     fi
   fi
   rm -rf "$REREG_BACKUP_DIR" || true
@@ -326,6 +329,7 @@ re_register() {
   REREG_BACKUP_DIR="$(mktemp -d)"
   REREG_HAD_REG=0
   REREG_WAS_ACTIVE=0
+  REREG_CONFIG_DONE=0
   for f in .runner .credentials .credentials_rsaparams .env; do
     if [ -f "$RUNNER_HOME/$f" ]; then
       cp -p "$RUNNER_HOME/$f" "$REREG_BACKUP_DIR/$f"
@@ -343,27 +347,34 @@ re_register() {
     (cd "$RUNNER_HOME" && ./svc.sh uninstall) >/dev/null 2>&1 || true
   fi
 
-  rm -f "$RUNNER_HOME/.runner" "$RUNNER_HOME/.credentials" "$RUNNER_HOME/.credentials_rsaparams"
-  local group_args=()
-  if [ -n "$RUNNER_GROUP" ]; then
-    group_args+=(--runnergroup "$RUNNER_GROUP")
-  fi
-  if ! runner_config "$RUNNER_TOKEN" \
-    --unattended \
-    --url "$RUNNER_URL" \
-    --name "$RUNNER_NAME" \
-    --labels "$RUNNER_LABELS" \
-    ${group_args[@]+"${group_args[@]}"} \
-    --work _work \
-    --ephemeral; then
+  if [ -f "$RUNNER_HOME/.re-register-pending" ] && [ -f "$RUNNER_HOME/.runner" ]; then
+    REREG_CONFIG_DONE=1
     RUNNER_TOKEN=""
-    re_register_restore
-    echo "provision.sh: config.sh failed during re-register; restored previous state" >&2
-    return 1
+  else
+    rm -f "$RUNNER_HOME/.runner" "$RUNNER_HOME/.credentials" "$RUNNER_HOME/.credentials_rsaparams"
+    local group_args=()
+    if [ -n "$RUNNER_GROUP" ]; then
+      group_args+=(--runnergroup "$RUNNER_GROUP")
+    fi
+    if ! runner_config "$RUNNER_TOKEN" \
+      --unattended \
+      --url "$RUNNER_URL" \
+      --name "$RUNNER_NAME" \
+      --labels "$RUNNER_LABELS" \
+      ${group_args[@]+"${group_args[@]}"} \
+      --work _work \
+      --ephemeral; then
+      RUNNER_TOKEN=""
+      re_register_restore
+      echo "provision.sh: config.sh failed during re-register; restored previous state" >&2
+      return 1
+    fi
+    RUNNER_TOKEN=""
+    REREG_CONFIG_DONE=1
+    : >"$RUNNER_HOME/.re-register-pending"
+    : >"$RUNNER_HOME/.ephemeral"
+    chmod 644 "$RUNNER_HOME/.ephemeral"
   fi
-  RUNNER_TOKEN=""
-  : >"$RUNNER_HOME/.ephemeral"
-  chmod 644 "$RUNNER_HOME/.ephemeral"
   if ! ensure_service; then
     re_register_restore
     return 1
@@ -397,6 +408,7 @@ re_register() {
     return 1
   fi
   trap - EXIT
+  rm -f "$RUNNER_HOME/.re-register-pending"
   rm -rf "$REREG_BACKUP_DIR"
   REREG_BACKUP_DIR=""
   echo "provision.sh: ephemeral runner re-registered at ${RUNNER_URL}"
