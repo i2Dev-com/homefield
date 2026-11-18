@@ -797,7 +797,7 @@ else
     systemctl is-active --quiet "$svc_unit" || break
     sleep 1
   done
-  if [ "$ready" != "1" ] || ! systemctl is-active --quiet "$svc_unit"; then
+  if [ "$ready" != "1" ] || { ! systemctl is-active --quiet "$svc_unit" && ! { [ "$RUNNER_EPHEMERAL" = "1" ] && [ "$(systemctl show -p Result --value "$svc_unit" 2>/dev/null || true)" = "success" ]; }; }; then
     journal="$(journalctl -u "$svc_unit" --since "$since" --no-pager 2>&1 || true)"
     printf '%s\n' "$journal" | tail -20
     echo "provision.sh: ${svc_unit} did not reach \"Listening for Jobs\"" >&2
