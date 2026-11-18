@@ -697,7 +697,7 @@ preset_saved_drops() {
 }
 
 cmd_install() {
-  local url="" label="" name="" group="" packages="" packages_set=0 cpus="" memory="" autostart=1 replace=0 cmd=install
+  local url="" label="" name="" group="" packages="" packages_set=0 cpus="" memory="" autostart=1 replace=0 ephemeral=0 cmd=install
   local presets=()
   [ "$SETUP" != 1 ] || cmd=setup
   while [ $# -gt 0 ]; do
@@ -716,6 +716,7 @@ cmd_install() {
       --no-autostart) autostart=0; shift ;;
       --group-exists) GROUP_EXISTS=1; shift ;;
       --replace) replace=1; shift ;;
+      --ephemeral) ephemeral=1; shift ;;
       --personal)
         [ "$ACCOUNT_FORCE" != org ] || die "${cmd}: --personal and --org cannot be used together"
         ACCOUNT_FORCE=personal; shift ;;
@@ -764,12 +765,31 @@ cmd_install() {
   verify_isolation
 
   if is_registered; then
+    if [ "$ephemeral" = 1 ]; then
+      local eph_rc=0
+      guest_has_file /opt/actions-runner/.ephemeral || eph_rc=$?
+      [ "$eph_rc" -lt 2 ] || die "could not ask VM ${INSTANCE} whether its registration is ephemeral"
+      [ "$eph_rc" = 0 ] || die "${INSTANCE} is already registered as a persistent runner; uninstall it first before switching to --ephemeral"
+    fi
     log "${INSTANCE} is already registered; upgrading instead (registration settings are kept)"
     local args=()
     [ "$packages_set" = 1 ] && args+=(--packages "$packages")
     local p
     for p in ${presets[@]+"${presets[@]}"}; do args+=(--preset "$p"); done
     upgrade_registered "${args[@]+"${args[@]}"}"
+    if [ "$ephemeral" = 1 ]; then
+      local r_url="" r_name="" was_eph=""
+      { IFS= read -r r_url || true; IFS= read -r r_name || true; } < <(runner_setting gitHubUrl agentName 2>/dev/null || true)
+      was_eph="$(state_get ephemeral)"
+      state_set ephemeral 1
+      state_set ephemeral_url "${r_url:-$url}"
+      state_set ephemeral_name "${r_name:-$name}"
+      if [ "$was_eph" != "1" ]; then
+        state_set ephemeral_group "$group"
+        state_set ephemeral_label "$label"
+      fi
+      state_set ephemeral_error ""
+    fi
     [ "$SETUP" != 1 ] || setup_upgrade_summary
     return
   fi
@@ -792,9 +812,27 @@ cmd_install() {
   local token
   token="$(get_token registration "$url")"
   remove_taken_name "$url" "$name"
+  if [ "$ephemeral" = 1 ]; then
+    env+=(RUNNER_EPHEMERAL=1)
+  fi
   log "provisioning ${INSTANCE} and registering at ${url}"
   run_provision "RUNNER_TOKEN=${token}"$'\n' "${env[@]}"
   token=""
+  if [ "$ephemeral" = 1 ]; then
+    state_set ephemeral 1
+    state_set ephemeral_url "$url"
+    state_set ephemeral_name "$name"
+    state_set ephemeral_group "$group"
+    state_set ephemeral_label "$label"
+    state_set ephemeral_error ""
+  elif [ "$(state_get ephemeral)" = "1" ]; then
+    state_set ephemeral 0
+    state_set ephemeral_url ""
+    state_set ephemeral_name ""
+    state_set ephemeral_group ""
+    state_set ephemeral_label ""
+    state_set ephemeral_error ""
+  fi
   [ "$autostart" = 1 ] && enable_autostart
   # The name and id the runner registered under, read back from its config.
   local registered_name="" registered_id=""
@@ -1081,6 +1119,18 @@ st_collect() {
   return 0
 }
 
+st_render_ephemeral() {
+  [ "$(state_get ephemeral)" = "1" ] || return 0
+  echo "mode: ephemeral (one job per registration)"
+  local eph_err=""
+  eph_err="$(state_get ephemeral_error)"
+  if [ -n "$eph_err" ]; then
+    echo "ephemeral: ERROR (${eph_err}); run homefield re-register --instance ${INSTANCE}"
+  elif [ "$ST_SVC" != "running" ] || [ "$ST_REG" = "no" ]; then
+    echo "ephemeral: awaiting re-registration (homefield re-register --instance ${INSTANCE})"
+  fi
+}
+
 st_render_human() {
   if [ -z "$ST_CREATED" ] && [ -z "$ST_STATUS" ]; then
     echo "VM ${INSTANCE}: unknown (could not ask Lima)"
@@ -1107,6 +1157,7 @@ st_render_human() {
   fi
   if [ "$ST_REG" = "no" ]; then
     echo "runner: not registered"
+    st_render_ephemeral
     return 0
   fi
   if [ -n "$ST_NAME" ] && [ -n "$ST_URL" ]; then
@@ -1134,6 +1185,7 @@ st_render_human() {
   else
     echo "service: NOT running (${ST_UNIT:-no service installed})"
   fi
+  st_render_ephemeral
   case "$ST_JOB" in
     running) echo "job: running" ;;
     idle) echo "job: idle" ;;
@@ -1402,4 +1454,117 @@ cmd_start() {
 cmd_stop() {
   [ $# -eq 0 ] || die "stop takes no options besides --instance"
   vm_dispatch stop stop_single
+}
+
+# re_register_single: fetches a fresh one-hour registration token on the host
+# and pipes it on stdin to provision.sh re-register, then waits for online.
+# On any failure, records ephemeral_error so homefield status reports it
+# visibly offline rather than silently dead.
+re_register_single() {
+  [ "$(state_get ephemeral)" = "1" ] ||
+    die "re-register: ${INSTANCE} is not configured in ephemeral mode"
+  check_host
+  vm_lookup
+  [ -n "$VM_STATUS" ] || die "no VM ${INSTANCE}; run bin/homefield install --ephemeral"
+  ensure_vm "" ""
+  verify_isolation
+
+  if is_job_running; then
+    die "re-register: a job is running on ${INSTANCE}; try again when it is idle"
+  fi
+
+  local url="" name="" group="" label=""
+  url="$(state_get ephemeral_url)"
+  name="$(state_get ephemeral_name)"
+  group="$(state_get ephemeral_group)"
+  label="$(state_get ephemeral_label)"
+  if [ -z "$url" ] || [ -z "$name" ]; then
+    local r_url="" r_name=""
+    { IFS= read -r r_url || true; IFS= read -r r_name || true; } < <(runner_setting gitHubUrl agentName 2>/dev/null || true)
+    [ -n "$url" ] || url="$r_url"
+    [ -n "$name" ] || name="$r_name"
+  fi
+  [ -n "$url" ] || die "re-register: could not determine registration URL for ${INSTANCE}"
+
+  local token=""
+  if ! token="$(get_token registration "$url")"; then
+    state_set ephemeral_error "token fetch failed"
+    die "re-register: could not fetch registration token for ${url}"
+  fi
+
+  local env=()
+  env+=(RUNNER_URL="$url" RUNNER_EPHEMERAL=1)
+  [ -z "$label" ] || env+=(RUNNER_LABEL="$label")
+  [ -z "$name" ] || env+=(RUNNER_NAME="$name")
+  [ -z "$group" ] || env+=(RUNNER_GROUP="$group")
+
+  log "re-registering ephemeral runner ${INSTANCE} at ${url}"
+  if ! PROVISION_CMD=re-register run_provision "RUNNER_TOKEN=${token}"$'\n' "${env[@]}"; then
+    token=""
+    state_set ephemeral_error "re-registration failed"
+    die "re-register: failed on ${INSTANCE}; runner left offline"
+  fi
+  token=""
+  state_set ephemeral_error ""
+
+  local registered_name=""
+  { IFS= read -r registered_name || true; } < <(runner_setting agentName)
+  wait_online "$url" "$registered_name" "${group:-homefield-ci}"
+}
+
+cmd_re_register() {
+  local watch=0 interval="${HOMEFIELD_EPHEMERAL_POLL_INTERVAL:-10}" max_cycles=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --watch) watch=1; shift ;;
+      --interval)
+        [ $# -ge 2 ] || die "re-register: --interval needs seconds"
+        interval="$2"; shift 2 ;;
+      --max-cycles)
+        [ $# -ge 2 ] || die "re-register: --max-cycles needs a count"
+        max_cycles="$2"; shift 2 ;;
+      *) die "re-register: unknown option $1 (see bin/homefield help)" ;;
+    esac
+  done
+  [[ "$interval" =~ ^[0-9]+$ ]] || die "re-register: --interval must be a non-negative integer"
+  [[ "$max_cycles" =~ ^[0-9]+$ ]] || die "re-register: --max-cycles must be a non-negative integer"
+
+  if [ "$watch" = 0 ]; then
+    vm_dispatch re-register re_register_single
+    return
+  fi
+
+  local watch_vms=() list="" vm
+  if [ "$EXPLICIT_INSTANCE" = 1 ]; then
+    [ "$(state_get ephemeral)" = "1" ] ||
+      die "re-register --watch: ${INSTANCE} is not configured in ephemeral mode"
+    watch_vms=("$INSTANCE")
+  else
+    if list="$(vm_instances)"; then
+      while IFS= read -r vm; do
+        [ -n "$vm" ] || continue
+        INSTANCE="$vm"
+        [ "$(state_get ephemeral)" = "1" ] && watch_vms+=("$vm")
+      done <<<"$list"
+    elif [ "$(state_get ephemeral)" = "1" ]; then
+      watch_vms=("$INSTANCE")
+    fi
+    [ ${#watch_vms[@]} -gt 0 ] ||
+      die "re-register --watch: no ephemeral VM found"
+  fi
+  local cycle=0
+  while :; do
+    cycle=$((cycle + 1))
+    for vm in "${watch_vms[@]}"; do
+      INSTANCE="$vm"
+      if ! is_job_running && ! runner_service_state; then
+        log "ephemeral runner ${INSTANCE} finished a job; re-registering"
+        re_register_single
+      fi
+    done
+    if [ "$max_cycles" -gt 0 ] && [ "$cycle" -ge "$max_cycles" ]; then
+      break
+    fi
+    [ "$interval" -eq 0 ] || sleep "$interval"
+  done
 }

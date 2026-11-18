@@ -34,7 +34,7 @@ record "help: the diagnose section with --json" "yes/yes" "$(has "$out" '  diagn
   --json')"
 record "help: the adopt section" "yes" "$(has "$out" '  --wait             with --setup:')"
 
-for cmd in setup install upgrade update status start stop diagnose uninstall reset route preflight adopt memory report version; do
+for cmd in setup install upgrade re-register update status start stop diagnose uninstall reset route preflight adopt memory report version; do
   out="$(env -i HOME="$HOME" PATH="$PATH" "$HF" help "$cmd" 2>&1 </dev/null)"; rc=$?
   record "help $cmd: exits 0" "0" "$rc"
   out2="$(env -i HOME="$HOME" PATH="$PATH" "$HF" "$cmd" --help 2>&1 </dev/null)"; rc2=$?

@@ -15,7 +15,8 @@ expression those options produce. The **simple** expression — the default
 `homefield adopt --setup` writes — has only the switch and the hosted
 fallback: every event routes, pushes and fork pull requests included. It is
 for a private repository where being able to open a pull request already
-means being trusted with the Mac. The full procedure, including how to
+means being trusted with the Mac (or use `--ephemeral` on throwaway VMs so
+each job gets a fresh runner registration). The full procedure, including how to
 write and pin the guard, is [adopting.md](adopting.md) steps 2-3.
 
 ## The contract
