@@ -3,6 +3,8 @@
 
 UPD_CHECK=0
 UPD_ALLOW_MINOR=0
+UPD_AUTO=0
+UPD_SCHEDULE=""
 UPD_WORK=""
 UPD_SWAPPED=0
 
@@ -24,17 +26,34 @@ update_cleanup() {
   rm -rf "$UPD_WORK"
 }
 
-# update_parse_args: parses --check and --allow-minor.
+# update_parse_args: parses --check, --allow-minor, --auto, and --schedule.
 update_parse_args() {
   UPD_CHECK=0
   UPD_ALLOW_MINOR=0
+  UPD_AUTO=0
+  UPD_SCHEDULE=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --check) UPD_CHECK=1; shift ;;
       --allow-minor) UPD_ALLOW_MINOR=1; shift ;;
+      --auto) UPD_AUTO=1; shift ;;
+      --schedule)
+        [ $# -ge 2 ] || die "update: --schedule needs install, remove, or status"
+        case "$2" in
+          install | remove | status) UPD_SCHEDULE="$2" ;;
+          *) die "update: --schedule must be install, remove, or status (got: $2)" ;;
+        esac
+        shift 2
+        ;;
       *) die "update: unknown option $1 (see bin/homefield help)" ;;
     esac
   done
+  if [ -n "$UPD_SCHEDULE" ] && { [ "$UPD_CHECK" = 1 ] || [ "$UPD_ALLOW_MINOR" = 1 ] || [ "$UPD_AUTO" = 1 ]; }; then
+    die "update: --schedule cannot be combined with --check, --allow-minor, or --auto"
+  fi
+  if [ "$UPD_AUTO" = 1 ] && [ "$UPD_CHECK" = 1 ]; then
+    die "update: --auto cannot be combined with --check"
+  fi
 }
 
 # update_api <repo> <commits REF|tags>: queries GitHub via curl first, falling
@@ -213,7 +232,7 @@ update_collect_vms() {
 }
 
 # update_check_idle: fails closed if any target VM is running a job or cannot
-# be asked.
+# be asked. Returns 10 when UPD_AUTO=1 and a job is running so callers skip.
 update_check_idle() {
   local vm st="" rc=0
   for vm in ${UPD_VMS[@]+"${UPD_VMS[@]}"}; do
@@ -223,6 +242,10 @@ update_check_idle() {
     [ "$rc" -lt 2 ] || die "update: could not check status of VM ${vm}"
     if [ "$st" = "Running" ]; then
       if is_job_running; then
+        if [ "$UPD_AUTO" = 1 ]; then
+          log "auto-update: skipping; a job is running on ${vm}"
+          return 10
+        fi
         die "update: a job is running on ${vm}; try again when it is idle"
       fi
     fi
@@ -265,8 +288,190 @@ update_rollback() {
   fi
 }
 
+update_now_epoch() {
+  local now="${HOMEFIELD_NOW_EPOCH:-}"
+  if [ -z "$now" ]; then
+    now="$(date +%s)"
+  fi
+  [[ "$now" =~ ^[0-9]+$ ]] || die "update: HOMEFIELD_NOW_EPOCH must be a non-negative integer"
+  printf '%s' "$now"
+}
+
+update_interval() {
+  local interval="${HOMEFIELD_UPDATE_INTERVAL:-21600}"
+  [[ "$interval" =~ ^[0-9]+$ ]] || die "update: HOMEFIELD_UPDATE_INTERVAL must be a non-negative integer (seconds)"
+  printf '%s' "$interval"
+}
+
+update_auto_mode() {
+  local raw="${HOMEFIELD_AUTO_UPDATE:-off}"
+  case "$raw" in
+    off | 0 | false) printf 'off' ;;
+    notify | check) printf 'notify' ;;
+    patch | on | 1 | true) printf 'patch' ;;
+    *) die "update: unknown HOMEFIELD_AUTO_UPDATE value '${raw}' (expected off, notify, or patch)" ;;
+  esac
+}
+
+update_state_dir() {
+  printf '%s' "${HOMEFIELD_STATE_DIR:-$HOME/.local/state/homefield}"
+}
+
+update_read_last_check() {
+  local f key value
+  f="$(update_state_dir)/update-check.state"
+  [ -f "$f" ] || return 0
+  while IFS='=' read -r key value || [ -n "$key" ]; do
+    if [ "$key" = "last_check" ] && [[ "$value" =~ ^[0-9]+$ ]]; then
+      printf '%s' "$value"
+      return 0
+    fi
+  done <"$f"
+}
+
+update_write_last_check() {
+  local now="$1" dir f tmp
+  dir="$(update_state_dir)"
+  mkdir -p "$dir"
+  f="$dir/update-check.state"
+  tmp="$(mktemp "$dir/.update-check.XXXXXX")"
+  printf 'last_check=%s\n' "$now" >"$tmp"
+  mv "$tmp" "$f"
+}
+
+update_plist_path() {
+  printf '%s/com.homefield.update.plist' "${HOMEFIELD_LAUNCH_AGENTS_DIR:-$HOME/Library/LaunchAgents}"
+}
+
+update_xml_escape() {
+  printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
+}
+
+update_schedule() {
+  local action="$1" plist dir state_dir interval auto_mode minor_val
+  plist="$(update_plist_path)"
+  case "$action" in
+    install)
+      interval="$(update_interval)"
+      [ "$interval" -gt 0 ] || die "update: HOMEFIELD_UPDATE_INTERVAL must be > 0 to install a schedule"
+      if [ -n "${HOMEFIELD_AUTO_UPDATE:-}" ]; then
+        auto_mode="$(update_auto_mode)"
+      else
+        auto_mode="notify"
+      fi
+      minor_val="${HOMEFIELD_AUTO_UPDATE_MINOR:-0}"
+      dir="$(dirname "$plist")"
+      state_dir="$(update_state_dir)"
+      mkdir -p "$dir" "$state_dir"
+      local inst_xml="" env_xml=""
+      if [ "$EXPLICIT_INSTANCE" = 1 ]; then
+        inst_xml="    <string>--instance</string>"$'\n'"    <string>$(update_xml_escape "$INSTANCE")</string>"$'\n'
+      fi
+      if [ -n "${HOMEFIELD_STATE_DIR:-}" ]; then
+        env_xml="${env_xml}    <key>HOMEFIELD_STATE_DIR</key>"$'\n'"    <string>$(update_xml_escape "$HOMEFIELD_STATE_DIR")</string>"$'\n'
+      fi
+      if [ -n "${LIMA_HOME:-}" ]; then
+        env_xml="${env_xml}    <key>LIMA_HOME</key>"$'\n'"    <string>$(update_xml_escape "$LIMA_HOME")</string>"$'\n'
+      fi
+      cat >"$plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.homefield.update</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$(update_xml_escape "$ROOT/bin/homefield")</string>
+${inst_xml}    <string>update</string>
+    <string>--auto</string>
+  </array>
+  <key>StartInterval</key>
+  <integer>${interval}</integer>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>$(update_xml_escape "$PATH")</string>
+    <key>HOMEFIELD_AUTO_UPDATE</key>
+    <string>${auto_mode}</string>
+    <key>HOMEFIELD_UPDATE_INTERVAL</key>
+    <string>${interval}</string>
+    <key>HOMEFIELD_AUTO_UPDATE_MINOR</key>
+    <string>$(update_xml_escape "$minor_val")</string>
+${env_xml}  </dict>
+  <key>StandardOutPath</key>
+  <string>$(update_xml_escape "$state_dir/update.log")</string>
+  <key>StandardErrorPath</key>
+  <string>$(update_xml_escape "$state_dir/update.log")</string>
+</dict>
+</plist>
+EOF
+      command -v launchctl >/dev/null 2>&1 || die "update: launchctl is required to install a macOS schedule"
+      launchctl unload -w "$plist" 2>/dev/null || true
+      launchctl load -w "$plist" || die "update: could not load LaunchAgent ${plist}"
+      log "installed update schedule (${plist}, interval=${interval}s, mode=${auto_mode})"
+      ;;
+    remove)
+      if [ -f "$plist" ]; then
+        if command -v launchctl >/dev/null 2>&1; then
+          launchctl unload -w "$plist" 2>/dev/null || true
+        fi
+        rm -f "$plist"
+        log "removed update schedule (${plist})"
+      else
+        log "no update schedule installed"
+      fi
+      ;;
+    status)
+      if [ ! -f "$plist" ]; then
+        log "update schedule: not installed (${plist})"
+        return 0
+      fi
+      local loaded="no"
+      if command -v launchctl >/dev/null 2>&1 && launchctl list com.homefield.update >/dev/null 2>&1; then
+        loaded="yes"
+      fi
+      log "update schedule: installed (${plist}, loaded=${loaded})"
+      ;;
+  esac
+}
+
 cmd_update() {
   update_parse_args "$@"
+  if [ -n "$UPD_SCHEDULE" ]; then
+    update_schedule "$UPD_SCHEDULE"
+    return 0
+  fi
+
+  if [ "$UPD_AUTO" = 1 ]; then
+    local auto_mode="" interval="" now="" last="" elapsed=0
+    auto_mode="$(update_auto_mode)"
+    if [ "$auto_mode" = "off" ]; then
+      log "auto-update is disabled (HOMEFIELD_AUTO_UPDATE=off)"
+      return 0
+    fi
+    interval="$(update_interval)"
+    if [ "$interval" = 0 ]; then
+      log "auto-update schedule is disabled (HOMEFIELD_UPDATE_INTERVAL=0)"
+      return 0
+    fi
+    now="$(update_now_epoch)"
+    last="$(update_read_last_check)"
+    if [ -n "$last" ] && [ "$now" -ge "$last" ]; then
+      elapsed=$((now - last))
+      if [ "$elapsed" -lt "$interval" ]; then
+        log "auto-update: checked recently; next check in $((interval - elapsed))s"
+        return 0
+      fi
+    fi
+    update_write_last_check "$now"
+    if [ "$auto_mode" = "notify" ]; then
+      UPD_CHECK=1
+    elif [ "${HOMEFIELD_AUTO_UPDATE_MINOR:-0}" = "1" ]; then
+      UPD_ALLOW_MINOR=1
+    fi
+  fi
+
   update_read_ref
   update_resolve
 
@@ -283,6 +488,10 @@ cmd_update() {
       log "warning: ${UPD_TARGET_REF} is a minor/major bump from ${UPD_REF} and may include breaking routing-guard changes; read CHANGELOG.md"
       if [ "$UPD_CHECK" = 1 ]; then
         log "pass --allow-minor to apply ${UPD_TARGET_REF}"
+        return 0
+      fi
+      if [ "$UPD_AUTO" = 1 ]; then
+        log "auto-update: skipping ${UPD_TARGET_REF} (set HOMEFIELD_AUTO_UPDATE_MINOR=1 to allow minor/major bumps)"
         return 0
       fi
       die "update: refusing minor/major bump ${UPD_TARGET_REF} without --allow-minor"
@@ -306,7 +515,13 @@ cmd_update() {
   fi
 
   update_collect_vms
-  update_check_idle
+  local idle_rc=0
+  update_check_idle || idle_rc=$?
+  if [ "$idle_rc" = 10 ]; then
+    return 0
+  elif [ "$idle_rc" != 0 ]; then
+    return "$idle_rc"
+  fi
 
   trap update_cleanup EXIT
   trap 'exit 130' INT
@@ -316,7 +531,16 @@ cmd_update() {
   update_stage "$UPD_REPO" "$UPD_TARGET_REF" "$UPD_WORK/homefield.tar.gz" "$UPD_WORK/new"
 
   # Re-check idle gate right before swapping and stopping any runner.
-  update_check_idle
+  idle_rc=0
+  update_check_idle || idle_rc=$?
+  if [ "$idle_rc" = 10 ]; then
+    update_cleanup
+    UPD_WORK=""
+    trap - EXIT INT TERM
+    return 0
+  elif [ "$idle_rc" != 0 ]; then
+    return "$idle_rc"
+  fi
 
   mv "$ROOT" "$UPD_WORK/backup"
   if ! mv "$UPD_WORK/new" "$ROOT"; then

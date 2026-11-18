@@ -48,7 +48,7 @@ agents that drive the tool without a human in the loop. The guides:
 | `adopt` | Prepare a repository: check the routing, add it to the group, switch it on | `--setup` opens the routing pull request; `--wait` carries on after the merge; `--app-id` / `--app-key-file` for GitHub App auth; refuses a public repository |
 | `memory` | Every VM's memory use: average and peak per day, out-of-memory kills | `--days N` (default 7); fails for a VM it cannot ask |
 | `report` | Queue wait, duration and minutes of jobs, local against hosted | `--json`; one API call per run, so allow a few minutes a month |
-| `update` | Update the installed tool and every idle VM to the latest patch release (or branch head), then verify with `diagnose` | `--check` checks without applying; `--allow-minor` opts into minor/major bumps; rolls back on failure |
+| `update` | Update the installed tool and every idle VM to the latest patch release (or branch head), then verify with `diagnose` | `--check` checks without applying; `--allow-minor` opts into minor/major bumps; `--auto` runs periodic check/apply per `HOMEFIELD_AUTO_UPDATE`; `--schedule install\|remove\|status` manages the macOS LaunchAgent; rolls back on failure |
 | `version` | The installed version, and whether a newer release exists (read from GitHub's public API; a private fork set with `HOMEFIELD_REPO` is not checked) | |
 
 ## Environment variables
@@ -62,6 +62,9 @@ agents that drive the tool without a human in the loop. The guides:
 | `HOMEFIELD_STATE_DIR` | Where the per-instance state files live (default `~/.local/state/homefield`) |
 | `HOMEFIELD_LIMA_CACHE_DIR` | Lima's download cache root for `preflight` image caching (default `~/Library/Caches/lima`) |
 | `HOMEFIELD_LIMA_TEMPLATE` | Override the Lima template YAML path checked by `preflight` image pre-fetching |
+| `HOMEFIELD_AUTO_UPDATE` | Periodic mode for `homefield update --auto`: `off` (default), `notify` (check only), or `patch` (auto-apply patch bumps while idle) |
+| `HOMEFIELD_UPDATE_INTERVAL` | Seconds between `homefield update --auto` checks and LaunchAgent runs (default `21600` = 6h; `0` disables) |
+| `HOMEFIELD_AUTO_UPDATE_MINOR` | Set `1` to allow minor/major bumps in `HOMEFIELD_AUTO_UPDATE=patch` mode (default `0`) |
 | `HOMEFIELD_SOURCE_ONLY=1` | Internal: source `bin/homefield` for its functions, run nothing |
 
 ## Machine-readable output (`--json`)

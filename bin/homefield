@@ -15,7 +15,7 @@
 #   bin/homefield adopt --repo <owner>/<repo> [--jobs "ci.yml:lint,..."] [--setup [--wait [--wait-timeout MIN]]] [--guards] [--events E] [--dependabot hosted|local] [--fallback IMAGE] [--no-switch] [--dry-run]
 #   bin/homefield memory [--days N]
 #   bin/homefield report --repo <owner>/<repo> [--repo ...] [--since DATE]
-#   bin/homefield update [--check] [--allow-minor]
+#   bin/homefield update [--check] [--allow-minor] [--auto] [--schedule install|remove|status]
 #   bin/homefield version
 #
 # install.sh puts this on the PATH as `homefield`; the messages below say
@@ -324,6 +324,10 @@ usage_sec_update() {
 update:
   --check            report whether an update is available without applying it
   --allow-minor      allow minor/major bumps (may change the routing expression)
+  --auto             periodic check/apply governed by HOMEFIELD_AUTO_UPDATE
+                     (off, notify, patch), HOMEFIELD_UPDATE_INTERVAL (default
+                     21600s), and HOMEFIELD_AUTO_UPDATE_MINOR (default 0)
+  --schedule ACTION  manage the macOS LaunchAgent (install, remove, status)
 EOF
 }
 usage_sec_diagnose() {

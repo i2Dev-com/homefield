@@ -87,6 +87,15 @@ and every idle VM in one step:
   tool, `homefield update` restores the previous host tool copy and re-verifies
   with `homefield diagnose` (host-tool rollback does not undo guest-side
   provisioning changes already applied).
+- For scheduled checks or opt-in auto-updates, `homefield update --schedule install`
+  installs a macOS LaunchAgent (`com.homefield.update`, every
+  `HOMEFIELD_UPDATE_INTERVAL` seconds, default `21600` = 6h) running
+  `homefield update --auto` (`HOMEFIELD_AUTO_UPDATE` defaults to `off` in the CLI
+  and `notify` when installing the schedule; set `HOMEFIELD_AUTO_UPDATE=patch`
+  to auto-apply patch bumps while idle, and `HOMEFIELD_AUTO_UPDATE_MINOR=1` to
+  also allow minor/major bumps). Busy VMs and un-opted minor bumps skip cleanly
+  until the next cycle. Use `--schedule status` / `--schedule remove` to inspect
+  or uninstall it.
 
 1. **Homebrew and `gh` login.** Missing Lima or `gh`, or a logged-out `gh`:
    one question each (the `brew` commands it will run; the `gh auth login`
