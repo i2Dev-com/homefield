@@ -765,6 +765,12 @@ cmd_install() {
   verify_isolation
 
   if is_registered; then
+    if [ "$ephemeral" = 1 ]; then
+      local eph_rc=0
+      guest_has_file /opt/actions-runner/.ephemeral || eph_rc=$?
+      [ "$eph_rc" -lt 2 ] || die "could not ask VM ${INSTANCE} whether its registration is ephemeral"
+      [ "$eph_rc" = 0 ] || die "${INSTANCE} is already registered as a persistent runner; uninstall it first before switching to --ephemeral"
+    fi
     log "${INSTANCE} is already registered; upgrading instead (registration settings are kept)"
     local args=()
     [ "$packages_set" = 1 ] && args+=(--packages "$packages")
@@ -772,13 +778,15 @@ cmd_install() {
     for p in ${presets[@]+"${presets[@]}"}; do args+=(--preset "$p"); done
     upgrade_registered "${args[@]+"${args[@]}"}"
     if [ "$ephemeral" = 1 ]; then
-      local r_url="" r_name=""
+      local r_url="" r_name="" cur_group="" cur_label=""
       { IFS= read -r r_url || true; IFS= read -r r_name || true; } < <(runner_setting gitHubUrl agentName 2>/dev/null || true)
+      cur_group="$(state_get ephemeral_group)"
+      cur_label="$(state_get ephemeral_label)"
       state_set ephemeral 1
-      state_set ephemeral_url "${url:-$r_url}"
-      state_set ephemeral_name "${name:-$r_name}"
-      state_set ephemeral_group "$group"
-      state_set ephemeral_label "$label"
+      state_set ephemeral_url "${r_url:-$url}"
+      state_set ephemeral_name "${r_name:-$name}"
+      state_set ephemeral_group "${cur_group:-$group}"
+      state_set ephemeral_label "${cur_label:-$label}"
       state_set ephemeral_error ""
     fi
     [ "$SETUP" != 1 ] || setup_upgrade_summary

@@ -319,7 +319,7 @@ env -i \
 retry_log="$(cat "$retry_calls")"
 record "provision.sh re_register retry after ensure_service failure: reuses registration without re-running config" "0/no/yes/no" "$retry_rc/$(has "$retry_log" "runner_config")/$(has "$retry_log" "ensure_service:ok")/$([ -f "$RETRY_WORK/runner/.re-register-pending" ] && echo yes || echo no)"
 
-# 15. Retrying install --ephemeral on already-registered VM reconciles ephemeral state
+# 15. Retrying install --ephemeral on already-registered VM reconciles ephemeral state (and refuses persistent)
 rm -rf "$WORK/state"/*
 # shellcheck disable=SC2016  # inner bash -c expands $REPO_ROOT
 env -i HOME="$WORK/home" PATH="$STUBS" REPO_ROOT="$REPO_ROOT" CALLS="$CALLS" HOMEFIELD_STATE_DIR="$WORK/state" /bin/bash -c '
@@ -330,6 +330,7 @@ env -i HOME="$WORK/home" PATH="$STUBS" REPO_ROOT="$REPO_ROOT" CALLS="$CALLS" HOM
   ensure_vm() { :; }
   cmd_preflight() { return 0; }
   is_registered() { return 0; }
+  guest_has_file() { return 0; }
   upgrade_registered() { :; }
   runner_setting() {
     for k in "$@"; do
@@ -339,10 +340,24 @@ env -i HOME="$WORK/home" PATH="$STUBS" REPO_ROOT="$REPO_ROOT" CALLS="$CALLS" HOM
       esac
     done
   }
-  cmd_install --url https://github.com/acme --org --ephemeral
+  cmd_install --url https://github.com/other-org --org --ephemeral
 ' >/dev/null 2>&1; ephem_retry_rc=$?
 st_body="$(cat "$WORK/state/homefield.state")"
-record "retry install --ephemeral when already registered: reconciles ephemeral state" "0/yes/yes" "$ephem_retry_rc/$(has "$st_body" "ephemeral=1")/$(has "$st_body" "ephemeral_url=https://github.com/acme")"
+record "retry install --ephemeral when already registered (ephemeral): reconciles actual guest settings" "0/yes/yes" "$ephem_retry_rc/$(has "$st_body" "ephemeral=1")/$(has "$st_body" "ephemeral_url=https://github.com/acme")"
+
+# shellcheck disable=SC2016  # inner bash -c expands $REPO_ROOT
+pers_out="$(env -i HOME="$WORK/home" PATH="$STUBS" REPO_ROOT="$REPO_ROOT" CALLS="$CALLS" HOMEFIELD_STATE_DIR="$WORK/state" /bin/bash -c '
+  HOMEFIELD_SOURCE_ONLY=1
+  . "$REPO_ROOT/bin/homefield"
+  check_host() { :; }
+  verify_isolation() { :; }
+  ensure_vm() { :; }
+  cmd_preflight() { return 0; }
+  is_registered() { return 0; }
+  guest_has_file() { return 1; }
+  cmd_install --url https://github.com/acme --org --ephemeral
+' 2>&1)"; pers_rc=$?
+record "install --ephemeral on already-registered persistent runner: refused" "nonzero/yes" "$(nonzero "$pers_rc")/$(has "$pers_out" "already registered as a persistent runner")"
 
 # 16. re-register --watch discovers non-default ephemeral instance via vm_instances
 rm -rf "$WORK/state"/*
