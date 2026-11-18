@@ -187,6 +187,58 @@ setup_vm_lines() {
   fi
 }
 
+WARM_STATE=""
+WARM_DETAIL=""
+
+# warm_vm: bounded post-registration warm-up check in the guest (docker daemon,
+# runner service, cleanup/maintenance timers). Never fails install/setup; sets
+# WARM_STATE to warm, incomplete, or unknown (with WARM_DETAIL for incomplete).
+warm_vm() {
+  local answer=""
+  WARM_STATE="unknown"
+  WARM_DETAIL=""
+  # shellcheck disable=SC2016  # the guest's shell expands these, not this one
+  answer="$(guest sudo sh -c '
+    missing=""
+    if ! timeout 10 docker info >/dev/null 2>&1; then missing="docker"; fi
+    svc="$(systemctl list-unit-files "actions.runner.*.service" --no-legend 2>/dev/null | awk "NR==1{print \$1}")"
+    if [ -z "$svc" ] || ! systemctl is-active --quiet "$svc"; then
+      missing="${missing:+${missing}, }runner"
+    fi
+    for t in homefield-cleanup.timer homefield-maintenance.timer; do
+      if ! systemctl is-enabled --quiet "$t" 2>/dev/null || ! systemctl is-active --quiet "$t" 2>/dev/null; then
+        missing="${missing:+${missing}, }timers"
+        break
+      fi
+    done
+    if [ -z "$missing" ]; then
+      echo "warm"
+    else
+      echo "incomplete:${missing}"
+    fi
+  ')" || answer=""
+  case "$answer" in
+    warm)
+      WARM_STATE="warm"
+      ;;
+    incomplete:*)
+      WARM_STATE="incomplete"
+      WARM_DETAIL="${answer#incomplete:}"
+      ;;
+    *)
+      WARM_STATE="unknown"
+      ;;
+  esac
+}
+
+setup_warm_line() {
+  case "$WARM_STATE" in
+    warm) echo "✓ VM warm (docker, runner, timers)" ;;
+    incomplete) echo "! Warm-up incomplete (${WARM_DETAIL:-unknown}): run homefield diagnose" ;;
+    *) echo "! Warm-up not verified (could not ask the VM): run homefield diagnose" ;;
+  esac
+}
+
 # setup_group_line <group> <slug>: the runner group, by what ensure_group found.
 setup_group_line() {
   local group="${1:-homefield-ci}" slug="$2"
@@ -282,6 +334,7 @@ setup_summary() {
   slug="${slug#https://github.com/}"
   echo
   setup_vm_lines
+  setup_warm_line
   setup_group_line "$group" "$slug"
   setup_runner_lines "$url" "$3" "$4"
   setup_next_steps "$group" "$slug"
@@ -747,11 +800,15 @@ cmd_install() {
   local registered_name="" registered_id=""
   { IFS= read -r registered_name || true; IFS= read -r registered_id || true; } < <(runner_setting agentName agentId)
   wait_online "$url" "$registered_name" "${group:-homefield-ci}"
+  warm_vm
   if [ "$SETUP" = 1 ]; then
     setup_summary "${group:-homefield-ci}" "$url" "$registered_name" "$registered_id"
     SETUP_LABEL="$label" SETUP_GROUP="$group"
     setup_offer_routing "$url"
   else
+    if [ "$WARM_STATE" = "incomplete" ]; then
+      log "warning: VM warm-up incomplete (${WARM_DETAIL}); run bin/homefield diagnose"
+    fi
     registered_next_steps "${group:-homefield-ci}" "$url"
   fi
 }

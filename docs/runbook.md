@@ -368,6 +368,14 @@ it. Run `limactl autostart enable homefield` (Lima 2.x; 1.x called it
 `start-at-login`). Inside the VM, the runner is a systemd service and starts
 with the guest.
 
+**Warm-up check.** Both `vm/provision.sh` and `homefield setup` / `install`
+run a bounded warm-up check before the first routed job: Docker daemon
+responsiveness (`docker info`), runner service health (`actions.runner.*.service`),
+and armed maintenance timers (`homefield-cleanup.timer` and
+`homefield-maintenance.timer`). `setup` reports this in its summary (`✓ VM warm
+(docker, runner, timers)` or `! Warm-up incomplete (...)`). To re-check a
+running VM later, run `homefield status` or `homefield diagnose`.
+
 ## What the VM has, compared with a hosted runner
 
 The bar for switching a job is that it runs the same on the VM as on a hosted
