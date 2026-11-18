@@ -198,7 +198,7 @@ warm_vm() {
   WARM_STATE="unknown"
   WARM_DETAIL=""
   # shellcheck disable=SC2016  # the guest's shell expands these, not this one
-  answer="$(guest sh -c '
+  answer="$(guest sudo sh -c '
     missing=""
     if ! timeout 10 docker info >/dev/null 2>&1; then missing="docker"; fi
     svc="$(systemctl list-unit-files "actions.runner.*.service" --no-legend 2>/dev/null | awk "NR==1{print \$1}")"
