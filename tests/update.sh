@@ -115,6 +115,16 @@ exit 1
 EOF
   chmod +x "$CASE_DIR/stubs/gh"
 
+  cat >"$CASE_DIR/stubs/launchctl" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "LAUNCHCTL:$*" >>"${UPD_CALL_LOG:?}"
+if [ "${1:-}" = "list" ]; then
+  exit "${STUB_LAUNCHCTL_LIST_RC:-0}"
+fi
+exit 0
+EOF
+  chmod +x "$CASE_DIR/stubs/launchctl"
+
   # Override old tool's diagnose/upgrade? Real cmd-diagnose needs many lima/gh calls;
   # for rollback verification we wrap cmd_diagnose in a tiny test hook only if STUB_OLD_DG is set.
   if [ "${STUB_OLD_DG:-0}" = "1" ]; then
@@ -133,6 +143,12 @@ run_update() {
     HOME="$CASE_DIR/home" \
     PATH="$CASE_DIR/stubs:$PATH" \
     UPD_CALL_LOG="$CALL_LOG" \
+    HOMEFIELD_STATE_DIR="$CASE_DIR/state" \
+    HOMEFIELD_LAUNCH_AGENTS_DIR="$CASE_DIR/launch_agents" \
+    HOMEFIELD_AUTO_UPDATE="${HOMEFIELD_AUTO_UPDATE:-}" \
+    HOMEFIELD_UPDATE_INTERVAL="${HOMEFIELD_UPDATE_INTERVAL:-}" \
+    HOMEFIELD_AUTO_UPDATE_MINOR="${HOMEFIELD_AUTO_UPDATE_MINOR:-}" \
+    HOMEFIELD_NOW_EPOCH="${HOMEFIELD_NOW_EPOCH:-}" \
     STUB_TAGS_JSON="${STUB_TAGS_JSON:-}" \
     STUB_COMMIT_SHA="${STUB_COMMIT_SHA:-}" \
     STUB_CURL_RC="${STUB_CURL_RC:-0}" \
@@ -141,6 +157,7 @@ run_update() {
     STUB_LIMA_LIST_RC="${STUB_LIMA_LIST_RC:-0}" \
     STUB_JOB_RC="${STUB_JOB_RC:-1}" \
     STUB_OLD_DG_RC="${STUB_OLD_DG_RC:-0}" \
+    STUB_LAUNCHCTL_LIST_RC="${STUB_LAUNCHCTL_LIST_RC:-0}" \
     bash "$CASE_DIR/tool/bin/homefield" update "$@" 2>&1 </dev/null
 }
 
@@ -268,5 +285,62 @@ STUB_JOB_RC=1
 out="$(run_update)"; rc=$?
 ref_after="$(cat "$CASE_DIR/tool/.homefield-ref")"
 record "interrupted update (SIGTERM): restores backup .homefield-ref" "nonzero/yes/yes" "$(nonzero "$rc")/$(has "$out" "update interrupted; restoring previous copy")/$(has "$ref_after" "ref=v0.5.3")"
+
+# 13. --auto with HOMEFIELD_AUTO_UPDATE=off (default)
+setup_env auto_off
+printf 'repo=i2Dev-com/homefield\nref=v0.5.3\ncommit=%s\n' "$AAA" >"$CASE_DIR/tool/.homefield-ref"
+out="$(HOMEFIELD_AUTO_UPDATE=off HOMEFIELD_NOW_EPOCH=1000 run_update --auto)"; rc=$?
+record "--auto off: exits 0 without creating state file" "0/yes/no" "$rc/$(has "$out" "auto-update is disabled")/$([ -f "$CASE_DIR/state/update-check.state" ] && echo yes || echo no)"
+
+# 14. --auto notify mode + interval gating
+setup_env auto_notify
+printf 'repo=i2Dev-com/homefield\nref=v0.5.3\ncommit=%s\n' "$AAA" >"$CASE_DIR/tool/.homefield-ref"
+STUB_TAGS_JSON=$'[\n  {\n    "name": "v0.5.4"\n  },\n  {\n    "name": "v0.5.3"\n  }\n]'
+out="$(HOMEFIELD_AUTO_UPDATE=notify HOMEFIELD_UPDATE_INTERVAL=3600 HOMEFIELD_NOW_EPOCH=10000 run_update --auto)"; rc=$?
+ref_after="$(cat "$CASE_DIR/tool/.homefield-ref")"
+record "--auto notify: exits 0, reports update, does not modify tool" "0/yes/yes" "$rc/$(has "$out" "update available: v0.5.4")/$(has "$ref_after" "ref=v0.5.3")"
+out="$(HOMEFIELD_AUTO_UPDATE=notify HOMEFIELD_UPDATE_INTERVAL=3600 HOMEFIELD_NOW_EPOCH=11000 run_update --auto)"; rc=$?
+record "--auto interval gate: skips within interval" "0/yes" "$rc/$(has "$out" "checked recently")"
+out="$(HOMEFIELD_AUTO_UPDATE=notify HOMEFIELD_UPDATE_INTERVAL=3600 HOMEFIELD_NOW_EPOCH=14000 run_update --auto)"; rc=$?
+record "--auto interval gate: checks again after interval" "0/yes" "$rc/$(has "$out" "update available: v0.5.4")"
+
+# 15. --auto patch mode skips cleanly (exit 0) when VM is busy
+setup_env auto_busy
+printf 'repo=i2Dev-com/homefield\nref=v0.5.3\ncommit=%s\n' "$AAA" >"$CASE_DIR/tool/.homefield-ref"
+STUB_TARBALL="$TAR_OK"
+STUB_TAGS_JSON=$'[\n  {\n    "name": "v0.5.4"\n  },\n  {\n    "name": "v0.5.3"\n  }\n]'
+STUB_JOB_RC=0
+out="$(HOMEFIELD_AUTO_UPDATE=patch HOMEFIELD_NOW_EPOCH=20000 run_update --auto)"; rc=$?
+ref_after="$(cat "$CASE_DIR/tool/.homefield-ref")"
+record "--auto patch busy VM: skips with exit 0 and leaves .homefield-ref untouched" "0/yes/yes" "$rc/$(has "$out" "auto-update: skipping; a job is running")/$(has "$ref_after" "ref=v0.5.3")"
+
+# 16. --auto patch mode skips minor bump cleanly without HOMEFIELD_AUTO_UPDATE_MINOR=1
+setup_env auto_minor_skip
+printf 'repo=i2Dev-com/homefield\nref=v0.5.3\ncommit=%s\n' "$AAA" >"$CASE_DIR/tool/.homefield-ref"
+STUB_TAGS_JSON=$'[\n  {\n    "name": "v0.6.0"\n  },\n  {\n    "name": "v0.5.3"\n  }\n]'
+out="$(HOMEFIELD_AUTO_UPDATE=patch HOMEFIELD_NOW_EPOCH=20000 run_update --auto)"; rc=$?
+record "--auto patch minor-only: skips with exit 0" "0/yes" "$rc/$(has "$out" "auto-update: skipping v0.6.0")"
+
+# 17. --auto patch mode applies patch bump when idle
+setup_env auto_patch_apply
+printf 'repo=i2Dev-com/homefield\nref=v0.5.3\ncommit=%s\n' "$AAA" >"$CASE_DIR/tool/.homefield-ref"
+STUB_TARBALL="$TAR_OK"
+STUB_TAGS_JSON=$'[\n  {\n    "name": "v0.5.4"\n  },\n  {\n    "name": "v0.5.3"\n  }\n]'
+STUB_JOB_RC=1
+out="$(HOMEFIELD_AUTO_UPDATE=patch HOMEFIELD_NOW_EPOCH=20000 run_update --auto)"; rc=$?
+ref_after="$(cat "$CASE_DIR/tool/.homefield-ref")"
+record "--auto patch idle VM: applies v0.5.4" "0/yes/yes" "$rc/$(has "$out" "updated homefield to v0.5.4")/$(has "$ref_after" "ref=v0.5.4")"
+
+# 18. --schedule install, status, remove
+setup_env schedule_cmd
+out="$(HOMEFIELD_UPDATE_INTERVAL=7200 run_update --schedule install)"; rc=$?
+plist="$CASE_DIR/launch_agents/com.homefield.update.plist"
+plist_body="$(cat "$plist")"
+calls="$(cat "$CALL_LOG")"
+record "--schedule install: writes plist and loads via launchctl" "0/yes/yes/yes/yes" "$rc/$(has "$out" "installed update schedule")/$(has "$plist_body" "<integer>7200</integer>")/$(has "$plist_body" "<string>notify</string>")/$(has "$calls" "LAUNCHCTL:load -w")"
+out="$(run_update --schedule status)"; rc=$?
+record "--schedule status: reports installed and loaded=yes" "0/yes" "$rc/$(has "$out" "installed (${plist}, loaded=yes)")"
+out="$(run_update --schedule remove)"; rc=$?
+record "--schedule remove: unloads and deletes plist" "0/yes/no" "$rc/$(has "$out" "removed update schedule")/$([ -f "$plist" ] && echo yes || echo no)"
 
 summary
