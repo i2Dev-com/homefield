@@ -158,6 +158,10 @@ cmd_adopt() {
   esac
 }
 run_provision() { echo "run_provision" >>"$CALLS"; : >"$PROVISIONED"; }
+warm_vm() {
+  WARM_STATE="${STUB_WARM_STATE:-warm}"
+  WARM_DETAIL="${STUB_WARM_DETAIL:-}"
+}
 runner_setting() {
   local k
   for k in "$@"; do
@@ -549,5 +553,13 @@ record "an already registered instance (the upgrade summary), even with --url: n
   "$rc/$(called '^cmd_adopt')/$(has "$out" 'Open the routing pull request')/$(has "$out" 'Repository to route first')/$(has "$out" 'Next steps:')"
 SRUN_IN="$work/yes" srun GH_OWNER_TYPE=User TTY=1 -- cmd_install --url $personal_url
 record "install is not offered it" "0/0/no" "$rc/$(called '^cmd_adopt')/$(has "$out" 'Open the routing pull request')"
+
+# Warm-up summary lines
+srun -- cmd_setup --url $org
+record "setup summary: warm-up complete line" "0/yes" "$rc/$(has "$out" '✓ VM warm (docker, runner, timers)')"
+srun STUB_WARM_STATE=incomplete STUB_WARM_DETAIL=docker -- cmd_setup --url $org
+record "setup summary: warm-up incomplete line" "0/yes" "$rc/$(has "$out" '! Warm-up incomplete (docker): run homefield diagnose')"
+srun STUB_WARM_STATE=unknown -- cmd_setup --url $org
+record "setup summary: warm-up unverified line" "0/yes" "$rc/$(has "$out" '! Warm-up not verified (could not ask the VM): run homefield diagnose')"
 
 summary

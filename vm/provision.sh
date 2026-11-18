@@ -804,6 +804,30 @@ systemctl enable --now homefield-cleanup.timer homefield-maintenance.timer
 systemctl enable homefield-memwatch.service
 systemctl restart homefield-memwatch.service
 
+# Bounded warm-up check: confirm Docker responds, the runner service is active,
+# and both maintenance timers are enabled and active before the first job.
+warm_guest() {
+  local missing=() t
+  if ! timeout 10 docker info >/dev/null 2>&1; then
+    missing+=(docker)
+  fi
+  if [ -z "${svc_unit:-}" ] || ! systemctl is-active --quiet "$svc_unit"; then
+    missing+=(runner)
+  fi
+  for t in homefield-cleanup.timer homefield-maintenance.timer; do
+    if ! systemctl is-enabled --quiet "$t" || ! systemctl is-active --quiet "$t"; then
+      missing+=(timers)
+      break
+    fi
+  done
+  if [ "${#missing[@]}" -eq 0 ]; then
+    echo "provision.sh: warm-up complete (docker, runner, timers)"
+  else
+    echo "provision.sh: warm-up incomplete (${missing[*]})" >&2
+  fi
+}
+warm_guest
+
 # Reports the registration as it is, which differs from the settings when an
 # existing registration was kept. Labels are not in the runner's config; the
 # runners page shows them.
