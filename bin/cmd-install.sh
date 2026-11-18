@@ -756,6 +756,15 @@ cmd_install() {
   vm_lookup
   SETUP_VM_WAS="$VM_STATUS"
   if [ -z "$VM_STATUS" ]; then
+    local existing_vms=0 existing_name=""
+    while IFS= read -r existing_name; do
+      [ -n "$existing_name" ] || continue
+      [ "$existing_name" != "$INSTANCE" ] || continue
+      existing_vms=$((existing_vms + 1))
+    done < <(vm_instances 2>/dev/null || true)
+    if [ "$existing_vms" -ge 1 ]; then
+      log "warning: ${existing_vms} other HomeField VM(s) already exist on this Mac; this VM will request ${cpus} vCPU(s) and ${memory} memory. Size the fleet to avoid CPU/RAM contention (see docs/runbook.md, \"Scaling on one Mac\")."
+    fi
     prepare_registration
     prepared=1
   elif [ -n "$url" ]; then

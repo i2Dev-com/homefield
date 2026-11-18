@@ -905,6 +905,20 @@ compare, `bin/homefield status` prints `extra packages:` and `limactl shell
 <instance> ls /etc/homefield/provision.d` lists the hooks. `upgrade` runs the
 hooks again, so a changed hook applies on the next upgrade.
 
+## Scaling on one Mac
+
+You can run multiple HomeField VMs on a single Mac (`homefield setup --instance <name> ...`) and manage them together with `homefield fleet`:
+
+- `homefield fleet` (or `homefield fleet status`) prints a compact table of every HomeField VM on the Mac (`INSTANCE`, `VM`, `RUNNER`, `GITHUB`, `SERVICE`, `JOB`, `MODE`) plus totals (`total`, `online`, `idle`, `busy`, `offline`). Pass `--json` for machine-readable output.
+- `homefield fleet start` boots every HomeField VM and prints the fleet status summary.
+- `homefield fleet stop` stops every HomeField VM (refusing any VM currently running a job).
+
+When creating an additional VM on a Mac that already has one or more HomeField VMs, `install`/`setup` logs a non-blocking warning so you size CPU and RAM intentionally:
+
+- Leave at least **2 host cores** and **8 GiB RAM** unallocated for macOS, Lima/VZ overhead, and Spotlight/WindowServer.
+- Never oversubscribe total vCPUs or RAM across concurrent VMs (for example, on a 10-core / 24 GiB Mac, two 4-vCPU / 8 GiB VMs fit comfortably; three would contend for CPU and swap).
+- Use `homefield memory` to verify each VM's peak RSS before adding another runner.
+
 ## Moving a registration
 
 To move the runner to another scope (for example from one repository to the
