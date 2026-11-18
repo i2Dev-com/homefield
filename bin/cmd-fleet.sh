@@ -61,11 +61,14 @@ fleet_status() {
     case "$gh_state" in
       online)
         online=$((online + 1))
-        if [ "$job_state" = "idle" ] || [ "$job_state" = "—" ]; then
-          idle=$((idle + 1))
-        else
-          busy=$((busy + 1))
-        fi
+        case "$job_state" in
+          idle|"—")
+            idle=$((idle + 1))
+            ;;
+          running)
+            busy=$((busy + 1))
+            ;;
+        esac
         ;;
       busy)
         online=$((online + 1))

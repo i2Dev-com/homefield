@@ -43,6 +43,7 @@ EOF
 chmod +x "$TMP/bin/limactl" "$TMP/bin/gh" "$TMP/bin/uname"
 
 # Source bin/homefield in a subshell-safe way.
+# shellcheck disable=SC2034
 HOMEFIELD_SOURCE_ONLY=1
 # shellcheck source=bin/homefield
 . "$ROOT/bin/homefield"
@@ -53,7 +54,7 @@ vm_instances() {
   case "$MOCK_MODE" in
     empty) return 0 ;;
     multi) printf '%s\n' "homefield-1" "homefield-2" ;;
-    busy|single) printf '%s\n' "homefield-1" ;;
+    busy|single|unknown_job) printf '%s\n' "homefield-1" ;;
   esac
 }
 
@@ -83,6 +84,14 @@ st_collect() {
       ST_GH_STATUS="online"
       ST_SVC="running"
       ST_JOB="running"
+      ;;
+    unknown_job:homefield-1)
+      ST_STATUS="Running"
+      ST_NAME="mac-1"
+      ST_GH="listed"
+      ST_GH_STATUS="online"
+      ST_SVC="running"
+      ST_JOB="unknown"
       ;;
   esac
 }
@@ -136,6 +145,17 @@ assert d["total"] == 1 and d["online"] == 1 and d["idle"] == 0 and d["busy"] == 
 print("ok")
 ' "$out" 2>/dev/null || echo bad)"
 record "fleet --json: counts busy runner under online+busy" "ok" "$json_busy"
+
+# 3b. Unknown job state counted under online, not idle or busy
+MOCK_MODE="unknown_job"
+out="$(cmd_fleet --json 2>&1)"
+json_unk="$(python3 -c '
+import json, sys
+d = json.loads(sys.argv[1])
+assert d["total"] == 1 and d["online"] == 1 and d["idle"] == 0 and d["busy"] == 0 and d["offline"] == 0
+print("ok")
+' "$out" 2>/dev/null || echo bad)"
+record "fleet --json: keeps unknown job out of idle and busy" "ok" "$json_unk"
 
 # 4. fleet start and fleet stop dispatch
 vm_dispatch() {
