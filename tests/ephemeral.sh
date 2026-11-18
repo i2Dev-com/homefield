@@ -16,7 +16,7 @@ trap 'rm -rf "$TMP"' EXIT
 
 STUBS="$TMP/stubs"
 mkdir -p "$STUBS"
-for t in awk bash cat cp cut date dirname git grep head mktemp mv rm mkdir sed sh sleep tr wc; do
+for t in awk bash cat chmod cp cut date dirname git grep head mktemp mv rm mkdir sed sh sleep tr wc; do
   ln -s "$(command -v "$t")" "$STUBS/$t"
 done
 
@@ -401,5 +401,38 @@ env -i HOME="$WORK/home" PATH="$STUBS" REPO_ROOT="$REPO_ROOT" CALLS="$CALLS" HOM
 ' >/dev/null 2>&1; watch_rc=$?
 watch_calls="$(cat "$CALLS")"
 record "re-register --watch discovers non-default ephemeral instance" "0/yes" "$watch_rc/$(has "$watch_calls" "rereg:custom-eph")"
+
+# 17. provision.sh re_register accepts clean ephemeral exit (Result=success) after Listening for Jobs
+DONE_WORK="$TMP/rereg-done"
+mkdir -p "$DONE_WORK/runner"
+# shellcheck disable=SC2016  # inner bash -c expands its own vars
+done_rc=0
+env -i \
+  PATH="$STUBS" \
+  RUNNER_HOME="$DONE_WORK/runner" \
+  RUNNER_URL="https://github.com/acme" \
+  RUNNER_TOKEN="tok-done" \
+  RUNNER_NAME="test-runner" \
+  RUNNER_LABELS="self-hosted,linux,arm64,homefield-ci" \
+  RUNNER_GROUP="" \
+  RUNNER_USER="runner" \
+  /bin/bash -c '
+    set -euo pipefail
+    pgrep() { return 1; }
+    systemctl() {
+      case "${1:-}" in
+        is-active) return 1 ;;
+        show) echo "success"; return 0 ;;
+        *) return 0 ;;
+      esac
+    }
+    journalctl() { echo "Listening for Jobs"; }
+    install() { :; }
+    runner_config() { : >"$RUNNER_HOME/.runner"; return 0; }
+    ensure_service() { printf "actions.runner.test.service\n" >"$RUNNER_HOME/.service"; return 0; }
+    . "$1"
+    re_register
+  ' _ "$REREG_FN" >/dev/null 2>&1 || done_rc=$?
+record "provision.sh re_register: accepts clean ephemeral job completion after Listening for Jobs" "0" "$done_rc"
 
 summary

@@ -402,7 +402,7 @@ re_register() {
     systemctl is-active --quiet "$svc_unit" || break
     sleep 1
   done
-  if [ "$ready" != "1" ] || ! systemctl is-active --quiet "$svc_unit"; then
+  if [ "$ready" != "1" ] || { ! systemctl is-active --quiet "$svc_unit" && [ "$(systemctl show -p Result --value "$svc_unit" 2>/dev/null || true)" != "success" ]; }; then
     systemctl stop "$svc_unit" 2>/dev/null || true
     echo "provision.sh: re-registered runner did not start listening for jobs" >&2
     return 1
