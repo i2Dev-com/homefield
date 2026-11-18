@@ -220,4 +220,15 @@ hrun cmd_install --url https://github.com/acme --org --ephemeral
 st_body="$(cat "$WORK/state/homefield.state")"
 record "ephemeral install with defaults: overwrites prior custom group and label" "0/no/no" "$rc/$(has "$st_body" "old-grp")/$(has "$st_body" "old-lbl")"
 
+# 12. st_render_human surfaces ephemeral error even when ST_REG=no
+hrun state_set ephemeral_error "re-registration failed"
+# shellcheck disable=SC2016  # inner bash -c expands $REPO_ROOT
+st_out="$(env -i HOME="$WORK/home" PATH="$STUBS" REPO_ROOT="$REPO_ROOT" HOMEFIELD_STATE_DIR="$WORK/state" /bin/bash -c '
+  HOMEFIELD_SOURCE_ONLY=1
+  . "$REPO_ROOT/bin/homefield"
+  ST_CREATED=yes ST_STATUS=Running ST_LB_STATE=verified ST_ASKFAIL=0 ST_REG=no ST_SVC=stopped
+  st_render_human
+' 2>&1)"
+record "status render with ST_REG=no and ephemeral_error: shows mode and ERROR" "yes/yes" "$(has "$st_out" "mode: ephemeral")/$(has "$st_out" "ephemeral: ERROR (re-registration failed)")"
+
 summary

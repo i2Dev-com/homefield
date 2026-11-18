@@ -1100,6 +1100,18 @@ st_collect() {
   return 0
 }
 
+st_render_ephemeral() {
+  [ "$(state_get ephemeral)" = "1" ] || return 0
+  echo "mode: ephemeral (one job per registration)"
+  local eph_err=""
+  eph_err="$(state_get ephemeral_error)"
+  if [ -n "$eph_err" ]; then
+    echo "ephemeral: ERROR (${eph_err}); run homefield re-register --instance ${INSTANCE}"
+  elif [ "$ST_SVC" != "running" ] || [ "$ST_REG" = "no" ]; then
+    echo "ephemeral: awaiting re-registration (homefield re-register --instance ${INSTANCE})"
+  fi
+}
+
 st_render_human() {
   if [ -z "$ST_CREATED" ] && [ -z "$ST_STATUS" ]; then
     echo "VM ${INSTANCE}: unknown (could not ask Lima)"
@@ -1126,6 +1138,7 @@ st_render_human() {
   fi
   if [ "$ST_REG" = "no" ]; then
     echo "runner: not registered"
+    st_render_ephemeral
     return 0
   fi
   if [ -n "$ST_NAME" ] && [ -n "$ST_URL" ]; then
@@ -1153,16 +1166,7 @@ st_render_human() {
   else
     echo "service: NOT running (${ST_UNIT:-no service installed})"
   fi
-  if [ "$(state_get ephemeral)" = "1" ]; then
-    echo "mode: ephemeral (one job per registration)"
-    local eph_err=""
-    eph_err="$(state_get ephemeral_error)"
-    if [ -n "$eph_err" ]; then
-      echo "ephemeral: ERROR (${eph_err}); run homefield re-register --instance ${INSTANCE}"
-    elif [ "$ST_SVC" != "running" ]; then
-      echo "ephemeral: awaiting re-registration (homefield re-register --instance ${INSTANCE})"
-    fi
-  fi
+  st_render_ephemeral
   case "$ST_JOB" in
     running) echo "job: running" ;;
     idle) echo "job: idle" ;;
