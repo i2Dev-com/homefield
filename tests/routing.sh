@@ -68,6 +68,11 @@ case "$*" in
     printf '%b' "${GH_RUNS_IN_PROGRESS-}" ;;
   *"actions/runner-groups/"*"repositories"*)
     printf '%b' "${GH_GROUP_REPOS-}" ;;
+  *"actions/runner-groups/"*"runners"*)
+    printf '%b' "${GH_GROUP_RUNNERS-}" ;;
+  *"actions/runner-groups?per_page="*)
+    [ -z "${GH_GROUPS_FAIL:-}" ] || { echo "gh: HTTP 502" >&2; exit 1; }
+    printf '%b' "${GH_GROUPS-}" ;;
   *"/actions/runs/"*"/jobs"*)
     [ -z "${GH_JOBS_FAIL:-}" ] || { echo "gh: HTTP 502" >&2; exit 1; }
     printf '%b' "${GH_JOBS-}" ;;
@@ -149,9 +154,10 @@ record "the variable set fails: no record, exit 1" "1/1" "$rc/$([ -f "$state/rou
 
 echo
 echo "the stop-side fallback"
-# GH_RUNNERS rows: name, status, labels (tab-separated), as runners_on_github
-# --jq prints them. my-mac-homefield is the runner being stopped.
-runner_rows='my-mac-homefield\tonline\tself-hosted,linux,arm64,homefield-ci\n'
+# GH_RUNNERS rows: id, name, status, labels (tab-separated), as
+# runners_on_github --jq prints them. my-mac-homefield is the runner being
+# stopped.
+runner_rows='42\tmy-mac-homefield\tonline\tself-hosted,linux,arm64,homefield-ci\n'
 
 reset_records
 printf 'homefield-ci acme/api\nhomefield-ci acme/web\nother-label acme/other\n' >"$state/routing"
@@ -170,7 +176,7 @@ record "...the label nobody serves (other-label) is left alone" "0" \
 reset_records
 printf 'homefield-ci acme/api\n' >"$state/routing"
 harness_env=(GH_RUNNERS="$runner_rows
-other-mac\tonline\tself-hosted,homefield-ci\n")
+43\tother-mac\tonline\tself-hosted,homefield-ci\n")
 harness route_stop_fallback https://github.com/acme my-mac-homefield
 record "another online runner serves the label: nothing is flipped" "0/yes/0" \
   "$rc/$(has "$out" 'still served by another online runner')/$(grep -c 'variable set' "$calls" || true)"
@@ -178,14 +184,40 @@ record "another online runner serves the label: nothing is flipped" "0/yes/0" \
 reset_records
 printf 'homefield-ci acme/api\n' >"$state/routing"
 harness_env=(GH_RUNNERS="$runner_rows
-other-mac\toffline\tself-hosted,homefield-ci\n")
+43\tother-mac\toffline\tself-hosted,homefield-ci\n")
 harness route_stop_fallback https://github.com/acme my-mac-homefield
 record "an offline runner serving the label does not count: the flip happens" "0/yes" \
   "$rc/$(grep -q 'variable set CI_RUNNER --repo acme/api --body hosted' "$calls" && echo yes || echo no)"
 
 reset_records
+printf 'homefield-ci acme/api\n' >"$state/routing"
+harness_env=(GH_RUNNERS="$runner_rows
+43\tother-mac\tonline\tself-hosted,homefield-ci\n" \
+  GH_GROUPS='homefield-ci\tselected\tpublic\t7\n' GH_GROUP_RUNNERS='43\n' GH_GROUP_REPOS='acme/web\n')
+harness route_stop_fallback https://github.com/acme my-mac-homefield
+record "the other runner's group does not admit the repo: the flip happens" "0/yes" \
+  "$rc/$(grep -q 'variable set CI_RUNNER --repo acme/api --body hosted' "$calls" && echo yes || echo no)"
+
+reset_records
+printf 'homefield-ci acme/api\n' >"$state/routing"
+harness_env=(GH_RUNNERS="$runner_rows
+43\tother-mac\tonline\tself-hosted,homefield-ci\n" \
+  GH_GROUPS='Default\t\t\t1\n' GH_GROUP_RUNNERS='43\n')
+harness route_stop_fallback https://github.com/acme my-mac-homefield
+record "the other runner is in the Default group: it serves every repo, nothing flips" "0/0" \
+  "$rc/$(grep -c 'variable set' "$calls" || true)"
+
+reset_records
+printf 'homefield-ci acme/api\n' >"$state/routing"
+harness_env=(GH_RUNNERS="$runner_rows
+43\tother-mac\tonline\tself-hosted,homefield-ci\n" GH_GROUPS_FAIL=1)
+harness route_stop_fallback https://github.com/acme my-mac-homefield
+record "the group cannot be asked: fail safe, nothing flips" "0/0" \
+  "$rc/$(grep -c 'variable set' "$calls" || true)"
+
+reset_records
 printf 'homefield-ci acme/api\nhomefield-ci acme/api2\n' >"$state/routing"
-harness_env=(GH_RUNNERS='repo-runner\tonline\tself-hosted,homefield-ci\n')
+harness_env=(GH_RUNNERS='45\trepo-runner\tonline\tself-hosted,homefield-ci\n')
 harness route_stop_fallback https://github.com/acme/api repo-runner
 record "a repository-scoped runner: its own repo flips, the org's others do not" "0/yes/no" \
   "$rc/$(grep -q 'variable set CI_RUNNER --repo acme/api --body hosted' "$calls" && echo yes || echo no)/$(grep -q 'variable set CI_RUNNER --repo acme/api2' "$calls" && echo yes || echo no)"
@@ -193,14 +225,15 @@ record "...the org's other repo stays routed local" "homefield-ci acme/api2" "$(
 
 reset_records
 printf 'HomeField-CI acme/api\n' >"$state/routing"
-harness_env=(GH_RUNNERS='my-mac-homefield\tonline\tself-hosted,HOMEFIELD-CI\n')
+harness_env=(GH_RUNNERS='42\tmy-mac-homefield\tonline\tself-hosted,HOMEFIELD-CI\n')
 harness route_stop_fallback https://github.com/acme my-mac-homefield
 record "labels match case-insensitively: the flip happens" "0/yes" \
   "$rc/$(grep -q 'variable set CI_RUNNER --repo acme/api --body hosted' "$calls" && echo yes || echo no)"
 
 reset_records
 printf 'homefield-ci acme/api\n' >"$state/routing"
-harness_env=(GH_RUNNERS='my-mac-homefield\tonline\tself-hosted,HOMEFIELD-CI\nother-mac\tonline\tself-hosted,Homefield-CI\n')
+harness_env=(GH_RUNNERS='42\tmy-mac-homefield\tonline\tself-hosted,HOMEFIELD-CI\n43\tother-mac\tonline\tself-hosted,Homefield-CI\n' \
+  GH_GROUPS='homefield-ci\tselected\tpublic\t7\n' GH_GROUP_RUNNERS='43\n' GH_GROUP_REPOS='acme/api\n')
 harness route_stop_fallback https://github.com/acme my-mac-homefield
 record "the still-served check is case-insensitive too: nothing flips" "0/0" \
   "$rc/$(grep -c 'variable set' "$calls" || true)"
@@ -214,7 +247,7 @@ record "GitHub cannot be asked: nothing is flipped, exit 1" "1/yes/0" \
 
 reset_records
 printf 'homefield-ci acme/api\n' >"$state/routing"
-harness_env=(GH_RUNNERS='someone-else\tonline\tself-hosted\n')
+harness_env=(GH_RUNNERS='44\tsomeone-else\tonline\tself-hosted\n')
 harness route_stop_fallback https://github.com/acme my-mac-homefield
 record "this runner is not in GitHub's list: nothing is flipped, exit 1" "1/yes/0" \
   "$rc/$(has "$out" 'not in GitHub')/$(grep -c 'variable set' "$calls" || true)"
@@ -251,7 +284,7 @@ echo
 echo "the start-side restore"
 reset_records
 printf 'homefield-ci acme/api\nhomefield-ci acme/web\n' >"$state/autoflip"
-harness_env=(GH_CI_RUNNER=hosted GH_RUNNERS='my-mac-homefield\tonline\tself-hosted,linux,arm64,homefield-ci\n')
+harness_env=(GH_CI_RUNNER=hosted GH_RUNNERS='42\tmy-mac-homefield\tonline\tself-hosted,linux,arm64,homefield-ci\n')
 harness route_start_restore https://github.com/acme my-mac-homefield
 record "every pending repo is routed back to local" "0/yes/yes" \
   "$rc/$(grep -q 'variable set CI_RUNNER --repo acme/api --body local' "$calls" && echo yes || echo no)/$(grep -q 'variable set CI_RUNNER --repo acme/web --body local' "$calls" && echo yes || echo no)"
@@ -262,14 +295,14 @@ record "...and autoflip is empty" "0" "$([ -f "$state/autoflip" ] && wc -l <"$st
 
 reset_records
 printf 'homefield-ci acme/api\n' >"$state/autoflip"
-harness_env=(GH_CI_RUNNER=hosted GH_VARSET_FAIL=1 GH_RUNNERS='my-mac-homefield\tonline\tself-hosted,linux,arm64,homefield-ci\n')
+harness_env=(GH_CI_RUNNER=hosted GH_VARSET_FAIL=1 GH_RUNNERS='42\tmy-mac-homefield\tonline\tself-hosted,linux,arm64,homefield-ci\n')
 harness route_start_restore https://github.com/acme my-mac-homefield
 record "a restore that fails: exit 1, the entry waits for the next start" "1/yes" \
   "$rc/$(grep -q acme/api "$state/autoflip" 2>/dev/null && echo yes || echo no)"
 
 reset_records
 printf 'homefield-ci acme/api\nother-label acme/web\n' >"$state/autoflip"
-harness_env=(GH_CI_RUNNER=hosted GH_RUNNERS='my-mac-homefield\tonline\tself-hosted,linux,arm64,homefield-ci\n')
+harness_env=(GH_CI_RUNNER=hosted GH_RUNNERS='42\tmy-mac-homefield\tonline\tself-hosted,linux,arm64,homefield-ci\n')
 harness route_start_restore https://github.com/acme my-mac-homefield
 record "a label this runner does not serve: its entry is left for the VM that serves it" "0/yes/no" \
   "$rc/$(grep -q 'variable set CI_RUNNER --repo acme/api --body local' "$calls" && echo yes || echo no)/$(grep -q 'variable set CI_RUNNER --repo acme/web' "$calls" && echo yes || echo no)"
@@ -277,14 +310,14 @@ record "...it stays in autoflip" "other-label acme/web" "$(grep other-label "$st
 
 reset_records
 printf 'HomeField-CI acme/api\n' >"$state/autoflip"
-harness_env=(GH_CI_RUNNER=hosted GH_RUNNERS='my-mac-homefield\tonline\tself-hosted,homefield-ci\n')
+harness_env=(GH_CI_RUNNER=hosted GH_RUNNERS='42\tmy-mac-homefield\tonline\tself-hosted,homefield-ci\n')
 harness route_start_restore https://github.com/acme my-mac-homefield
 record "the restore matches labels case-insensitively" "0/yes" \
   "$rc/$(grep -q 'variable set CI_RUNNER --repo acme/api --body local' "$calls" && echo yes || echo no)"
 
 reset_records
 printf 'homefield-ci beta/web\n' >"$state/autoflip"
-harness_env=(GH_CI_RUNNER=hosted GH_RUNNERS='my-mac-homefield\tonline\tself-hosted,homefield-ci\n')
+harness_env=(GH_CI_RUNNER=hosted GH_RUNNERS='42\tmy-mac-homefield\tonline\tself-hosted,homefield-ci\n')
 harness route_start_restore https://github.com/acme my-mac-homefield
 record "a pending repo in another scope: left hosted, with a message" "0/yes/0" \
   "$rc/$(has "$out" 'routed under a different scope than acme')/$(grep -c 'variable set' "$calls" || true)"
@@ -292,7 +325,7 @@ record "...it stays in autoflip" "homefield-ci beta/web" "$(cat "$state/autoflip
 
 reset_records
 printf 'homefield-ci acme/api\n' >"$state/autoflip"
-harness_env=(GH_CI_RUNNER=hosted GH_RUNNERS='someone-else\tonline\tself-hosted\n')
+harness_env=(GH_CI_RUNNER=hosted GH_RUNNERS='44\tsomeone-else\tonline\tself-hosted\n')
 harness route_start_restore https://github.com/acme my-mac-homefield
 record "this runner is not in GitHub's list: nothing restored, exit 1" "1/yes/0" \
   "$rc/$(has "$out" 'not in GitHub')/$(grep -c 'variable set' "$calls" || true)"
@@ -336,16 +369,23 @@ record "a repository-scoped registration: the registration's own repo is the can
 
 reset_records
 printf 'acme/api local\n' >"$work/byrepo"
-harness_env=(GH_GROUP_REPOS='acme/api\n' GH_RUNNERS='my-mac-homefield\tonline\tself-hosted,linux,arm64,homefield-ci\n' GH_CI_RUNNER_BY_REPO="$work/byrepo")
+harness_env=(GH_GROUP_REPOS='acme/api\n' GH_RUNNERS='42\tmy-mac-homefield\tonline\tself-hosted,linux,arm64,homefield-ci\n' GH_CI_RUNNER_BY_REPO="$work/byrepo")
 harness seed_routing_records https://github.com/acme my-mac-homefield "" 7
 record "without a label, the runner's routing label is derived from GitHub's list" "0/yes" \
   "$rc/$(grep -q 'homefield-ci acme/api' "$state/routing" && echo yes || echo no)"
 
 reset_records
-harness_env=(GH_GROUP_REPOS='acme/api\n' GH_RUNNERS='my-mac-homefield\tonline\tself-hosted,linux\n' GH_CI_RUNNER_BY_REPO="$work/byrepo")
+harness_env=(GH_GROUP_REPOS='acme/api\n' GH_RUNNERS='42\tmy-mac-homefield\tonline\tself-hosted,linux\n' GH_CI_RUNNER_BY_REPO="$work/byrepo")
 harness seed_routing_records https://github.com/acme my-mac-homefield
 record "a runner with no custom label: nothing routes to it, nothing to seed" "0/yes" \
   "$rc/$(has "$out" 'nothing to seed')"
+
+reset_records
+printf 'acme/api local\n' >"$work/byrepo"
+harness_env=(GH_RUNNERS='45\trepo-runner\tonline\tself-hosted,homefield-ci\n' GH_CI_RUNNER_BY_REPO="$work/byrepo")
+harness seed_routing_records https://github.com/acme/api repo-runner
+record "a repo-scoped upgrade without a label: the label is derived from GitHub's list" "0/homefield-ci acme/api" \
+  "$rc/$(cat "$state/routing" 2>/dev/null)"
 
 rm -f "$stubs/gh"
 
@@ -494,7 +534,7 @@ record "an unknown option: refused, nothing stopped" "1/yes/0" \
   "$rc/$(has "$err" 'stop takes no options besides --instance and --route-hosted')/$(grep -c '^limactl stop' "$calls" || true)"
 
 # start: restore from autoflip once the runner takes jobs.
-named_rows='my-mac-homefield\tonline\tself-hosted,linux,arm64,homefield-ci\n'
+named_rows='42\tmy-mac-homefield\tonline\tself-hosted,linux,arm64,homefield-ci\n'
 start_env=(LIMA_STATUS=Stopped REG=0 SETTING_OUT="$settings" SVC_NAME='actions.runner.acme.test.service' \
   GH_RUNNERS='42\tonline\tfalse\n' GH_RUNNERS_NAMED="$named_rows")
 
@@ -589,7 +629,7 @@ iharness_env=()
 
 rm -f "$state/routing"
 printf 'acme/api local\n' >"$work/byrepo-install"
-iharness_env=(STUB_GROUP_ID= GH_GROUP_REPOS=$'acme/api\n' GH_CI_RUNNER_BY_REPO="$work/byrepo-install" GH_RUNNERS_NAMED='test-mac-homefield\tonline\tself-hosted,homefield-ci\n')
+iharness_env=(STUB_GROUP_ID= GH_GROUP_REPOS=$'acme/api\n' GH_CI_RUNNER_BY_REPO="$work/byrepo-install" GH_RUNNERS_NAMED='46\ttest-mac-homefield\tonline\tself-hosted,homefield-ci\n')
 iharness cmd_install --url https://github.com/acme --org --auto-route
 record "install --auto-route without a group id: the fallback says what is missing" "0/yes/1" \
   "$rc/$(has "$out" 'could not list the runner group')/$([ -f "$state/routing" ] && echo 0 || echo 1)"
@@ -597,7 +637,7 @@ iharness_env=()
 
 rm -f "$state/routing"
 printf 'acme/api local\n' >"$work/byrepo-install"
-iharness_env=(GH_GROUP_REPOS=$'acme/api\n' GH_CI_RUNNER_BY_REPO="$work/byrepo-install" GH_RUNNERS_NAMED='test-mac-homefield\tonline\tself-hosted,homefield-ci\n')
+iharness_env=(GH_GROUP_REPOS=$'acme/api\n' GH_CI_RUNNER_BY_REPO="$work/byrepo-install" GH_RUNNERS_NAMED='46\ttest-mac-homefield\tonline\tself-hosted,homefield-ci\n')
 iharness cmd_install --url https://github.com/acme/api --auto-route
 record "a repository-scoped install --auto-route: the registration's repo is seeded" "0/homefield-ci acme/api" \
   "$rc/$(cat "$state/routing" 2>/dev/null)"
@@ -612,7 +652,7 @@ printf 'group_created=acme/homefield-ci/7\n' >>"$state/homefield.state"
 rm -f "$state/routing"
 printf 'acme/api local\n' >"$work/byrepo-up"
 iharness_env=(STUB_REG=0 GH_GROUP_REPOS=$'acme/api\n' GH_CI_RUNNER_BY_REPO="$work/byrepo-up" \
-  GH_RUNNERS_NAMED='test-mac-homefield\tonline\tself-hosted,homefield-ci\n')
+  GH_RUNNERS_NAMED='46\ttest-mac-homefield\tonline\tself-hosted,homefield-ci\n')
 iharness cmd_upgrade --auto-route
 record "upgrade --auto-route on an existing install: the records are seeded, label derived" "0/1/homefield-ci acme/api" \
   "$rc/$(grep -c . "$state/routing" 2>/dev/null || true)/$(cat "$state/routing" 2>/dev/null)"

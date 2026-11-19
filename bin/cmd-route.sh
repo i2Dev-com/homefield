@@ -38,16 +38,38 @@ record_add() {
   mv -f "$tmp" "$f" || { rm -f "$tmp"; return 1; }
 }
 
-# runners_on_github <url>: the scope's runners as `name status labels` lines
-# (labels comma-separated), or nothing when GitHub lists none; 1 when GitHub
-# could not be asked. One paginated call serves both the fallback's halves:
-# this runner's labels and which other online runners still serve them.
+# runners_on_github <url>: the scope's runners as `id name status labels`
+# lines (labels comma-separated), or nothing when GitHub lists none; 1 when
+# GitHub could not be asked. One paginated call serves the fallback's halves:
+# this runner's labels, and which other online runners still serve them —
+# which needs the id, because a runner serves a repository only if its group
+# admits it (runners in different groups can share a label).
 runners_on_github() {
   local scope
   scope="$(api_scope "$1" 2>/dev/null)" || return 1
   gh api --hostname github.com --paginate "${scope}/actions/runners?per_page=100" \
-    --jq '.runners[] | [.name, .status, (.labels | map(.name) | join(","))] | @tsv' \
+    --jq '.runners[] | [.id, .name, .status, (.labels | map(.name) | join(","))] | @tsv' \
     </dev/null 2>/dev/null
+}
+
+# runner_serves_repo <org> <runner id> <repo>: whether the runner can take
+# the repository's jobs — its group admits the repository (a selected group
+# only its listed ones, the Default group every repository in the org).
+# 0 serves, 1 does not, 2 could not be asked (the caller fails safe and
+# keeps the repository routed local).
+runner_serves_repo() {
+  local org="$1" rid="$2" repo="$3" row vis gid repos
+  row="$(find_runner_group "$org" "$rid")" || return 2
+  IFS=$'\t' read -r _gname vis _pub gid <<<"$row"
+  case "$vis" in
+    selected)
+      repos="$(group_repositories "$org" "$gid" 2>/dev/null)" || return 2
+      printf '%s\n' "$repos" | grep -qx "$repo" && return 0
+      return 1
+      ;;
+    # the Default group admits every repository in the organization
+    *) return 0 ;;
+  esac
 }
 
 # scope_owner <url>: what a runner is registered to — the path after
@@ -94,8 +116,8 @@ route_stop_fallback() {
   }
   # This runner's labels, from the row that matches by name. Not listed:
   # nothing is known about what it serves, so nothing is flipped.
-  local labels=""
-  while IFS=$'\t' read -r rname rstatus rlabels; do
+  local labels="" rid rname rstatus rlabels
+  while IFS=$'\t' read -r rid rname rstatus rlabels; do
     [ "$rname" = "$name" ] && labels="$rlabels"
   done <<<"$rows"
   if [ -z "$labels" ]; then
@@ -106,8 +128,9 @@ route_stop_fallback() {
   # so the comparisons do as well: a record for HomeField-CI and a runner
   # advertising homefield-ci are the same label.
   labels="$(lower "$labels")"
-  local owner
+  local owner repo_scope=org
   owner="$(scope_owner "$url")"
+  case "$owner" in */*) repo_scope=repo ;; esac
   while read -r label repo; do
     [ -n "$repo" ] || continue
     # The rows describe this scope's runners only, so a record for a repo in
@@ -121,10 +144,22 @@ route_stop_fallback() {
     # Another online runner (not this one) carrying the label keeps the
     # label served, so the repositories stay routed local.
     served=0
-    while IFS=$'\t' read -r rname rstatus rlabels; do
+    while IFS=$'\t' read -r rid rname rstatus rlabels; do
       [ "$rname" = "$name" ] && continue
       [ "$rstatus" = online ] || continue
-      case ",$(lower "$rlabels")," in *",$(lower "$label"),"*) served=1 ;; esac
+      case ",$(lower "$rlabels")," in *",$(lower "$label"),"*) ;; *) continue ;; esac
+      # The label alone is not enough: the other runner takes this
+      # repository's jobs only if its group admits the repository (two
+      # runners can share a label from different groups). On a
+      # repository-scoped registration every listed runner serves the
+      # repository by definition; otherwise the group decides, and a group
+      # that cannot be asked keeps the status quo (routed local).
+      if [ "$repo_scope" = repo ]; then
+        served=1
+      else
+        runner_serves_repo "$owner" "$rid" "$repo"
+        case $? in 0 | 2) served=1 ;; esac
+      fi
     done <<<"$rows"
     if [ "$served" = 1 ]; then
       log "${repo}: label ${label} is still served by another online runner; not switching to hosted"
@@ -171,8 +206,8 @@ route_start_restore() {
     echo "homefield: could not read the runners from GitHub; the flipped repositories stay hosted until the next start" >&2
     return 1
   }
-  local labels=""
-  while IFS=$'\t' read -r rname rstatus rlabels; do
+  local labels="" rid rname rstatus rlabels
+  while IFS=$'\t' read -r rid rname rstatus rlabels; do
     [ "$rname" = "$name" ] && labels="$rlabels"
   done <<<"$rows"
   if [ -z "$labels" ]; then
@@ -208,8 +243,8 @@ route_start_restore() {
 # rows or carries no custom label (nothing can be routed to it, so there is
 # nothing to seed).
 routing_label_from_rows() {
-  local rname rstatus rlabels labels="" l
-  while IFS=$'\t' read -r rname rstatus rlabels; do
+  local rid rname rstatus rlabels labels="" l
+  while IFS=$'\t' read -r rid rname rstatus rlabels; do
     [ "$rname" = "$2" ] && labels="$rlabels"
   done <<<"$1"
   [ -n "$labels" ] || return 0
@@ -242,21 +277,25 @@ seed_routing_records() {
     echo "homefield: could not read the scope of ${url}; the routing records were not seeded (repositories already routed local are not covered by the automatic fallback until each is recorded: bin/homefield route local --repo <owner>/<repo>)" >&2
     return 1
   }
+  # Without a label — the upgrade path, which does not know the runner's
+  # registration settings — derive it from GitHub's runner list, whatever
+  # the registration scope: a repository-scoped upgrade needs it exactly as
+  # much as an organization one.
+  if [ -z "$label" ]; then
+    local rows
+    rows="$(runners_on_github "$url")" || {
+      echo "homefield: could not read the runners from GitHub; the routing records were not seeded (repositories already routed local are not covered by the automatic fallback until each is recorded: bin/homefield route local --repo <owner>/<repo> --label <label>)" >&2
+      return 1
+    }
+    label="$(routing_label_from_rows "$rows" "$name")"
+    if [ -z "$label" ]; then
+      log "no routing label on ${name}; nothing routes to it, so there is nothing to seed"
+      return 0
+    fi
+  fi
   case "$scope" in
     orgs/*)
       org="${scope#orgs/}"
-      if [ -z "$label" ]; then
-        local rows
-        rows="$(runners_on_github "$url")" || {
-          echo "homefield: could not read the runners from GitHub; the routing records were not seeded (repositories already routed local are not covered by the automatic fallback until each is recorded: bin/homefield route local --repo <owner>/<repo> --label <label>)" >&2
-          return 1
-        }
-        label="$(routing_label_from_rows "$rows" "$name")"
-        if [ -z "$label" ]; then
-          log "no routing label on ${name}; nothing routes to it, so there is nothing to seed"
-          return 0
-        fi
-      fi
       if [ -z "$gid" ]; then
         gc="$(state_get group_created)"
         if [ -n "$gc" ] && [ "${gc%%/*}" = "$org" ]; then gid="${gc##*/}"; fi
