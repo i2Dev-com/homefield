@@ -255,25 +255,31 @@ break-even math and `tools/cost.py` savings calculator.
 
 ## Alternatives
 
-- **[GitHub's own self-hosted runner](https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/add-runners)
-  on the Mac**: a few commands, but jobs run as your macOS user with your
-  files, SSH keys and credentials in reach, and nothing keeps fork pull
-  requests, Dependabot or a widened `runs-on` off it. Enough for one private
-  repository whose every contributor you trust with your Mac.
-- **[actions-runner-controller](https://github.com/actions/actions-runner-controller)**:
-  ephemeral runners on Kubernetes. The right choice for a team with a
-  cluster; far more to operate than one VM.
-- **[Tart](https://tart.run) / [Cirrus Runners](https://cirrus-runners.app)**:
-  macOS and Linux VMs on Apple Silicon, including macOS jobs, which this does
-  not do.
-- **[act](https://github.com/nektos/act)**: runs workflows locally without
-  GitHub. Good for iterating on a workflow, but no checks on the pull request.
-- **Larger or cheaper hosted runners**: no hardware to run, and nothing to
-  secure.
+HomeField sits in a specific gap in the [self-hosted runner landscape](https://github.com/jonico/awesome-runners): turning an existing Apple Silicon Mac into an isolated Linux runner with **zero cloud spend**, **empirically verified VM isolation**, **a workflow-enforced routing guard**, and **an explicit one-variable switch back to GitHub-hosted runners** (`CI_RUNNER` / `homefield route hosted`) when the Mac is asleep or offline.
 
-This project's niche: an opt-in, per-repository switch with a hosted
-fallback, guard rails that keep the routing reviewed, and a VM that keeps
-pull-request code away from the Mac it runs on.
+### How HomeField compares
+
+| Feature / Question | **HomeField** (`i2Dev-com/homefield`) | **Stock Runner / Local Mac Apps** (raw `actions/runner`, [Codemany](https://codemany.com/features/single-use-runners)) | **Bare-Metal / SSH Linux CLIs** ([Flinner/gh-runnerctl](https://github.com/Flinner/gh-runnerctl)) | **Docker-Container Runners** ([myoung34](https://github.com/myoung34/docker-github-actions-runner), [zoomies](https://github.com/eyupio/zoomies)) | **macOS VM Runners** ([Tart](https://tart.run) / [Cirrus Runners](https://cirrus-runners.app)) | **Cloud / K8s Autoscalers** ([ARC](https://github.com/actions/actions-runner-controller), [runs-on](https://github.com/runs-on/runs-on), [garm](https://github.com/cloudbase/garm)) |
+|---|---|---|---|---|---|---|
+| **Free & open-source (zero ongoing fees)?** | ✅ (MIT; \$0 on your Mac) | ✅ Stock / ❌ Codemany (\$20/mo per 2 machines) | ✅ (OSS; \$0 on your Linux host) | ✅ (OSS; host compute cost) | ✅ Tart CLI / ❌ Cirrus (paid) | ❌ (ongoing cloud VM/cluster spend; some require a paid license) |
+| **VM-isolated from macOS host files & loopback?** | ✅ (Lima `vz` VM; zero host mounts + host loopback blocked & probed from guest) | ❌ (runs as your macOS user on Mac; Codemany VM mode is Linux KVM only) | ❌ (user-level Linux process, no VM boundary) | ❌ (shared container kernel; often privileged `DinD`) | ✅ (Apple `Virtualization.framework` VM) | ✅ (dedicated cloud VM or K8s pod) |
+| **Offline / hosted-runner fallback switch?** | ✅ (explicit `CI_RUNNER` / `homefield route hosted` switch + re-runs queued jobs; auto-switch on stop/sleep tracked in [#286](https://github.com/i2Dev-com/homefield/issues/286)) | ❌ (jobs queue while Mac sleeps and fail after 24h) | ❌ (jobs queue when host is offline) | ❌ (jobs queue when container/host is down) | ❌ (requires always-on Mac host or paid pool) | ❌ (requires always-on cloud control plane) |
+| **Workflow `runs-on` guard against unreviewed widening?** | ✅ (`routing-guard` Action fails CI on unreviewed `runs-on`; `adopt` refuses public repos) | ❌ (any PR editing `.github/workflows` can target `self-hosted`) | ❌ | ❌ | ❌ | ❌ (runner-group scoping only) |
+| **Keeps fork PRs & Dependabot off the local runner?** | ✅ (in `--guards` mode / default guarded expression; `adopt --setup` defaults to simple mode) | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Zero PAT inside the runner (`stdin`-only registration)?** | ✅ (1-hour registration token piped on `stdin`, never on `cmdline` or env) | ✅ (manual token or Codemany single-use JIT config) | ✅ (short-lived token piped over SSH `stdin`) | ❌ in `myoung34` (PAT in env) / ✅ in `zoomies` (JIT) | ✅ (GitHub App / JIT token) | ✅ (GitHub App / short-lived JIT config) |
+| **Apple Silicon `arm64` + `x86-64` (`amd64`) containers?** | ✅ (native `linux/arm64` + Apple Rosetta & `buildx-rosetta` preset) | ✅ (native host arch) | ✅ (native Linux `x64` / `arm64`) | ✅ (native arch or slower QEMU emulation) | ✅ (native macOS & Linux `arm64` VMs) | ✅ (native `x64` and `arm64` cloud instances) |
+| **1-command setup, repo PR onboarding & fleet CLI?** | ✅ (`setup`, `adopt --setup`, `fleet`, `diagnose`, `report`, `tools/cost.py`) | ❌ Stock (manual) / ✅ Codemany (GUI app) | ✅ (declarative TOML + `converge` CLI) | ❌ (manual `docker run` / Compose / Helm) | ❌ Tart (manual CLI) / ✅ Cirrus (GitHub App) | ❌ (Terraform / CloudFormation / Helm + cloud IAM) |
+| **Scheduled idle-gated self-update with rollback?** | ✅ (`homefield update --schedule`) | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Single-job ephemeral registration mode?** | ✅ (optional `--ephemeral` + `homefield re-register --watch`) | ❌ Stock / ✅ Codemany (single-use per job) | ❌ (persistent runners) | ✅ (optional ephemeral container) | ✅ (ephemeral VM clone per job) | ✅ (ephemeral pod or cloud VM per job) |
+| **Automated disk & Docker cleanup?** | ✅ (daily `homefield-cleanup` timer: >24h Docker objects, >7d workspaces) | ❌ Stock / ✅ Codemany (wipes runner folder per job) | ❌ | ✅ (when running ephemeral containers) | ✅ (VM snapshot discarded after job) | ✅ (pod/VM terminated after job) |
+| **Fresh VM / root-disk reset after every single job?** | ❌ (keeps VM warm for fast Docker/apt caches; daily cleanup today — per-job cleanup hook & APFS clone reset tracked in [#285](https://github.com/i2Dev-com/homefield/issues/285)) | ❌ on macOS (Codemany KVM VM per job is Linux only) | ❌ | ❌ (container recreated, shared host kernel) | ✅ (clones a fresh VM snapshot per job) | ✅ (VM autoscalers destroy instance per job) |
+| **Webhook-driven elastic autoscaling (`0 → N`)?** | ❌ (fixed VMs per Mac via `--instance` + `fleet`; demand-driven local VM start/stop & auto-fallback tracked in [#286](https://github.com/i2Dev-com/homefield/issues/286)) | ❌ Stock / ✅ Codemany | ❌ (fixed pools by design) | ❌ `myoung34` / ✅ `zoomies` | ❌ Tart / ✅ Cirrus Runners | ✅ (scales `0 → N` cloud VMs/pods from `workflow_job` webhooks) |
+| **Native macOS / Xcode / iOS & Windows jobs?** | ❌ (Ubuntu 24.04 Linux guest by design — Lima virtualizes Linux only, and host macOS jobs would break isolation) | ✅ (runs directly on macOS host) | ❌ (Linux only) | ✅ (Linux / Windows containers) | ✅ (native macOS/Xcode VMs on Apple Silicon) | ✅ (Linux, Windows, and EC2 macOS dedicated hosts) |
+| **Direct Linux host installer (without macOS / Lima)?** | ❌ (tracked in [#231](https://github.com/i2Dev-com/homefield/issues/231); `vm/provision.sh` runs on Ubuntu `arm64`) | ✅ (Linux & macOS) | ✅ (built for Linux / SSH hosts) | ✅ (any Docker host) | ❌ (Apple Silicon macOS only) | ✅ (cloud / K8s Linux nodes) |
+| **Multiple concurrent jobs inside a single VM?** | ❌ (1 job/VM today; add VMs via `--instance` + `fleet`; tracked in [#14](https://github.com/i2Dev-com/homefield/issues/14)) | ✅ (multiple runners per machine) | ✅ (multiple runners per host) | ✅ (multiple containers per host) | ✅ (multiple VMs per Mac) | ✅ (high cluster concurrency) |
+| **GitHub Enterprise Server (GHES) support?** | ❌ (`github.com` only today; GHES & custom hostnames tracked in [#287](https://github.com/i2Dev-com/homefield/issues/287)) | ✅ Stock / ❌ Codemany (`github.com` only) | ✅ | ✅ (supported in most) | ✅ | ✅ |
+
+*(For local workflow iteration without pushing to GitHub at all, see **[act](https://github.com/nektos/act)** — useful for testing workflow changes locally, though it does not report pull-request check statuses.)*
 
 ## Documentation
 
