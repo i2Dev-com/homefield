@@ -699,6 +699,7 @@ preset_saved_drops() {
 cmd_install() {
   local url="" label="" name="" group="" packages="" packages_set=0 cpus="" memory="" autostart=1 replace=0 ephemeral=0 cmd=install
   local job_cleanup=0 job_cleanup_set=0
+  local auto_route=0 auto_route_set=0
   local presets=()
   [ "$SETUP" != 1 ] || cmd=setup
   while [ $# -gt 0 ]; do
@@ -720,6 +721,8 @@ cmd_install() {
       --ephemeral) ephemeral=1; shift ;;
       --job-cleanup) job_cleanup=1; job_cleanup_set=1; shift ;;
       --no-job-cleanup) job_cleanup=0; job_cleanup_set=1; shift ;;
+      --auto-route) auto_route=1; auto_route_set=1; shift ;;
+      --no-auto-route) auto_route=0; auto_route_set=1; shift ;;
       --personal)
         [ "$ACCOUNT_FORCE" != org ] || die "${cmd}: --personal and --org cannot be used together"
         ACCOUNT_FORCE=personal; shift ;;
@@ -789,6 +792,7 @@ cmd_install() {
     local p
     for p in ${presets[@]+"${presets[@]}"}; do args+=(--preset "$p"); done
     [ "$job_cleanup_set" = 1 ] && args+=("$([ "$job_cleanup" = 1 ] && echo --job-cleanup || echo --no-job-cleanup)")
+    [ "$auto_route_set" = 1 ] && args+=("$([ "$auto_route" = 1 ] && echo --auto-route || echo --no-auto-route)")
     upgrade_registered "${args[@]+"${args[@]}"}"
     if [ "$ephemeral" = 1 ]; then
       local r_url="" r_name="" was_eph=""
@@ -835,6 +839,16 @@ cmd_install() {
   run_provision "RUNNER_TOKEN=${token}"$'\n' "${env[@]}"
   token=""
   state_set job_cleanup "$job_cleanup"
+  # The automatic hosted fallback follows the VM's stop/start (host-side
+  # only): 1 makes plain `stop` route the routed repositories to hosted and
+  # plain `start` route them back.
+  state_set auto_route "$auto_route"
+  if [ "$auto_route" = 1 ]; then
+    # Cover the repositories that were already routed local before the
+    # fallback existed; a failure only means they are not covered yet, and
+    # seed_routing_records says exactly what to do about it.
+    seed_routing_records "$url" "$name" "${label:-homefield-ci}" "${GROUP_ID:-}" || true
+  fi
   if [ "$ephemeral" = 1 ]; then
     state_set ephemeral 1
     state_set ephemeral_url "$url"
@@ -929,6 +943,12 @@ upgrade_single() {
   if [ "$UP_JOB_CLEANUP_SET" = 1 ]; then
     state_set job_cleanup "$UP_JOB_CLEANUP"
   fi
+  if [ "$UP_AUTO_ROUTE_SET" = 1 ]; then
+    state_set auto_route "$UP_AUTO_ROUTE"
+    if [ "$UP_AUTO_ROUTE" = 1 ]; then
+      seed_routing_records "$url" "$name" || true
+    fi
+  fi
   runner_back
 }
 
@@ -940,6 +960,7 @@ upgrade_single() {
 parse_upgrade_args() {
   UP_PACKAGES="" UP_PACKAGES_SET=0 UP_FORCE=0
   UP_JOB_CLEANUP="" UP_JOB_CLEANUP_SET=0
+  UP_AUTO_ROUTE="" UP_AUTO_ROUTE_SET=0
   UP_PRESETS=()
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -955,6 +976,8 @@ parse_upgrade_args() {
       --force) UP_FORCE=1; shift ;;
       --job-cleanup) UP_JOB_CLEANUP=1 UP_JOB_CLEANUP_SET=1; shift ;;
       --no-job-cleanup) UP_JOB_CLEANUP=0 UP_JOB_CLEANUP_SET=1; shift ;;
+      --auto-route) UP_AUTO_ROUTE=1 UP_AUTO_ROUTE_SET=1; shift ;;
+      --no-auto-route) UP_AUTO_ROUTE=0 UP_AUTO_ROUTE_SET=1; shift ;;
       *) die "upgrade: unknown option $1 (see bin/homefield help)" ;;
     esac
   done
@@ -1408,7 +1431,13 @@ cmd_status() {
 # not after a poll. Read-only in the guest: nothing is provisioned or changed.
 # start_single / stop_single: one VM; vm_dispatch runs them for every VM by default.
 start_single() {
-  [ $# -eq 0 ] || die "start takes no options besides --instance"
+  local route=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --route-local) route=1; shift ;;
+      *) die "start takes no options besides --instance and --route-local" ;;
+    esac
+  done
   check_host
   vm_lookup
   [ -n "$VM_STATUS" ] || die "no VM ${INSTANCE}; run bin/homefield install --instance ${INSTANCE} --url https://github.com/<org>[/<repo>]"
@@ -1446,11 +1475,25 @@ start_single() {
     return 1
   fi
   echo "taking jobs: yes"
+  # The other half of the automatic fallback (#286): with --route-local, or
+  # on every start of an --auto-route VM, the repositories a stop flipped to
+  # hosted come back to local now that this runner is taking jobs again. A
+  # restore that does not land keeps its entry for the next start and fails
+  # the command, so scripts notice.
+  if [ "$route" = 1 ] || [ "$(state_get auto_route)" = "1" ]; then
+    route_start_restore "$RR_URL" "$RR_NAME" || return 1
+  fi
   return 0
 }
 
 stop_single() {
-  [ $# -eq 0 ] || die "stop takes no options besides --instance"
+  local route=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --route-hosted) route=1; shift ;;
+      *) die "stop takes no options besides --instance and --route-hosted" ;;
+    esac
+  done
   command -v limactl >/dev/null || die "Lima is not installed: brew install lima"
   vm_lookup
   [ -n "$VM_STATUS" ] || die "no VM ${INSTANCE}; nothing to stop"
@@ -1466,20 +1509,35 @@ stop_single() {
     echo "  Try again when it is idle (bin/homefield status), or keep the repository on hosted runners: bin/homefield route hosted --repo <owner>/<repo>" >&2
     return 1
   fi
+  # The automatic fallback (#286): with --route-hosted, or on every stop of
+  # an --auto-route VM, repositories routed to this runner go to hosted
+  # before the VM stops, so queued jobs re-run on GitHub's runners instead
+  # of waiting for a VM that is down. The stop itself is what was asked for,
+  # so a fallback that cannot prove it should run still stops the VM — it
+  # just says so and exits 1.
+  local fallback_rc=0
+  if [ "$route" = 1 ] || [ "$(state_get auto_route)" = "1" ]; then
+    runner_report_collect
+    if [ "$RR_ASKFAIL" = 1 ] || [ "$RR_NOTREG" = 1 ]; then
+      echo "homefield: could not read ${INSTANCE}'s runner identity; the routed repositories stay as they are and jobs will queue while the VM is down" >&2
+      fallback_rc=1
+    elif ! route_stop_fallback "$RR_URL" "$RR_NAME"; then
+      fallback_rc=1
+    fi
+  fi
   log "stopping VM ${INSTANCE}: its runner takes no jobs until it starts again"
   limactl stop "$INSTANCE" </dev/null ||
     die "could not stop VM ${INSTANCE} (Lima failed; docs/runbook.md, \"Failure modes\")"
   echo "VM ${INSTANCE}: Stopped"
+  return "$fallback_rc"
 }
 
 cmd_start() {
-  [ $# -eq 0 ] || die "start takes no options besides --instance"
-  vm_dispatch start start_single
+  vm_dispatch start start_single "$@"
 }
 
 cmd_stop() {
-  [ $# -eq 0 ] || die "stop takes no options besides --instance"
-  vm_dispatch stop stop_single
+  vm_dispatch stop stop_single "$@"
 }
 
 # re_register_single: fetches a fresh one-hour registration token on the host

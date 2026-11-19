@@ -231,7 +231,7 @@ case "$*" in
     ;;
 esac
 EOF
-for t in awk basename cat dirname git grep head ls mkdir mktemp rm sed sleep tr wc jq openssl; do [ -x "$stubs/$t" ] || ln -sf "$(command -v "$t")" "$stubs/$t"; done
+for t in awk basename cat dirname git grep head ls mkdir mktemp mv rm sed sleep tr wc jq openssl; do [ -x "$stubs/$t" ] || ln -sf "$(command -v "$t")" "$stubs/$t"; done
 # mktemp -d without a template puts the directory in TMPDIR on Linux but not on
 # macOS; the explicit template makes both land in $TMPDIR, where a test can
 # look for what a run left behind.

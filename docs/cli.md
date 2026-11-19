@@ -39,8 +39,8 @@ agents that drive the tool without a human in the loop. The guides:
 | `upgrade` | Re-run provisioning on a registered runner: packages, hooks, runner binary | Refuses (and skips) a VM with a job running, unless `--force` |
 | `re-register` | Re-register an `--ephemeral` runner with a fresh one-hour token (piped on stdin) | `--watch` polls and re-registers after each job completes; on failure leaves runner visibly offline |
 | `status` | Each VM, its registration, the GitHub listing, the service, the job, npm | `--json`; exits 0 only when every VM answered well |
-| `start` | Boot each VM, then report whether its runner is taking jobs | Exits 0 when every runner is online |
-| `stop` | Stop each VM | Refuses a VM with a job running; stopping an already stopped VM is not an error |
+| `start` | Boot each VM, then report whether its runner is taking jobs | Exits 0 when every runner is online; `--route-local` puts the repositories a stop flipped to hosted back to local (automatic on an `--auto-route` VM) |
+| `stop` | Stop each VM | Refuses a VM with a job running; stopping an already stopped VM is not an error; `--route-hosted` first sends the routed repositories to hosted when no other online runner serves the label (automatic on an `--auto-route` VM); a fallback that cannot be proven still stops and exits 1 |
 | `diagnose` | One read-only report per VM, with the fix for each problem | `--json`; exits 1 on any problem; starts and changes nothing |
 | `uninstall` | Deregister the runner and delete one VM | Refuses to guess with more than one VM: `--instance` is required |
 | `reset` | Roll back an install, complete or half-finished | Asks first; `HOMEFIELD_YES=1` answers yes; a no-op when nothing to undo |
@@ -49,7 +49,7 @@ agents that drive the tool without a human in the loop. The guides:
 | `adopt` | Prepare a repository: check the routing, add it to the group, switch it on | `--setup` opens the routing pull request; `--wait` carries on after the merge; `--app-id` / `--app-key-file` for GitHub App auth; refuses a public repository |
 | `memory` | Every VM's memory use: average and peak per day, out-of-memory kills | `--days N` (default 7); fails for a VM it cannot ask |
 | `report` | Queue wait, duration and minutes of jobs, local against hosted | `--json`; one API call per run, so allow a few minutes a month |
-| `fleet` | Fleet-wide status (`status`, default), `start`, and `stop` across every HomeField VM on this Mac | `fleet [status] [--json]` prints per-VM rows and `total`/`online`/`idle`/`busy`/`offline` counts; `fleet start` boots all VMs and prints the fleet summary |
+| `fleet` | Fleet-wide status (`status`, default), `start`, and `stop` across every HomeField VM on this Mac | `fleet [status] [--json]` prints per-VM rows and `total`/`online`/`idle`/`busy`/`offline` counts; `fleet start` boots all VMs and prints the fleet summary; `fleet start`/`fleet stop` take `--route-local`/`--route-hosted` for every VM |
 | `update` | Update the installed tool and every idle VM to the latest patch release (or branch head), then verify with `diagnose` | `--check` checks without applying; `--allow-minor` opts into minor/major bumps; `--auto` runs periodic check/apply per `HOMEFIELD_AUTO_UPDATE`; `--schedule install\|remove\|status` manages the macOS LaunchAgent; rolls back on failure |
 | `version` | The installed version, and whether a newer release exists (read from GitHub's public API; a private fork set with `HOMEFIELD_REPO` is not checked) | |
 
@@ -153,6 +153,11 @@ repository, day, queue wait, duration, minutes, local against hosted.
   request exists, as without `--wait`.
 - `route`: 0 when every repository was routed; a repository that cannot be
   switched is warned about and skipped.
+- `start`/`stop`: the runner/service rows as before; with the fallback
+  (`--route-hosted`/`--route-local`, or automatic on an `--auto-route` VM),
+  1 when the fallback could not be proven — GitHub unreachable, the runner
+  missing from GitHub's list, a flip or restore that failed — while the VM
+  itself is still stopped or started.
 
 ## Recipes
 

@@ -595,6 +595,46 @@ gh run cancel <run-id> --repo <owner>/<repo>
 gh run rerun <run-id> --repo <owner>/<repo>
 ```
 
+## The automatic hosted fallback (stop/start)
+
+A stopped VM leaves every routed job queued until it starts again. `stop
+--route-hosted` hands those jobs to GitHub's runners before the VM stops: each
+repository routed to this runner goes hosted, but only when no other online
+runner in the scope serves the routing label, so a one-runner Mac falls back
+and a fleet keeps routing locally while one VM stops. A repository whose
+routing label another online runner still serves stays local and says so.
+`start --route-local` puts the flipped repositories back once the runner is
+taking jobs again (the runner being online is checked first; a start that
+fails to restore keeps the pending entries and exits 1). A manual `route
+local` for a flipped repository clears its pending restore — the operator's
+routing label wins over the stop's, and the next start will not overwrite
+it.
+
+`install --auto-route` (or `upgrade --auto-route`; `--no-auto-route` turns it
+off) makes plain `stop` and plain `start` run the fallback every time. `fleet
+start`/`fleet stop` accept the same flags for every VM. Switching it on seeds
+the routing records from the registration's own repositories (the runner
+group's list, or the repository itself for a repository-scoped runner): every
+one already routed local is recorded, so an install that adopted before the
+fallback existed is covered from the first stop. A repository that is already
+recorded keeps its record (runners in one group can use different routing
+labels, and the record says which label routes the repository), and one that
+is not is recorded under this runner's label only when no other runner in the
+scope with a different label can also take its jobs — otherwise it is left
+unrecorded with the `route local --repo` command to record it by hand, like
+every other seeding failure.
+
+The fallback is fail-safe: when GitHub cannot be asked, this runner is not in
+GitHub's runner list, or a flip fails, nothing is flipped, the stop (or start)
+still happens, and the command exits 1 — jobs keep routing to the local
+runner, which is the state a human can see and fix with `route`. Queued jobs
+that the flip catches are cancelled and re-run, the same as `route hosted`
+does by hand. GHES scopes skip the runner lookup with a warning (tracked in
+[#287](https://github.com/i2Dev-com/homefield/issues/287)). Autostart at login
+boots the VMs but nothing runs `homefield start` for you, so after a reboot or
+sleep the fallback's restore waits for the sleep/wake watcher (a planned
+follow-up to this change).
+
 ## Failure modes
 
 Not sure which row applies? `bin/homefield diagnose` checks the VM, the runner
