@@ -609,7 +609,13 @@ fails to restore keeps the pending entries and exits 1).
 
 `install --auto-route` (or `upgrade --auto-route`; `--no-auto-route` turns it
 off) makes plain `stop` and plain `start` run the fallback every time. `fleet
-start`/`fleet stop` accept the same flags for every VM.
+start`/`fleet stop` accept the same flags for every VM. Switching it on seeds
+the routing records from the registration's own repositories (the runner
+group's list, or the repository itself for a repository-scoped runner): every
+one already routed local is recorded, so an install that adopted before the
+fallback existed is covered from the first stop. Where the candidates cannot
+be listed, the command warns with the `route local --repo` command to record
+each repository by hand.
 
 The fallback is fail-safe: when GitHub cannot be asked, this runner is not in
 GitHub's runner list, or a flip fails, nothing is flipped, the stop (or start)
