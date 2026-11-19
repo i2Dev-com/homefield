@@ -50,6 +50,16 @@ runners_on_github() {
     </dev/null 2>/dev/null
 }
 
+# scope_owner <url>: the owner a runner is registered under — the path after
+# github.com in its gitHubUrl (`https://github.com/acme` -> `acme`). The
+# fallback may only touch repositories in that scope: the runners it can see
+# (and the labels it matched) are the scope's runners, so a record for another
+# organization's repo is someone else's to flip.
+scope_owner() {
+  local owner="${1#*github.com/}"
+  printf '%s' "${owner%/}"
+}
+
 # route_stop_fallback <url> <name>: the stop-side of the automatic fallback
 # (#286). Every repository routed to one of this runner's labels goes to
 # hosted, unless another online runner still serves that label — the issue's
@@ -80,8 +90,16 @@ route_stop_fallback() {
     echo "homefield: ${name} is not in GitHub's runner list; leaving the routed repositories as they are" >&2
     return 1
   fi
+  local owner
+  owner="$(scope_owner "$url")"
   while read -r label repo; do
     [ -n "$repo" ] || continue
+    # The rows describe this scope's runners only, so a record for a repo in
+    # another scope (a Mac hosting runners for two organizations) is not this
+    # stop's to flip: its own runner is invisible here and may be online.
+    case "$repo" in "$owner"/*) ;;
+      *) log "${repo}: routed under a different scope than ${owner}; not switching it to hosted"; continue ;;
+    esac
     case ",${labels}," in *",${label},"*) ;; *) continue ;; esac
     # Another online runner (not this one) carrying the label keeps the
     # label served, so the repositories stay routed local.
@@ -95,12 +113,20 @@ route_stop_fallback() {
       log "${repo}: label ${label} is still served by another online runner; not switching to hosted"
       continue
     fi
+    local landed=0
     if cmd_route hosted --repo "$repo" --label "$label"; then
+      landed=1
+    else
+      rc=1
+      # cmd_route also returns 1 when the variable landed but the stuck-run
+      # recovery failed. The repo leaving the routing record is what a landed
+      # variable looks like in the records; a failed set leaves it there.
+      [ -n "$(awk -v r="$repo" '$2 == r {print; exit}' "$(routing_file)" 2>/dev/null)" ] || landed=1
+    fi
+    if [ "$landed" = 1 ]; then
       record_add "$(autoflip_file)" "$label" "$repo" ||
         { rc=1; echo "homefield: ${repo}: flipped to hosted but could not record it for the next start; run bin/homefield route local --repo ${repo} --label ${label} by hand" >&2; }
       flipped=$((flipped + 1))
-    else
-      rc=1
     fi
   done <"$(routing_file)"
   if [ "$flipped" -eq 0 ] && [ "$rc" = 0 ]; then
@@ -109,18 +135,40 @@ route_stop_fallback() {
   return "$rc"
 }
 
-# route_start_restore: the start-side of the automatic fallback (#286):
-# every repository a stop flipped to hosted goes back to local, and leaves
-# `autoflip` only when the flip landed (a failure keeps it for the next
-# start). The caller has already confirmed this runner is online — routing
-# jobs to a runner that is not taking them is the problem this feature
-# exists to fix.
+# route_start_restore <url> <name>: the start-side of the automatic fallback
+# (#286): the repositories this runner flipped to hosted go back to local,
+# and leave `autoflip` only when the flip landed (a failure keeps it for the
+# next start). Only entries this runner can actually serve are restored: the
+# repo's label must be one of the runner's (a Mac with VMs on different
+# labels must not restore another, still stopped VM's repositories) and the
+# repo must be in the runner's registration scope (the stop side only ever
+# flips that scope, so anything else in the file is not this runner's).
+# GitHub being unanswerable or the runner missing from its list reads as
+# "cannot prove what this runner serves": nothing restored, entries kept,
+# 1 to the caller.
 route_start_restore() {
-  local label repo rc=0 restored=0
+  local url="$1" name="$2" rows rname rstatus rlabels label repo rc=0 restored=0 owner
   # Nothing waiting: quiet, and GitHub need not be asked.
   [ -f "$(autoflip_file)" ] || { log "no repository waiting to be routed back"; return 0; }
+  rows="$(runners_on_github "$url")" || {
+    echo "homefield: could not read the runners from GitHub; the flipped repositories stay hosted until the next start" >&2
+    return 1
+  }
+  local labels=""
+  while IFS=$'\t' read -r rname rstatus rlabels; do
+    [ "$rname" = "$name" ] && labels="$rlabels"
+  done <<<"$rows"
+  if [ -z "$labels" ]; then
+    echo "homefield: ${name} is not in GitHub's runner list; the flipped repositories stay hosted until the next start" >&2
+    return 1
+  fi
+  owner="$(scope_owner "$url")"
   while read -r label repo; do
     [ -n "$repo" ] || continue
+    case "$repo" in "$owner"/*) ;;
+      *) log "${repo}: routed under a different scope than ${owner}; leaving it hosted" ; continue ;;
+    esac
+    case ",${labels}," in *",${label},"*) ;; *) continue ;; esac
     if cmd_route local --repo "$repo" --label "$label"; then
       record_drop "$(autoflip_file)" "$repo" ||
         { rc=1; echo "homefield: ${repo}: routed local but could not update the record; it will be routed local again on the next start" >&2; }

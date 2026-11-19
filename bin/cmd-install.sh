@@ -1472,7 +1472,7 @@ start_single() {
   # restore that does not land keeps its entry for the next start and fails
   # the command, so scripts notice.
   if [ "$route" = 1 ] || [ "$(state_get auto_route)" = "1" ]; then
-    route_start_restore || return 1
+    route_start_restore "$RR_URL" "$RR_NAME" || return 1
   fi
   return 0
 }
