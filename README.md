@@ -336,6 +336,8 @@ of the latest tag.
 
 Contributions are welcome: the checks to run before a pull request (the test
 suites, `shellcheck`, `actionlint`) are listed in
-[`CONTRIBUTING.md`](CONTRIBUTING.md). Report security issues privately, as
-described in [`SECURITY.md`](SECURITY.md), which also lists the known
-limitations. Licensed under the [MIT License](LICENSE).
+[`CONTRIBUTING.md`](CONTRIBUTING.md); `bash tests/run-suites.sh` runs them all
+the way CI does, in a bounded worker pool (`TEST_CONCURRENCY` overrides the
+pool size; the default is the machine's CPU count, capped at 8). Report
+security issues privately, as described in [`SECURITY.md`](SECURITY.md), which
+also lists the known limitations. Licensed under the [MIT License](LICENSE).
