@@ -94,6 +94,23 @@ in_scope() {
   esac
 }
 
+# serves_jobs <labels> <label>: whether a runner advertising <labels> can
+# take an adopted workflow's jobs. The workflow's runs-on is the canonical
+# expression (routing-guard/routing_guard.py canonical_expression):
+# self-hosted, linux, arm64 and the routing label — a runner missing any of
+# them (an x64 runner, for one) cannot execute the workflow, however well
+# its custom labels match. Comparisons are case-insensitive, as GitHub
+# treats labels.
+serves_jobs() {
+  local labels
+  labels=",$(lower "$1"),"
+  case "$labels" in *",self-hosted,"*) ;; *) return 1 ;; esac
+  case "$labels" in *",linux,"*) ;; *) return 1 ;; esac
+  case "$labels" in *",arm64,"*) ;; *) return 1 ;; esac
+  case "$labels" in *",$(lower "$2"),"* ) ;; *) return 1 ;; esac
+  return 0
+}
+
 # route_stop_fallback <url> <name>: the stop-side of the automatic fallback
 # (#286). Every repository routed to one of this runner's labels goes to
 # hosted, unless another online runner still serves that label — the issue's
@@ -141,19 +158,19 @@ route_stop_fallback() {
       continue
     fi
     case ",${labels}," in *",$(lower "$label"),"* ) ;; *) continue ;; esac
-    # Another online runner (not this one) carrying the label keeps the
-    # label served, so the repositories stay routed local.
+    # Another online runner (not this one) that can take the repository's
+    # jobs keeps the label served, so the repositories stay routed local.
     served=0
     while IFS=$'\t' read -r rid rname rstatus rlabels; do
       [ "$rname" = "$name" ] && continue
       [ "$rstatus" = online ] || continue
-      case ",$(lower "$rlabels")," in *",$(lower "$label"),"*) ;; *) continue ;; esac
-      # The label alone is not enough: the other runner takes this
-      # repository's jobs only if its group admits the repository (two
-      # runners can share a label from different groups). On a
-      # repository-scoped registration every listed runner serves the
-      # repository by definition; otherwise the group decides, and a group
+      # The custom label is not enough: the workflow's runs-on also needs
+      # self-hosted, linux and arm64 (the canonical expression), and the
+      # runner's group must admit the repository (two runners can share a
+      # label from different groups). On a repository-scoped registration
+      # every listed runner serves the repository by definition; a group
       # that cannot be asked keeps the status quo (routed local).
+      serves_jobs "$rlabels" "$label" || continue
       if [ "$repo_scope" = repo ]; then
         served=1
       else
@@ -222,7 +239,9 @@ route_start_restore() {
       log "${repo}: routed under a different scope than ${owner}; leaving it hosted"
       continue
     fi
-    case ",${labels}," in *",$(lower "$label"),"* ) ;; *) continue ;; esac
+    # The started runner must be able to take the repository's jobs: the
+    # workflow's full runs-on set, not just the label (see serves_jobs).
+    serves_jobs "$labels" "$label" || continue
     if cmd_route local --repo "$repo" --label "$label"; then
       record_drop "$(autoflip_file)" "$repo" ||
         { rc=1; echo "homefield: ${repo}: routed local but could not update the record; it will be routed local again on the next start" >&2; }
@@ -353,6 +372,9 @@ seed_routing_records() {
       other="$(routing_label "$rlabels")"
       if [ -z "$other" ]; then continue; fi
       if [ "$(lower "$other")" = "$(lower "$label")" ]; then continue; fi
+      # A runner that cannot take the workflow's jobs (missing the
+      # canonical platform labels) is no alternative label source.
+      serves_jobs "$rlabels" "$other" || continue
       if [ "$repo_scope" = repo ]; then
         conflict=1
       else
