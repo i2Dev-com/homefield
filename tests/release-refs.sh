@@ -35,6 +35,12 @@ check_text "README.md pins the routing guard at ${release}" README.md "${action}
 check_text "README.md's quick start names ${release}" README.md "/homefield/${release}/install.sh"
 check_text "docs/cli.md's one-liner names ${release}" docs/cli.md "/homefield/${release}/install.sh"
 
+expr="$(python3 -I "$ROOT/routing-guard/routing_guard.py" --print-expression)"
+expr_push="$(python3 -I "$ROOT/routing-guard/routing_guard.py" --print-expression --events push)"
+check_text "docs/adopting.md has the canonical expression" docs/adopting.md "runs-on: ${expr}"
+check_text "README.md has the canonical expression" README.md "runs-on: ${expr}"
+check_text "docs/adopting.md shows the expression for events push" docs/adopting.md "runs-on: ${expr_push}"
+
 # Every guard pin in the adoption guide is the current release (this file has
 # no historical pins; docs/security.md deliberately does, so it is excluded).
 pins="$(grep -oE 'i2Dev-com/homefield/routing-guard@v[0-9]+\.[0-9]+\.[0-9]+' docs/adopting.md | sort -u | tr '\n' ' ')"

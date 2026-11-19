@@ -15,6 +15,10 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 - Self-hosted runner comparison matrix in [`README.md`](README.md#alternatives): compares HomeField against stock macOS runners and local runner apps (`Codemany`), bare-metal/SSH CLIs (`gh-runnerctl`), Docker runner wrappers, macOS VM runners (`Tart` / `Cirrus`), and cloud/Kubernetes autoscalers (`ARC`, `runs-on`, `garm`) using scannable `✅`/`❌` cells across isolation, explicit hosted-switch fallback, workflow routing guard (`--guards` vs simple mode), token hygiene, daily cleanup/ephemeral mode, Rosetta `amd64` support, and areas where other tools do more or HomeField roadmap items ([#231](https://github.com/i2Dev-com/homefield/issues/231), [#14](https://github.com/i2Dev-com/homefield/issues/14), [#285](https://github.com/i2Dev-com/homefield/issues/285), [#286](https://github.com/i2Dev-com/homefield/issues/286), [#287](https://github.com/i2Dev-com/homefield/issues/287)) apply.
 
+### CI
+
+- Docs-only fast path in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) and `tests/release-refs.sh`: when a pull request or push modifies only Markdown or `docs/assets/*` files, CI skips `shellcheck`, `ruff`, and the non-doc shell suites and runs `actionlint` plus `tests/release-refs.sh` (which now also pins the canonical `runs-on` expressions in `README.md` and `docs/adopting.md`).
+
 ## v0.5.4 (2026-11-18)
 
 Bumps the patch from v0.5.3, and it is compatible for consumers: the routing
