@@ -29,6 +29,15 @@
 #                 separated. Saved in the guest, so later runs keep them
 #                 without passing it again; setting it replaces the saved
 #                 list, and setting it empty clears it (nothing is removed).
+#   RUNNER_JOB_CLEANUP
+#                 1 adds the runner's job-completed hook: after every job,
+#                 /usr/local/sbin/homefield-job-cleanup removes stopped
+#                 containers, unused custom networks, the job's build state
+#                 under _work and /tmp scratch, keeping image and BuildKit
+#                 caches warm. 0 takes the hook back out. Saved in the guest
+#                 like RUNNER_EXTRA_PACKAGES: a later run without it keeps
+#                 the last value. Off by default; the daily cleanup timer
+#                 runs either way.
 # Tools apt does not have go in hooks: /etc/homefield/provision.d/*.sh, run
 # as root in name order after the packages. See docs/runbook.md, "Adding
 # tools".
@@ -150,6 +159,12 @@ check_packages() {
 }
 read -ra requested_packages <<<"${RUNNER_EXTRA_PACKAGES:-}"
 check_packages RUNNER_EXTRA_PACKAGES ${requested_packages[@]+"${requested_packages[@]}"}
+# The job-completed hook is a switch, not a list: only 1 or 0 is meaningful,
+# and anything else would be read as off below without saying so.
+if [ -n "${RUNNER_JOB_CLEANUP+set}" ] && [ "$RUNNER_JOB_CLEANUP" != "1" ] && [ "$RUNNER_JOB_CLEANUP" != "0" ]; then
+  echo "provision.sh: RUNNER_JOB_CLEANUP must be 1 or 0, got: $RUNNER_JOB_CLEANUP" >&2
+  exit 1
+fi
 CONFIG_DIR="/etc/homefield"
 RUNNER_USER="runner"
 RUNNER_HOME="/opt/actions-runner"
@@ -261,6 +276,23 @@ if [ -z "${RUNNER_EXTRA_PACKAGES+set}" ] && [ -f "$CONFIG_DIR/extra-packages" ];
     saved_packages+=(${words[@]+"${words[@]}"})
   done <"$CONFIG_DIR/extra-packages"
   check_packages "$CONFIG_DIR/extra-packages" ${saved_packages[@]+"${saved_packages[@]}"}
+fi
+
+# The saved job-cleanup switch, read here for the same reason: a bad value
+# fails the run while nothing has changed. The file holds one line, 1 or 0,
+# written by the run that set RUNNER_JOB_CLEANUP (below, after the runner's
+# .env carries the switch). Absent means off: the feature is opt-in.
+saved_job_cleanup=""
+if [ -z "${RUNNER_JOB_CLEANUP+set}" ] && [ -f "$CONFIG_DIR/job-cleanup" ]; then
+  IFS= read -r saved_job_cleanup <"$CONFIG_DIR/job-cleanup" || saved_job_cleanup=""
+  if [ "$saved_job_cleanup" != "1" ] && [ "$saved_job_cleanup" != "0" ]; then
+    echo "provision.sh: $CONFIG_DIR/job-cleanup must hold 1 or 0, got: $saved_job_cleanup" >&2
+    exit 1
+  fi
+fi
+job_cleanup="${saved_job_cleanup:-0}"
+if [ -n "${RUNNER_JOB_CLEANUP+set}" ]; then
+  job_cleanup="$RUNNER_JOB_CLEANUP"
 fi
 
 # ── Tokens ──────────────────────────────────────────────────────────────────
@@ -389,6 +421,36 @@ re_register() {
     echo "$hook_line" >>"$env_new"
     install -o "$RUNNER_USER" -g "$RUNNER_USER" -m 644 "$env_new" "$RUNNER_HOME/.env"
     rm -f "$env_new"
+  fi
+  # The job-completed hook line follows the switch (RUNNER_JOB_CLEANUP, or
+  # the value the run that set it saved): =1 re-adds a line a hand edit lost,
+  # =0 takes it back out. The scripts themselves were installed by the run
+  # that turned the feature on; re-register does not install them, and only
+  # runs on a VM whose install did. The restart below makes the runner read
+  # the changed .env.
+  hook_line="ACTIONS_RUNNER_HOOK_JOB_COMPLETED=/usr/local/sbin/homefield-job-cleanup.sh"
+  if [ "$job_cleanup" = "1" ]; then
+    if ! grep -qx "$hook_line" "$RUNNER_HOME/.env" 2>/dev/null; then
+      local env_new=""
+      env_new="$(mktemp)"
+      if [ -f "$RUNNER_HOME/.env" ]; then
+        grep -v '^ACTIONS_RUNNER_HOOK_JOB_COMPLETED=' "$RUNNER_HOME/.env" >"$env_new" || [ $? = 1 ]
+      fi
+      echo "$hook_line" >>"$env_new"
+      install -o "$RUNNER_USER" -g "$RUNNER_USER" -m 644 "$env_new" "$RUNNER_HOME/.env"
+      rm -f "$env_new"
+    fi
+  else
+    if grep -qx "$hook_line" "$RUNNER_HOME/.env" 2>/dev/null; then
+      local env_new=""
+      env_new="$(mktemp)"
+      grep -v '^ACTIONS_RUNNER_HOOK_JOB_COMPLETED=' "$RUNNER_HOME/.env" >"$env_new" || [ $? = 1 ]
+      install -o "$RUNNER_USER" -g "$RUNNER_USER" -m 644 "$env_new" "$RUNNER_HOME/.env"
+      rm -f "$env_new"
+    fi
+  fi
+  if [ -n "${RUNNER_JOB_CLEANUP+set}" ]; then
+    printf '%s\n' "$job_cleanup" >"$CONFIG_DIR/job-cleanup"
   fi
   local svc_unit="" i ready=0 since=""
   svc_unit="$(cat "$RUNNER_HOME/.service")"
@@ -633,6 +695,12 @@ fi
 install -m 755 "$script_dir/guest/homefield-workspace-owner" /usr/local/sbin/homefield-workspace-owner
 # The runner picks the interpreter by extension, so the hook needs ".sh".
 install -m 755 "$script_dir/guest/homefield-job-started.sh" /usr/local/sbin/homefield-job-started.sh
+# The job-completed hook (opt-in, RUNNER_JOB_CLEANUP=1): the scripts are
+# installed on every run so an upgrade keeps them current, but the runner
+# only calls the hook when the .env line below names it. Off, they cost
+# nothing; on, they run after every job (vm/guest/homefield-job-cleanup).
+install -m 755 "$script_dir/guest/homefield-job-cleanup" /usr/local/sbin/homefield-job-cleanup
+install -m 755 "$script_dir/guest/homefield-job-cleanup.sh" /usr/local/sbin/homefield-job-cleanup.sh
 # install_sudoers <dest> <rule>: writes the rule to a temp file, has visudo
 # check it, and only then installs it at <dest> with mode 440. A rule visudo
 # rejects never reaches /etc/sudoers.d, where it would break sudo for everyone.
@@ -646,6 +714,11 @@ install_sudoers() {
 }
 install_sudoers /etc/sudoers.d/homefield-workspace-owner \
   'runner ALL=(root) NOPASSWD: /usr/local/sbin/homefield-workspace-owner ""'
+# The job-completed hook gets the same narrow rule for the same reason: the
+# hook must not depend on the general grant below. The script takes no
+# arguments, and the rule allows exactly it.
+install_sudoers /etc/sudoers.d/homefield-job-cleanup \
+  'runner ALL=(root) NOPASSWD: /usr/local/sbin/homefield-job-cleanup ""'
 # Run it once now, as the hook will: this proves the sudo rule works before
 # any job depends on it, fixes what earlier container jobs left, and repairs
 # and verifies the runner's npm (#110) — including in a tree the runner
@@ -740,11 +813,16 @@ ensure_service
 
 # The runner reads .env (written by config.sh) only when it starts, so a
 # changed .env restarts it below. The previous .env is kept until the runner
-# is back, to restore it if it is not.
-hook_line="ACTIONS_RUNNER_HOOK_JOB_STARTED=/usr/local/sbin/homefield-job-started.sh"
+# is back, to restore it if it is not. The job-completed hook line follows
+# the job_cleanup switch computed at the top: =1 adds it, =0 takes it out
+# (the same rule re-register applies, kept in step by hand).
+started_line="ACTIONS_RUNNER_HOOK_JOB_STARTED=/usr/local/sbin/homefield-job-started.sh"
+completed_line="ACTIONS_RUNNER_HOOK_JOB_COMPLETED=/usr/local/sbin/homefield-job-cleanup.sh"
 env_changed=0
 env_prev=""
-if ! grep -qx "$hook_line" "$RUNNER_HOME/.env" 2>/dev/null; then
+if ! grep -qx "$started_line" "$RUNNER_HOME/.env" 2>/dev/null ||
+   { [ "$job_cleanup" = "1" ] && ! grep -qx "$completed_line" "$RUNNER_HOME/.env" 2>/dev/null; } ||
+   { [ "$job_cleanup" = "0" ] && grep -qx "$completed_line" "$RUNNER_HOME/.env" 2>/dev/null; }; then
   new_tmp
   env_new="$tmp"
   if [ -f "$RUNNER_HOME/.env" ]; then
@@ -753,12 +831,21 @@ if ! grep -qx "$hook_line" "$RUNNER_HOME/.env" 2>/dev/null; then
     new_tmp
     cp "$RUNNER_HOME/.env" "$tmp"
     env_prev="$tmp"
-    grep -v '^ACTIONS_RUNNER_HOOK_JOB_STARTED=' "$RUNNER_HOME/.env" >"$env_new" || [ $? = 1 ]
+    grep -v -e '^ACTIONS_RUNNER_HOOK_JOB_STARTED=' -e '^ACTIONS_RUNNER_HOOK_JOB_COMPLETED=' \
+      "$RUNNER_HOME/.env" >"$env_new" || [ $? = 1 ]
   fi
-  echo "$hook_line" >>"$env_new"
+  echo "$started_line" >>"$env_new"
+  if [ "$job_cleanup" = "1" ]; then
+    echo "$completed_line" >>"$env_new"
+  fi
   install -o "$RUNNER_USER" -g "$RUNNER_USER" -m 644 "$env_new" "$RUNNER_HOME/.env"
   rm -f "$env_new"
   env_changed=1
+fi
+# The switch is saved only once the .env carries it, so a failed run leaves
+# the saved value as it was (the same rule the package list follows).
+if [ -n "${RUNNER_JOB_CLEANUP+set}" ]; then
+  printf '%s\n' "$job_cleanup" >"$CONFIG_DIR/job-cleanup"
 fi
 
 svc_unit="$(cat "$RUNNER_HOME/.service")"

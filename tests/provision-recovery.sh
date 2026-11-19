@@ -337,6 +337,51 @@ run_move ""
 rc=$?
 record "a bad saved list on a move: refused before the runner is stopped" "1/0/running" "$rc/$(calls stop)/$(running)"
 
+echo "the per-job cleanup switch (#285):"
+# run_switch <value>: one provision run with RUNNER_JOB_CLEANUP set, on a
+# registered runner. The switch is saved in the guest only after the .env
+# carries it, the same rule the package list follows.
+run_switch() {
+  RUNNER_JOB_CLEANUP="$1" PATH="$stubs:$PATH" STATE="$work/state" UNIT="$unit" \
+    UNIT_DIR="$work/systemd" bash "$work/provision.sh" </dev/null >"$work/out" 2>&1
+}
+completed_line="ACTIONS_RUNNER_HOOK_JOB_COMPLETED=$work/sbin/homefield-job-cleanup.sh"
+fresh "$current" active
+run_switch 1
+rc=$?
+record "RUNNER_JOB_CLEANUP=1: the .env gains the hook line and the switch is saved" "0/yes/1" \
+  "$rc/$(grep -qx "$completed_line" "$work/runner/.env" && echo yes || echo no)/$(cat "$work/etc/job-cleanup" 2>/dev/null || echo missing)"
+run
+rc=$?
+record "a later run without the switch: the line stays (the saved value rules)" "0/yes/1" \
+  "$rc/$(grep -qx "$completed_line" "$work/runner/.env" && echo yes || echo no)/$(cat "$work/etc/job-cleanup" 2>/dev/null || echo missing)"
+run_switch 0
+rc=$?
+record "RUNNER_JOB_CLEANUP=0: the line is taken back out and the switch saved off" "0/no/0" \
+  "$rc/$(grep -qx "$completed_line" "$work/runner/.env" && echo yes || echo no)/$(cat "$work/etc/job-cleanup" 2>/dev/null || echo missing)"
+run
+rc=$?
+record "a later run without the switch: it stays off" "0/no/0" \
+  "$rc/$(grep -qx "$completed_line" "$work/runner/.env" && echo yes || echo no)/$(cat "$work/etc/job-cleanup" 2>/dev/null || echo missing)"
+fresh "$current" active
+printf '1\n' >"$work/etc/job-cleanup"
+run
+rc=$?
+record "a saved switch of 1 and no RUNNER_JOB_CLEANUP: the hook line is added" "0/yes" \
+  "$rc/$(grep -qx "$completed_line" "$work/runner/.env" && echo yes || echo no)"
+fresh "$current" active
+printf 'maybe\n' >"$work/etc/job-cleanup"
+run
+rc=$?
+record "a hand-edited saved switch that is neither 1 nor 0: refused, saying where" "1/yes" \
+  "$rc/$(grep -q 'job-cleanup must hold 1 or 0' "$work/out" && echo yes || echo no)"
+fresh "$current" active
+RUNNER_JOB_CLEANUP=yes PATH="$stubs:$PATH" STATE="$work/state" UNIT="$unit" \
+  UNIT_DIR="$work/systemd" bash "$work/provision.sh" </dev/null >"$work/out" 2>&1
+rc=$?
+record "RUNNER_JOB_CLEANUP=yes: refused before anything runs" "1/yes" \
+  "$rc/$(grep -q 'RUNNER_JOB_CLEANUP must be 1 or 0' "$work/out" && echo yes || echo no)"
+
 echo "a move fails before old registration removal:"
 fresh 2.0.0 active
 run_move tar

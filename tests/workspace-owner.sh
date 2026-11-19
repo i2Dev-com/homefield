@@ -46,7 +46,7 @@ visudo_line="$(in_helper 'visudo -cqf "$tmp"')"
 install_line="$(in_helper 'install -m 440 "$tmp" "$dest"')"
 record "...the helper validates a rule before it installs it" "yes" "$([ -n "$visudo_line" ] && [ -n "$install_line" ] && [ "$visudo_line" -lt "$install_line" ] && echo yes || echo no)"
 record "...with mode 440" "yes" "$([ -n "$install_line" ] && echo yes || echo no)"
-record "both rules go through the helper" "2" "$(grep -c '^install_sudoers /etc/sudoers.d/' "$prov")"
+record "all three rules go through the helper" "3" "$(grep -c '^install_sudoers /etc/sudoers.d/' "$prov")"
 # shellcheck disable=SC2016  # the $ values are matched literally in provision.sh
 record "...and proved as runner, so a bad rule fails the provision" "yes" "$(has "$prov" 'sudo -u "$RUNNER_USER" sudo -n true')"
 record "the runner's .env names the hook" "yes" "$(has "$prov" 'hook_line="ACTIONS_RUNNER_HOOK_JOB_STARTED=/usr/local/sbin/homefield-job-started.sh"')"

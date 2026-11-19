@@ -330,7 +330,8 @@ record "...the group's repositories were asked for by its id" "1" "$(called 'run
 record "...install's closing text is not printed" "no" "$(has "$out" 'Registered. Next:')"
 record "...the summary comes after the wait for the runner" "yes" \
   "$(has "${out%%✓ VM homefield created*}" 'is online: labels')"
-record "...the group was recorded for reset" "group_created=acme/homefield-ci/7" "$(cat "$state/homefield.state" 2>/dev/null)"
+record "...the group was recorded for reset, beside the cleanup switch" "group_created=acme/homefield-ci/7
+job_cleanup=0" "$(cat "$state/homefield.state" 2>/dev/null)"
 
 srun STUB_LOOPBACK_STATE=not-verified GH_GROUPS="$work/groups-none" GH_REPOS='' -- cmd_setup --url $org
 record "...when the loopback probe could not verify, the isolation line flags it" "0/yes/no/1" \

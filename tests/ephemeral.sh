@@ -117,6 +117,21 @@ calls="$(cat "$CALLS")"
 st_body="$(cat "$WORK/state/homefield.state")"
 record "install --ephemeral: passes RUNNER_EPHEMERAL=1 and sets state" "0/yes/yes/yes" "$rc/$(has "$calls" "RUNNER_EPHEMERAL=1")/$(has "$st_body" "ephemeral=1")/$(has "$st_body" "ephemeral_url=https://github.com/acme")"
 
+# 2b. the per-job cleanup switch: install passes it, state remembers it, and
+# re-register passes it back to the guest
+hrun cmd_install --url https://github.com/acme --org --ephemeral --job-cleanup
+calls="$(cat "$CALLS")"
+st_body="$(cat "$WORK/state/homefield.state")"
+record "install --job-cleanup: passes RUNNER_JOB_CLEANUP=1 and sets state" "0/yes/yes" "$rc/$(has "$calls" "RUNNER_JOB_CLEANUP=1")/$(has "$st_body" "job_cleanup=1")"
+hrun cmd_install --url https://github.com/acme --org --ephemeral --no-job-cleanup
+calls="$(cat "$CALLS")"
+st_body="$(cat "$WORK/state/homefield.state")"
+record "install --no-job-cleanup: passes RUNNER_JOB_CLEANUP=0 and clears state" "0/yes/yes" "$rc/$(has "$calls" "RUNNER_JOB_CLEANUP=0")/$(has "$st_body" "job_cleanup=0")"
+hrun cmd_install --url https://github.com/acme --org --ephemeral --job-cleanup
+STUB_JOB_RC=1 hrun cmd_re_register
+calls="$(cat "$CALLS")"
+record "re-register passes the saved switch to the guest" "0/yes" "$rc/$(has "$calls" "RUNNER_JOB_CLEANUP=1")"
+
 # 3. re-register refuses when job is running
 STUB_JOB_RC=0 hrun cmd_re_register
 record "busy VM: re-register refused" "nonzero/yes" "$(nonzero "$rc")/$(has "$out" "a job is running")"
@@ -189,6 +204,7 @@ rereg_out="$(env -i \
   RUNNER_LABELS="self-hosted,linux,arm64,homefield-ci" \
   RUNNER_GROUP="" \
   RUNNER_USER="runner" \
+  job_cleanup="0" \
   REREG_CALLS="$rereg_calls" \
   bash -c '
     set -euo pipefail
@@ -244,6 +260,7 @@ env -i \
   RUNNER_LABELS="self-hosted,linux,arm64,homefield-ci" \
   RUNNER_GROUP="" \
   RUNNER_USER="runner" \
+  job_cleanup="0" \
   REREG_CALLS="$rereg_calls" \
   /bin/bash -c '
     set -euo pipefail
@@ -282,6 +299,7 @@ env -i \
   RUNNER_LABELS="self-hosted,linux,arm64,homefield-ci" \
   RUNNER_GROUP="" \
   RUNNER_USER="runner" \
+  job_cleanup="0" \
   RETRY_CALLS="$retry_calls" \
   /bin/bash -c '
     set -euo pipefail
@@ -304,6 +322,7 @@ env -i \
   RUNNER_LABELS="self-hosted,linux,arm64,homefield-ci" \
   RUNNER_GROUP="" \
   RUNNER_USER="runner" \
+  job_cleanup="0" \
   RETRY_CALLS="$retry_calls" \
   /bin/bash -c '
     set -euo pipefail
@@ -416,6 +435,7 @@ env -i \
   RUNNER_LABELS="self-hosted,linux,arm64,homefield-ci" \
   RUNNER_GROUP="" \
   RUNNER_USER="runner" \
+  job_cleanup="0" \
   /bin/bash -c '
     set -euo pipefail
     pgrep() { return 1; }

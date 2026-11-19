@@ -13,6 +13,10 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ### Added
 
+- Opt-in per-job cleanup hook (`bin/homefield install --job-cleanup`, or `upgrade --job-cleanup` on an existing VM; `--no-job-cleanup` turns it back off): adds the runner's `ACTIONS_RUNNER_HOOK_JOB_COMPLETED` hook, which after every job removes stopped containers and unused custom Docker networks, the job's build state under `_work` (runner-owned `_` entries kept) and everything in `/tmp`, while tagged images, BuildKit layers and apt/preset packages stay warm. The switch is saved in the guest and in the instance state, so later runs, upgrades and ephemeral re-registers keep it. The hook runs before the job's result is finalized, so it warns and moves on instead of failing the job; the daily `homefield-cleanup` timer stays as the backstop either way ([#285](https://github.com/i2Dev-com/homefield/issues/285)).
+
+### CI
+
 - Self-hosted runner comparison matrix in [`README.md`](README.md#alternatives): compares HomeField against stock macOS runners and local runner apps (`Codemany`), bare-metal/SSH CLIs (`gh-runnerctl`), Docker runner wrappers, macOS VM runners (`Tart` / `Cirrus`), and cloud/Kubernetes autoscalers (`ARC`, `runs-on`, `garm`) using scannable `✅`/`❌` cells across isolation, explicit hosted-switch fallback, workflow routing guard (`--guards` vs simple mode), token hygiene, daily cleanup/ephemeral mode, Rosetta `amd64` support, and areas where other tools do more or HomeField roadmap items ([#231](https://github.com/i2Dev-com/homefield/issues/231), [#14](https://github.com/i2Dev-com/homefield/issues/14), [#285](https://github.com/i2Dev-com/homefield/issues/285), [#286](https://github.com/i2Dev-com/homefield/issues/286), [#287](https://github.com/i2Dev-com/homefield/issues/287)) apply.
 
 ### CI
