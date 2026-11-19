@@ -387,6 +387,38 @@ harness seed_routing_records https://github.com/acme/api repo-runner
 record "a repo-scoped upgrade without a label: the label is derived from GitHub's list" "0/homefield-ci acme/api" \
   "$rc/$(cat "$state/routing" 2>/dev/null)"
 
+reset_records
+printf 'label-web acme/web\n' >"$state/routing"
+printf 'acme/web local\n' >"$work/byrepo"
+harness_env=(GH_GROUP_REPOS='acme/web\n' GH_RUNNERS='42\tmy-mac-homefield\tonline\tself-hosted,homefield-ci\n' GH_CI_RUNNER_BY_REPO="$work/byrepo")
+harness seed_routing_records https://github.com/acme my-mac-homefield homefield-ci 7
+record "an already recorded repo keeps its own label (not this runner's)" "0/label-web acme/web" \
+  "$rc/$(cat "$state/routing" 2>/dev/null)"
+
+reset_records
+printf 'acme/web local\n' >"$work/byrepo"
+harness_env=(GH_GROUP_REPOS='acme/web\n' GH_RUNNERS='42\tmy-mac-homefield\tonline\tself-hosted,homefield-ci\n43\tother-mac\tonline\tself-hosted,label-web\n' \
+  GH_GROUPS='homefield-ci\tselected\tpublic\t7\n' GH_GROUP_RUNNERS='43\n' GH_CI_RUNNER_BY_REPO="$work/byrepo")
+harness seed_routing_records https://github.com/acme my-mac-homefield homefield-ci 7
+record "another runner with a different label can serve the repo: not recorded, exit 1" "1/yes/0" \
+  "$rc/$(has "$out" 'not provably the only label')/$([ -f "$state/routing" ] && wc -l < "$state/routing" | tr -d ' ' || echo 0)"
+
+reset_records
+printf 'acme/web local\n' >"$work/byrepo"
+harness_env=(GH_GROUP_REPOS='acme/web\n' GH_RUNNERS='42\tmy-mac-homefield\tonline\tself-hosted,homefield-ci\n43\tother-mac\tonline\tself-hosted,homefield-ci\n' \
+  GH_GROUPS='homefield-ci\tselected\tpublic\t7\n' GH_GROUP_RUNNERS='43\n' GH_CI_RUNNER_BY_REPO="$work/byrepo")
+harness seed_routing_records https://github.com/acme my-mac-homefield homefield-ci 7
+record "another runner with the same label: no conflict, the repo is recorded" "0/homefield-ci acme/web" \
+  "$rc/$(cat "$state/routing" 2>/dev/null)"
+
+reset_records
+printf 'acme/web local\n' >"$work/byrepo"
+harness_env=(GH_GROUP_REPOS='acme/web\n' GH_RUNNERS='42\tmy-mac-homefield\tonline\tself-hosted,homefield-ci\n43\tother-mac\tonline\tself-hosted,label-web\n' \
+  GH_GROUPS_FAIL=1 GH_CI_RUNNER_BY_REPO="$work/byrepo")
+harness seed_routing_records https://github.com/acme my-mac-homefield homefield-ci 7
+record "the other runner's group cannot be asked: fail safe, not recorded" "1/0" \
+  "$rc/$([ -f "$state/routing" ] && wc -l < "$state/routing" | tr -d ' ' || echo 0)"
+
 rm -f "$stubs/gh"
 
 echo

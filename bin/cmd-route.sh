@@ -237,26 +237,34 @@ route_start_restore() {
   return "$rc"
 }
 
+# routing_label <labels>: the runner's routing label — the first label that
+# is not one of the standard labels GitHub gives every self-hosted runner.
+# Empty when there is none (nothing can be routed to such a runner).
+routing_label() {
+  local l found=""
+  (
+    IFS=,
+    for l in $1; do
+      [ -n "$found" ] && continue
+      case ",$(lower "$l")," in
+        *,self-hosted,* | *,linux,* | *,arm64,* | *,x64,* | *,arm,* | *,windows,* | *,macos,*) ;;
+        *) printf '%s\n' "$l" && found=1 ;;
+      esac
+    done
+  )
+}
+
 # routing_label_from_rows <rows> <name>: the routing label of the runner
-# named <name> — its first label that is not one of the standard labels
-# GitHub gives every self-hosted runner. Empty when the runner is not in the
+# named <name> (see routing_label). Empty when the runner is not in the
 # rows or carries no custom label (nothing can be routed to it, so there is
 # nothing to seed).
 routing_label_from_rows() {
-  local rid rname rstatus rlabels labels="" l
+  local rid rname rstatus rlabels labels=""
   while IFS=$'\t' read -r rid rname rstatus rlabels; do
     [ "$rname" = "$2" ] && labels="$rlabels"
   done <<<"$1"
   [ -n "$labels" ] || return 0
-  (
-    IFS=,
-    for l in $labels; do
-      case ",$(lower "$l")," in
-        *,self-hosted,* | *,linux,* | *,arm64,* | *,x64,* | *,arm,* | *,windows,* | *,macos,*) ;;
-        *) printf '%s\n' "$l" ;;
-      esac
-    done
-  )
+  routing_label "$labels"
 }
 
 # seed_routing_records <url> <name> [label] [gid]: populate the routing
@@ -266,33 +274,42 @@ routing_label_from_rows() {
 # registration's repositories: the group's repositories for an organization
 # runner (the group id, or the one this install created, from the state),
 # the registration's own repository for a repository-scoped one. A
-# repository whose CI_RUNNER is local is recorded under the label — the
-# caller's when known, otherwise the runner's routing label derived from
-# GitHub's runner list. Failures warn loudly and return 1: the fallback
-# stays silent-but-uncovered until the repositories are recorded by hand,
-# which is exactly what the warnings say to do.
+# repository that is already recorded keeps its record — runners in one
+# group can use different routing labels, and the record, not this runner,
+# says which label routes the repository. A repository routed local but not
+# recorded is recorded under the actual routing label: the caller's when
+# known, otherwise the runner's routing label derived from GitHub's runner
+# list — but only when no other runner in the scope with a different label
+# can also take the repository's jobs (its group admits it), because a
+# record under this runner's label would make the stop side flip a
+# repository another runner is still serving. Ambiguous repositories are
+# left unrecorded with the by-hand command, like every other seeding
+# failure: the fallback stays silent-but-uncovered until the repositories
+# are recorded by hand, which is exactly what the warnings say to do.
 seed_routing_records() {
-  local url="$1" name="$2" label="${3:-}" gid="${4:-}" scope org repos r current rc=0 n=0 gc
+  local url="$1" name="$2" label="${3:-}" gid="${4:-}" scope org repos r current rc=0 n=0 preserved=0 gc
+  local rows="" rid rname rstatus rlabels other conflict owner repo_scope
   scope="$(api_scope "$url" 2>/dev/null)" || {
     echo "homefield: could not read the scope of ${url}; the routing records were not seeded (repositories already routed local are not covered by the automatic fallback until each is recorded: bin/homefield route local --repo <owner>/<repo>)" >&2
     return 1
   }
-  # Without a label — the upgrade path, which does not know the runner's
-  # registration settings — derive it from GitHub's runner list, whatever
-  # the registration scope: a repository-scoped upgrade needs it exactly as
-  # much as an organization one.
+  # The runner list serves two purposes: deriving the routing label when
+  # the caller does not know it (the upgrade path), and telling which other
+  # runners can take a repository's jobs. Both need it, whatever the
+  # registration scope.
+  rows="$(runners_on_github "$url")" || {
+    echo "homefield: could not read the runners from GitHub; the routing records were not seeded (repositories already routed local are not covered by the automatic fallback until each is recorded: bin/homefield route local --repo <owner>/<repo> --label <label>)" >&2
+    return 1
+  }
   if [ -z "$label" ]; then
-    local rows
-    rows="$(runners_on_github "$url")" || {
-      echo "homefield: could not read the runners from GitHub; the routing records were not seeded (repositories already routed local are not covered by the automatic fallback until each is recorded: bin/homefield route local --repo <owner>/<repo> --label <label>)" >&2
-      return 1
-    }
     label="$(routing_label_from_rows "$rows" "$name")"
     if [ -z "$label" ]; then
       log "no routing label on ${name}; nothing routes to it, so there is nothing to seed"
       return 0
     fi
   fi
+  owner="$(scope_owner "$url")"
+  case "$owner" in */*) repo_scope=repo ;; *) repo_scope=org ;; esac
   case "$scope" in
     orgs/*)
       org="${scope#orgs/}"
@@ -316,8 +333,38 @@ seed_routing_records() {
   esac
   while IFS= read -r r; do
     [ -n "$r" ] || continue
+    # An existing record is the truth about which label routes this
+    # repository; this runner's label would be a guess (runners in one
+    # group can use different labels), so never overwrite.
+    if [ -n "$(awk -v r="$r" '$2 == r {print; exit}' "$(routing_file)" 2>/dev/null)" ]; then
+      preserved=$((preserved + 1))
+      continue
+    fi
     current="$(repo_variable_get "$r" CI_RUNNER)"
-    [ "$current" = local ] || continue
+    if [ "$current" != local ]; then continue; fi
+    # Establish the actual routing label. Another runner in the scope with
+    # a different custom label that can take this repository's jobs (its
+    # group admits the repository; a group that cannot be asked counts as
+    # able to) makes this runner's label a guess, and a wrong label makes
+    # the stop side flip a repository another runner is still serving.
+    conflict=0
+    while IFS=$'\t' read -r rid rname rstatus rlabels; do
+      if [ "$rname" = "$name" ]; then continue; fi
+      other="$(routing_label "$rlabels")"
+      if [ -z "$other" ]; then continue; fi
+      if [ "$(lower "$other")" = "$(lower "$label")" ]; then continue; fi
+      if [ "$repo_scope" = repo ]; then
+        conflict=1
+      else
+        runner_serves_repo "$owner" "$rid" "$r"
+        case $? in 0 | 2) conflict=1 ;; esac
+      fi
+    done <<<"$rows"
+    if [ "$conflict" = 1 ]; then
+      rc=1
+      echo "homefield: ${r}: routed local, but ${label} is not provably the only label that can serve it here; not recorded (record it by hand: bin/homefield route local --repo ${r} --label <label>)" >&2
+      continue
+    fi
     if record_add "$(routing_file)" "$label" "$r"; then
       n=$((n + 1))
     else
@@ -327,6 +374,9 @@ seed_routing_records() {
   done <<<"$repos"
   if [ "$n" -gt 0 ]; then
     log "seeded the routing records with ${n} repositories already routed local"
+  fi
+  if [ "$preserved" -gt 0 ]; then
+    log "kept ${preserved} existing routing record(s)"
   fi
   return "$rc"
 }

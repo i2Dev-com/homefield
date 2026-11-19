@@ -613,9 +613,13 @@ start`/`fleet stop` accept the same flags for every VM. Switching it on seeds
 the routing records from the registration's own repositories (the runner
 group's list, or the repository itself for a repository-scoped runner): every
 one already routed local is recorded, so an install that adopted before the
-fallback existed is covered from the first stop. Where the candidates cannot
-be listed, the command warns with the `route local --repo` command to record
-each repository by hand.
+fallback existed is covered from the first stop. A repository that is already
+recorded keeps its record (runners in one group can use different routing
+labels, and the record says which label routes the repository), and one that
+is not is recorded under this runner's label only when no other runner in the
+scope with a different label can also take its jobs — otherwise it is left
+unrecorded with the `route local --repo` command to record it by hand, like
+every other seeding failure.
 
 The fallback is fail-safe: when GitHub cannot be asked, this runner is not in
 GitHub's runner list, or a flip fails, nothing is flipped, the stop (or start)
