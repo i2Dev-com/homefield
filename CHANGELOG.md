@@ -24,6 +24,8 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 - Docs-only fast path in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) and `tests/release-refs.sh`: when a pull request or push modifies only Markdown or `docs/assets/*` files, CI skips `shellcheck`, `ruff`, and the non-doc shell suites and runs `actionlint` plus `tests/release-refs.sh` (which now also pins the canonical `runs-on` expressions in `README.md` and `docs/adopting.md`).
 
+- The test suites run in a bounded worker pool instead of one by one ([#293](https://github.com/i2Dev-com/homefield/pull/293)): `tests/run-suites.sh` (also the local way to run everything) keeps the machine's CPU count suites in flight, capped at 8, and prints each suite's output in order, so CI's test phase takes roughly the slowest few suites rather than their sum (the macOS job was ~14 minutes; the suites are process-spawn bound and sum to ~7 minutes sequentially). `TEST_CONCURRENCY` overrides the pool size.
+
 ## v0.5.4 (2026-11-18)
 
 Bumps the patch from v0.5.3, and it is compatible for consumers: the routing
