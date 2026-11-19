@@ -13,7 +13,7 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ### Added
 
-- Self-hosted runner comparison matrix in [`README.md`](README.md#alternatives): compares HomeField against stock macOS runners and local runner apps (`Codemany`), bare-metal/SSH CLIs (`gh-runnerctl`), Docker runner wrappers, macOS VM runners (`Tart` / `Cirrus`), and cloud/Kubernetes autoscalers (`ARC`, `runs-on`, `garm`) across isolation, hosted fallback, workflow routing guard, token hygiene, cleanup/ephemeral mode, Rosetta `amd64` support, and areas where other tools do more or HomeField roadmap items ([#231](https://github.com/i2Dev-com/homefield/issues/231), [#14](https://github.com/i2Dev-com/homefield/issues/14)) apply.
+- Self-hosted runner comparison matrix in [`README.md`](README.md#alternatives): compares HomeField against stock macOS runners and local runner apps (`Codemany`), bare-metal/SSH CLIs (`gh-runnerctl`), Docker runner wrappers, macOS VM runners (`Tart` / `Cirrus`), and cloud/Kubernetes autoscalers (`ARC`, `runs-on`, `garm`) across isolation, explicit hosted-switch fallback, workflow routing guard (`--guards` vs simple mode), token hygiene, daily cleanup/ephemeral mode, Rosetta `amd64` support, and areas where other tools do more or HomeField roadmap items ([#231](https://github.com/i2Dev-com/homefield/issues/231), [#14](https://github.com/i2Dev-com/homefield/issues/14)) apply.
 
 ## v0.5.4 (2026-11-18)
 
