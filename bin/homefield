@@ -323,6 +323,12 @@ install (and setup, which takes the same options):
   --memory GIB       VM memory in GiB, when creating it (default: vm/lima.yaml)
   --no-autostart     do not start the VM at login
   --ephemeral        register for one job per registration (use with re-register)
+  --job-cleanup      after every job, remove stopped containers, unused custom
+                     networks, the job's build state under _work and /tmp
+                     scratch, keeping image and BuildKit caches warm
+                     (ACTIONS_RUNNER_HOOK_JOB_COMPLETED). Off by default; the
+                     daily cleanup timer runs either way
+  --no-job-cleanup   take the per-job cleanup hook back out
 EOF
 }
 usage_sec_upgrade() {
@@ -334,6 +340,8 @@ upgrade:
                      Unlike --packages it never replaces the saved list
                      (docs/runbook.md, "Adding tools")
   --force            upgrade even while a job is running (the job is cancelled)
+  --job-cleanup      turn on the per-job cleanup hook (see install)
+  --no-job-cleanup   turn the per-job cleanup hook back off
 EOF
 }
 usage_sec_re_register() {

@@ -699,6 +699,21 @@ nothing, which is easy to misread as "no containers".
   be safe if a job starts during it. For that reason it never removes tagged
   images. After a service image version bump, clear the old tags by hand while
   idle: `limactl shell homefield sudo docker image prune --all --force`.
+  - **Per-job cleanup (opt-in).** `bin/homefield install --job-cleanup` (or
+    `upgrade --job-cleanup` on an existing VM) adds the runner's
+    job-completed hook (`ACTIONS_RUNNER_HOOK_JOB_COMPLETED` in
+    `/opt/actions-runner/.env`): after every job,
+    `/usr/local/sbin/homefield-job-cleanup` removes stopped containers and
+    unused custom Docker networks, the job's build state under `_work`
+    (anything not starting with `_`), and everything in `/tmp`, while tagged
+    images, BuildKit layers and apt/preset packages stay warm. `--no-job-cleanup`
+    takes it back out; the switch is saved in the guest, so later runs and
+    re-registers keep it. The hook runs before the job's result is finalized,
+    so it is written to warn and move on rather than fail: a cleanup hiccup
+    never turns a finished job red — its warnings are in the job log under
+    "Complete runner". Containers still running when the hook fires are left
+    for the daily timer (killing containers blindly is worse than leaving one
+    for an hour).
 - **Workspace ownership.** A `container:` job runs as root in its container,
   so whatever it writes in the workspace is owned by root, and the next job's
   checkout, as `runner`, could not delete it. Before every job, the runner's

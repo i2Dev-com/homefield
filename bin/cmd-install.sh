@@ -698,6 +698,7 @@ preset_saved_drops() {
 
 cmd_install() {
   local url="" label="" name="" group="" packages="" packages_set=0 cpus="" memory="" autostart=1 replace=0 ephemeral=0 cmd=install
+  local job_cleanup=0 job_cleanup_set=0
   local presets=()
   [ "$SETUP" != 1 ] || cmd=setup
   while [ $# -gt 0 ]; do
@@ -717,6 +718,8 @@ cmd_install() {
       --group-exists) GROUP_EXISTS=1; shift ;;
       --replace) replace=1; shift ;;
       --ephemeral) ephemeral=1; shift ;;
+      --job-cleanup) job_cleanup=1; job_cleanup_set=1; shift ;;
+      --no-job-cleanup) job_cleanup=0; job_cleanup_set=1; shift ;;
       --personal)
         [ "$ACCOUNT_FORCE" != org ] || die "${cmd}: --personal and --org cannot be used together"
         ACCOUNT_FORCE=personal; shift ;;
@@ -785,6 +788,7 @@ cmd_install() {
     [ "$packages_set" = 1 ] && args+=(--packages "$packages")
     local p
     for p in ${presets[@]+"${presets[@]}"}; do args+=(--preset "$p"); done
+    [ "$job_cleanup_set" = 1 ] && args+=("$([ "$job_cleanup" = 1 ] && echo --job-cleanup || echo --no-job-cleanup)")
     upgrade_registered "${args[@]+"${args[@]}"}"
     if [ "$ephemeral" = 1 ]; then
       local r_url="" r_name="" was_eph=""
@@ -824,9 +828,13 @@ cmd_install() {
   if [ "$ephemeral" = 1 ]; then
     env+=(RUNNER_EPHEMERAL=1)
   fi
+  if [ "$job_cleanup_set" = 1 ]; then
+    env+=(RUNNER_JOB_CLEANUP="$job_cleanup")
+  fi
   log "provisioning ${INSTANCE} and registering at ${url}"
   run_provision "RUNNER_TOKEN=${token}"$'\n' "${env[@]}"
   token=""
+  state_set job_cleanup "$job_cleanup"
   if [ "$ephemeral" = 1 ]; then
     state_set ephemeral 1
     state_set ephemeral_url "$url"
@@ -911,10 +919,16 @@ upgrade_single() {
   elif [ "$packages_set" = 1 ]; then
     env+=(RUNNER_EXTRA_PACKAGES="$packages")
   fi
+  if [ "$UP_JOB_CLEANUP_SET" = 1 ]; then
+    env+=(RUNNER_JOB_CLEANUP="$UP_JOB_CLEANUP")
+  fi
   log "upgrading ${INSTANCE}"
   # provision.sh starts the service again at the end, and waits until it is
   # listening for jobs.
   run_provision "" "${env[@]+"${env[@]}"}"
+  if [ "$UP_JOB_CLEANUP_SET" = 1 ]; then
+    state_set job_cleanup "$UP_JOB_CLEANUP"
+  fi
   runner_back
 }
 
@@ -925,6 +939,7 @@ upgrade_single() {
 # never disagree about what the options are.
 parse_upgrade_args() {
   UP_PACKAGES="" UP_PACKAGES_SET=0 UP_FORCE=0
+  UP_JOB_CLEANUP="" UP_JOB_CLEANUP_SET=0
   UP_PRESETS=()
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -938,6 +953,8 @@ parse_upgrade_args() {
         shift 2
         ;;
       --force) UP_FORCE=1; shift ;;
+      --job-cleanup) UP_JOB_CLEANUP=1 UP_JOB_CLEANUP_SET=1; shift ;;
+      --no-job-cleanup) UP_JOB_CLEANUP=0 UP_JOB_CLEANUP_SET=1; shift ;;
       *) die "upgrade: unknown option $1 (see bin/homefield help)" ;;
     esac
   done
@@ -1506,6 +1523,12 @@ re_register_single() {
   [ -z "$label" ] || env+=(RUNNER_LABEL="$label")
   [ -z "$name" ] || env+=(RUNNER_NAME="$name")
   [ -z "$group" ] || env+=(RUNNER_GROUP="$group")
+  # The job-cleanup switch follows the VM's saved state, so a re-register
+  # keeps the hook (or its absence) exactly as install/upgrade left it: =1
+  # re-adds the .env line if a hand edit lost it, =0 takes it back out.
+  local job_cleanup=""
+  job_cleanup="$(state_get job_cleanup)"
+  [ -z "$job_cleanup" ] || env+=(RUNNER_JOB_CLEANUP="$job_cleanup")
 
   log "re-registering ephemeral runner ${INSTANCE} at ${url}"
   if ! PROVISION_CMD=re-register run_provision "RUNNER_TOKEN=${token}"$'\n' "${env[@]}"; then

@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# Per-job cleanup, run through the runner's job-completed hook
+# (ACTIONS_RUNNER_HOOK_JOB_COMPLETED, set in .env by provision.sh when
+# RUNNER_JOB_CLEANUP=1): between one job and the next, nothing a job left
+# behind stays — stopped containers, unused custom networks, the repository's
+# build state under _work and /tmp scratch — while the caches that make the
+# next job fast (tagged images, BuildKit layers, apt/preset packages) are
+# kept. The daily timer (homefield-cleanup) remains the backstop for what a
+# cancelled job leaves running.
+#
+# The hook runs as root, like the job-started hook's script: a container job
+# leaves root-owned files in _work that runner could not remove, and /tmp
+# holds root-owned job artifacts. It runs before the job's result is
+# finalized, and a hook that exits non-zero can fail the job (docs.github.com,
+# "Running scripts before or after a job"), so every failure below is printed
+# loudly and the script still exits 0: a cleanup hiccup must never turn a
+# finished job red. The job log's "Complete runner" section carries the
+# warnings.
+#
+# No timeout exists for hooks, so this stays fast: two prunes, one workspace
+# and /tmp. Docker being down is a warning, not a failure — the guest starts
+# Docker on boot, so this only matters while it is being repaired.
+set -euo pipefail
+runner_home="${HOMEFIELD_RUNNER_HOME:-/opt/actions-runner}"
+tmp_dir="${HOMEFIELD_TMP:-/tmp}"
+
+job_running() { pgrep -f Runner.Worker >/dev/null; }
+if job_running; then
+  echo "homefield-job-cleanup: a job is already running, skipping"
+  exit 0
+fi
+
+# Stopped containers and unused custom networks are what a finished job
+# leaves; the runner removes its own service containers, but a failed step
+# can leave them. The default networks (bridge, host, none) are never
+# pruned, and network prune keeps any network a container still uses.
+# Deliberately not `docker stop`: a container still running when the hook
+# fires is a leftover (the guest runs nothing else), but killing containers
+# blindly is worse than leaving one for the daily timer to prune, and the
+# prune here already takes every stopped one.
+if ! out="$(docker container prune --force 2>&1)"; then
+  echo "homefield-job-cleanup: docker container prune failed:" >&2
+  printf '%s\n' "$out" >&2
+fi
+if ! out="$(docker network prune --force 2>&1)"; then
+  echo "homefield-job-cleanup: docker network prune failed:" >&2
+  printf '%s\n' "$out" >&2
+fi
+
+# The workspace of the repository the job built, and anything else a job
+# left directly under _work, plus the runner's own per-job state. Entries
+# starting with _ are the runner's (_temp, _tool): kept, the same rule the
+# daily cleanup applies. A job starting between the top of the script and
+# the rm would be checking out into the directory about to be removed, so
+# it is re-checked first — the same guard the daily cleanup uses.
+shopt -s nullglob
+for entry in "$runner_home"/_work/*; do
+  case "$(basename "$entry")" in _*) continue ;; esac
+  if job_running; then
+    echo "homefield-job-cleanup: a job started, leaving $entry"
+    break
+  fi
+  echo "homefield-job-cleanup: removing $entry"
+  rm -rf "$entry" || echo "homefield-job-cleanup: could not remove $entry" >&2
+done
+
+# /tmp: everything in it is per-job scratch (checkouts' temp files, step
+# leftovers). The guest's own machinery does not keep state there: the
+# provisioning staging directories are created and removed per run, and
+# systemd units do not use /tmp.
+if job_running; then
+  echo "homefield-job-cleanup: a job started, leaving $tmp_dir"
+else
+  while IFS= read -r -d '' entry; do
+    rm -rf -- "$entry" || echo "homefield-job-cleanup: could not remove $entry" >&2
+  done < <(find "$tmp_dir" -mindepth 1 -maxdepth 1 -print0 2>/dev/null)
+fi
