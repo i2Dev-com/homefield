@@ -115,6 +115,7 @@ fleet_status() {
 cmd_fleet() {
   local sub="status"
   local json=0
+  local -a pass=()
 
   if [ "$#" -gt 0 ]; then
     case "$1" in
@@ -144,6 +145,14 @@ cmd_fleet() {
         [ "$sub" = "status" ] || die "--json is only supported with 'fleet status'"
         json=1
         ;;
+      --route-local)
+        [ "$sub" = "start" ] || die "--route-local is only supported with 'fleet start'"
+        pass+=("$1")
+        ;;
+      --route-hosted)
+        [ "$sub" = "stop" ] || die "--route-hosted is only supported with 'fleet stop'"
+        pass+=("$1")
+        ;;
       -h|--help)
         usage_for fleet
         return 0
@@ -160,11 +169,11 @@ cmd_fleet() {
       fleet_status "$json"
       ;;
     start)
-      vm_dispatch start start_single
+      vm_dispatch start start_single ${pass[@]+"${pass[@]}"}
       fleet_status 0
       ;;
     stop)
-      vm_dispatch stop stop_single
+      vm_dispatch stop stop_single ${pass[@]+"${pass[@]}"}
       ;;
   esac
 }

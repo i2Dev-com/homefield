@@ -143,6 +143,8 @@ usage_cmd_start() {
              booted and online are separate facts. Exits 0 when every runner
              is online (service running, GitHub lists it online), 1 otherwise
              with the fix per VM; a failure on one never skips the next.
+  --route-local    route the repositories a stop flipped to hosted back to
+                   this runner (or do it on every start of an --auto-route VM)
 EOF
 }
 usage_cmd_stop() {
@@ -153,6 +155,10 @@ usage_cmd_stop() {
              the others are still stopped. Autostart stays as it was, so a
              reboot starts them again; stopping an already stopped VM is not
              an error. Exits 0 only when every VM reached Stopped.
+  --route-hosted   route the repositories routed to this runner to hosted
+                   first, when no other online runner serves them (or do it
+                   on every stop of an --auto-route VM); queued jobs re-run
+                   on GitHub's runners instead of waiting for this VM
 EOF
 }
 usage_cmd_diagnose() {
@@ -329,6 +335,10 @@ install (and setup, which takes the same options):
                      (ACTIONS_RUNNER_HOOK_JOB_COMPLETED). Off by default; the
                      daily cleanup timer runs either way
   --no-job-cleanup   take the per-job cleanup hook back out
+  --auto-route       on stop, route the adopted repositories to hosted
+                     runners when no local runner is left online; on start,
+                     route them back to this runner (the automatic fallback,
+                     #286). Off by default; --no-auto-route turns it off
 EOF
 }
 usage_sec_upgrade() {
@@ -342,6 +352,8 @@ upgrade:
   --force            upgrade even while a job is running (the job is cancelled)
   --job-cleanup      turn on the per-job cleanup hook (see install)
   --no-job-cleanup   turn the per-job cleanup hook back off
+  --auto-route       turn on the automatic hosted fallback (see install)
+  --no-auto-route    turn the automatic hosted fallback back off
 EOF
 }
 usage_sec_re_register() {
@@ -576,6 +588,8 @@ Fleet options (`fleet [status|start|stop] [--json]`):
   start      Boot every HomeField VM and print the fleet status summary
   stop       Stop every HomeField VM (refused while a job is running)
   --json     Print fleet status and totals as JSON (with `fleet` or `fleet status`)
+  --route-local / --route-hosted   the start/stop fallback flags, applied to
+                                   every VM (with `fleet start` / `fleet stop`)
 EOF
 }
 
