@@ -48,14 +48,17 @@ trap 'rm -rf "$work"' EXIT
 export WORKDIR="$work"
 
 # The pool: xargs keeps $concurrency suites running, feeding the next one
-# as a worker frees. Each suite writes its own log and exit code; the
-# ordered report below prints them.
+# as a worker frees. Each suite writes its own log, exit code, and wall
+# time; the ordered report below prints them.
 printf '%s\n' $suites |
   xargs -P "$concurrency" -n 1 bash -c '
     suite="$1"
-    log="$WORKDIR/${suite//\//.}.log"
+    base="${suite//\//.}"
+    log="$WORKDIR/$base.log"
+    t0=$(date +%s)
     bash "$suite" >"$log" 2>&1
-    echo "$?" >"$WORKDIR/${suite//\//.}.rc"
+    echo "$?" >"$WORKDIR/$base.rc"
+    echo $(( $(date +%s) - t0 )) >"$WORKDIR/$base.time"
     ' _
 
 status=0
@@ -70,4 +73,14 @@ for suite in $suites; do
     status=1
   fi
 done
+
+# The wall clock the step reports does not say where it went: with the
+# pool, the slowest suite is the floor, and this is how the next
+# optimization target shows itself.
+echo "::group::Suite wall times (slowest first)"
+for suite in $suites; do
+  base="${suite//\//.}"
+  printf '%5ss  %s\n' "$(cat "$work/$base.time" 2>/dev/null || echo '?')" "$suite"
+done | sort -rn
+echo "::endgroup::"
 exit "$status"

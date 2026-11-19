@@ -8,6 +8,13 @@ on:
 permissions:
   contents: read
 
+# A new push to the same branch cancels the run it supersedes: the
+# suites take minutes, and during a review round the superseded
+# run's result is nobody's answer.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     name: Lint & test
