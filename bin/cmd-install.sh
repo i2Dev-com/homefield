@@ -843,6 +843,12 @@ cmd_install() {
   # only): 1 makes plain `stop` route the routed repositories to hosted and
   # plain `start` route them back.
   state_set auto_route "$auto_route"
+  if [ "$auto_route" = 1 ]; then
+    # Cover the repositories that were already routed local before the
+    # fallback existed; a failure only means they are not covered yet, and
+    # seed_routing_records says exactly what to do about it.
+    seed_routing_records "$url" "$name" "${label:-homefield-ci}" "${GROUP_ID:-}" || true
+  fi
   if [ "$ephemeral" = 1 ]; then
     state_set ephemeral 1
     state_set ephemeral_url "$url"
@@ -939,6 +945,9 @@ upgrade_single() {
   fi
   if [ "$UP_AUTO_ROUTE_SET" = 1 ]; then
     state_set auto_route "$UP_AUTO_ROUTE"
+    if [ "$UP_AUTO_ROUTE" = 1 ]; then
+      seed_routing_records "$url" "$name" || true
+    fi
   fi
   runner_back
 }

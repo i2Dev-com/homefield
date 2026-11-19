@@ -50,14 +50,26 @@ runners_on_github() {
     </dev/null 2>/dev/null
 }
 
-# scope_owner <url>: the owner a runner is registered under — the path after
-# github.com in its gitHubUrl (`https://github.com/acme` -> `acme`). The
-# fallback may only touch repositories in that scope: the runners it can see
-# (and the labels it matched) are the scope's runners, so a record for another
-# organization's repo is someone else's to flip.
+# scope_owner <url>: what a runner is registered to — the path after
+# github.com in its gitHubUrl: the organization (`https://github.com/acme`
+# -> `acme`) or, for a repository-scoped registration, the repository itself
+# (`https://github.com/acme/api` -> `acme/api`). The fallback may only touch
+# repositories in that scope: the runners it can see (and the labels it
+# matched) are the scope's runners, so a record for another organization's
+# repo is someone else's to flip.
 scope_owner() {
   local owner="${1#*github.com/}"
   printf '%s' "${owner%/}"
+}
+
+# in_scope <repo> <owner>: whether the repo belongs to the runner's
+# registration scope — the exact repository for a repository-scoped
+# registration, anything under the organization otherwise.
+in_scope() {
+  case "$1" in
+    "$2" | "$2"/*) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 # route_stop_fallback <url> <name>: the stop-side of the automatic fallback
@@ -90,6 +102,10 @@ route_stop_fallback() {
     echo "homefield: ${name} is not in GitHub's runner list; leaving the routed repositories as they are" >&2
     return 1
   fi
+  # GitHub matches runner labels case-insensitively (adopt's checks do too),
+  # so the comparisons do as well: a record for HomeField-CI and a runner
+  # advertising homefield-ci are the same label.
+  labels="$(lower "$labels")"
   local owner
   owner="$(scope_owner "$url")"
   while read -r label repo; do
@@ -97,17 +113,18 @@ route_stop_fallback() {
     # The rows describe this scope's runners only, so a record for a repo in
     # another scope (a Mac hosting runners for two organizations) is not this
     # stop's to flip: its own runner is invisible here and may be online.
-    case "$repo" in "$owner"/*) ;;
-      *) log "${repo}: routed under a different scope than ${owner}; not switching it to hosted"; continue ;;
-    esac
-    case ",${labels}," in *",${label},"*) ;; *) continue ;; esac
+    if ! in_scope "$repo" "$owner"; then
+      log "${repo}: routed under a different scope than ${owner}; not switching it to hosted"
+      continue
+    fi
+    case ",${labels}," in *",$(lower "$label"),"* ) ;; *) continue ;; esac
     # Another online runner (not this one) carrying the label keeps the
     # label served, so the repositories stay routed local.
     served=0
     while IFS=$'\t' read -r rname rstatus rlabels; do
       [ "$rname" = "$name" ] && continue
       [ "$rstatus" = online ] || continue
-      case ",${rlabels}," in *",${label},"*) served=1 ;; esac
+      case ",$(lower "$rlabels")," in *",$(lower "$label"),"*) served=1 ;; esac
     done <<<"$rows"
     if [ "$served" = 1 ]; then
       log "${repo}: label ${label} is still served by another online runner; not switching to hosted"
@@ -162,13 +179,15 @@ route_start_restore() {
     echo "homefield: ${name} is not in GitHub's runner list; the flipped repositories stay hosted until the next start" >&2
     return 1
   fi
+  labels="$(lower "$labels")"
   owner="$(scope_owner "$url")"
   while read -r label repo; do
     [ -n "$repo" ] || continue
-    case "$repo" in "$owner"/*) ;;
-      *) log "${repo}: routed under a different scope than ${owner}; leaving it hosted" ; continue ;;
-    esac
-    case ",${labels}," in *",${label},"*) ;; *) continue ;; esac
+    if ! in_scope "$repo" "$owner"; then
+      log "${repo}: routed under a different scope than ${owner}; leaving it hosted"
+      continue
+    fi
+    case ",${labels}," in *",$(lower "$label"),"* ) ;; *) continue ;; esac
     if cmd_route local --repo "$repo" --label "$label"; then
       record_drop "$(autoflip_file)" "$repo" ||
         { rc=1; echo "homefield: ${repo}: routed local but could not update the record; it will be routed local again on the next start" >&2; }
@@ -179,6 +198,96 @@ route_start_restore() {
   done <"$(autoflip_file)"
   if [ "$restored" -eq 0 ] && [ "$rc" = 0 ]; then
     log "no repository waiting to be routed back"
+  fi
+  return "$rc"
+}
+
+# routing_label_from_rows <rows> <name>: the routing label of the runner
+# named <name> — its first label that is not one of the standard labels
+# GitHub gives every self-hosted runner. Empty when the runner is not in the
+# rows or carries no custom label (nothing can be routed to it, so there is
+# nothing to seed).
+routing_label_from_rows() {
+  local rname rstatus rlabels labels="" l
+  while IFS=$'\t' read -r rname rstatus rlabels; do
+    [ "$rname" = "$2" ] && labels="$rlabels"
+  done <<<"$1"
+  [ -n "$labels" ] || return 0
+  (
+    IFS=,
+    for l in $labels; do
+      case ",$(lower "$l")," in
+        *,self-hosted,* | *,linux,* | *,arm64,* | *,x64,* | *,arm,* | *,windows,* | *,macos,*) ;;
+        *) printf '%s\n' "$l" ;;
+      esac
+    done
+  )
+}
+
+# seed_routing_records <url> <name> [label] [gid]: populate the routing
+# record for the repositories that are already routed local when the
+# automatic fallback is switched on, so an install that adopted before
+# --auto-route existed is still covered. The candidates are the
+# registration's repositories: the group's repositories for an organization
+# runner (the group id, or the one this install created, from the state),
+# the registration's own repository for a repository-scoped one. A
+# repository whose CI_RUNNER is local is recorded under the label — the
+# caller's when known, otherwise the runner's routing label derived from
+# GitHub's runner list. Failures warn loudly and return 1: the fallback
+# stays silent-but-uncovered until the repositories are recorded by hand,
+# which is exactly what the warnings say to do.
+seed_routing_records() {
+  local url="$1" name="$2" label="${3:-}" gid="${4:-}" scope org repos r current rc=0 n=0 gc
+  scope="$(api_scope "$url" 2>/dev/null)" || {
+    echo "homefield: could not read the scope of ${url}; the routing records were not seeded (repositories already routed local are not covered by the automatic fallback until each is recorded: bin/homefield route local --repo <owner>/<repo>)" >&2
+    return 1
+  }
+  case "$scope" in
+    orgs/*)
+      org="${scope#orgs/}"
+      if [ -z "$label" ]; then
+        local rows
+        rows="$(runners_on_github "$url")" || {
+          echo "homefield: could not read the runners from GitHub; the routing records were not seeded (repositories already routed local are not covered by the automatic fallback until each is recorded: bin/homefield route local --repo <owner>/<repo> --label <label>)" >&2
+          return 1
+        }
+        label="$(routing_label_from_rows "$rows" "$name")"
+        if [ -z "$label" ]; then
+          log "no routing label on ${name}; nothing routes to it, so there is nothing to seed"
+          return 0
+        fi
+      fi
+      if [ -z "$gid" ]; then
+        gc="$(state_get group_created)"
+        if [ -n "$gc" ] && [ "${gc%%/*}" = "$org" ]; then gid="${gc##*/}"; fi
+      fi
+      if [ -n "$gid" ]; then
+        repos="$(group_repositories "$org" "$gid" 2>/dev/null)" || repos=""
+      fi
+      if [ -z "${repos:-}" ]; then
+        echo "homefield: could not list the runner group's repositories; repositories already routed local are not covered by the automatic fallback until each is recorded: bin/homefield route local --repo <owner>/<repo>" >&2
+        return 1
+      fi
+      ;;
+    repos/*)
+      repos="${url#*github.com/}" ;;
+    *)
+      echo "homefield: unexpected scope ${scope}; the routing records were not seeded" >&2
+      return 1 ;;
+  esac
+  while IFS= read -r r; do
+    [ -n "$r" ] || continue
+    current="$(repo_variable_get "$r" CI_RUNNER)"
+    [ "$current" = local ] || continue
+    if record_add "$(routing_file)" "$label" "$r"; then
+      n=$((n + 1))
+    else
+      rc=1
+      echo "homefield: ${r}: routed local but could not record it; the automatic fallback will not cover this repo ($(routing_file))" >&2
+    fi
+  done <<<"$repos"
+  if [ "$n" -gt 0 ]; then
+    log "seeded the routing records with ${n} repositories already routed local"
   fi
   return "$rc"
 }

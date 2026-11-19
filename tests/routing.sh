@@ -39,6 +39,14 @@ cat >"$stubs/gh" <<'EOF'
 echo "gh $*" >>"$CALLS"
 case "$1 $2" in
   "variable get"*)
+    repo=""
+    all="$*"
+    case "$all" in *"--repo "*) repo="${all#*--repo }" ;; esac
+    repo="${repo%% *}"
+    if [ -n "${GH_CI_RUNNER_BY_REPO:-}" ]; then
+      v="$(awk -v r="$repo" '$1 == r {print $2; exit}' "$GH_CI_RUNNER_BY_REPO" 2>/dev/null)"
+      [ -n "$v" ] && { echo "$v"; exit 0; }
+    fi
     if [ -n "${GH_CI_RUNNER:-}" ]; then echo "$GH_CI_RUNNER"; else echo "variable not found" >&2; exit 1; fi
     exit 0
     ;;
@@ -58,6 +66,8 @@ case "$*" in
     ;;
   *"actions/runs?status=in_progress"*)
     printf '%b' "${GH_RUNS_IN_PROGRESS-}" ;;
+  *"actions/runner-groups/"*"repositories"*)
+    printf '%b' "${GH_GROUP_REPOS-}" ;;
   *"/actions/runs/"*"/jobs"*)
     [ -z "${GH_JOBS_FAIL:-}" ] || { echo "gh: HTTP 502" >&2; exit 1; }
     printf '%b' "${GH_JOBS-}" ;;
@@ -79,8 +89,10 @@ cat >"$HARNESS" <<'EOF'
 #!/usr/bin/env bash
 set -uo pipefail
 HOMEFIELD_STATE_DIR="$STATE_DIR"
+INSTANCE="homefield"
 . "$ROOT/bin/lib/emit.sh"
 . "$ROOT/bin/lib/github.sh"
+. "$ROOT/bin/lib/state.sh"
 . "$ROOT/bin/cmd-route.sh"
 adopt_nap() { :; }
 "$@"
@@ -172,6 +184,28 @@ record "an offline runner serving the label does not count: the flip happens" "0
   "$rc/$(grep -q 'variable set CI_RUNNER --repo acme/api --body hosted' "$calls" && echo yes || echo no)"
 
 reset_records
+printf 'homefield-ci acme/api\nhomefield-ci acme/api2\n' >"$state/routing"
+harness_env=(GH_RUNNERS='repo-runner\tonline\tself-hosted,homefield-ci\n')
+harness route_stop_fallback https://github.com/acme/api repo-runner
+record "a repository-scoped runner: its own repo flips, the org's others do not" "0/yes/no" \
+  "$rc/$(grep -q 'variable set CI_RUNNER --repo acme/api --body hosted' "$calls" && echo yes || echo no)/$(grep -q 'variable set CI_RUNNER --repo acme/api2' "$calls" && echo yes || echo no)"
+record "...the org's other repo stays routed local" "homefield-ci acme/api2" "$(grep api2 "$state/routing")"
+
+reset_records
+printf 'HomeField-CI acme/api\n' >"$state/routing"
+harness_env=(GH_RUNNERS='my-mac-homefield\tonline\tself-hosted,HOMEFIELD-CI\n')
+harness route_stop_fallback https://github.com/acme my-mac-homefield
+record "labels match case-insensitively: the flip happens" "0/yes" \
+  "$rc/$(grep -q 'variable set CI_RUNNER --repo acme/api --body hosted' "$calls" && echo yes || echo no)"
+
+reset_records
+printf 'homefield-ci acme/api\n' >"$state/routing"
+harness_env=(GH_RUNNERS='my-mac-homefield\tonline\tself-hosted,HOMEFIELD-CI\nother-mac\tonline\tself-hosted,Homefield-CI\n')
+harness route_stop_fallback https://github.com/acme my-mac-homefield
+record "the still-served check is case-insensitive too: nothing flips" "0/0" \
+  "$rc/$(grep -c 'variable set' "$calls" || true)"
+
+reset_records
 printf 'homefield-ci acme/api\n' >"$state/routing"
 harness_env=(GH_RUNNERS_FAIL=1)
 harness route_stop_fallback https://github.com/acme my-mac-homefield
@@ -242,6 +276,13 @@ record "a label this runner does not serve: its entry is left for the VM that se
 record "...it stays in autoflip" "other-label acme/web" "$(grep other-label "$state/autoflip")"
 
 reset_records
+printf 'HomeField-CI acme/api\n' >"$state/autoflip"
+harness_env=(GH_CI_RUNNER=hosted GH_RUNNERS='my-mac-homefield\tonline\tself-hosted,homefield-ci\n')
+harness route_start_restore https://github.com/acme my-mac-homefield
+record "the restore matches labels case-insensitively" "0/yes" \
+  "$rc/$(grep -q 'variable set CI_RUNNER --repo acme/api --body local' "$calls" && echo yes || echo no)"
+
+reset_records
 printf 'homefield-ci beta/web\n' >"$state/autoflip"
 harness_env=(GH_CI_RUNNER=hosted GH_RUNNERS='my-mac-homefield\tonline\tself-hosted,homefield-ci\n')
 harness route_start_restore https://github.com/acme my-mac-homefield
@@ -269,6 +310,42 @@ reset_records
 harness route_start_restore https://github.com/acme my-mac-homefield
 record "nothing pending: a quiet exit 0 without asking GitHub" "0/yes/0" \
   "$rc/$(has "$out" 'no repository waiting')/$(grep -c 'actions/runners' "$calls" || true)"
+
+echo
+echo "seeding the records when the fallback is switched on"
+reset_records
+printf 'acme/api local\nacme/web hosted\nacme/old local\n' >"$work/byrepo"
+harness_env=(GH_GROUP_REPOS='acme/api\nacme/web\nacme/old\n' GH_CI_RUNNER_BY_REPO="$work/byrepo")
+harness seed_routing_records https://github.com/acme my-mac-homefield homefield-ci 7
+record "seeding: the group's repositories already routed local are recorded" "0/2" \
+  "$rc/$(grep -c . "$state/routing" 2>/dev/null || true)"
+record "...under the given label, and only the local ones" "yes/no" \
+  "$(grep -q 'homefield-ci acme/api' "$state/routing" && echo yes || echo no)/$(grep -q 'acme/web' "$state/routing" && echo yes || echo no)"
+
+reset_records
+harness_env=(GH_GROUP_REPOS='' GH_CI_RUNNER_BY_REPO="$work/byrepo")
+harness seed_routing_records https://github.com/acme my-mac-homefield homefield-ci 7
+record "the group's repositories cannot be listed: a warning, exit 1, no records" "1/yes/1" \
+  "$rc/$(has "$out" 'could not list the runner group')/$([ -f "$state/routing" ] && echo 0 || echo 1)"
+
+reset_records
+harness_env=(GH_CI_RUNNER_BY_REPO="$work/byrepo")
+harness seed_routing_records https://github.com/acme/api repo-runner homefield-ci
+record "a repository-scoped registration: the registration's own repo is the candidate" "0/yes" \
+  "$rc/$(grep -q 'homefield-ci acme/api' "$state/routing" && echo yes || echo no)"
+
+reset_records
+printf 'acme/api local\n' >"$work/byrepo"
+harness_env=(GH_GROUP_REPOS='acme/api\n' GH_RUNNERS='my-mac-homefield\tonline\tself-hosted,linux,arm64,homefield-ci\n' GH_CI_RUNNER_BY_REPO="$work/byrepo")
+harness seed_routing_records https://github.com/acme my-mac-homefield "" 7
+record "without a label, the runner's routing label is derived from GitHub's list" "0/yes" \
+  "$rc/$(grep -q 'homefield-ci acme/api' "$state/routing" && echo yes || echo no)"
+
+reset_records
+harness_env=(GH_GROUP_REPOS='acme/api\n' GH_RUNNERS='my-mac-homefield\tonline\tself-hosted,linux\n' GH_CI_RUNNER_BY_REPO="$work/byrepo")
+harness seed_routing_records https://github.com/acme my-mac-homefield
+record "a runner with no custom label: nothing routes to it, nothing to seed" "0/yes" \
+  "$rc/$(has "$out" 'nothing to seed')"
 
 rm -f "$stubs/gh"
 
@@ -337,9 +414,19 @@ case "$*" in
       *) printf '%b' "${GH_RUNNERS-}" ;;
     esac ;;
   "variable get"*)
+    repo=""
+    all="$*"
+    case "$all" in *"--repo "*) repo="${all#*--repo }" ;; esac
+    repo="${repo%% *}"
+    if [ -n "${GH_CI_RUNNER_BY_REPO:-}" ]; then
+      v="$(awk -v r="$repo" '$1 == r {print $2; exit}' "$GH_CI_RUNNER_BY_REPO" 2>/dev/null)"
+      [ -n "$v" ] && { echo "$v"; exit 0; }
+    fi
     if [ -n "${GH_CI_RUNNER:-}" ]; then echo "$GH_CI_RUNNER"; else echo "variable not found" >&2; exit 1; fi
     ;;
   "variable set"*) ;;
+  *"actions/runner-groups/"*"repositories"*)
+    printf '%b' "${GH_GROUP_REPOS-}" ;;
   *"actions/runs?status=queued"*) ;;
   *"actions/runs?status=in_progress"*) ;;
   *"/actions/runs/"*"/jobs"*) ;;
@@ -453,7 +540,7 @@ verify_isolation() { :; }
 ensure_vm() { :; }
 enable_autostart() { :; }
 cmd_preflight() { return 0; }
-ensure_group() { GROUP_STATE=narrow; GROUP_ID=7; }
+ensure_group() { GROUP_STATE=narrow; GROUP_ID="${STUB_GROUP_ID-7}"; }
 check_name_free() { :; }
 remove_taken_name() { :; }
 get_token() { printf 'stub-tok-123\n'; }
@@ -490,15 +577,45 @@ iharness() {
 }
 iharness_env=()
 
+rm -f "$state/routing"
+printf 'acme/api local\nacme/web hosted\n' >"$work/byrepo-install"
+iharness_env=(GH_GROUP_REPOS=$'acme/api\nacme/web\n' GH_CI_RUNNER_BY_REPO="$work/byrepo-install")
 iharness cmd_install --url https://github.com/acme --org --auto-route
 record "install --auto-route: the switch is saved on" "0/1" \
   "$rc/$(state_value auto_route)"
+record "...and the records are seeded from the group's already-local repositories" "homefield-ci acme/api" \
+  "$(cat "$state/routing" 2>/dev/null)"
+iharness_env=()
+
+rm -f "$state/routing"
+printf 'acme/api local\n' >"$work/byrepo-install"
+iharness_env=(STUB_GROUP_ID= GH_GROUP_REPOS=$'acme/api\n' GH_CI_RUNNER_BY_REPO="$work/byrepo-install" GH_RUNNERS_NAMED='test-mac-homefield\tonline\tself-hosted,homefield-ci\n')
+iharness cmd_install --url https://github.com/acme --org --auto-route
+record "install --auto-route without a group id: the fallback says what is missing" "0/yes/1" \
+  "$rc/$(has "$out" 'could not list the runner group')/$([ -f "$state/routing" ] && echo 0 || echo 1)"
+iharness_env=()
+
+rm -f "$state/routing"
+printf 'acme/api local\n' >"$work/byrepo-install"
+iharness_env=(GH_GROUP_REPOS=$'acme/api\n' GH_CI_RUNNER_BY_REPO="$work/byrepo-install" GH_RUNNERS_NAMED='test-mac-homefield\tonline\tself-hosted,homefield-ci\n')
+iharness cmd_install --url https://github.com/acme/api --auto-route
+record "a repository-scoped install --auto-route: the registration's repo is seeded" "0/homefield-ci acme/api" \
+  "$rc/$(cat "$state/routing" 2>/dev/null)"
+iharness_env=()
 rm -f "$state/homefield.state"
 iharness cmd_install --url https://github.com/acme --org
 record "plain install: the switch is saved off" "0/0" \
   "$rc/$(state_value auto_route)"
 
 printf 'auto_route=1\n' >"$state/homefield.state"
+printf 'group_created=acme/homefield-ci/7\n' >>"$state/homefield.state"
+rm -f "$state/routing"
+printf 'acme/api local\n' >"$work/byrepo-up"
+iharness_env=(STUB_REG=0 GH_GROUP_REPOS=$'acme/api\n' GH_CI_RUNNER_BY_REPO="$work/byrepo-up" \
+  GH_RUNNERS_NAMED='test-mac-homefield\tonline\tself-hosted,homefield-ci\n')
+iharness cmd_upgrade --auto-route
+record "upgrade --auto-route on an existing install: the records are seeded, label derived" "0/1/homefield-ci acme/api" \
+  "$rc/$(grep -c . "$state/routing" 2>/dev/null || true)/$(cat "$state/routing" 2>/dev/null)"
 iharness_env=(STUB_REG=0)
 iharness cmd_upgrade --no-auto-route
 record "upgrade --no-auto-route: the switch is saved off" "0/0" \
