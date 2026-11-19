@@ -605,7 +605,10 @@ and a fleet keeps routing locally while one VM stops. A repository whose
 routing label another online runner still serves stays local and says so.
 `start --route-local` puts the flipped repositories back once the runner is
 taking jobs again (the runner being online is checked first; a start that
-fails to restore keeps the pending entries and exits 1).
+fails to restore keeps the pending entries and exits 1). A manual `route
+local` for a flipped repository clears its pending restore — the operator's
+routing label wins over the stop's, and the next start will not overwrite
+it.
 
 `install --auto-route` (or `upgrade --auto-route`; `--no-auto-route` turns it
 off) makes plain `stop` and plain `start` run the fallback every time. `fleet

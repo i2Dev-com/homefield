@@ -432,10 +432,16 @@ cmd_route() {
       # The records mirror the variable, so the automatic fallback (#286)
       # knows what a stop may flip and a start may bring back. A record
       # failure is a real gap — the fallback would not cover the repo — so
-      # it fails the command, but the routing itself has landed.
+      # it fails the command, but the routing itself has landed. A local
+      # route also clears a pending restore it supersedes: an operator's
+      # `route local` after a stop has decided the repository's routing
+      # label, and a later start must not overwrite that choice with the
+      # stop's label (the start would flip it back, and the next stop of
+      # the operator's runner would then skip the repo and queue its jobs).
       if [ "$target" = local ]; then
         record_add "$(routing_file)" "$label" "$repo" ||
           { rc=1; log "${repo}: routed local but could not record it; the automatic fallback will not cover this repo ($(routing_file))" >&2; }
+        record_drop "$(autoflip_file)" "$repo" || { rc=1; log "${repo}: could not update $(autoflip_file)" >&2; }
       else
         record_drop "$(routing_file)" "$repo" || { rc=1; log "${repo}: could not update $(routing_file)" >&2; }
         record_drop "$(autoflip_file)" "$repo" || { rc=1; log "${repo}: could not update $(autoflip_file)" >&2; }

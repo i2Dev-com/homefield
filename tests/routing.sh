@@ -132,6 +132,18 @@ record "route local on another label: the repo's line is replaced" "0/other-labe
   "$rc/$(cat "$state/routing" 2>/dev/null)"
 
 reset_records
+printf 'label-a acme/api\n' >"$state/autoflip"
+harness cmd_route local --repo acme/api --label label-b
+record "a local route clears the pending restore it supersedes" "0/label-b acme/api/0" \
+  "$rc/$(cat "$state/routing" 2>/dev/null)/$(wc -l <"$state/autoflip" 2>/dev/null | tr -d ' ' || echo 0)"
+
+reset_records
+printf 'label-a acme/other\n' >"$state/autoflip"
+harness cmd_route local --repo acme/api --label label-b
+record "a local route keeps a pending restore for another repo" "0/label-a acme/other" \
+  "$rc/$(cat "$state/autoflip" 2>/dev/null)"
+
+reset_records
 printf 'homefield-ci acme/api\nhomefield-ci acme/web\n' >"$state/routing"
 printf 'homefield-ci acme/old\n' >"$state/autoflip"
 harness_env=(GH_CI_RUNNER=local)
