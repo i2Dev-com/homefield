@@ -26,6 +26,8 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 - The test suites run in a bounded worker pool instead of one by one ([#293](https://github.com/i2Dev-com/homefield/pull/293)): `tests/run-suites.sh` (also the local way to run everything) keeps the machine's CPU count suites in flight, capped at 8, and prints each suite's output in order, so CI's test phase takes roughly the slowest few suites rather than their sum (the macOS job was ~14 minutes; the suites are process-spawn bound and sum to ~7 minutes sequentially). `TEST_CONCURRENCY` overrides the pool size.
 
+- No retest on main when the tree was already tested: a push to main that is a squash merge whose tree is byte-identical to the pull request head this workflow already tested green (the PR branched from the commit that was main when it merged) skips the run - re-running the suites on the same bytes can only catch runner flakiness. When main moved after the PR was tested, the pushed tree is a combination no PR run has tested and CI runs as before; direct pushes and any lookup failure also run. The gate is the new `already-tested` job in [`.github/workflows/ci.yml`](.github/workflows/ci.yml), which needs the workflow's new read-only `pull-requests` and `actions` permissions.
+
 ## v0.5.4 (2026-11-18)
 
 Bumps the patch from v0.5.3, and it is compatible for consumers: the routing

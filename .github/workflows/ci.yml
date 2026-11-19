@@ -7,6 +7,8 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
+  actions: read
 
 # A new push to the same branch cancels the run it supersedes: the
 # suites take minutes, and during a review round the superseded
@@ -16,8 +18,53 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # A squash merge lands a new sha on main whose tree can be byte-identical
+  # to the pull request head this workflow just tested green - namely when
+  # the PR branched from the commit that was main when it merged. Re-running
+  # the suites on the same bytes can only catch runner flakiness, so this
+  # gate looks for a pull request whose head tree equals the pushed commit's
+  # tree and whose CI run succeeded, and the two jobs below skip when it
+  # finds one. When main moved after the PR was tested, the pushed tree is
+  # a combination no PR run has tested and CI runs: that combination check
+  # is the one thing only a main run can do. Direct pushes and every lookup
+  # failure fall through to a full run.
+  already-tested:
+    name: Skip if this tree was already tested
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      skip: ${{ steps.decide.outputs.skip }}
+    steps:
+      - id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        # No set -e on purpose: an API error must fall through to a full
+        # run, not fail the gate. A failed call leaves its variable empty,
+        # the comparisons below then miss, and skip stays false.
+        run: |
+          set -uo pipefail
+          skip=false
+          push_tree="$(gh api "repos/$REPO/commits/$SHA" --jq '.commit.tree.sha' 2>/dev/null || true)"
+          for number in $(gh api "repos/$REPO/commits/$SHA/pulls" --jq '.[].number' 2>/dev/null || true); do
+            head="$(gh api "repos/$REPO/pulls/$number" --jq '.head.sha' 2>/dev/null || true)"
+            [ -n "$head" ] || continue
+            head_tree="$(gh api "repos/$REPO/commits/$head" --jq '.commit.tree.sha' 2>/dev/null || true)"
+            [ -n "$push_tree" ] && [ "$head_tree" = "$push_tree" ] || continue
+            if [ "$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$head" --jq 'any(.workflow_runs[]; .conclusion == "success")' 2>/dev/null || true)" = true ]; then
+              echo "PR #$number head $head is this exact tree and CI passed there; skipping"
+              skip=true
+              break
+            fi
+          done
+          echo "skip=$skip" >>"$GITHUB_OUTPUT"
+
   test:
     name: Lint & test
+    needs: already-tested
+    if: ${{ !cancelled() && needs.already-tested.outputs.skip != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -146,6 +193,8 @@ jobs:
   # PATH); memwatch.sh skips its run in this setup, its lint part always runs.
   test-macos:
     name: Test suites (macOS, bash 3.2)
+    needs: already-tested
+    if: ${{ !cancelled() && needs.already-tested.outputs.skip != 'true' }}
     runs-on: macos-latest
     timeout-minutes: 20
     steps:
