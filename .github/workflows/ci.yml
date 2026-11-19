@@ -108,36 +108,19 @@ jobs:
           tar -xzf "$tarball" actionlint
           ./actionlint -color
 
-      # One loop over every suite, so a new tests/*.sh is in CI by existing.
-      # lib.sh and fakes.sh are helpers, not suites. A failing suite does not
-      # stop the others: every failure is reported, and the step fails at the
-      # end.
+      # tests/run-suites.sh runs every suite in a bounded worker pool, so a
+      # new tests/*.sh is in CI by existing and the lead time is the slowest
+      # few suites rather than their sum. Each suite's output is printed in
+      # order, failures are reported without stopping the others, and the
+      # step fails at the end if any failed. DOCS_ONLY=true runs only the
+      # release-refs check.
       - name: Test suites
         env:
           DOCS_ONLY: ${{ steps.changes.outputs.docs_only }}
         run: |
           set -uo pipefail
           export PATH="$PWD:$PATH"
-          if [ "${DOCS_ONLY:-false}" = "true" ]; then
-            echo "::group::tests/release-refs.sh"
-            bash tests/release-refs.sh
-            rc=$?
-            echo "::endgroup::"
-            exit "$rc"
-          fi
-          status=0
-          for suite in routing-guard/tests/run.sh tests/*.sh; do
-            case "$suite" in tests/lib.sh | tests/fakes.sh) continue ;; esac
-            echo "::group::$suite"
-            if bash "$suite"; then
-              echo "::endgroup::"
-            else
-              echo "::endgroup::"
-              echo "::error::$suite failed"
-              status=1
-            fi
-          done
-          exit "$status"
+          bash tests/run-suites.sh
 
       # The action as consumers call it, not just the script behind it: inputs
       # through env, $GITHUB_ACTION_PATH resolution, composite wiring.
@@ -199,23 +182,4 @@ jobs:
           DOCS_ONLY: ${{ steps.changes.outputs.docs_only }}
         run: |
           set -uo pipefail
-          if [ "${DOCS_ONLY:-false}" = "true" ]; then
-            echo "::group::tests/release-refs.sh"
-            bash tests/release-refs.sh
-            rc=$?
-            echo "::endgroup::"
-            exit "$rc"
-          fi
-          status=0
-          for suite in routing-guard/tests/run.sh tests/*.sh; do
-            case "$suite" in tests/lib.sh | tests/fakes.sh) continue ;; esac
-            echo "::group::$suite"
-            if bash "$suite"; then
-              echo "::endgroup::"
-            else
-              echo "::endgroup::"
-              echo "::error::$suite failed"
-              status=1
-            fi
-          done
-          exit "$status"
+          bash tests/run-suites.sh

@@ -36,13 +36,16 @@ bash tests/parser-parity.sh        # tools/adopt.py and routing_guard.py read a 
 bash tests/runner-name.sh          # RUNNER_NAME and RUNNER_GROUP validation
 bash tests/start-stop.sh           # `homefield start` and `homefield stop`
 bash tests/status-json.sh          # `homefield status --json`
+bash tests/run-suites.sh           # all of the above in a bounded worker pool, as CI runs them
 shellcheck --severity=warning bin/homefield install.sh bin/cmd-*.sh bin/lib/*.sh \
   vm/provision.sh vm/guest/* vm/presets/*/*.sh \
   routing-guard/tests/run.sh tests/*.sh
 actionlint
 ```
 
-CI runs the same. Changes to `bin/homefield` or `vm/provision.sh` should also be
+CI runs the same (through `tests/run-suites.sh`, which is also the quick way
+to run everything locally; `TEST_CONCURRENCY` caps the pool, default the
+machine's CPU count at most 8). Changes to `bin/homefield` or `vm/provision.sh` should also be
 tried on a throwaway VM (`bin/homefield install --instance <name> ...`), and
 the pull request should say what was run and what happened. Never test against
 a runner that serves real repositories.
