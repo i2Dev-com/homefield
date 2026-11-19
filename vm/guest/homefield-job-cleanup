@@ -12,10 +12,18 @@
 # leaves root-owned files in _work that runner could not remove, and /tmp
 # holds root-owned job artifacts. It runs before the job's result is
 # finalized, and a hook that exits non-zero can fail the job (docs.github.com,
-# "Running scripts before or after a job"), so every failure below is printed
-# loudly and the script still exits 0: a cleanup hiccup must never turn a
-# finished job red. The job log's "Complete runner" section carries the
-# warnings.
+# "Running scripts before or after a job"; the runner registers it as the
+# job's last post step), so every failure below is printed loudly and the
+# script still exits 0: a cleanup hiccup must never turn a finished job red.
+# The job log's "Complete runner" section carries the warnings.
+#
+# No job-running guard here, though the daily cleanup (homefield-cleanup)
+# has one: this hook is a post step of the job itself, executed by the
+# Runner.Worker that ran the job — a `pgrep -f Runner.Worker` guard would
+# match that Worker and skip every run. And no other job can be running:
+# the runner takes one job at a time, and the next one is not dispatched
+# until this job's result is finalized, which happens after this hook
+# returns.
 #
 # No timeout exists for hooks, so this stays fast: two prunes, one workspace
 # and /tmp. Docker being down is a warning, not a failure — the guest starts
@@ -23,12 +31,6 @@
 set -euo pipefail
 runner_home="${HOMEFIELD_RUNNER_HOME:-/opt/actions-runner}"
 tmp_dir="${HOMEFIELD_TMP:-/tmp}"
-
-job_running() { pgrep -f Runner.Worker >/dev/null; }
-if job_running; then
-  echo "homefield-job-cleanup: a job is already running, skipping"
-  exit 0
-fi
 
 # Stopped containers and unused custom networks are what a finished job
 # leaves; the runner removes its own service containers, but a failed step
@@ -50,16 +52,10 @@ fi
 # The workspace of the repository the job built, and anything else a job
 # left directly under _work, plus the runner's own per-job state. Entries
 # starting with _ are the runner's (_temp, _tool): kept, the same rule the
-# daily cleanup applies. A job starting between the top of the script and
-# the rm would be checking out into the directory about to be removed, so
-# it is re-checked first — the same guard the daily cleanup uses.
+# daily cleanup applies.
 shopt -s nullglob
 for entry in "$runner_home"/_work/*; do
   case "$(basename "$entry")" in _*) continue ;; esac
-  if job_running; then
-    echo "homefield-job-cleanup: a job started, leaving $entry"
-    break
-  fi
   echo "homefield-job-cleanup: removing $entry"
   rm -rf "$entry" || echo "homefield-job-cleanup: could not remove $entry" >&2
 done
@@ -68,10 +64,6 @@ done
 # leftovers). The guest's own machinery does not keep state there: the
 # provisioning staging directories are created and removed per run, and
 # systemd units do not use /tmp.
-if job_running; then
-  echo "homefield-job-cleanup: a job started, leaving $tmp_dir"
-else
-  while IFS= read -r -d '' entry; do
-    rm -rf -- "$entry" || echo "homefield-job-cleanup: could not remove $entry" >&2
-  done < <(find "$tmp_dir" -mindepth 1 -maxdepth 1 -print0 2>/dev/null)
-fi
+while IFS= read -r -d '' entry; do
+  rm -rf -- "$entry" || echo "homefield-job-cleanup: could not remove $entry" >&2
+done < <(find "$tmp_dir" -mindepth 1 -maxdepth 1 -print0 2>/dev/null)

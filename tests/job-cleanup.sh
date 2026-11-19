@@ -5,7 +5,7 @@
 # flags, and re-register keeping the switch.
 #
 # The guest script runs against a scratch tree the way tests/guest-scripts.sh
-# runs homefield-cleanup: stub pgrep/docker/rm on the PATH, the runner home
+# runs homefield-cleanup: stub docker/rm/install on the PATH, the runner home
 # and /tmp pointed into the tree through HOMEFIELD_RUNNER_HOME and
 # HOMEFIELD_TMP, real find and bash. Nothing reaches a VM, Docker or /tmp.
 # provision.sh's settings checks run through lib.sh's provision_verdict, and
@@ -30,8 +30,6 @@ mkdir -p "$stubs"
 # quoted on purpose: they expand when the stub runs, not here.
 # shellcheck disable=SC2016  # the stub's body is expanded by the stub, not here
 stub() { printf '#!/usr/bin/env bash\n%s\n' "$2" >"$stubs/$1"; chmod +x "$stubs/$1"; }
-stub pgrep 'echo "pgrep $*" >>"$CALLS"
-[ "${PGREP_ANSWER:-none}" = running ]'
 # docker <subcommand> ...: DOCKER_FAIL names a subcommand that fails, as a
 # guest with Docker being repaired would.
 stub docker 'echo "docker $*" >>"$CALLS"
@@ -46,19 +44,19 @@ for a in "$@"; do
 done
 exec /bin/rm "$@"'
 # install [-o u] [-g g] [-m mode] <src> <dst>: a plain copy, so the .env
-# rewrites land where the script puts them.
+# rewrites land where the script puts them. cp, not `command cp`: exec
+# cannot run a builtin, and the external command(1) is a macOS-only script.
 stub install 'while [ $# -gt 2 ]; do case "$1" in -o|-g|-m) shift 2 ;; *) shift ;; esac; done
-exec command cp "$1" "$2"'
+exec cp "$1" "$2"'
 
 # reset_tree: a scratch runner home (empty _work) and scratch /tmp.
 reset_tree() {
   : >"$calls"
-  rm -rf "$work/runner" "$work/tmp" "$work/pgrep-n"
+  rm -rf "$work/runner" "$work/tmp"
   mkdir -p "$work/runner/_work" "$work/tmp"
 }
 # run_hook <env assignments...>: one homefield-job-cleanup run against the
-# scratch tree. The assignments before -- reach the run (the pgrep stub's
-# answer, injected failures).
+# scratch tree. The assignments before -- reach the run (injected failures).
 run_hook() {
   local -a envs=()
   while [ $# -gt 0 ] && [ "$1" != "--" ]; do envs+=("$1"); shift; done
@@ -96,27 +94,13 @@ record "/tmp is emptied, dotfile directories included, exit 0" "0/0" \
   "$rc/$(find "$work/tmp" -mindepth 1 | wc -l | tr -d ' ')"
 record "...a file outside the scratch /tmp is untouched" "yes" "$([ -f "$work/outside" ] && echo yes || echo no)"
 
-reset_tree
-run_hook PGREP_ANSWER=running --
-record "a job running: skipped before docker, nothing removed, exit 0" "0/0/0/yes" \
-  "$rc/$(grep -c 'docker ' "$calls")/$(grep -c '^rm ' "$calls")/$(has "$out" 'a job is already running, skipping')"
-
-# The re-check: pgrep answers "none" at the top and "running" from the second
-# call on, so a job starts between the docker prunes and the workspace rm.
-cat >"$stubs/pgrep" <<'EOF'
-#!/usr/bin/env bash
-echo "pgrep $*" >>"$CALLS"
-n=$(($(cat "$WORK/pgrep-n" 2>/dev/null || echo 0) + 1))
-echo "$n" >"$WORK/pgrep-n"
-[ "${PGREP_ANSWER:-none}" = running ] || [ "$n" -gt 1 ]
-EOF
-reset_tree
-mkdir -p "$work/runner/_work/acme__api"
-run_hook --
-record "a job starting mid-run: the workspace and /tmp are left, exit 0" "0/yes/yes" \
-  "$rc/$(has "$out" 'a job started, leaving')/$([ -d "$work/runner/_work/acme__api" ] && echo yes || echo no)"
-printf '#!/usr/bin/env bash\necho "pgrep $*" >>"$CALLS"\n[ "${PGREP_ANSWER:-none}" = running ]\n' >"$stubs/pgrep"
-chmod +x "$stubs/pgrep"
+# The completed hook runs as a post step of the job itself (the runner
+# registers it in Runner.Worker's job pipeline, before the result is
+# finalized): a job-running guard would match the Worker that invoked the
+# hook and skip every run, so the script must not carry one — the daily
+# timer's guard is right for a timer and wrong here.
+record "the script has no job-running guard of its own" "0/0" \
+  "$(grep -c 'Runner\.Worker>' "$ROOT/vm/guest/homefield-job-cleanup" || true)/$(grep -c 'job_running' "$ROOT/vm/guest/homefield-job-cleanup")"
 
 reset_tree
 mkdir -p "$work/runner/_work/acme__api"
