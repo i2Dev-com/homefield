@@ -9,11 +9,23 @@ fail, such as a new guard in the routing expression, bumps the minor version
 (0.1 to 0.2). Compatible changes bump the patch. Merged changes wait on
 `main`, under *Unreleased*, until a release is cut.
 
-## Unreleased
+## v0.5.4 (2026-11-18)
 
-### Fixed
-
-- Intermittent SIGPIPE / `pipefail` race in `copy_preset_hooks` and `tests/preset.sh` ([`bin/cmd-install.sh`](bin/cmd-install.sh), `tests/preset.sh`, [#274](https://github.com/i2Dev-com/homefield/issues/274)): feeds the preset hook manifest to `guest_stdin sudo tee` via here-string instead of a pipe and drains stdin in `tests/preset.sh`'s `guest_stdin` mock.
+Bumps the patch from v0.5.3, and it is compatible for consumers: the routing
+expression, guards, defaults, and options are unchanged, so workflows passing
+`routing-guard@v0.5.3` pass `@v0.5.4` as well. Highlights include multi-VM
+fleet mode (`homefield fleet`), opt-in ephemeral runners (`--ephemeral` and
+`homefield re-register`), self-update (`homefield update` and scheduled auto-update),
+VM warm-up checks, persisted loopback probe state in `status`/`diagnose`,
+GitHub App auth in `homefield adopt`, VM image pre-fetch in `preflight`, the
+`buildx-rosetta` preset, a Homebrew tap formula (`formula/homefield.rb`), the
+security audit invariant map, tag-protection ruleset guidance, the cost
+calculator (`tools/cost.py`), a one-PR demo guide, and a `gh >= 2.81` version
+floor. To upgrade, run `homefield update` (for `install.sh` installs) or re-run
+the README one-liner to update the host tool, and run `homefield upgrade` on
+existing VMs to pick up the updated guest provisioning, warm-up check, and
+mount-count helper. Consumers of the routing guard can bump
+`routing-guard@v0.5.3` pins to `@v0.5.4` at their leisure.
 
 ### Added
 
@@ -74,6 +86,7 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ### Fixed
 
+- Intermittent SIGPIPE / `pipefail` race in `copy_preset_hooks` and `tests/preset.sh` ([`bin/cmd-install.sh`](bin/cmd-install.sh), `tests/preset.sh`, [#274](https://github.com/i2Dev-com/homefield/issues/274)): feeds the preset hook manifest to `guest_stdin sudo tee` via here-string instead of a pipe and drains stdin in `tests/preset.sh`'s `guest_stdin` mock.
 - Leftover comments, misplaced globals and one-line helpers from the
   `bin/lib/` and `bin/cmd-*.sh` split
   ([#194](https://github.com/i2Dev-com/homefield/issues/194)) are moved to
