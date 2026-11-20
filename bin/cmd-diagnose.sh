@@ -532,11 +532,7 @@ dg_render_json() {
   else
     printf '    "extra_packages": null,\n'
   fi
-  if [ "$DG_WATCHER" != off ]; then
-    printf '    "npm": %s,\n' "$(json_str "$DG_NPM")"
-  else
-    printf '    "npm": %s\n' "$(json_str "$DG_NPM")"
-  fi
+  printf '    "npm": %s\n' "$(json_str "$DG_NPM")"
   printf '  },\n'
   printf '  "github": {\n'
   printf '    "scope": %s,\n' "$(json_nstr "$DG_SCOPE")"

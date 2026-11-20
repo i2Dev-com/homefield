@@ -587,6 +587,15 @@ diag "${healthy[@]}" -- --json
 record "...--json says not-installed, with the problem" "yes/yes" \
   "$(has "$out" '"route_watcher": {"state": "not-installed"')/$(has "$out" 'the route watcher is not installed')"
 
+# A real parser, because the watcher key moved around the vm object once and
+# left a trailing comma behind it: a report a parser cannot read is worse
+# than no report.
+if command -v python3 >/dev/null 2>&1 && python3 -c 'import json' >/dev/null 2>&1; then
+  diag "${healthy[@]}" -- --json
+  parsed="$(printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["vm"]["npm"], d["route_watcher"]["state"], sep="/")' 2>/dev/null)" && rc2=0 || rc2=1
+  record "...--json parses with the watcher present (the vm object stays valid)" "0/ok/not-installed" "$rc2/$parsed"
+fi
+
 mkdir -p "$home/Library/LaunchAgents"
 : >"$home/Library/LaunchAgents/com.homefield.route-watcher.plist"
 diag "${healthy[@]}" --

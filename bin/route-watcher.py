@@ -36,16 +36,20 @@ to the watcher log (StandardErrorPath in the plist).
 import ctypes
 import ctypes.util
 import os
+import signal
 import subprocess
 import sys
 import time
 
-# IOKit's power messages (IOPMLib.h).
-kIOMessageCanSystemSleep = 14
-kIOMessageSystemWillSleep = 15
-kIOMessageSystemWillPowerOn = 16
-kIOMessageSystemHasPoweredOn = 17
-kIOMessageSystemWillNotSleep = 18
+# IOKit's power messages (IOPMLib.h): iokit_common_msg(0x270) etc., i.e.
+# 0xe0000000 | the message id. Verified by compiling this Mac's own
+# /usr/include/IOKit/IOMessage.h — the plain ids (14, 15, ...) are not what
+# IORegisterForSystemPower delivers.
+kIOMessageCanSystemSleep = 0xE0000270
+kIOMessageSystemWillSleep = 0xE0000280
+kIOMessageSystemWillPowerOn = 0xE0000320
+kIOMessageSystemHasPoweredOn = 0xE0000300
+kIOMessageSystemWillNotSleep = 0xE0000290
 
 
 def _positive_float(name, default):
@@ -97,6 +101,27 @@ def log(message):
     print(message, file=sys.stderr, flush=True)
 
 
+def kill_tree(proc):
+    """Kill the run's whole process group and reap it.
+
+    A multi-VM run's real work happens in per-VM grandchildren (vm_dispatch
+    re-runs the command with --instance), so killing only the top `homefield`
+    would leave them flipping repositories after the budget expired — the
+    stale-flip protection must reach the whole tree. The command is started
+    in a session of its own (start_new_session), so the group is exactly the
+    run's tree; the parent may already be gone, and then the group id is
+    what is still signalled.
+    """
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        pass
+
+
 def run_route_watch(mode, budget):
     """Run one route-watch mode, bounded by wall time.
 
@@ -108,7 +133,7 @@ def run_route_watch(mode, budget):
     and the run loop's next message (the wake) takes over.
     """
     global sleep_child
-    proc = subprocess.Popen([HOMEFIELD, "route-watch", mode])
+    proc = subprocess.Popen([HOMEFIELD, "route-watch", mode], start_new_session=True)
     sleep_child = proc
     deadline = time.time() + budget
     while True:
@@ -119,8 +144,7 @@ def run_route_watch(mode, budget):
         except subprocess.TimeoutExpired:
             pass
         if time.time() >= deadline:
-            proc.kill()
-            proc.wait()
+            kill_tree(proc)
             sleep_child = None
             log(
                 "route-watch %s did not finish within %ds; killed. Repositories "
@@ -151,8 +175,7 @@ def on_power_event(_refcon, _service, message_type, message_argument):
             # Unreachable while the run loop is single-threaded (the wake
             # cannot be delivered inside the sleep callback), but a stale
             # flip must never outlive the sleep it served.
-            sleep_child.kill()
-            sleep_child.wait()
+            kill_tree(sleep_child)
         run_route_watch("wake", WAKE_BUDGET)
 
 
