@@ -93,6 +93,16 @@ RUNNER_URL="${RUNNER_URL:-}"
 RUNNER_NAME="${RUNNER_NAME:-$(hostname)}"
 RUNNER_LABEL="${RUNNER_LABEL:-homefield-ci}"
 RUNNER_EPHEMERAL="${RUNNER_EPHEMERAL:-0}"
+# RUNNER_PREPARE_ONLY=1 provisions everything but the registration: packages,
+# hooks, sudoers, the runner binary, the timers. It is how install --reset-vm
+# builds the VM a base is cloned from: the base must be unregistered (a clone
+# of a registered VM inherits its registration, and the clone's listener then
+# never reaches "Listening for Jobs"), so the working VM is provisioned in
+# this mode first, cloned to <instance>-base while stopped, and registered
+# afterwards by the normal flow. Re-running it on a prepared VM is safe.
+RUNNER_PREPARE_ONLY="${RUNNER_PREPARE_ONLY:-0}"
+prepare=0
+[ "$RUNNER_PREPARE_ONLY" = "1" ] && prepare=1
 # Org registrations join the runner group that limits which repositories may
 # use the runner (docs/runbook.md, "Runner group"). Without one the runner
 # lands in Default, usable by every repository in the organization. Runner
@@ -503,8 +513,9 @@ fi
 # which would fail and leave the runner offline. So it only moves what has not
 # moved yet.
 # RUNNER_URL has no default: a guess would register the runner, possibly at
-# the wrong organization, and a move compares against it.
-if [ -z "$RUNNER_URL" ] && { [ "${RUNNER_REREGISTER:-0}" = "1" ] || [ ! -f "$RUNNER_HOME/.runner" ]; }; then
+# the wrong organization, and a move compares against it. A prepare-only run
+# registers nothing, so it needs neither a URL nor a token.
+if [ "$prepare" != 1 ] && [ -z "$RUNNER_URL" ] && { [ "${RUNNER_REREGISTER:-0}" = "1" ] || [ ! -f "$RUNNER_HOME/.runner" ]; }; then
   echo "provision.sh: set RUNNER_URL (https://<host>/<org> or a repository URL on a GitHub host) to register" >&2
   exit 1
 fi
@@ -543,7 +554,7 @@ if [ "$move" = "1" ]; then
     systemctl stop "$svc_unit"
     on_failure=restart_old_on_failure
   fi
-elif [ ! -f "$RUNNER_HOME/.runner" ] && [ -z "$RUNNER_TOKEN" ]; then
+elif [ "$prepare" != 1 ] && [ ! -f "$RUNNER_HOME/.runner" ] && [ -z "$RUNNER_TOKEN" ]; then
   echo "provision.sh: first registration needs RUNNER_TOKEN on stdin" >&2
   exit 1
 fi
@@ -766,138 +777,140 @@ install_sudoers /etc/sudoers.d/homefield-runner 'runner ALL=(ALL) NOPASSWD: ALL'
 sudo -u "$RUNNER_USER" sudo -n true
 
 # ── Registration + service ──────────────────────────────────────────────────
-if [ "$move" = "1" ]; then
-  if [ -f "$RUNNER_HOME/.service" ]; then
-    (cd "$RUNNER_HOME" && ./svc.sh uninstall)
+if [ "$prepare" != 1 ]; then
+  if [ "$move" = "1" ]; then
+    if [ -f "$RUNNER_HOME/.service" ]; then
+      (cd "$RUNNER_HOME" && ./svc.sh uninstall)
+    fi
+    runner_config "$RUNNER_REMOVE_TOKEN" remove
+    # The old registration is gone; the old service must no longer restart.
+    on_failure=""
   fi
-  runner_config "$RUNNER_REMOVE_TOKEN" remove
-  # The old registration is gone; the old service must no longer restart.
-  on_failure=""
-fi
-if [ ! -f "$RUNNER_HOME/.runner" ]; then
-  # A ${RUNNER_GROUP:+--runnergroup "$RUNNER_GROUP"} expansion would split a
-  # group name containing a space into two words; build the argument instead,
-  # so the name reaches config.sh as one.
-  group_args=()
-  if [ -n "$RUNNER_GROUP" ]; then
-    group_args+=(--runnergroup "$RUNNER_GROUP")
+  if [ ! -f "$RUNNER_HOME/.runner" ]; then
+    # A ${RUNNER_GROUP:+--runnergroup "$RUNNER_GROUP"} expansion would split a
+    # group name containing a space into two words; build the argument instead,
+    # so the name reaches config.sh as one.
+    group_args=()
+    if [ -n "$RUNNER_GROUP" ]; then
+      group_args+=(--runnergroup "$RUNNER_GROUP")
+    fi
+    # No --replace: it would hand this machine the registration of any runner
+    # already using the name, wherever that runs (#52), and it keeps that
+    # registration's runner group, ignoring --runnergroup (actions/runner#4091),
+    # which could put the runner in Default. A taken name fails here instead.
+    local_ephemeral_args=()
+    if [ "$RUNNER_EPHEMERAL" = "1" ]; then
+      local_ephemeral_args+=(--ephemeral)
+    fi
+    runner_config "$RUNNER_TOKEN" \
+      --unattended \
+      --url "$RUNNER_URL" \
+      --name "$RUNNER_NAME" \
+      --labels "$RUNNER_LABELS" \
+      "${group_args[@]}" \
+      ${local_ephemeral_args[@]+"${local_ephemeral_args[@]}"} \
+      --work _work
+    if [ "$RUNNER_EPHEMERAL" = "1" ]; then
+      : >"$RUNNER_HOME/.ephemeral"
+      chmod 644 "$RUNNER_HOME/.ephemeral"
+    else
+      rm -f "$RUNNER_HOME/.ephemeral"
+    fi
   fi
-  # No --replace: it would hand this machine the registration of any runner
-  # already using the name, wherever that runs (#52), and it keeps that
-  # registration's runner group, ignoring --runnergroup (actions/runner#4091),
-  # which could put the runner in Default. A taken name fails here instead.
-  local_ephemeral_args=()
-  if [ "$RUNNER_EPHEMERAL" = "1" ]; then
-    local_ephemeral_args+=(--ephemeral)
-  fi
-  runner_config "$RUNNER_TOKEN" \
-    --unattended \
-    --url "$RUNNER_URL" \
-    --name "$RUNNER_NAME" \
-    --labels "$RUNNER_LABELS" \
-    "${group_args[@]}" \
-    ${local_ephemeral_args[@]+"${local_ephemeral_args[@]}"} \
-    --work _work
-  if [ "$RUNNER_EPHEMERAL" = "1" ]; then
-    : >"$RUNNER_HOME/.ephemeral"
-    chmod 644 "$RUNNER_HOME/.ephemeral"
-  else
-    rm -f "$RUNNER_HOME/.ephemeral"
-  fi
-fi
-RUNNER_TOKEN=""
-RUNNER_REMOVE_TOKEN=""
-# Straight after registration, with nothing in between that can fail, so a
-# registered runner always gets its service (#83). The .env below is read only
-# when the service starts. Running this again also repairs a service an
-# earlier run or an uninstall left half done.
-ensure_service
+  RUNNER_TOKEN=""
+  RUNNER_REMOVE_TOKEN=""
+  # Straight after registration, with nothing in between that can fail, so a
+  # registered runner always gets its service (#83). The .env below is read only
+  # when the service starts. Running this again also repairs a service an
+  # earlier run or an uninstall left half done.
+  ensure_service
 
-# The runner reads .env (written by config.sh) only when it starts, so a
-# changed .env restarts it below. The previous .env is kept until the runner
-# is back, to restore it if it is not. The job-completed hook line follows
-# the job_cleanup switch computed at the top: =1 adds it, =0 takes it out
-# (the same rule re-register applies, kept in step by hand).
-started_line="ACTIONS_RUNNER_HOOK_JOB_STARTED=/usr/local/sbin/homefield-job-started.sh"
-completed_line="ACTIONS_RUNNER_HOOK_JOB_COMPLETED=/usr/local/sbin/homefield-job-cleanup.sh"
-env_changed=0
-env_prev=""
-if ! grep -qx "$started_line" "$RUNNER_HOME/.env" 2>/dev/null ||
-   { [ "$job_cleanup" = "1" ] && ! grep -qx "$completed_line" "$RUNNER_HOME/.env" 2>/dev/null; } ||
-   { [ "$job_cleanup" = "0" ] && grep -qx "$completed_line" "$RUNNER_HOME/.env" 2>/dev/null; }; then
-  new_tmp
-  env_new="$tmp"
-  if [ -f "$RUNNER_HOME/.env" ]; then
-    # Set only once the copy is whole: restore_runner may already be armed,
-    # and must not put a failed copy over a .env that is still good.
+  # The runner reads .env (written by config.sh) only when it starts, so a
+  # changed .env restarts it below. The previous .env is kept until the runner
+  # is back, to restore it if it is not. The job-completed hook line follows
+  # the job_cleanup switch computed at the top: =1 adds it, =0 takes it out
+  # (the same rule re-register applies, kept in step by hand).
+  started_line="ACTIONS_RUNNER_HOOK_JOB_STARTED=/usr/local/sbin/homefield-job-started.sh"
+  completed_line="ACTIONS_RUNNER_HOOK_JOB_COMPLETED=/usr/local/sbin/homefield-job-cleanup.sh"
+  env_changed=0
+  env_prev=""
+  if ! grep -qx "$started_line" "$RUNNER_HOME/.env" 2>/dev/null ||
+     { [ "$job_cleanup" = "1" ] && ! grep -qx "$completed_line" "$RUNNER_HOME/.env" 2>/dev/null; } ||
+     { [ "$job_cleanup" = "0" ] && grep -qx "$completed_line" "$RUNNER_HOME/.env" 2>/dev/null; }; then
     new_tmp
-    cp "$RUNNER_HOME/.env" "$tmp"
-    env_prev="$tmp"
-    grep -v -e '^ACTIONS_RUNNER_HOOK_JOB_STARTED=' -e '^ACTIONS_RUNNER_HOOK_JOB_COMPLETED=' \
-      "$RUNNER_HOME/.env" >"$env_new" || [ $? = 1 ]
-  fi
-  echo "$started_line" >>"$env_new"
-  if [ "$job_cleanup" = "1" ]; then
-    echo "$completed_line" >>"$env_new"
-  fi
-  install -o "$RUNNER_USER" -g "$RUNNER_USER" -m 644 "$env_new" "$RUNNER_HOME/.env"
-  rm -f "$env_new"
-  env_changed=1
-fi
-# The switch is saved only once the .env carries it, so a failed run leaves
-# the saved value as it was (the same rule the package list follows).
-if [ -n "${RUNNER_JOB_CLEANUP+set}" ]; then
-  printf '%s\n' "$job_cleanup" >"$CONFIG_DIR/job-cleanup"
-fi
-
-svc_unit="$(cat "$RUNNER_HOME/.service")"
-
-# A runner that fails to come up must fail provisioning: otherwise every CI
-# job queues for 24 h behind a script that reported success. "active" only
-# means the process started, so a (re)started runner must also log
-# "Listening for Jobs", which it does once it has authenticated with GitHub.
-# A runner that was already running and untouched is left alone. One whose
-# .env changed is restarted, which cancels a job in progress, as replacing the
-# binary does (bin/homefield upgrade refuses while a job runs). That restart
-# stops a working runner, so if it does not come back, any failure from here
-# puts the previous .env back and starts the runner again before exiting.
-# Every other path gets here with the runner stopped (first registration, a
-# move, a new runner binary, bin/homefield upgrade). After a new runner
-# binary, restore_runner (above) is still armed for the same; the others
-# have nothing to restore.
-was_active=0
-if systemctl is-active --quiet "$svc_unit"; then
-  was_active=1
-fi
-if [ "$env_changed" = "0" ] && [ "$was_active" = "1" ]; then
-  echo "provision.sh: ${svc_unit} already running"
-else
-  if [ "$was_active" = "1" ]; then
-    on_failure=restore_runner
-  fi
-  since="$(date '+%Y-%m-%d %H:%M:%S')"
-  systemctl restart "$svc_unit"
-  ready=0
-  for _ in $(seq 1 60); do
-    if journalctl -u "$svc_unit" --since "$since" --no-pager 2>/dev/null | grep -q "Listening for Jobs"; then
-      ready=1
-      break
+    env_new="$tmp"
+    if [ -f "$RUNNER_HOME/.env" ]; then
+      # Set only once the copy is whole: restore_runner may already be armed,
+      # and must not put a failed copy over a .env that is still good.
+      new_tmp
+      cp "$RUNNER_HOME/.env" "$tmp"
+      env_prev="$tmp"
+      grep -v -e '^ACTIONS_RUNNER_HOOK_JOB_STARTED=' -e '^ACTIONS_RUNNER_HOOK_JOB_COMPLETED=' \
+        "$RUNNER_HOME/.env" >"$env_new" || [ $? = 1 ]
     fi
-    systemctl is-active --quiet "$svc_unit" || break
-    sleep 1
-  done
-  if [ "$ready" != "1" ] || { ! systemctl is-active --quiet "$svc_unit" && ! { [ "$RUNNER_EPHEMERAL" = "1" ] && [ "$(systemctl show -p Result --value "$svc_unit" 2>/dev/null || true)" = "success" ]; }; }; then
-    journal="$(journalctl -u "$svc_unit" --since "$since" --no-pager 2>&1 || true)"
-    printf '%s\n' "$journal" | tail -20
-    echo "provision.sh: ${svc_unit} did not reach \"Listening for Jobs\"" >&2
-    # The runner's own words, as a hint only (#76).
-    if [[ "$journal" == *"registration has been deleted from the server"* ]]; then
-      echo "provision.sh: GitHub no longer has this runner's registration (it removes runners that have not connected for more than 14 days); docs/runbook.md, \"Operating several runners\", says how to register it again" >&2
+    echo "$started_line" >>"$env_new"
+    if [ "$job_cleanup" = "1" ]; then
+      echo "$completed_line" >>"$env_new"
     fi
-    exit 1
+    install -o "$RUNNER_USER" -g "$RUNNER_USER" -m 644 "$env_new" "$RUNNER_HOME/.env"
+    rm -f "$env_new"
+    env_changed=1
   fi
-  on_failure=""
-  echo "provision.sh: ${svc_unit} is listening for jobs"
+  # The switch is saved only once the .env carries it, so a failed run leaves
+  # the saved value as it was (the same rule the package list follows).
+  if [ -n "${RUNNER_JOB_CLEANUP+set}" ]; then
+    printf '%s\n' "$job_cleanup" >"$CONFIG_DIR/job-cleanup"
+  fi
+
+  svc_unit="$(cat "$RUNNER_HOME/.service")"
+
+  # A runner that fails to come up must fail provisioning: otherwise every CI
+  # job queues for 24 h behind a script that reported success. "active" only
+  # means the process started, so a (re)started runner must also log
+  # "Listening for Jobs", which it does once it has authenticated with GitHub.
+  # A runner that was already running and untouched is left alone. One whose
+  # .env changed is restarted, which cancels a job in progress, as replacing the
+  # binary does (bin/homefield upgrade refuses while a job runs). That restart
+  # stops a working runner, so if it does not come back, any failure from here
+  # puts the previous .env back and starts the runner again before exiting.
+  # Every other path gets here with the runner stopped (first registration, a
+  # move, a new runner binary, bin/homefield upgrade). After a new runner
+  # binary, restore_runner (above) is still armed for the same; the others
+  # have nothing to restore.
+  was_active=0
+  if systemctl is-active --quiet "$svc_unit"; then
+    was_active=1
+  fi
+  if [ "$env_changed" = "0" ] && [ "$was_active" = "1" ]; then
+    echo "provision.sh: ${svc_unit} already running"
+  else
+    if [ "$was_active" = "1" ]; then
+      on_failure=restore_runner
+    fi
+    since="$(date '+%Y-%m-%d %H:%M:%S')"
+    systemctl restart "$svc_unit"
+    ready=0
+    for _ in $(seq 1 60); do
+      if journalctl -u "$svc_unit" --since "$since" --no-pager 2>/dev/null | grep -q "Listening for Jobs"; then
+        ready=1
+        break
+      fi
+      systemctl is-active --quiet "$svc_unit" || break
+      sleep 1
+    done
+    if [ "$ready" != "1" ] || { ! systemctl is-active --quiet "$svc_unit" && ! { [ "$RUNNER_EPHEMERAL" = "1" ] && [ "$(systemctl show -p Result --value "$svc_unit" 2>/dev/null || true)" = "success" ]; }; }; then
+      journal="$(journalctl -u "$svc_unit" --since "$since" --no-pager 2>&1 || true)"
+      printf '%s\n' "$journal" | tail -20
+      echo "provision.sh: ${svc_unit} did not reach \"Listening for Jobs\"" >&2
+      # The runner's own words, as a hint only (#76).
+      if [[ "$journal" == *"registration has been deleted from the server"* ]]; then
+        echo "provision.sh: GitHub no longer has this runner's registration (it removes runners that have not connected for more than 14 days); docs/runbook.md, \"Operating several runners\", says how to register it again" >&2
+      fi
+      exit 1
+    fi
+    on_failure=""
+    echo "provision.sh: ${svc_unit} is listening for jobs"
+  fi
 fi
 
 # ── Cleanup timer ───────────────────────────────────────────────────────────
@@ -1033,13 +1046,16 @@ systemctl restart homefield-memwatch.service
 
 # Bounded warm-up check: confirm Docker responds, the runner service is active,
 # and both maintenance timers are enabled and active before the first job.
+# A prepare-only run has no runner service yet: docker and timers only.
 warm_guest() {
   local missing=() t
   if ! timeout 10 docker info >/dev/null 2>&1; then
     missing+=(docker)
   fi
-  if [ -z "${svc_unit:-}" ] || ! systemctl is-active --quiet "$svc_unit"; then
-    missing+=(runner)
+  if [ "${prepare:-0}" != 1 ]; then
+    if [ -z "${svc_unit:-}" ] || ! systemctl is-active --quiet "$svc_unit"; then
+      missing+=(runner)
+    fi
   fi
   for t in homefield-cleanup.timer homefield-maintenance.timer; do
     if ! systemctl is-enabled --quiet "$t" || ! systemctl is-active --quiet "$t"; then
@@ -1048,7 +1064,11 @@ warm_guest() {
     fi
   done
   if [ "${#missing[@]}" -eq 0 ]; then
-    echo "provision.sh: warm-up complete (docker, runner, timers)"
+    if [ "${prepare:-0}" = 1 ]; then
+      echo "provision.sh: warm-up complete (docker, timers)"
+    else
+      echo "provision.sh: warm-up complete (docker, runner, timers)"
+    fi
   else
     echo "provision.sh: warm-up incomplete (${missing[*]})" >&2
   fi
@@ -1059,7 +1079,9 @@ warm_guest
 # existing registration was kept. Labels are not in the runner's config; the
 # runners page shows them.
 # The runner is set up by now, so a config it cannot read fails nothing.
-if { read -r reg_name && read -r reg_url; } < <(runner_setting agentName gitHubUrl) && [ -n "$reg_name" ] && [ -n "$reg_url" ]; then
+if [ "${prepare:-0}" = 1 ]; then
+  echo "provision.sh: prepared ${RUNNER_VERSION} (no registration; a clone of this VM registers on its first re-register)"
+elif { read -r reg_name && read -r reg_url; } < <(runner_setting agentName gitHubUrl) && [ -n "$reg_name" ] && [ -n "$reg_url" ]; then
   echo "provision.sh: runner ${reg_name} (${RUNNER_VERSION}) registered at ${reg_url}"
 else
   echo "provision.sh: runner provisioned (${RUNNER_VERSION}); could not read its name and URL from ${RUNNER_HOME}/.runner" >&2

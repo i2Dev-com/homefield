@@ -338,8 +338,10 @@ record "...the group's repositories were asked for by its id" "1" "$(called 'run
 record "...install's closing text is not printed" "no" "$(has "$out" 'Registered. Next:')"
 record "...the summary comes after the wait for the runner" "yes" \
   "$(has "${out%%✓ VM homefield created*}" 'is online: labels')"
-record "...the group was recorded for reset, beside the cleanup and fallback switches" "group_created=acme/homefield-ci/7/github.com
+record "...the group was recorded for reset, beside the cleanup, reset and fallback switches" "group_created=acme/homefield-ci/7/github.com
 job_cleanup=0
+reset_vm=0
+reset_error=
 auto_route=0" "$(cat "$state/homefield.state" 2>/dev/null)"
 
 srun STUB_LOOPBACK_STATE=not-verified GH_GROUPS="$work/groups-none" GH_REPOS='' -- cmd_setup --url $org
