@@ -50,6 +50,9 @@ hang "${GH_HANG2:-}" 2 "${GH_HANG2_SECS:-30}"
 if [ -n "${GH_TOKEN:-}" ]; then
   echo "TOKEN:${GH_TOKEN}" >>"$state/gh_tokens"
 fi
+if [ -n "${GH_ENTERPRISE_TOKEN:-}" ]; then
+  echo "ENT:${GH_ENTERPRISE_TOKEN}" >>"$state/gh_tokens"
+fi
 case "$*" in
   # gh auth status (gh_active_account): GH_AUTH is "login|scopes" the way the
   # real gh answers, empty when nobody is logged in, GH_AUTH_FAIL a gh that
@@ -106,7 +109,7 @@ case "$*" in
     while [ ! -f "$GH_JOBS/$n" ] && [ "$n" -gt 1 ]; do n=$((n - 1)); done
     cat "$GH_JOBS/$n"
     ;;
-  "api repos/"*"/actions/runs/"*)
+  "api "*"repos/"*"/actions/runs/"*)
     if [ -n "${GH_RUN_FAIL:-}" ]; then echo "gh: HTTP 404" >&2; exit 1; fi
     cat "$GH_RUN"
     ;;
@@ -225,7 +228,7 @@ case "$*" in
       *) printf '%s\n' "$word" ;;
     esac
     ;;
-  "api repos/"*)
+  "api "*"repos/"*)
     if [ -n "${GH_REPO_FAIL:-}" ]; then echo "gh: Not Found (HTTP 404)" >&2; exit 1; fi
     printf '%s\n' "${GH_REPO:-true	555	main	Organization}"
     ;;
@@ -594,6 +597,7 @@ adopt() {
     "${envs[@]+"${envs[@]}"}" -- cmd_adopt --repo acme/app "$@"
 }
 put_path="orgs/acme/actions/runner-groups/42/repositories/555"
+put_call="gh api --hostname github.com -X PUT $put_path"
 
 # route <env...> -- <route args>: a cmd_route run with the stuck-run fixtures:
 # GH_RUN is what `--jq '.workflow_runs[].id'` prints (run 9001 is active) and
@@ -653,14 +657,14 @@ adopt GH_REPO="garbage" --
 record "an answer that cannot be read: refused" "nonzero/yes" "$(nonzero "$rc")/$(has "$out" 'cannot read')"
 adopt GH_CI_RUNNER=hosted -- --no-switch
 record "a private repository is reported with its default branch" "0/yes" "$rc/$(has "$out" 'acme/app is private (default branch main)')"
-record "the repository is read once" "1" "$(called '^gh api repos/acme/app ')"
+record "the repository is read once" "1" "$(called '^gh api --hostname github.com repos/acme/app ')"
 
 # ── Runner group ───────────────────────────────────────────────────────────
 echo "runner group"
 adopt --
 record "selected group, not a member: added" "0/yes" "$rc/$(has "$out" 'added acme/app to homefield-ci')"
-record "...by a PUT to the group's repository path, once" "1" "$(called "gh api -X PUT $put_path")"
-record "...after reading the members, paginated" "1" "$(called '--paginate orgs/acme/actions/runner-groups/42/repositories?per_page=100')"
+record "...by a PUT to the group's repository path, once" "1" "$(called "$put_call")"
+record "...after reading the members, paginated" "1" "$(called '--hostname github.com --paginate orgs/acme/actions/runner-groups/42/repositories?per_page=100')"
 
 adopt GH_MEMBERS="$work/members-with" --
 record "already a member: no PUT" "0/yes/0" "$rc/$(has "$out" 'already has access to homefield-ci')/$(called 'X PUT')"
@@ -711,10 +715,10 @@ echo "routing"
 adopt --
 record "ready workflows: the guard passes and the jobs are listed" "0/yes/yes" \
   "$rc/$(has "$out" 'routing: ready')/$(has "$out" 'ci.yml:lint ci.yml:test')"
-record "...so CI_RUNNER is set to local through route" "1" "$(called 'variable set CI_RUNNER --repo acme/app --body local')"
+record "...so CI_RUNNER is set to local through route" "1" "$(called 'variable set CI_RUNNER --repo github.com/acme/app --body local')"
 record "...nothing else is written" "0" "$(called 'X POST')"
 record "the workflow directory is listed at the default branch, then every file is fetched" "1/1/1" \
-  "$(called '^gh api -X GET repos/acme/app/contents/.github/workflows -f ref=main')/$(called 'workflows/ci.yml ')/$(called 'workflows/my%20flow.yaml ')"
+  "$(called '^gh api --hostname github.com -X GET repos/acme/app/contents/.github/workflows -f ref=main')/$(called 'workflows/ci.yml ')/$(called 'workflows/my%20flow.yaml ')"
 record "...a name with a space is encoded, and README.md is not fetched" "0" "$(called 'README.md')"
 record "...the raw media type is asked for" "2" "$(called "Accept: application/vnd.github.raw")"
 record "the downloaded workflows are removed afterwards" "0" "$(find "$work/tmp" -mindepth 1 | wc -l | tr -d ' ')"
@@ -750,13 +754,13 @@ record "--jobs fills the snippet's expected list" "yes/yes/no" "$(has "$out" '  
 
 adopt GH_WF="$work/wf-label" --
 record "a guard with another label: that label is used" "0/yes/yes/1" \
-  "$rc/$(has "$out" 'routing: ready')/$(has "$out" 'these jobs are routed: ci.yml:lint')/$(called 'variable set CI_RUNNER --repo acme/app --body local')"
+  "$rc/$(has "$out" 'routing: ready')/$(has "$out" 'these jobs are routed: ci.yml:lint')/$(called 'variable set CI_RUNNER --repo github.com/acme/app --body local')"
 adopt GH_WF="$work/wf-label" -- --label homefield-ci
 record "...unless --label says otherwise: not ready, and only that label's jobs count" \
   "nonzero/yes/yes/0" \
   "$(nonzero "$rc")/$(has "$out" 'uses label acme-ci, but --label is homefield-ci')/$(has "$out" 'no job uses the routing expression for label homefield-ci')/$(called 'variable set')"
 adopt GH_WF="$work/wf-label" -- --label acme-ci
-record "...--label that agrees is fine" "0/1" "$rc/$(called 'variable set CI_RUNNER --repo acme/app --body local')"
+record "...--label that agrees is fine" "0/1" "$rc/$(called 'variable set CI_RUNNER --repo github.com/acme/app --body local')"
 adopt GH_WF="$work/wf-noguard" -- --label acme-ci
 record "snippets carry the chosen label in the expression and the guard" "yes/yes" "$(has "$out" "runs-on: $expr_acme_simple")/$(has "$out" '          label: acme-ci')"
 
@@ -764,22 +768,22 @@ record "snippets carry the chosen label in the expression and the guard" "yes/ye
 # the label is.
 adopt GH_WF="$work/wf-push" --
 record "a guard with events push: that is used, and the jobs are routed" "0/yes/yes/1" \
-  "$rc/$(has "$out" 'routing: ready')/$(has "$out" 'these jobs are routed: ci.yml:lint')/$(called 'variable set CI_RUNNER --repo acme/app --body local')"
+  "$rc/$(has "$out" 'routing: ready')/$(has "$out" 'these jobs are routed: ci.yml:lint')/$(called 'variable set CI_RUNNER --repo github.com/acme/app --body local')"
 adopt GH_WF="$work/wf-push" -- --events push
-record "...--events that agrees is fine" "0/1" "$rc/$(called 'variable set CI_RUNNER --repo acme/app --body local')"
+record "...--events that agrees is fine" "0/1" "$rc/$(called 'variable set CI_RUNNER --repo github.com/acme/app --body local')"
 adopt GH_WF="$work/wf-push" -- --events pull_request
 record "...--events that differs: refused with the reason, nothing switched" "nonzero/yes/yes/0" \
   "$(nonzero "$rc")/$(has "$out" 'uses events push, but --events is pull_request')/$(has "$out" 'no job uses the routing expression')/$(called 'variable set')"
 adopt GH_WF="$work/wf-combo" -- --events 'schedule push' --dependabot local --fallback ubuntu-24.04-arm
 record "all three options, in another order and separator: agree with a block-scalar guard" "0/yes/1" \
-  "$rc/$(has "$out" 'routing: ready')/$(called 'variable set CI_RUNNER --repo acme/app --body local')"
+  "$rc/$(has "$out" 'routing: ready')/$(called 'variable set CI_RUNNER --repo github.com/acme/app --body local')"
 adopt GH_WF="$work/wf-combo" --
-record "...without flags the guard's options are used" "0/1" "$rc/$(called 'variable set CI_RUNNER --repo acme/app --body local')"
+record "...without flags the guard's options are used" "0/1" "$rc/$(called 'variable set CI_RUNNER --repo github.com/acme/app --body local')"
 record "...and a standard fallback is not warned about" "yes/no" \
   "$(has "$out" 'fallback image: ubuntu-24.04-arm is a standard')/$(has "$out" 'warning: fallback')"
 adopt GH_WF="$work/wf-typo" --
 record "a fallback GitHub does not list (ubuntu-lates): warned, not refused" "0/yes/1" \
-  "$rc/$(has "$out" 'warning: fallback ubuntu-lates is not one of')/$(called 'variable set CI_RUNNER --repo acme/app --body local')"
+  "$rc/$(has "$out" 'warning: fallback ubuntu-lates is not one of')/$(called 'variable set CI_RUNNER --repo github.com/acme/app --body local')"
 adopt GH_WF="$work/wf-combo" -- --events 'push,schedule,workflow_dispatch'
 record "...a larger events set differs" "nonzero/yes" "$(nonzero "$rc")/$(has "$out" 'but --events is push,schedule,workflow_dispatch')"
 adopt GH_WF="$work/wf-combo" -- --dependabot hosted
@@ -878,7 +882,7 @@ record "routing not ready, group open to all: the existing warning, no PUT" "non
   "$(nonzero "$rc")/$(called 'X PUT')/$(has "$out" 'is open to all')"
 adopt --
 record "routing ready: the PUT comes after the routing is reported" "1/yes" \
-  "$(called "gh api -X PUT $put_path")/$(before "$out" 'routing: ready' 'runner group: added')"
+  "$(called "$put_call")/$(before "$out" 'routing: ready' 'runner group: added')"
 record "...and the cache keys, then the switch, follow the group" "yes/yes" \
   "$(before "$out" 'cache keys:' 'runner group: added')/$(before "$out" 'runner group: added' 'CI_RUNNER')"
 adopt GH_WF="$work/wf-src-v1" --
@@ -1027,11 +1031,11 @@ record "an unset CI_RUNNER: the dry run names it unset and writes nothing" "0/ye
   "$rc/$(has "$out" 'acme/app: CI_RUNNER (unset) -> hosted (dry run)')/$(called 'variable set')"
 route -- local --repo acme/app --repo acme/other
 record "two repositories, both switched to local, exit 0" "0/1/1" \
-  "$rc/$(called 'variable set CI_RUNNER --repo acme/app --body local')/$(called 'variable set CI_RUNNER --repo acme/other --body local')"
+  "$rc/$(called 'variable set CI_RUNNER --repo github.com/acme/app --body local')/$(called 'variable set CI_RUNNER --repo github.com/acme/other --body local')"
 route GH_VARSET_FAIL_FIRST=1 -- local --repo acme/app --repo acme/other
 record "the first variable set fails: a warning naming the repo and the manual step" "nonzero/yes/yes" \
-  "$(nonzero "$rc")/$(has "$out" 'acme/app: could not set CI_RUNNER to local')/$(has "$out" 'gh variable set CI_RUNNER --repo acme/app --body local')"
-record "...and the second repository is still switched" "1" "$(called 'variable set CI_RUNNER --repo acme/other --body local')"
+  "$(nonzero "$rc")/$(has "$out" 'acme/app: could not set CI_RUNNER to local')/$(has "$out" 'gh variable set CI_RUNNER --repo github.com/acme/app --body local')"
+record "...and the second repository is still switched" "1" "$(called 'variable set CI_RUNNER --repo github.com/acme/other --body local')"
 route GH_VARSET_FAIL_FIRST=2 -- local --repo acme/app --repo acme/other
 record "both variable sets fail: two warnings, exit nonzero" "nonzero/2" \
   "$(nonzero "$rc")/$(printf '%s\n' "$out" | grep -c 'could not set CI_RUNNER')"
@@ -1040,7 +1044,7 @@ record "a failed set on hosted: warned, and no stuck-run listing for that repo" 
   "$(nonzero "$rc")/$(has "$out" 'acme/app: could not set CI_RUNNER to hosted')/$(called 'actions/runs?status=queued')"
 route GH_RUN_FAIL=1 -- hosted --repo acme/app --repo acme/other
 record "the stuck-run listing fails: a warning, and the next repository is listed" "nonzero/yes/1" \
-  "$(nonzero "$rc")/$(has "$out" 'acme/app: could not list its runs with gh')/$(called 'variable set CI_RUNNER --repo acme/other --body hosted')"
+  "$(nonzero "$rc")/$(has "$out" 'acme/app: could not list its runs with gh')/$(called 'variable set CI_RUNNER --repo github.com/acme/other --body hosted')"
 route -- hosted --repo acme/app
 record "a stuck run: cancelled and re-run, exit 0" "0/1/1/yes" \
   "$rc/$(called 'run cancel 9001')/$(called 'run rerun 9001')/$(has "$out" 'acme/app: run 9001 re-run')"
@@ -1049,16 +1053,16 @@ record "a dry run: the stuck run is reported, nothing written" "0/yes/0" \
   "$rc/$(has "$out" 'run 9001 has jobs waiting for homefield-ci; would cancel and re-run it')/$(called_any 'run cancel' 'run rerun')"
 route GH_CANCEL_FAIL=1 -- hosted --repo acme/app
 record "the cancel fails: a warning naming the manual re-run, and no re-run call" "nonzero/yes/0" \
-  "$(nonzero "$rc")/$(has "$out" 'run 9001: the cancel failed; re-run it yourself: gh run rerun 9001 --repo acme/app')/$(called 'run rerun')"
+  "$(nonzero "$rc")/$(has "$out" 'run 9001: the cancel failed; re-run it yourself: gh run rerun 9001 --repo github.com/acme/app')/$(called 'run rerun')"
 route GH_RUNVIEW_FAIL=1 -- hosted --repo acme/app
 record "the status read fails: a warning, no re-run, exit nonzero" "nonzero/yes/0" \
   "$(nonzero "$rc")/$(has "$out" 'run 9001: could not read its status with gh')/$(called 'run rerun')"
 route GH_RUN_STATUS=in_progress ROUTE_TRIES=2 ROUTE_INTERVAL=0 -- hosted --repo acme/app
 record "the cancel does not land in a minute: said, with the manual re-run" "0/yes" \
-  "$rc/$(has "$out" 'run 9001 is still in_progress after a minute; re-run it yourself: gh run rerun 9001 --repo acme/app')"
+  "$rc/$(has "$out" 'run 9001 is still in_progress after a minute; re-run it yourself: gh run rerun 9001 --repo github.com/acme/app')"
 route GH_RERUN_FAIL=1 -- hosted --repo acme/app
 record "the re-run is refused: a warning, exit nonzero" "nonzero/yes" \
-  "$(nonzero "$rc")/$(has "$out" 'run 9001: the re-run was refused; run it yourself: gh run rerun 9001 --repo acme/app')"
+  "$(nonzero "$rc")/$(has "$out" 'run 9001: the re-run was refused; run it yourself: gh run rerun 9001 --repo github.com/acme/app')"
 printf '551\n' >"$work/route-jobs/1"
 : >"$work/route-jobs/2"
 printf '9001\n9002\n' >"$work/route-runs-alt"
@@ -1069,7 +1073,7 @@ record "...and the second run is not touched" "0" "$(called 'run cancel 9002')"
 : >"$work/route-jobs/1"
 route -- hosted --repo acme/app
 record "nothing stuck: the switch is the whole job, exit 0" "0/1/0" \
-  "$rc/$(called 'variable set CI_RUNNER --repo acme/app --body hosted')/$(called_any 'run cancel' 'run rerun')"
+  "$rc/$(called 'variable set CI_RUNNER --repo github.com/acme/app --body hosted')/$(called_any 'run cancel' 'run rerun')"
 
 # ── Verify ─────────────────────────────────────────────────────────────────
 # The re-run of the latest pull-request run, and the report of where its jobs
@@ -1175,14 +1179,14 @@ verify -- --verify
 record "--verify, every job local: exit 0, one local line per job" "0/yes/yes" \
   "$rc/$(has "$out" 'verify: lint: ran on the local runner homefield-1 (success)')/$(has "$out" 'verify: test: ran on the local runner homefield-1 (success)')"
 record "...the latest pull-request run is listed (one run, as JSON, with its workflow name), then the run is read: once for its attempt, once with the jobs" "1/2" \
-  "$(called '^gh run list --repo acme/app --event pull_request --limit 1 --json databaseId,status,url,displayTitle,workflowName')/$(called '^gh api repos/acme/app/actions/runs/9001$')"
-record "...re-run exactly once, with that run's id" "1/1" "$(rerun_n)/$(called '^gh run rerun 9001 --repo acme/app$')"
-record "...the jobs are read, paginated" "1" "$(called '^gh api --paginate repos/acme/app/actions/runs/9001/jobs')"
+  "$(called '^gh run list --repo github.com/acme/app --event pull_request --limit 1 --json databaseId,status,url,displayTitle,workflowName')/$(called '^gh api --hostname github.com repos/acme/app/actions/runs/9001$')"
+record "...re-run exactly once, with that run's id" "1/1" "$(rerun_n)/$(called '^gh run rerun 9001 --repo github.com/acme/app$')"
+record "...the jobs are read, paginated" "1" "$(called '^gh api --hostname github.com --paginate repos/acme/app/actions/runs/9001/jobs')"
 record "...the question is not asked, and the summary counts both jobs" "no/yes" \
   "$(has "$out" 'uses CI minutes')/$(has "$out" 'verify: 2 on the local runner, 0 on GitHub-hosted runners, 0 still waiting for a runner')"
 record "...no warning about a hosted job, no advice about a failed one" "no/no" "$(has "$out" 'warning:')/$(has "$out" 'Job fails only on the local runner')"
 record "...the re-run comes after the run was read, and the report ends adopt with only what is left by hand" "yes/yes/no" \
-  "$(before "$(cat "$calls")" 'gh api repos/acme/app/actions/runs/9001' 'gh run rerun 9001')/$(has "$out" 'still by hand: add any tools the jobs lack, and note why a job stays hosted if you want to (docs/adopting.md, step 7)')/$(has "$out" 'steps 6 and 7')"
+  "$(before "$(cat "$calls")" 'gh api --hostname github.com repos/acme/app/actions/runs/9001' 'gh run rerun 9001')/$(has "$out" 'still by hand: add any tools the jobs lack, and note why a job stays hosted if you want to (docs/adopting.md, step 7)')/$(has "$out" 'steps 6 and 7')"
 
 verify GH_CI_RUNNER=local -- --verify
 record "...an already local CI_RUNNER is verified too, without writing the variable" "0/1/0" "$rc/$(rerun_n)/$(called 'variable set')"
@@ -1200,7 +1204,7 @@ verify GH_RUN="$work/run-going" GH_JOBS="$work/jobs-chain" -- --verify
 record "a run still going, only a hosted job listed at first: polls again and finds the called workflow's job" "0/2/yes/yes" \
   "$rc/$(called 'actions/runs/9001/jobs')/$(has "$out" 'verify: call / lint: is running on the local runner homefield-1 (in_progress)')/$(has "$out" 'verify: prep: ran on a GitHub-hosted runner')"
 record "...the run is read at each poll, and the report says the run is unfinished and the list may grow" "3/yes" \
-  "$(called '^gh api repos/acme/app/actions/runs/9001$')/$(has "$out" 'verify: the run is still in_progress: a job that starts only after others finish is not in this list yet; look at https://github.com/acme/app/actions/runs/9001')"
+  "$(called '^gh api --hostname github.com repos/acme/app/actions/runs/9001$')/$(has "$out" 'verify: the run is still in_progress: a job that starts only after others finish is not in this list yet; look at https://github.com/acme/app/actions/runs/9001')"
 verify GH_RUN="$work/run-going" GH_JOBS="$work/jobs-hostonly" ADOPT_VERIFY_TRIES=3 -- --verify
 record "a run still going, nothing local listed: keeps polling until the tries run out, then warns and says the run is unfinished" "3/yes/yes" \
   "$(called 'actions/runs/9001/jobs')/$(has "$out" 'warning: e2e did not run on the local runner')/$(has "$out" 'the run is still in_progress')"
@@ -1240,7 +1244,7 @@ record "no pull-request run yet: said so, pointing at step 6, no re-run, no more
 record "...and the last line still sends you to steps 6 and 7" "yes" "$(has "$out" 'docs/adopting.md, steps 6 and 7')"
 verify GH_RUNLIST="$work/runlist-running" -- --verify
 record "a run still in progress: not re-run, with the command for later" "0/yes/yes/0" \
-  "$rc/$(has "$out" 'run 9001 (Fix the thing) is still in_progress')/$(has "$out" 'gh run rerun 9001 --repo acme/app')/$(rerun_n)"
+  "$rc/$(has "$out" 'run 9001 (Fix the thing) is still in_progress')/$(has "$out" 'gh run rerun 9001 --repo github.com/acme/app')/$(rerun_n)"
 
 # The guard workflow's own run ("HomeField routing") is hosted by design: the
 # newest pull-request run can be exactly that (the adopt --setup PR creates
@@ -1253,22 +1257,22 @@ verify GH_RUNLIST="$work/runlist-guard" -- --verify
 record "the newest pull-request run is the guard's own: not re-run, said so, pointer to verify by hand" "0/0/yes/yes" \
   "$rc/$(rerun_n)/$(has "$out" 'the routing guard')/$(has "$out" 'Open a pull request on the repository')"
 record "...it looked below the newest one before concluding (the wider fetch ran)" "1" \
-  "$(called '^gh run list --repo acme/app --event pull_request --limit 15 --json databaseId,status,url,displayTitle,workflowName$')"
+  "$(called '^gh run list --repo github.com/acme/app --event pull_request --limit 15 --json databaseId,status,url,displayTitle,workflowName$')"
 record "...no hosted warning from the guard's hosted job" "no" "$(has "$out" 'warning:')"
 # A guard run newest, a real CI run below it: only the wider fetch can see the
 # CI run, and it is the one re-run.
 echo '[{"databaseId":7001,"status":"completed","url":"https://github.com/acme/app/actions/runs/7001","displayTitle":"Route CI jobs to the local HomeField runner","workflowName":"HomeField routing"},{"databaseId":9001,"status":"completed","url":"https://github.com/acme/app/actions/runs/9001","displayTitle":"Fix the thing","workflowName":"CI"}]' >"$work/runlist-guard-plus"
 verify GH_RUNLIST="$work/runlist-guard-plus" -- --verify
 record "the guard run first in the list: the CI run after it is the one re-run" "0/1/0/yes" \
-  "$rc/$(called '^gh run rerun 9001 --repo acme/app$')/$(called '^gh run rerun 7001')/$(has "$out" 'verify: lint: ran on the local runner homefield-1 (success)')"
+  "$rc/$(called '^gh run rerun 9001 --repo github.com/acme/app$')/$(called '^gh run rerun 7001')/$(has "$out" 'verify: lint: ran on the local runner homefield-1 (success)')"
 record "...exactly two run-list fetches: the wide one only after the newest was the guard's" "2/1" \
-  "$(called '^gh run list --repo acme/app')/$(called '^gh run list --repo acme/app --event pull_request --limit 15')"
+  "$(called '^gh run list --repo github.com/acme/app')/$(called '^gh run list --repo github.com/acme/app --event pull_request --limit 15')"
 # A run without workflowName (an older gh): picked as before, no crash, and
 # one fetch only (nothing looks like a guard run, so no wider fetch).
 verify GH_RUNLIST="$work/runlist-done" -- --verify
 record "a run list without workflowName fields: re-runs as before" "1" "$(rerun_n)"
 record "...a single fetch: the wide one is not needed when the newest is not the guard's" "1" \
-  "$(called '^gh run list --repo acme/app')"
+  "$(called '^gh run list --repo github.com/acme/app')"
 
 verify -- --verify --no-verify
 record "--verify with --no-verify: refused before anything is read" "nonzero/yes/0" "$(nonzero "$rc")/$(has "$out" '--verify and --no-verify contradict each other')/$(called gh)"
@@ -1282,7 +1286,7 @@ record "...also on a terminal: no question" "0/0/no" "$rc/$(runs_n)/$(has "$out"
 
 verify --
 record "no terminal and no --verify: nothing asked, nothing re-run, the commands printed" "0/no/0/yes/yes" \
-  "$rc/$(has "$out" 'uses CI minutes')/$(runs_n)/$(has "$out" '  gh run list --repo acme/app --event pull_request --limit 15')/$(has "$out" '  gh run rerun <run-id> --repo acme/app')"
+  "$rc/$(has "$out" 'uses CI minutes')/$(runs_n)/$(has "$out" '  gh run list --repo github.com/acme/app --event pull_request --limit 15')/$(has "$out" '  gh run rerun <run-id> --repo github.com/acme/app')"
 record "...and the last line keeps the pointer to steps 6 and 7" "yes" "$(has "$out" 'docs/adopting.md, steps 6 and 7')"
 
 verify_tty y --
@@ -1291,7 +1295,7 @@ record "on a terminal, y: the question is asked, and the run is verified" "0/yes
 verify_tty Y --
 record "...Y too" "1" "$(rerun_n)"
 verify_tty n --
-record "on a terminal, n: no re-run, the commands printed" "0/0/yes/yes" "$rc/$(rerun_n)/$(has "$out" "$ask")/$(has "$out" '  gh run rerun <run-id> --repo acme/app')"
+record "on a terminal, n: no re-run, the commands printed" "0/0/yes/yes" "$rc/$(rerun_n)/$(has "$out" "$ask")/$(has "$out" '  gh run rerun <run-id> --repo github.com/acme/app')"
 record "...nothing of the run was listed either" "0" "$(runs_n)"
 verify_tty "" --
 record "on a terminal, Enter alone: the default is no" "0/0/yes" "$rc/$(runs_n)/$(has "$out" "$ask")"
@@ -1761,7 +1765,7 @@ record "--setup --guards on a simple-mode guard: refused" "nonzero/yes" \
   "$(nonzero "$rc")/$(has "$out" 'uses mode simple, but this run asks for guards')"
 adopt GH_WF="$work/wf-simpleguard" --
 record "plain adopt on a simple-mode guard: ready, CI_RUNNER switched" "0/yes/yes/no/1" \
-  "$rc/$(has "$out" 'routing: ready')/$(has "$out" 'these jobs are routed: ci.yml:lint')/$(has "$out" 'ci.yml:build')/$(called 'variable set CI_RUNNER --repo acme/app --body local')"
+  "$rc/$(has "$out" 'routing: ready')/$(has "$out" 'these jobs are routed: ci.yml:lint')/$(has "$out" 'ci.yml:build')/$(called 'variable set CI_RUNNER --repo github.com/acme/app --body local')"
 
 # A repository mixing the shapes, with a simple-mode guard listing both: plain
 # adopt follows the guard's mode and accepts both.
@@ -1770,7 +1774,7 @@ mkdir -p "$work/wf-mixed"
   emit_job guardjob ubuntu-latest "$(guard_opts ci.yml:lint 'jobs: |' '            ci.yml:lint' '            ci.yml:test' 'mode: simple')"; } >"$work/wf-mixed/ci.yml"
 adopt GH_WF="$work/wf-mixed" --
 record "plain adopt, a simple job and a guarded one: both routed, ready" "0/yes/yes/1" \
-  "$rc/$(has "$out" 'routing: ready')/$(has "$out" 'these jobs are routed: ci.yml:lint ci.yml:test')/$(called 'variable set CI_RUNNER --repo acme/app --body local')"
+  "$rc/$(has "$out" 'routing: ready')/$(has "$out" 'these jobs are routed: ci.yml:lint ci.yml:test')/$(called 'variable set CI_RUNNER --repo github.com/acme/app --body local')"
 adopt GH_WF="$work/wf-mixed" -- --guards
 record "...the same repository with --guards: refused, the guard is simple" "nonzero/yes/0" \
   "$(nonzero "$rc")/$(has "$out" 'uses mode simple, but --guards is given')/$(called 'variable set')"
@@ -1796,7 +1800,7 @@ wait_adopt() {
   rm -f "$work/pr_polls" "$work/pr_merged" "$work/branch-homefield_route-to-local"
   adopt ADOPT_WAIT_INTERVAL=0 GH_PR_SEQ="$work/pr-seq" "$@"
 }
-polls() { called 'api repos/acme/app/pulls/77 '; }
+polls() { called 'api --hostname github.com repos/acme/app/pulls/77 '; }
 group_put="X PUT $put_path"
 # line_of <first|last> <pattern>: where in the recorded calls it is (empty: never).
 line_of() { grep -n -e "$2" "$calls" | cut -d: -f1 | if [ "$1" = first ]; then head -n 1; else tail -n 1; fi; }
@@ -1820,13 +1824,13 @@ done
 # merged on the first read
 wait_adopt "merged" -- --setup --wait
 record "merged at the first read: group access and the switch follow, in this run" "0/1/1/1/yes" \
-  "$rc/$(polls)/$(called "$group_put")/$(called 'variable set CI_RUNNER --repo acme/app --body local')/$(has "$out" 'done: acme/app: runner group added; routing ready; CI_RUNNER set to local')"
+  "$rc/$(polls)/$(called "$group_put")/$(called 'variable set CI_RUNNER --repo github.com/acme/app --body local')/$(has "$out" 'done: acme/app: runner group added; routing ready; CI_RUNNER set to local')"
 record "...the wait is announced with the pull request, Ctrl-C and the way to go on by hand" "yes/yes/yes" \
   "$(has "$out" "waiting for ${pr_url} to be merged (up to 60 min)")/$(has "$out" 'Ctrl-C is safe')/$(has "$out" 'carry on by hand once it is merged: homefield adopt --repo acme/app')"
 record "...the pull request came first, then the group, then the switch" "yes/yes" \
   "$(before "$(cat "$calls")" 'X POST repos/acme/app/pulls' "$group_put")/$(before "$(cat "$calls")" "$group_put" 'variable set CI_RUNNER')"
 record "...the repository and its workflows are read again after the merge" "2/2" \
-  "$(called '^gh api repos/acme/app ')/$(called '^gh api -X GET repos/acme/app/contents/.github/workflows -f')"
+  "$(called '^gh api --hostname github.com repos/acme/app ')/$(called '^gh api --hostname github.com -X GET repos/acme/app/contents/.github/workflows -f')"
 record "...and the next-step line says it is waiting, without offering --wait" "yes/no" \
   "$(has "$out" 'next: review and merge it; this run waits for that')/$(has "$out" 'does both in one run')"
 record "...a merged pull request leaves its branch alone" "0" "$(called 'X DELETE')"
@@ -1834,7 +1838,7 @@ record "...a merged pull request leaves its branch alone" "0" "$(called 'X DELET
 # open, open, merged: nothing is added or switched before the merge answer
 wait_adopt "open open merged" ADOPT_WAIT_INTERVAL=10 -- --setup --wait
 record "open, open, merged: three reads, a sleep of the interval between each" "0/3/2" "$rc/$(polls)/$(called '^sleep 10$')"
-last_poll="$(line_of last 'api repos/acme/app/pulls/77 ')"
+last_poll="$(line_of last 'api --hostname github.com repos/acme/app/pulls/77 ')"
 record "...the group and the switch come only after the merged answer" "yes/yes" \
   "$([ "$(line_of first "$group_put")" -gt "$last_poll" ] && echo yes || echo no)/$([ "$(line_of first 'variable set')" -gt "$last_poll" ] && echo yes || echo no)"
 record "...nothing was written to the group or the variable before it" "0" \
@@ -1883,7 +1887,7 @@ record "merged, but the routing is still not ready: not switched, the group unto
   "$rc/$(has "$out" 'not switched: merge the routing first')/$(has "$out" 'no routing-guard step in .github/workflows')/$(called "$group_put")/$(called 'variable set')"
 wait_adopt "open merged" GH_WF="$work/wf-noguard" GH_WF_MERGED="$work/wf-ready" -- --setup --wait
 record "the workflows are read at the merge, not before: the merged routing is what is checked" "0/1/1" \
-  "$rc/$(called "$group_put")/$(called 'variable set CI_RUNNER --repo acme/app --body local')"
+  "$rc/$(called "$group_put")/$(called 'variable set CI_RUNNER --repo github.com/acme/app --body local')"
 wait_adopt "merged" GH_CI_RUNNER=hosted -- --setup --wait --no-switch
 record "--no-switch still holds after the wait" "0/1/0" "$rc/$(called "$group_put")/$(called 'variable set')"
 
@@ -1908,6 +1912,14 @@ record "...the next-step line without --wait too, and --group alone adds no --la
   "$(has "$out" 'then homefield adopt --repo acme/app --group other-group (docs/adopting.md')/$(has "$out" '--label')"
 wait_adopt "open" ADOPT_WAIT_INTERVAL=30 -- --setup --wait --wait-timeout 1
 record "...no flags given, none added" "yes/no" "$(has "$out" 'Once it is merged, run: homefield adopt --repo acme/app')/$(has "$out" 'run: homefield adopt --repo acme/app --')"
+
+# On a GitHub host other than github.com the continuation command carries the
+# host: the user runs it in their own shell, which has no HOMEFIELD_GITHUB_HOST
+# (Codex #295 round 2).
+ghes_hand='HOMEFIELD_GITHUB_HOST=ghes.acme.example homefield adopt --repo acme/app'
+wait_adopt "open" HOMEFIELD_GITHUB_HOST=ghes.acme.example ADOPT_WAIT_INTERVAL=30 -- --setup --wait --wait-timeout 1
+record "a GHES host: the hand-off command carries HOMEFIELD_GITHUB_HOST" "yes/yes" \
+  "$(has "$out" "Once it is merged, run: ${ghes_hand}")/$(has "$(cat "$work/pr_body")" "\`${ghes_hand}\` adds the repository")"
 
 # a pull request URL with no number to follow
 wait_adopt "merged" GH_PR_URL=https://github.com/acme/app/pull/x -- --setup --wait
@@ -2118,7 +2130,7 @@ record "SIGTERM before the pull request exists: exactly 143, the same note, the 
 interrupt INT pending
 record "Ctrl-C while the pull request is being opened: exactly 130, nothing left running" "130/0" "$rc/$intr_left"
 record "...the note says it may exist, where to look, and that the branch was left" "yes/yes/yes/yes/no" \
-  "$(has "$out" 'interrupted while the pull request was being opened; it may exist: look at https://github.com/acme/app/pulls')/$(has "$out" 'If there is none, delete the branch (gh api -X DELETE repos/acme/app/git/refs/heads/homefield/route-to-local) and run again. The branch was left in place')/$(has "$out" 'Nothing was switched or added to the runner group')/$(has "$out" 'interrupted')/$(has "$out" 'untouched')"
+  "$(has "$out" 'interrupted while the pull request was being opened; it may exist: look at https://github.com/acme/app/pulls')/$(has "$out" 'If there is none, delete the branch (gh api --hostname github.com -X DELETE repos/acme/app/git/refs/heads/homefield/route-to-local) and run again. The branch was left in place')/$(has "$out" 'Nothing was switched or added to the runner group')/$(has "$out" 'interrupted')/$(has "$out" 'untouched')"
 record "...the branch is not deleted (that would close a pull request that was just opened)" "0/yes/no" \
   "$(called 'X DELETE')/$(branch_there)/$(has "$out" 'removing homefield/route-to-local')"
 interrupt TERM pending
@@ -2148,9 +2160,9 @@ record "Ctrl-C while --verify pauses between reads: exactly 130, the sleep taken
 record "...the note says the repository is routed, only the check was cut short, a re-run may be in flight" "1/no/no" \
   "$(notes_n "$verify_note")/$(has "$out" 'untouched')/$(has "$out" 'may or may not')"
 record "...and gives the commands to check by hand, after the note" "yes/yes/yes" \
-  "$(has "$out" '  gh run list --repo acme/app --event pull_request --limit 1')/$(has "$out" '  gh run rerun <run-id> --repo acme/app')/$(before "$out" 'interrupted after its work' 'gh run rerun <run-id>')"
+  "$(has "$out" '  gh run list --repo github.com/acme/app --event pull_request --limit 1')/$(has "$out" '  gh run rerun <run-id> --repo github.com/acme/app')/$(before "$out" 'interrupted after its work' 'gh run rerun <run-id>')"
 record "...the group access and the switch were done once, the branch was not touched" "1/1/0" \
-  "$(called "$group_put")/$(called 'variable set CI_RUNNER --repo acme/app --body local')/$(called 'X DELETE')"
+  "$(called "$group_put")/$(called 'variable set CI_RUNNER --repo github.com/acme/app --body local')/$(called 'X DELETE')"
 interrupt TERM verify
 record "SIGTERM while --verify pauses: exactly 143, the same note, the sleep taken down at once" "143/1/0" "$rc/$(notes_n "$verify_note")/$intr_left"
 
@@ -2239,7 +2251,7 @@ record "...nothing deleted, switched or added to the group, the branch stays, th
 interrupt TERM verify parent
 record "adopt told its parent is setup, which ends during --verify: adopt stops with 143 and the group drains" "143/0" "$rc/$intr_left"
 record "...the note says setup ended, that the repository is routed, and the check by hand" "yes/yes/yes" \
-  "$(has "$out" 'setup has ended, so adopt stopped after its work was done (runner group added; routing ready; CI_RUNNER set to local)')/$(has "$out" 'Only the optional check')/$(has "$out" '  gh run rerun <run-id> --repo acme/app')"
+  "$(has "$out" 'setup has ended, so adopt stopped after its work was done (runner group added; routing ready; CI_RUNNER set to local)')/$(has "$out" 'Only the optional check')/$(has "$out" '  gh run rerun <run-id> --repo github.com/acme/app')"
 
 # ── The docs say what the tool prints ──────────────────────────────────────
 echo "docs"
@@ -2359,6 +2371,16 @@ record "adopt with GitHub App key file: exits 0" "0" "$rc"
 record "...authenticated using minted token" "yes" "$(has "$out" "authenticated as GitHub App")"
 record "...token was passed to gh via GH_TOKEN" "yes" "$(grep -q 'ghs_mock_app_token_12345' "$work/gh_tokens" 2>/dev/null && echo yes || echo no)"
 record "...private key never entered argv" "0" "$(called 'BEGIN RSA PRIVATE KEY')"
+
+# A GitHub Enterprise Server host: gh serves that host from
+# GH_ENTERPRISE_TOKEN, not GH_TOKEN, so the minted token has to be in both.
+rm -f "$work/gh_tokens"
+run_fn GITHUB_API_URL="$mock_api_url" HOMEFIELD_GITHUB_HOST=ghes.acme.example GH_GROUPS="$work/groups-selected" GH_MEMBERS="$work/members-other" GH_WF="$work/wf-ready" \
+  -- cmd_adopt --repo acme/app --app-id 12345 --app-key-file "$work/test-app-key.pem"
+record "adopt --app on a GHES host: exits 0" "0" "$rc"
+record "...token passed to gh via GH_ENTERPRISE_TOKEN" "yes" "$(grep -q 'ENT:ghs_mock_app_token_12345' "$work/gh_tokens" 2>/dev/null && echo yes || echo no)"
+record "...and via GH_TOKEN (github.com and *.ghe.com serve from it)" "yes" "$(grep -q 'TOKEN:ghs_mock_app_token_12345' "$work/gh_tokens" 2>/dev/null && echo yes || echo no)"
+record "...gh calls name the GHES host" "yes" "$(grep -q 'gh api --hostname ghes.acme.example' "$calls" 2>/dev/null && echo yes || echo no)"
 
 run_fn GITHUB_API_URL="$mock_api_url" GH_GROUPS="$work/groups-selected" GH_MEMBERS="$work/members-other" GH_WF="$work/wf-ready" \
   -- eval "cmd_adopt --repo acme/app --app-id 12345 --app-key-stdin <$(printf '%q' "$work/test-app-key.pem")"

@@ -1109,6 +1109,25 @@ def mint_jwt(app_id: int, key_pem: bytes) -> str:
             pass
 
 
+def default_api_url() -> str:
+    """The REST API base for HOMEFIELD_GITHUB_HOST, the way gh maps a GitHub
+    host: api.github.com for github.com, api.<host> for a *.ghe.com
+    data-residency subdomain, and <host>/api/v3 for GitHub Enterprise Server.
+    The value must be a bare hostname, the same rule bin/lib/github.sh's
+    github_host applies (no scheme, no path). GITHUB_API_URL, when set,
+    overrides this entirely (it always has)."""
+    host = os.environ.get("HOMEFIELD_GITHUB_HOST", "github.com").strip()
+    if not host or not all(c.isalnum() or c in "._-" for c in host):
+        raise SystemExit(
+            f"adopt.py: HOMEFIELD_GITHUB_HOST must be a hostname (letters, digits, '.', '-', '_'), got: {os.environ.get('HOMEFIELD_GITHUB_HOST', '')}"
+        )
+    if host == "github.com":
+        return "https://api.github.com"
+    if host.endswith(".ghe.com"):
+        return f"https://api.{host}"
+    return f"https://{host}/api/v3"
+
+
 def fetch_installation_token(app_id: int, repo: str, key_pem: bytes) -> str:
     """Mint a GitHub App installation token for the given owner/repo."""
     if "/" not in repo:
@@ -1116,7 +1135,8 @@ def fetch_installation_token(app_id: int, repo: str, key_pem: bytes) -> str:
     owner, repo_name = repo.split("/", 1)
     jwt_token = mint_jwt(app_id, key_pem)
 
-    api_url = os.environ.get("GITHUB_API_URL", "https://api.github.com").rstrip("/")
+    api_url = os.environ.get("GITHUB_API_URL") or default_api_url()
+    api_url = api_url.rstrip("/")
     headers = {
         "Authorization": f"Bearer {jwt_token}",
         "Accept": "application/vnd.github+json",

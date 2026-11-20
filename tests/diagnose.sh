@@ -78,7 +78,7 @@ EOF
 fake_stub "$stubs" gh CALLS <<'EOF'
 case "$*" in
   "--version") echo "gh version 2.90.0" ;;
-  "auth status --json hosts"*) echo "${GH_JQ_OUT-stub-user|admin:org, repo}" ;;
+  "auth status"*) echo "${GH_JQ_OUT-stub-user|admin:org, repo}" ;;
   *"-X "*) echo "gh stub: a write must never be called by diagnose" >&2; exit 98 ;;
   *"/actions/runners?"*)
     if [ -n "${GH_SLEEP:-}" ]; then sleep 3; fi
@@ -177,7 +177,7 @@ out="$(env -i HOME="$home" PATH="$stubs" CALLS="$calls" FAKE_ROOT="$root" HOMEFI
   "$BASH_BIN" -c '. "$1"; have_terminal() { true; }; main diagnose' _ "$ROOT/bin/homefield" 2>&1 </dev/null)"
 rc=$?
 record "diagnose on a terminal with gh logged out: reports it, never offers or runs a login" "yes/no/0" \
-  "$(has "$out" "gh not logged in: run 'gh auth login'")/$(has "$out" '[Y/n]')/$(called 'auth login')"
+  "$(has "$out" "gh not logged in: run 'gh auth login -h github.com'")/$(has "$out" '[Y/n]')/$(called 'auth login')"
 
 # A healthy organization runner in the group homefield-ci, which admits two
 # repositories.

@@ -72,7 +72,7 @@ EOF
 # GitHub lists (GH_RUNNERS: id, status, busy). GH_SLEEP=1 black-holes the call.
 fake_stub "$stubs" gh CALLS <<'EOF'
 case "$*" in
-  "auth status --json hosts"*) echo "${GH_JQ_OUT-stub-user|admin:org, repo}" ;;
+  "auth status"*) echo "${GH_JQ_OUT-stub-user|admin:org, repo}" ;;
   *"/actions/runners?"*)
     if [ -n "${GH_SLEEP:-}" ]; then sleep 3; fi
     [ -z "${GH_RUNNERS_FAIL:-}" ] || exit 1

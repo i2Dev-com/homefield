@@ -26,7 +26,7 @@ share="$work/share"
 bin="$work/bin"
 mkdir -p "$stubs" "$work/home"
 unit="actions.runner.acme.test.service"
-DEL='gh api -X DELETE orgs/acme/actions/runner-groups/7$'
+DEL='gh api --hostname github.com -X DELETE orgs/acme/actions/runner-groups/7$'
 
 stub() { printf '#!/usr/bin/env bash\n%s\n' "$2" >"$stubs/$1"; chmod +x "$stubs/$1"; }
 stub sudo 'while [ $# -gt 0 ]; do case "$1" in -u) shift 2 ;; -n|--preserve-env=*) shift ;; *) break ;; esac; done
@@ -244,7 +244,7 @@ record "--keep-group: kept, exit 0, gh not asked, the record stays" "0/0/0/state
 fresh
 set_state acme/Default/1
 run VM=none --
-record "the Default group is never deleted" "0/0/no-state" "$rc/$(lines 'gh api -X DELETE orgs/acme/actions/runner-groups/1$')/$(has_state)"
+record "the Default group is never deleted" "0/0/no-state" "$rc/$(lines 'gh api --hostname github.com -X DELETE orgs/acme/actions/runner-groups/1$')/$(has_state)"
 record "...and says why" "yes" "$(has "$out" 'it is the Default group')"
 fresh
 set_state acme/homefield-ci/7
@@ -254,7 +254,7 @@ fresh
 set_state acme/homefield-ci/7
 run VM=none GH_GROUPS_FILE="$work/groups-new-id" --
 record "the recorded id is gone (a group of that name has another id): not deleted, stale record removed" "0/0/no-state/yes" "$rc/$(lines "$DEL")/$(has_state)/$(has "$out" 'not on GitHub any more')"
-record "...the other group is untouched" "0" "$(lines 'gh api -X DELETE orgs/acme/actions/runner-groups/9$')"
+record "...the other group is untouched" "0" "$(lines 'gh api --hostname github.com -X DELETE orgs/acme/actions/runner-groups/9$')"
 fresh
 set_state acme/homefield-ci/7
 run VM=none GH_GROUPS_FILE="$work/groups-case" --
@@ -280,7 +280,7 @@ record "no id recorded: the group is found by name, and deleted by the id GitHub
 fresh
 set_state acme/homefield-ci/
 run VM=none GH_GROUPS_FILE="$work/groups-new-id" --
-record "...the id it finds (9, not 7) is the one deleted" "1/0" "$(lines 'gh api -X DELETE orgs/acme/actions/runner-groups/9$')/$(lines "$DEL")"
+record "...the id it finds (9, not 7) is the one deleted" "1/0" "$(lines 'gh api --hostname github.com -X DELETE orgs/acme/actions/runner-groups/9$')/$(lines "$DEL")"
 fresh
 set_state acme/homefield-ci/7
 run VM=none GH_DELETE_FAIL=1 --
@@ -296,6 +296,11 @@ fresh
 set_state acme/homefield-ci/7
 run GH_ON=0 GH_GROUP_RUNNERS="42" --
 record "deregistered in this run and still listed (GitHub lags): the group is deleted" "0/1" "$rc/$(lines "$DEL")"
+fresh
+set_state acme/homefield-ci/7/ghes.acme.example
+run GH_ON=0 GH_GROUP_RUNNERS="42" --
+record "a record that names a GHES host (no VM, so no R_URL): the group is deleted there" "0/1" \
+  "$rc/$(lines 'gh api --hostname ghes.acme.example -X DELETE orgs/acme/actions/runner-groups/7$')"
 fresh
 set_state acme/homefield-ci/7
 run GH_ON=0 GH_GROUP_RUNNERS="42 99" --
@@ -520,18 +525,18 @@ esac
 EOF
 printf 'Default\tall\tfalse\t1\n' >"$work/groups-none"
 irun
-record "install creates the group, and the record is there before the VM is touched" "3/yes/at-vm=group_created=acme/homefield-ci/7" "$rc/$(has "$out" 'created runner group homefield-ci')/$(echo "$out" | grep '^at-vm=')"
-record "...the file holds exactly that line" "group_created=acme/homefield-ci/7" "$(cat "$(state_file)")"
+record "install creates the group, and the record is there before the VM is touched" "3/yes/at-vm=group_created=acme/homefield-ci/7/github.com" "$rc/$(has "$out" 'created runner group homefield-ci')/$(echo "$out" | grep '^at-vm=')"
+record "...the file holds exactly that line" "group_created=acme/homefield-ci/7/github.com" "$(cat "$(state_file)")"
 irun CALL_ENSURE_GROUP=https://github.com/acme GROUP="Local CI"
-record "a group name with a space is recorded whole" "group_created=acme/Local CI/7" "$(cat "$(state_file)")"
+record "a group name with a space is recorded whole" "group_created=acme/Local CI/7/github.com" "$(cat "$(state_file)")"
 irun CALL_ENSURE_GROUP=https://github.com/acme "GH_POST_BODY=null"
-record "an id that cannot be read: the org and name are recorded, the id is empty" "group_created=acme/homefield-ci/" "$(cat "$(state_file)")"
+record "an id that cannot be read: the org and name are recorded, the id is empty" "group_created=acme/homefield-ci//github.com" "$(cat "$(state_file)")"
 mkdir -p "$state"
 printf 'other=1\ngroup_created=old/old/1\n' >"$state/resettest.state"
 out="$(env -i PATH="$stubs:$PATH" HOME="$work/home" LOG="$work/log" ROOT_DIR="$ROOT" GH_GROUPS_FILE="$work/groups-none" \
   HOMEFIELD_INSTANCE=resettest HOMEFIELD_STATE_DIR="$state" CALL_ENSURE_GROUP=https://github.com/acme \
   "$BASH" "$work/harness-install.sh" 2>&1 </dev/null)"
-record "a later creation replaces the record and keeps other keys" "other=1/group_created=acme/homefield-ci/7" "$(paste -sd/ "$(state_file)")"
+record "a later creation replaces the record and keeps other keys" "other=1/group_created=acme/homefield-ci/7/github.com" "$(paste -sd/ "$(state_file)")"
 printf 'Default\tall\tfalse\t1\nhomefield-ci\tselected\tfalse\t7\n' >"$work/groups-exist"
 for mode in "narrow:groups-exist:org:homefield-ci" "default:groups-exist:org:Default" "personal:groups-exist:personal:homefield-ci"; do
   IFS=: read -r want file m g <<<"$mode"

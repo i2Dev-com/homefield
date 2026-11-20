@@ -174,14 +174,15 @@ in one VM.
 ### The `admin:org` scope
 
 Looking up and creating groups needs it. If `gh`
-lacks it, `install` on a terminal offers to run `gh auth refresh -h github.com
--s admin:org`. It does not offer when `GITHUB_TOKEN` or `GH_TOKEN` is set,
-because `gh` uses that instead of its stored login; run
-`GITHUB_TOKEN= GH_TOKEN= homefield install ...` to use the stored login, which
-may have the scope. Without `gh`, `install` asks before going on with the group
-unchecked, and without a terminal it stops. If you created and checked the
-group by hand, pass `--group-exists` to go on without asking (registration
-fails if the group is missing).
+lacks it, `install` on a terminal offers to run `gh auth refresh -h <host>
+-s admin:org`, where <host> is the registration's GitHub host (`--url`'s, or
+`HOMEFIELD_GITHUB_HOST`; github.com by default). It does not offer when
+`GITHUB_TOKEN` or `GH_TOKEN` is set, because `gh` uses that instead of its
+stored login; run `GITHUB_TOKEN= GH_TOKEN= homefield install ...` to use the
+stored login, which may have the scope. Without `gh`, `install` asks before
+going on with the group unchecked, and without a terminal it stops. If you
+created and checked the group by hand, pass `--group-exists` to go on without
+asking (registration fails if the group is missing).
 
 ### The `workflow` scope
 
@@ -192,9 +193,10 @@ repository. `homefield adopt --setup` checks the scope of gh's active login
 first and stops before anything is created when it is missing; a token whose
 scopes GitHub does not report (a fine-grained or App token) or an env-var
 token cannot be checked, and the write's own 404 says the likely cause. To
-add the scope to gh's stored login: `gh auth refresh -h github.com -s
-workflow`. `GITHUB_TOKEN`/`GH_TOKEN` must carry the scope themselves; gh's
-`auth refresh` cannot add it to them.
+add the scope to gh's stored login: `gh auth refresh -h <host> -s
+workflow`, with <host> the host adopt works on (`HOMEFIELD_GITHUB_HOST`;
+github.com by default). `GITHUB_TOKEN`/`GH_TOKEN` must carry the scope
+themselves; gh's `auth refresh` cannot add it to them.
 
 ## Setup (once per machine)
 
@@ -212,14 +214,15 @@ an organization URL needs that scope while a repository URL does not. The
 `setup` command prints it first and stops on any failed check, before creating
 or touching anything (a warning does not stop it). On a terminal, when gh is
 installed, has no active login and no other check fails, `setup` first offers
-`gh auth login -h github.com` (gh asks its own questions) and runs the check
+`gh auth login -h <host>` (gh asks its own questions) and runs the check
 after it. When `--url` is an organization's owner URL (looked up, or `--org`),
-the login is `gh auth login -h github.com -s admin:org`, so the scope the
+the login is `gh auth login -h <host> -s admin:org`, so the scope the
 runner group needs comes with the one browser authorization instead of a second
 one at the group step; a repository URL, a personal account, `--personal`, no
 `--url` yet or an owner that cannot be looked up keep gh's default login, and
 the scope is offered later, as above; declining, end of input, a login that does not finish, or no terminal
-leaves the check to fail as above. It does not offer when another check fails
+leaves the check to fail as above. <host> is the registration's GitHub host
+(`--url`'s, or `HOMEFIELD_GITHUB_HOST`; github.com by default). It does not offer when another check fails
 too (a browser login would only be followed by the stop), when `gh` cannot
 answer the login question at all (a login would not fix that), or when
 `GITHUB_TOKEN` or `GH_TOKEN` is set, since `gh` uses that instead of its stored
@@ -235,6 +238,8 @@ homefield preflight
 Run the [README's one-liner](../README.md#quick-start), or, from a checkout,
 `bin/homefield setup --url https://github.com/<org>` (or
 `https://github.com/<owner>/<repo>`, which is what a personal account needs;
+on a GitHub Enterprise Server or GHE.com host, the URL carries that host
+instead, and commands without a `--url` take it from `HOMEFIELD_GITHUB_HOST`;
 options: `bin/homefield help`). It needs
 Lima ≥ 2.3 (verified on 2.3.0), which the one-liner installs, with gh, in one
 Homebrew question (`HOMEFIELD_YES=1` answers it; Lima is required, so declining
@@ -271,7 +276,10 @@ pull request and carry on once you merge it, so the next commands do not have
 to be typed. A repository-scoped registration (a personal account, or a
 repository URL) knows the repository and asks `Open the routing pull request
 for <owner>/<repo> now, and carry on once you merge it? [Y/n]`; Enter or `y`
-runs `homefield adopt --repo <owner>/<repo> --setup --wait`. An organization asks
+runs `homefield adopt --repo <owner>/<repo> --setup --wait` (on a GitHub host
+other than github.com, in that host's environment, so the offer works on the
+host the runner was registered at; the commands printed for later carry
+`HOMEFIELD_GITHUB_HOST=<host>` for the same reason). An organization asks
 `Repository to route first (name or owner/repo; Enter to skip)`: a bare name
 means `<org>/<name>`, and text that is not a repository name is refused without
 running anything. `n`, Enter at the organization question and end of input
@@ -629,8 +637,18 @@ GitHub's runner list, or a flip fails, nothing is flipped, the stop (or start)
 still happens, and the command exits 1 — jobs keep routing to the local
 runner, which is the state a human can see and fix with `route`. Queued jobs
 that the flip catches are cancelled and re-run, the same as `route hosted`
-does by hand. GHES scopes skip the runner lookup with a warning (tracked in
-[#287](https://github.com/i2Dev-com/homefield/issues/287)). Autostart at login
+does by hand. On a GitHub Enterprise Server host the stop-side fallback
+skips with a warning, and `route hosted` refuses: a GHES host has no hosted
+runners, so there is nothing to fall back to there. A GHE.com
+data-residency host has hosted Linux and Windows runners (macOS is the only
+kind GitHub does not serve there), and the fallback's labels are Linux ones,
+so the fallback and `route hosted` work on it as on github.com
+([#287](https://github.com/i2Dev-com/homefield/issues/287) added the host
+support). The records carry the host they were written for (a line
+without one, from before the host support, reads as github.com): a Mac with
+runners for the same owner/repo on github.com and a GHES host keeps the two
+hosts' records apart, so one host's start does not consume the other's
+pending restore. Autostart at login
 boots the VMs but nothing runs `homefield start` for you, so after a reboot or
 sleep the fallback's restore waits for the sleep/wake watcher (a planned
 follow-up to this change).

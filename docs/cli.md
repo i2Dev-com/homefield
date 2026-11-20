@@ -60,6 +60,7 @@ agents that drive the tool without a human in the loop. The guides:
 | `HOMEFIELD_YES=1` | Answer yes to the tool's prompts: `reset`'s plan, the one-liner's Homebrew question |
 | `HOMEFIELD_INSTANCE` | The default instance, as `--instance` does |
 | `HOMEFIELD_GH_TIMEOUT` | Seconds a GitHub call waits before "not checked" (default 15) |
+| `HOMEFIELD_GITHUB_HOST` | The GitHub host commands without a `--url` work on (default `github.com`): a GitHub Enterprise Server host or a GHE.com subdomain. A `--url` always wins over it |
 | `HOMEFIELD_COLOR` | `always` colors piped output; `NO_COLOR` (any value) turns color off everywhere |
 | `HOMEFIELD_STATE_DIR` | Where the per-instance state files live (default `~/.local/state/homefield`) |
 | `HOMEFIELD_LIMA_CACHE_DIR` | Lima's download cache root for `preflight` image caching (default `~/Library/Caches/lima`) |

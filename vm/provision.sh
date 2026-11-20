@@ -12,9 +12,11 @@
 #       bash /tmp/provision.sh
 #
 # Settings, as environment variables (after `sudo`, as above):
-#   RUNNER_URL    where to register: https://github.com/<org>, or a repository
-#                 URL. Required to register or move; not needed to re-run on a
-#                 runner that is already registered.
+#   RUNNER_URL    where to register: https://<host>/<org>, or a repository
+#                 URL, on a GitHub host (github.com, a GitHub Enterprise
+#                 Server, or a GHE.com subdomain). Required to register or
+#                 move; not needed to re-run on a runner that is already
+#                 registered.
 #   RUNNER_LABEL  the custom label workflows route on (default homefield-ci). Must
 #                 match routing-guard's `label` input and the label in every
 #                 inline expression.
@@ -95,7 +97,7 @@ RUNNER_EPHEMERAL="${RUNNER_EPHEMERAL:-0}"
 # use the runner (docs/runbook.md, "Runner group"). Without one the runner
 # lands in Default, usable by every repository in the organization. Runner
 # groups do not exist for a repository-scoped runner, so none is passed there.
-if [[ "$RUNNER_URL" =~ ^https://github\.com/[^/]+/?$ ]]; then
+if [[ "$RUNNER_URL" =~ ^https://[A-Za-z0-9_.-]+/[^/]+/?$ ]]; then
   RUNNER_GROUP="${RUNNER_GROUP:-homefield-ci}"
 else
   RUNNER_GROUP=""
@@ -119,8 +121,8 @@ if [[ "$label_lc" =~ ^(self-hosted|linux|windows|macos|ubuntu|x64|x86|arm|arm64)
   exit 1
 fi
 RUNNER_LABELS="self-hosted,linux,arm64,${RUNNER_LABEL}"
-if [ -n "$RUNNER_URL" ] && ! [[ "$RUNNER_URL" =~ ^https://github\.com/[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)?/?$ ]]; then
-  echo "provision.sh: RUNNER_URL must be https://github.com/<org> or https://github.com/<owner>/<repo>, got: $RUNNER_URL" >&2
+if [ -n "$RUNNER_URL" ] && ! [[ "$RUNNER_URL" =~ ^https://[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)?/?$ ]]; then
+  echo "provision.sh: RUNNER_URL must be https://<host>/<org> or https://<host>/<owner>/<repo> (a GitHub host: github.com, a GitHub Enterprise Server, or a GHE.com subdomain), got: $RUNNER_URL" >&2
   exit 1
 fi
 # RUNNER_NAME and RUNNER_GROUP reach config.sh and the group API as single
@@ -503,7 +505,7 @@ fi
 # RUNNER_URL has no default: a guess would register the runner, possibly at
 # the wrong organization, and a move compares against it.
 if [ -z "$RUNNER_URL" ] && { [ "${RUNNER_REREGISTER:-0}" = "1" ] || [ ! -f "$RUNNER_HOME/.runner" ]; }; then
-  echo "provision.sh: set RUNNER_URL (https://github.com/<org> or a repository URL) to register" >&2
+  echo "provision.sh: set RUNNER_URL (https://<host>/<org> or a repository URL on a GitHub host) to register" >&2
   exit 1
 fi
 move=0

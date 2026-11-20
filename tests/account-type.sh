@@ -123,7 +123,7 @@ mv "$work/gh.away" "$stubs/gh"
 # The API cannot be reached, or does not know the account.
 run_fn GH_USERS_FAIL=1 CURL_FAIL=1 -- check_scope_owner https://github.com/acme
 record "owner URL, nothing answers: fatal, and names --org and --personal" "nonzero/yes/yes/yes" \
-  "$(nonzero "$rc")/$(has "$out" 'could not find acme on GitHub')/$(has "$out" '--org')/$(has "$out" '--personal')"
+  "$(nonzero "$rc")/$(has "$out" 'could not find acme on')/$(has "$out" '--org')/$(has "$out" '--personal')"
 # shellcheck disable=SC2016  # expanded by the inner bash
 run_fn GH_USERS_FAIL=1 CURL_FAIL=1 -- eval 'check_scope_owner https://github.com/acme/app; echo "mode=[$ACCOUNT_MODE]"'
 record "repository URL, nothing answers: not fatal, mode unknown" "0/mode=[]" "$rc/$(echo "$out" | grep '^mode=')"

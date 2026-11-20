@@ -291,14 +291,18 @@ EOF
 usage_sec_install() {
   cat <<'EOF'
 install (and setup, which takes the same options):
-  --url URL          https://github.com/<org> or https://github.com/<owner>/<repo>
+  --url URL          https://<host>/<org> or https://<host>/<owner>/<repo> on a
+                     GitHub host: github.com (the default), a GitHub Enterprise
+                     Server, or a GHE.com data-residency subdomain. Commands
+                     without a --url (adopt, route) take the host from
+                     HOMEFIELD_GITHUB_HOST instead.
                      (asked for on a terminal when a new registration has none).
                      Whether the owner is an organization or a personal account
-                     is looked up first (gh, else the public API). A personal
+                     is looked up first (gh, else the host's API). A personal
                      account has no account-wide runners and no runner groups,
                      so it needs a repository URL; with only its owner URL,
                      a terminal is asked for the repository, and without one
-                     install stops, naming --url https://github.com/<you>/<repo>
+                     install stops, naming --url https://<host>/<you>/<repo>
   --personal         treat the owner as a personal account without looking it
                      up (the lookup needs the API, and a token that can see the
                      account). Cannot be combined with --org
@@ -529,7 +533,8 @@ adopt:
   opens the routing pull request and changes nothing else (unless --wait
   carries on after the merge; with --dry-run it waits for nothing). Writing
   .github/workflows/ needs the workflow scope of a classic PAT; without it,
-  --setup stops before anything is created, naming `gh auth refresh -s workflow`.
+  --setup stops before anything is created, naming `gh auth refresh -h <host>
+  -s workflow` (<host>: HOMEFIELD_GITHUB_HOST, github.com by default).
   Needs gh and python3. Does not need the VM.
 EOF
 }
@@ -576,7 +581,8 @@ your gh credentials allow it (org owner with admin:org, or repository admin);
 otherwise you are asked to paste one from the "New runner" page. Tokens go to
 the VM on stdin, never on a command line. For an organization, gh also reads
 and creates the runner group, which needs the same admin:org scope: on a
-terminal you are offered `gh auth refresh -s admin:org` if it is missing;
+terminal you are offered `gh auth refresh -h <host> -s admin:org` if it is
+missing (<host>: HOMEFIELD_GITHUB_HOST, github.com by default);
 without one, pass --group-exists for a group you created and checked by hand.
 EOF
 }

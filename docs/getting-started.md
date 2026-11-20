@@ -29,7 +29,12 @@ online. Any other option is appended after `bash -s --`, like `--url`:
 ```
 
 From a checkout, with Lima ≥ 2.3, run `bin/homefield setup --url
-https://github.com/<org>` instead. `setup` is the whole first-time setup in one
+https://github.com/<org>` instead. On a GitHub Enterprise Server or GHE.com
+host, the `--url` carries that host instead of `github.com` (and commands
+without a `--url` take it from `HOMEFIELD_GITHUB_HOST`); a GHES host has no
+hosted runners, so the hosted fallback does not apply there, while a GHE.com
+host has hosted Linux and Windows runners and the fallback works. `setup` is
+the whole first-time setup in one
 command: it runs `preflight` first and stops, with nothing created, if any check
 fails (a warning does not stop it; on a terminal, a `gh` that is not logged in
 is first offered `gh auth login` when no other check fails, and the check runs
@@ -69,7 +74,7 @@ would cancel it.
 
 ## Personal account or organization
 
-`install` looks the URL's owner up first (with `gh`, else the public API) and
+`install` looks the URL's owner up first (with `gh`, else the host's API) and
 says whether it found an organization or a personal account. A personal
 account cannot have an account-wide runner or a runner group, so it is
 registered for one repository (`--url https://github.com/<you>/<repo>`); given

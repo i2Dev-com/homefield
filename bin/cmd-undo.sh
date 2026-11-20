@@ -137,20 +137,23 @@ reset_inspect() {
 }
 
 # The runner group install created, from the state file (state_get): org, name
-# and id (empty when install could not read it from GitHub's answer), and
-# RG_BAD 1 for a record that does not parse.
+# and id (empty when install could not read it from GitHub's answer), the host
+# the group lives on (github.com for a record written before the host support,
+# which was github.com-only), and RG_BAD 1 for a record that does not parse.
 RG_ORG=""
 RG_NAME=""
 RG_ID=""
 RG_BAD=0
 RG_LABEL=""
 RG_PAGE=""
+RG_HOST=""
 
 reset_load_group() {
-  local raw re='^([A-Za-z0-9_.-]+)/(.+)/([0-9]*)$'
+  local raw re='^([A-Za-z0-9_.-]+)/(.+)/([0-9]*)(/([A-Za-z0-9_.-]+))?$'
   RG_ORG=""
   RG_NAME=""
   RG_ID=""
+  RG_HOST=""
   RG_BAD=0
   raw="$(state_get group_created)"
   [ -n "$raw" ] || return 0
@@ -158,8 +161,10 @@ reset_load_group() {
     RG_ORG="${BASH_REMATCH[1]}"
     RG_NAME="${BASH_REMATCH[2]}"
     RG_ID="${BASH_REMATCH[3]}"
+    # A 3-field record (written before the host support) is a github.com
+    # group: the tool did not work on other hosts then.
+    RG_HOST="${BASH_REMATCH[5]:-github.com}"
     RG_LABEL="${RG_ORG}/${RG_NAME}"
-    RG_PAGE="https://github.com/organizations/${RG_ORG}/settings/actions/runner-groups"
   else
     RG_BAD=1
   fi
@@ -198,7 +203,15 @@ group_kept() {
 # runners to Default; and --keep-group was not given. A group that cannot be
 # checked is not deleted.
 reset_group() {
-  local keep="$1" own="$2" rows="" ids="" name vis pub id rid found_id="" found_name="" others=0 out
+  local keep="$1" own="$2" rows="" ids="" name vis pub id rid found_id="" found_name="" others=0 out host
+  # The group lives on the host the group_created record names — where this
+  # install created it, which survives a failed registration and a VM deleted
+  # by hand (R_URL is empty in both, and the environment may name another
+  # host). A record without a host field is a pre-host-support github.com
+  # group; with no record at all, the runner's registration host (R_URL) or
+  # HOMEFIELD_GITHUB_HOST, as before.
+  host="${RG_HOST:-$(github_host "$R_URL")}"
+  RG_PAGE="https://${host}/organizations/${RG_ORG}/settings/actions/runner-groups"
   if [ "$keep" = 1 ]; then
     group_kept "--keep-group was given"
     return 0
@@ -211,7 +224,7 @@ reset_group() {
     group_kept "gh is not installed, so it was not checked" problem
     return 0
   fi
-  if ! rows="$(list_groups_ids "$RG_ORG")"; then
+  if ! rows="$(list_groups_ids "$RG_ORG" "$host")"; then
     group_kept "gh could not list the runner groups of ${RG_ORG} (needs an org owner with the admin:org scope)" problem
     return 0
   fi
@@ -234,7 +247,7 @@ reset_group() {
     group_kept "group id ${found_id} is now named ${found_name}, not the group install created"
     return 0
   fi
-  if ! ids="$(group_runner_ids "$RG_ORG" "$found_id")"; then
+  if ! ids="$(group_runner_ids "$RG_ORG" "$found_id" "$host")"; then
     group_kept "gh could not list its runners, so it was not checked" problem
     return 0
   fi
@@ -247,7 +260,7 @@ reset_group() {
     group_kept "it holds ${others} other runner(s), and deleting a group moves its runners to Default"
     return 0
   fi
-  if out="$(gh api -X DELETE "orgs/${RG_ORG}/actions/runner-groups/${found_id}" </dev/null 2>&1)"; then
+  if out="$(gh api --hostname "$host" -X DELETE "orgs/${RG_ORG}/actions/runner-groups/${found_id}" </dev/null 2>&1)"; then
     rep "runner group ${RG_LABEL} (id ${found_id}): deleted"
   else
     group_kept "gh could not delete it (${out:-no message}; needs an org owner with the admin:org scope)" problem
