@@ -1748,6 +1748,9 @@ reset_vm_cycle() {
     log "reset: could not clone VM ${INSTANCE} from ${base}; the next watch cycle clones it again (or run bin/homefield re-register --instance ${INSTANCE})"
     return 2
   fi
+  # The clone inherited the base's config, reset-base marker included; a
+  # working VM that looks like a base would be skipped by vm_instances.
+  strip_base_marker "$INSTANCE"
   state_set reset_error ""
   log "cloned a fresh VM ${INSTANCE} from ${base}"
   return 0
@@ -1785,6 +1788,7 @@ re_register_single() {
         log "reset: could not clone VM ${INSTANCE} from $RESET_BASE; the next watch cycle retries (or run bin/homefield re-register --instance ${INSTANCE})"
         return 1
       fi
+      strip_base_marker "$INSTANCE"
       state_set reset_error ""
       recovery=1
     else
@@ -1887,7 +1891,7 @@ cmd_re_register() {
     return
   fi
 
-  local watch_vms=() list="" vm own_eph=0
+  local watch_vms=() list="" vm own_eph=0 original_instance="$INSTANCE"
   [ "$(state_get ephemeral)" = "1" ] && own_eph=1
   if [ "$EXPLICIT_INSTANCE" = 1 ]; then
     [ "$own_eph" = 1 ] ||
@@ -1901,13 +1905,16 @@ cmd_re_register() {
         [ "$(state_get ephemeral)" = "1" ] && watch_vms+=("$vm")
       done <<<"$list"
       if [ ${#watch_vms[@]} -eq 0 ] && [ "$own_eph" = 1 ]; then
-        # Every HomeField VM is gone (a failed reset deletes one, and the base
-        # VM is never listed): watch this instance anyway, so the loop can
-        # clone it back from its base instead of giving up.
-        watch_vms=("$INSTANCE")
+        # Every listed VM is persistent: the ephemeral one this instance's
+        # state describes is gone (a failed reset deletes one, and the base
+        # VM is never listed). Watch it anyway — the loop can clone it back
+        # from its base instead of giving up. The instance the state
+        # describes, not the last VM the list happened to name.
+        watch_vms=("$original_instance")
+        INSTANCE="$original_instance"
       fi
     elif [ "$own_eph" = 1 ]; then
-      watch_vms=("$INSTANCE")
+      watch_vms=("$original_instance")
     fi
     [ ${#watch_vms[@]} -gt 0 ] ||
       die "re-register --watch: no ephemeral VM found"

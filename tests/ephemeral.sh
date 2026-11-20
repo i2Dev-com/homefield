@@ -33,9 +33,11 @@ case "${1:-}" in
   --version) echo "limactl version 2.3.0" ;;
   list)
     # STUB_VM_GONE=1: the working VM is not listed (it is gone). STUB_BASE_PRESENT=1:
-    # the reset base VM (homefield-base) is listed, stopped.
+    # the reset base VM (homefield-base) is listed, stopped. STUB_EXTRA_ROWS:
+    # extra Lima rows (other HomeField VMs on this Mac).
     [ "${STUB_VM_GONE:-0}" = "1" ] || echo "homefield Running"
     [ "${STUB_BASE_PRESENT:-0}" = "1" ] && echo "homefield-base Stopped"
+    [ -n "${STUB_EXTRA_ROWS:-}" ] && printf '%b\n' "$STUB_EXTRA_ROWS"
     exit 0
     ;;
   stop|delete|clone|start)
@@ -573,6 +575,8 @@ record "...the clone comes before the re-register" "yes" \
   "$([ -n "$clone_line" ] && [ -n "$rereg_line" ] && [ "$clone_line" -lt "$rereg_line" ] && echo yes || echo no)"
 record "...a successful cycle clears reset_error" "yes" \
   "$(grep -qx 'reset_error=' "$WORK/state/homefield.state" && echo yes || echo no)"
+record "...the fresh working VM does not look like a base (the inherited marker is stripped)" "no" \
+  "$(grep -qF '# HomeField reset base VM' "$WORK/home/.lima/homefield/lima.yaml" && echo yes || echo no)"
 
 # 23. the stop fails: the reset is skipped, the VM and the re-register remain
 mkbase
@@ -636,6 +640,19 @@ STUB_CLONE_FAIL=1 STUB_BASE_PRESENT=1 STUB_JOB_RC=1 STUB_SVC_RC=1 hrun cmd_re_re
 calls="$(cat "$CALLS")"; st_body="$(cat "$WORK/state/homefield.state")"
 record "--watch survives a failing reset clone: loops on, retries the clone" "0/2/yes" \
   "$rc/$(grep -c 'limactl:clone' "$CALLS")/$(has "$st_body" "ephemeral_error=reset: clone from homefield-base failed")"
+
+# 28c. the ephemeral VM is gone but a persistent HomeField VM exists: the
+# watcher must recover the ephemeral instance its state describes, not watch
+# the persistent one (whose service running would idle the loop forever)
+mkdir -p "$WORK/home/.lima/other"
+printf '# Lima VM for the local GitHub Actions runner.\n' >"$WORK/home/.lima/other/lima.yaml"
+printf 'ephemeral=1\nephemeral_url=https://github.com/acme\nephemeral_name=test-mac-homefield\nreset_vm=1\n' >"$WORK/state/homefield.state"
+mkbase
+STUB_VM_GONE=1 STUB_BASE_PRESENT=1 STUB_EXTRA_ROWS='other Running' STUB_JOB_RC=1 STUB_SVC_RC=1 \
+  hrun cmd_re_register --watch --interval 0 --max-cycles 1
+calls="$(cat "$CALLS")"
+record "--watch with the ephemeral VM gone beside a persistent VM: recovers the ephemeral one" "0/yes/yes/no" \
+  "$rc/$(has "$calls" "limactl:clone --start=false homefield-base homefield")/$(has "$calls" "cmd=re-register")/$(has "$calls" "other")"
 
 # 29. upgrade --reset-vm: the switch follows the base (which only install
 # creates); --no-reset-vm always works

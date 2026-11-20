@@ -106,22 +106,37 @@ is_reset_base() {
   grep -qF "$HF_RESET_BASE_MARKER" "$f"
 }
 
+# strip_base_marker <name>: take the reset-base marker back out of that
+# instance's stored config. A working VM cloned from its base inherits the
+# base's config verbatim, marker included — and a working VM that looks like a
+# base would be skipped by vm_instances and never started, stopped or watched.
+# Called on every clone that produces a working VM; the base keeps its marker.
+strip_base_marker() {
+  local f="${LIMA_HOME:-$HOME/.lima}/$1/lima.yaml" tmp
+  [ -f "$f" ] || return 0
+  tmp="$(mktemp "${f%.yaml}.XXXXXX")" || return 1
+  grep -vF "$HF_RESET_BASE_MARKER" "$f" >"$tmp" || true
+  mv "$tmp" "$f"
+}
+
 # vm_instances: every HomeField VM on this Mac, one name per line, in Lima's
 # order. The default instance counts even without the marker (a config edited by
 # hand), because install creates it under that name. A --reset-vm base VM
-# (<instance>-base) is a HomeField VM too, but the tool never starts it — it
-# exists to be cloned from — so the commands that cover "every VM" (start,
-# stop, status, fleet, the watch loop) skip it; name it with --instance to act
-# on it. Returns 1 when Lima is not installed or cannot list; a command then
-# falls back to its single-instance path.
+# (<instance>-base, marked as such in its stored config) is a HomeField VM too,
+# but the tool never starts it — it exists to be cloned from — so the commands
+# that cover "every VM" (start, stop, status, fleet, the watch loop) skip it;
+# name it with --instance to act on it. An ordinary runner that happens to be
+# named <something>-base is not a base (no marker) and stays listed. Returns 1
+# when Lima is not installed or cannot list; a command then falls back to its
+# single-instance path.
 vm_instances() {
   local rows name status found=""
   command -v limactl >/dev/null || return 1
   rows="$(limactl list --format '{{.Name}} {{.Status}}' 2>/dev/null)" || return 1
   while read -r name status; do
     [ -n "$name" ] || continue
-    case "$name" in *-base) continue ;; esac
     if is_homefield_vm "$name" || [ "$name" = "$DEFAULT_INSTANCE" ]; then
+      is_reset_base "$name" && continue
       found="${found}${name}"$'\n'
     fi
   done <<<"$rows"
