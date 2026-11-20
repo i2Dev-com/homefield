@@ -57,6 +57,14 @@ host_repo() {
   printf '%s/%s' "$1" "$2"
 }
 
+# url_path <url>: the path after the host: the owner (an owner URL) or
+# owner/repo (a repository URL), on any GitHub host. The scheme, host and
+# trailing slash come off; a URL with no path comes back unchanged.
+url_path() {
+  local url="${1%/}"
+  printf '%s' "${url#https://*/}"
+}
+
 # gh_major_minor: GH_MAJOR/GH_MIN[OR] from `gh --version`'s first line
 # ("gh version 2.32.1"); empty when unreadable, like lima_major_minor.
 gh_major_minor() {

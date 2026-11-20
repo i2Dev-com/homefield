@@ -1113,11 +1113,10 @@ def default_api_url() -> str:
     """The REST API base for HOMEFIELD_GITHUB_HOST, the way gh maps a GitHub
     host: api.github.com for github.com, api.<host> for a *.ghe.com
     data-residency subdomain, and <host>/api/v3 for GitHub Enterprise Server.
-    GITHUB_API_URL, when set, overrides this entirely (it always has)."""
+    The value must be a bare hostname, the same rule bin/lib/github.sh's
+    github_host applies (no scheme, no path). GITHUB_API_URL, when set,
+    overrides this entirely (it always has)."""
     host = os.environ.get("HOMEFIELD_GITHUB_HOST", "github.com").strip()
-    if host.startswith("https://"):
-        host = host[len("https://"):]
-    host = host.rstrip("/")
     if not host or not all(c.isalnum() or c in "._-" for c in host):
         raise SystemExit(
             f"adopt.py: HOMEFIELD_GITHUB_HOST must be a hostname (letters, digits, '.', '-', '_'), got: {os.environ.get('HOMEFIELD_GITHUB_HOST', '')}"

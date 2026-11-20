@@ -149,7 +149,7 @@ group_advice() {
 # ensure_group found (GROUP_STATE).
 registered_next_steps() {
   local group="$1" slug="${2%/}"
-  slug="${slug#https://github.com/}"
+  slug="$(url_path "$slug")"
   echo
   echo "Registered. Next:"
   group_advice "$group" "$slug" "  - " "    "
@@ -332,7 +332,7 @@ setup_next_steps() {
 # setup_summary <group> <url> <name> <id>: the end of a fresh setup.
 setup_summary() {
   local group="$1" url="$2" slug="${2%/}"
-  slug="${slug#https://github.com/}"
+  slug="$(url_path "$slug")"
   echo
   setup_vm_lines
   setup_warm_line
@@ -442,7 +442,7 @@ setup_skip_routing() {
 # repositories and needing write access. End of input (Ctrl-D) is a no.
 setup_offer_routing() {
   local slug="${1%/}" answer repo
-  slug="${slug#https://github.com/}"
+  slug="$(url_path "$slug")"
   have_terminal || return 0
   echo
   if [[ "$slug" == */* ]]; then

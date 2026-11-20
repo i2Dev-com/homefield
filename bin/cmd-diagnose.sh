@@ -405,7 +405,7 @@ dg_render_human() {
   case "$DG_GROUP" in
     n/a)
       echo "  - Group: n/a (repository-scoped registration)"
-      echo "  - Repositories in group: n/a (a repository-scoped runner serves only ${DG_URL#https://github.com/})"
+      echo "  - Repositories in group: n/a (a repository-scoped runner serves only $(url_path "$DG_URL"))"
       ;;
     checked | not-checked)
       if [ -n "$DG_GROUP_NAME" ]; then
