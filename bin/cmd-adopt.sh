@@ -1382,7 +1382,21 @@ cmd_adopt() {
     fi
     ADOPT_APP_ID="$app_id"
   fi
-  ADOPT_PLAIN_CMD="homefield adopt --repo $(printf '%q' "$repo")"
+  # Every gh call below addresses ADOPT_GH_HOST: HOMEFIELD_GITHUB_HOST when
+  # set (a GitHub Enterprise Server or GHE.com host), github.com otherwise.
+  # The --repo argument is an owner/repo slug; the host comes from the
+  # environment, as it does for route.
+  ADOPT_GH_HOST="$(github_host "")"
+  # The continuation command, printed in the pull request body and in the
+  # wait/interrupt notes: the user runs it in their own shell, which has no
+  # HOMEFIELD_GITHUB_HOST, so a host other than github.com has to travel in
+  # the command (the way setup's hand-run hints carry it).
+  if [ "$ADOPT_GH_HOST" != github.com ]; then
+    ADOPT_PLAIN_CMD="HOMEFIELD_GITHUB_HOST=$(printf '%q' "$ADOPT_GH_HOST") homefield adopt"
+  else
+    ADOPT_PLAIN_CMD="homefield adopt"
+  fi
+  ADOPT_PLAIN_CMD="$ADOPT_PLAIN_CMD --repo $(printf '%q' "$repo")"
   [ "$label_given" = 0 ] || ADOPT_PLAIN_CMD="$ADOPT_PLAIN_CMD --label $(printf '%q' "$label")"
   [ "$group" = homefield-ci ] || ADOPT_PLAIN_CMD="$ADOPT_PLAIN_CMD --group $(printf '%q' "$group")"
   if [ -n "$app_id" ]; then
@@ -1406,11 +1420,6 @@ cmd_adopt() {
   done
   command -v gh >/dev/null || die "adopt needs gh (https://cli.github.com)"
   command -v python3 >/dev/null || die "adopt needs python3"
-  # Every gh call below addresses ADOPT_GH_HOST: HOMEFIELD_GITHUB_HOST when
-  # set (a GitHub Enterprise Server or GHE.com host), github.com otherwise.
-  # The --repo argument is an owner/repo slug; the host comes from the
-  # environment, as it does for route.
-  ADOPT_GH_HOST="$(github_host "")"
   [ -z "$app_id" ] || command -v openssl >/dev/null || die "adopt --app-id needs openssl"
   # The same label and option rules as the guard, and a message from it when
   # they fail. The shape is resolved later — an existing guard's own mode wins

@@ -3,37 +3,48 @@
 
 # The routing records, next to the per-instance state files (the same
 # directory, not inside them: they are per-Mac, not per-VM). `routing` holds
-# one `label repo` line per repository currently routed to a local runner —
-# the mirror of CI_RUNNER=local on GitHub — and `autoflip` holds the
+# one `label repo host` line per repository currently routed to a local
+# runner — the mirror of CI_RUNNER=local on GitHub — and `autoflip` holds the
 # repositories a `stop --route-hosted` flipped to hosted, waiting for
 # `start --route-local` (or the next start of an --auto-route VM) to bring
-# them back. One line per repo: a repo's CI_RUNNER points one way.
+# them back. One line per repo and host: a Mac may host runners for the same
+# owner/repo on github.com and a GitHub Enterprise Server, and the records
+# must not mix them — a restore against one host must not consume the other
+# host's pending entry. The host is the third field; a line without one (a
+# record written before #287) reads as github.com.
 routing_file() { printf '%s/routing' "${HOMEFIELD_STATE_DIR:-$HOME/.local/state/homefield}"; }
 autoflip_file() { printf '%s/autoflip' "${HOMEFIELD_STATE_DIR:-$HOME/.local/state/homefield}"; }
 
-# record_drop <file> <repo>: remove the repo's line, keeping the rest. A
-# missing file is already correct. The rewrite goes through a temp file next
-# to the target and moves over it, so a reader never sees half a file (the
-# same rule state_set follows).
+# The awk condition shared by the record readers: the line's repo is r and
+# its host is hval (an empty third field is github.com, so a legacy line and
+# a github.com line are the same record).
+RECORD_IS='($2 == r && ($3 == "" ? "github.com" : $3) == hval)'
+
+# record_drop <file> <repo> <host>: remove the repo's line for <host>,
+# keeping the rest. A missing file is already correct. The rewrite goes
+# through a temp file next to the target and moves over it, so a reader never
+# sees half a file (the same rule state_set follows).
 record_drop() {
-  local f="$1" repo="$2" dir tmp
+  local f="$1" repo="$2" host="$3" dir tmp
   [ -f "$f" ] || return 0
   dir="$(dirname "$f")"
   tmp="$(mktemp "$dir/.routing.XXXXXX")" || return 1
-  awk -v r="$repo" '$2 != r' "$f" >"$tmp" || { rm -f "$tmp"; return 1; }
+  awk -v r="$repo" -v hval="$host" "!$RECORD_IS" "$f" >"$tmp" ||
+    { rm -f "$tmp"; return 1; }
   mv -f "$tmp" "$f" || { rm -f "$tmp"; return 1; }
 }
 
-# record_add <file> <label> <repo>: one `label repo` line for the repo,
-# replacing any line it already has.
+# record_add <file> <label> <repo> <host>: one `label repo host` line for the
+# repo on the host, replacing any line it already has for that pair (a
+# record for the same repo on another host stays).
 record_add() {
   local f="$1" dir tmp
   dir="$(dirname "$f")"
   mkdir -p "$dir" || return 1
   tmp="$(mktemp "$dir/.routing.XXXXXX")" || return 1
   {
-    [ ! -f "$f" ] || awk -v r="$3" '$2 != r' "$f"
-    printf '%s %s\n' "$2" "$3"
+    [ ! -f "$f" ] || awk -v r="$3" -v hval="$4" "!$RECORD_IS" "$f"
+    printf '%s %s %s\n' "$2" "$3" "$4"
   } >"$tmp" || { rm -f "$tmp"; return 1; }
   mv -f "$tmp" "$f" || { rm -f "$tmp"; return 1; }
 }
@@ -160,8 +171,16 @@ route_stop_fallback() {
   local owner repo_scope=org
   owner="$(scope_owner "$url")"
   case "$owner" in */*) repo_scope=repo ;; esac
-  while read -r label repo; do
+  while read -r label repo rhost; do
     [ -n "$repo" ] || continue
+    # The host field (a legacy line without one reads as github.com): this
+    # stop only flips github.com records — it refused other hosts above —
+    # and a record for another host belongs to that host's runner, whose
+    # stop is the one that may flip it.
+    [ "${rhost:-github.com}" = github.com ] || {
+      log "${repo}: routed on ${rhost}, not github.com; not switching it to hosted"
+      continue
+    }
     # The rows describe this scope's runners only, so a record for a repo in
     # another scope (a Mac hosting runners for two organizations) is not this
     # stop's to flip: its own runner is invisible here and may be online.
@@ -205,10 +224,10 @@ route_stop_fallback() {
       # cmd_route also returns 1 when the variable landed but the stuck-run
       # recovery failed. The repo leaving the routing record is what a landed
       # variable looks like in the records; a failed set leaves it there.
-      [ -n "$(awk -v r="$repo" '$2 == r {print; exit}' "$(routing_file)" 2>/dev/null)" ] || landed=1
+      [ -n "$(awk -v r="$repo" -v hval="$host" "$RECORD_IS { print; exit }" "$(routing_file)" 2>/dev/null)" ] || landed=1
     fi
     if [ "$landed" = 1 ]; then
-      record_add "$(autoflip_file)" "$label" "$repo" ||
+      record_add "$(autoflip_file)" "$label" "$repo" "$host" ||
         { rc=1; echo "homefield: ${repo}: flipped to hosted but could not record it for the next start; run bin/homefield route local --repo ${repo} --label ${label} by hand" >&2; }
       flipped=$((flipped + 1))
     fi
@@ -249,8 +268,15 @@ route_start_restore() {
   fi
   labels="$(lower "$labels")"
   owner="$(scope_owner "$url")"
-  while read -r label repo; do
+  while read -r label repo rhost; do
     [ -n "$repo" ] || continue
+    # The host field (a legacy line without one reads as github.com): only
+    # this host's records are this start's to restore — a pending entry for
+    # the same owner/repo on another host belongs to that host's runner.
+    if [ "${rhost:-github.com}" != "$host" ]; then
+      log "${repo}: flipped on ${rhost:-github.com}, not ${host}; leaving it hosted"
+      continue
+    fi
     if ! in_scope "$repo" "$owner"; then
       log "${repo}: routed under a different scope than ${owner}; leaving it hosted"
       continue
@@ -260,7 +286,7 @@ route_start_restore() {
     serves_jobs "$labels" "$label" || continue
     # See route_stop_fallback: cmd_route reads its host from the environment.
     if HOMEFIELD_GITHUB_HOST="$host" cmd_route local --repo "$repo" --label "$label"; then
-      record_drop "$(autoflip_file)" "$repo" ||
+      record_drop "$(autoflip_file)" "$repo" "$host" ||
         { rc=1; echo "homefield: ${repo}: routed local but could not update the record; it will be routed local again on the next start" >&2; }
       restored=$((restored + 1))
     else
@@ -373,7 +399,7 @@ seed_routing_records() {
     # An existing record is the truth about which label routes this
     # repository; this runner's label would be a guess (runners in one
     # group can use different labels), so never overwrite.
-    if [ -n "$(awk -v r="$r" '$2 == r {print; exit}' "$(routing_file)" 2>/dev/null)" ]; then
+    if [ -n "$(awk -v r="$r" -v hval="$host" "$RECORD_IS { print; exit }" "$(routing_file)" 2>/dev/null)" ]; then
       preserved=$((preserved + 1))
       continue
     fi
@@ -405,7 +431,7 @@ seed_routing_records() {
       echo "homefield: ${r}: routed local, but ${label} is not provably the only label that can serve it here; not recorded (record it by hand: bin/homefield route local --repo ${r} --label <label>)" >&2
       continue
     fi
-    if record_add "$(routing_file)" "$label" "$r"; then
+    if record_add "$(routing_file)" "$label" "$r" "$host"; then
       n=$((n + 1))
     else
       rc=1
@@ -486,12 +512,12 @@ cmd_route() {
       # stop's label (the start would flip it back, and the next stop of
       # the operator's runner would then skip the repo and queue its jobs).
       if [ "$target" = local ]; then
-        record_add "$(routing_file)" "$label" "$repo" ||
+        record_add "$(routing_file)" "$label" "$repo" "$host" ||
           { rc=1; log "${repo}: routed local but could not record it; the automatic fallback will not cover this repo ($(routing_file))" >&2; }
-        record_drop "$(autoflip_file)" "$repo" || { rc=1; log "${repo}: could not update $(autoflip_file)" >&2; }
+        record_drop "$(autoflip_file)" "$repo" "$host" || { rc=1; log "${repo}: could not update $(autoflip_file)" >&2; }
       else
-        record_drop "$(routing_file)" "$repo" || { rc=1; log "${repo}: could not update $(routing_file)" >&2; }
-        record_drop "$(autoflip_file)" "$repo" || { rc=1; log "${repo}: could not update $(autoflip_file)" >&2; }
+        record_drop "$(routing_file)" "$repo" "$host" || { rc=1; log "${repo}: could not update $(routing_file)" >&2; }
+        record_drop "$(autoflip_file)" "$repo" "$host" || { rc=1; log "${repo}: could not update $(autoflip_file)" >&2; }
       fi
       log "${repo}: CI_RUNNER ${current} -> ${target}"
     fi

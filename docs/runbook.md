@@ -641,7 +641,11 @@ does by hand. On a GitHub host other than github.com (GHES, GHE.com) the
 stop-side fallback skips with a warning, and `route hosted` refuses: GitHub's
 hosted runners exist only on github.com, so there is nothing to fall back to
 there ([#287](https://github.com/i2Dev-com/homefield/issues/287) added the
-host support). Autostart at login
+host support). The records carry the host they were written for (a line
+without one, from before the host support, reads as github.com): a Mac with
+runners for the same owner/repo on github.com and a GHES host keeps the two
+hosts' records apart, so one host's start does not consume the other's
+pending restore. Autostart at login
 boots the VMs but nothing runs `homefield start` for you, so after a reboot or
 sleep the fallback's restore waits for the sleep/wake watcher (a planned
 follow-up to this change).

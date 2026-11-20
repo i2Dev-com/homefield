@@ -1913,6 +1913,14 @@ record "...the next-step line without --wait too, and --group alone adds no --la
 wait_adopt "open" ADOPT_WAIT_INTERVAL=30 -- --setup --wait --wait-timeout 1
 record "...no flags given, none added" "yes/no" "$(has "$out" 'Once it is merged, run: homefield adopt --repo acme/app')/$(has "$out" 'run: homefield adopt --repo acme/app --')"
 
+# On a GitHub host other than github.com the continuation command carries the
+# host: the user runs it in their own shell, which has no HOMEFIELD_GITHUB_HOST
+# (Codex #295 round 2).
+ghes_hand='HOMEFIELD_GITHUB_HOST=ghes.acme.example homefield adopt --repo acme/app'
+wait_adopt "open" HOMEFIELD_GITHUB_HOST=ghes.acme.example ADOPT_WAIT_INTERVAL=30 -- --setup --wait --wait-timeout 1
+record "a GHES host: the hand-off command carries HOMEFIELD_GITHUB_HOST" "yes/yes" \
+  "$(has "$out" "Once it is merged, run: ${ghes_hand}")/$(has "$(cat "$work/pr_body")" "\`${ghes_hand}\` adds the repository")"
+
 # a pull request URL with no number to follow
 wait_adopt "merged" GH_PR_URL=https://github.com/acme/app/pull/x -- --setup --wait
 record "a pull request number that cannot be read: stops, the pull request and branch stay, exit 4" "4/yes/0/0" \
