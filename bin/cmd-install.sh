@@ -1904,14 +1904,20 @@ cmd_re_register() {
         INSTANCE="$vm"
         [ "$(state_get ephemeral)" = "1" ] && watch_vms+=("$vm")
       done <<<"$list"
-      if [ ${#watch_vms[@]} -eq 0 ] && [ "$own_eph" = 1 ]; then
-        # Every listed VM is persistent: the ephemeral one this instance's
-        # state describes is gone (a failed reset deletes one, and the base
-        # VM is never listed). Watch it anyway — the loop can clone it back
-        # from its base instead of giving up. The instance the state
-        # describes, not the last VM the list happened to name.
-        watch_vms=("$original_instance")
-        INSTANCE="$original_instance"
+      # The instance this state describes is always watched, even when the
+      # list found other ephemeral VMs: it may be absent (a failed reset
+      # deletes one), and this watch is what clones it back from its base.
+      if [ "$own_eph" = 1 ]; then
+        local already=0
+        if [ ${#watch_vms[@]} -gt 0 ]; then
+          for vm in "${watch_vms[@]}"; do
+            if [ "$vm" = "$original_instance" ]; then already=1; fi
+          done
+        fi
+        if [ "$already" != 1 ]; then
+          watch_vms+=("$original_instance")
+          INSTANCE="$original_instance"
+        fi
       fi
     elif [ "$own_eph" = 1 ]; then
       watch_vms=("$original_instance")

@@ -654,6 +654,20 @@ calls="$(cat "$CALLS")"
 record "--watch with the ephemeral VM gone beside a persistent VM: recovers the ephemeral one" "0/yes/yes/no" \
   "$rc/$(has "$calls" "limactl:clone --start=false homefield-base homefield")/$(has "$calls" "cmd=re-register")/$(has "$calls" "other")"
 
+# 28d. the ephemeral VM is gone beside ANOTHER EPHEMERAL VM: the missing one
+# is still watched and recovered (the old fallback only fired when no
+# ephemeral VM was found at all)
+mkdir -p "$WORK/home/.lima/second"
+printf '# Lima VM for the local GitHub Actions runner.\n' >"$WORK/home/.lima/second/lima.yaml"
+printf 'ephemeral=1\nephemeral_url=https://github.com/acme\n' >"$WORK/state/second.state"
+printf 'ephemeral=1\nephemeral_url=https://github.com/acme\nephemeral_name=test-mac-homefield\nreset_vm=1\n' >"$WORK/state/homefield.state"
+mkbase
+STUB_VM_GONE=1 STUB_BASE_PRESENT=1 STUB_EXTRA_ROWS='second Running' STUB_JOB_RC=1 STUB_SVC_RC=1 \
+  hrun cmd_re_register --watch --interval 0 --max-cycles 1
+calls="$(cat "$CALLS")"
+record "--watch with the ephemeral VM gone beside another ephemeral VM: both watched, the gone one recovered" "0/yes/yes" \
+  "$rc/$(has "$calls" "limactl:clone --start=false homefield-base homefield")/$(has "$calls" "cmd=re-register")"
+
 # 29. upgrade --reset-vm: the switch follows the base (which only install
 # creates); --no-reset-vm always works
 UP_HARNESS="$WORK/up_harness.sh"
