@@ -201,8 +201,9 @@ route_stop_fallback() {
       [ "$rname" = "$name" ] && continue
       # A runner in the exclusion list goes away with this Mac (the watcher's
       # sleep side), so it does not keep the label served, however online
-      # GitHub still lists it.
-      if [ -n "$exclude" ] && printf '%s\n' "$exclude" | grep -qx "$rname"; then
+      # GitHub still lists it. -F -x: a literal whole-line match — a runner
+      # name is data, not a pattern.
+      if [ -n "$exclude" ] && printf '%s\n' "$exclude" | grep -Fxq "$rname"; then
         continue
       fi
       [ "$rstatus" = online ] || continue
