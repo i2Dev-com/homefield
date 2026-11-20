@@ -572,4 +572,43 @@ record "diagnose loopback=stale: warning and qualified summary" "0/yes/yes" \
   "$rc/$(has "$out" '  - Loopback: stale')/$(has "$out" 'Summary: healthy as far as it could be checked.')"
 rm -rf "$home/.local/state/homefield"
 
+# The sleep/wake watcher's facts, for a VM with the automatic fallback on:
+# a missing agent is a problem, a failed last run a hint naming the log.
+echo "the sleep/wake watcher:"
+guest_fs
+state_dir="$home/.local/state/homefield"
+mkdir -p "$state_dir"
+printf 'auto_route=1\n' >"$state_dir/homefield.state"
+diag "${healthy[@]}" --
+record "auto_route=1, the agent missing: a problem with the fix, exit 1" "1/yes/yes" \
+  "$rc/$(has "$out" 'Route watcher: NOT installed')/$(has "$out" 'upgrade --auto-route')"
+
+diag "${healthy[@]}" -- --json
+record "...--json says not-installed, with the problem" "yes/yes" \
+  "$(has "$out" '"route_watcher": {"state": "not-installed"')/$(has "$out" 'the route watcher is not installed')"
+
+mkdir -p "$home/Library/LaunchAgents"
+: >"$home/Library/LaunchAgents/com.homefield.route-watcher.plist"
+diag "${healthy[@]}" --
+record "the agent installed, no run recorded: no problem, exit 0" "0/yes/no" \
+  "$rc/$(has "$out" 'Route watcher: installed (no run recorded yet)')/$(has "$out" 'problem')"
+
+printf 'last_run=1\nlast_run_at=2026-11-20 08:00:00\nlast_mode=sleep\nlast_result=failed\n' >"$state_dir/route-watcher.state"
+diag "${healthy[@]}" --
+record "a failed last run: a hint naming the log, exit 0" "0/yes/yes" \
+  "$rc/$(has "$out" 'Next: the route watcher')/$(has "$out" 'route-watcher.log')"
+record "...the human line says which run failed" "yes" \
+  "$(has "$out" 'last ran sleep at 2026-11-20 08:00:00: FAILED')"
+
+diag "${healthy[@]}" -- --json
+record "...--json carries the failed run" "yes" \
+  "$(has "$out" '"route_watcher": {"state": "failed", "last_run": "2026-11-20 08:00:00", "last_mode": "sleep", "last_result": "failed"}')"
+
+printf 'auto_route=0\n' >"$state_dir/homefield.state"
+diag "${healthy[@]}" --
+record "auto_route=0: no watcher line, exit 0" "0/no" \
+  "$rc/$(has "$out" 'Route watcher')"
+
+rm -rf "$state_dir" "$home/Library/LaunchAgents"
+
 summary

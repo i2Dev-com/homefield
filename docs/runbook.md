@@ -687,10 +687,60 @@ support). The records carry the host they were written for (a line
 without one, from before the host support, reads as github.com): a Mac with
 runners for the same owner/repo on github.com and a GHES host keeps the two
 hosts' records apart, so one host's start does not consume the other's
-pending restore. Autostart at login
-boots the VMs but nothing runs `homefield start` for you, so after a reboot or
-sleep the fallback's restore waits for the sleep/wake watcher (a planned
-follow-up to this change).
+pending restore.
+
+## The sleep/wake watcher (sleep and login)
+
+Stop and start need someone to run them. Two moments have no such caller:
+the Mac sleeping (the Lima VMs do not survive sleep cleanly, so the runners
+go offline with the Mac and queued jobs wait behind them) and a reboot or
+login (autostart boots the VMs, but nothing restores the repositories a
+stop flipped). `install --auto-route` and `upgrade --auto-route` therefore
+also install a LaunchAgent, `com.homefield.route-watcher`, whose helper
+(part of the installed tool, a small Python program that receives macOS's
+power events) runs `homefield route-watch sleep` when the Mac is about to
+sleep and `homefield route-watch wake` when it wakes up or logs in.
+
+The sleep side runs the stop-side flip of the section above, without
+stopping the VMs: every Running VM whose own `auto_route` is on has its
+routed repositories flipped to hosted, so jobs queued while the Mac is away
+run on GitHub's runners, and the flipped repositories wait in `autoflip` for
+the wake side (or the next `start`) to bring them back. A VM with a job
+running is skipped — the same rule `stop` applies — and so is a VM that
+cannot be asked whether one is: neither is flipped and neither's records
+are touched. Because every runner on the Mac goes away together at sleep,
+the flip's still-served check treats all of them as gone: two VMs sharing a
+label do not leave each other's repositories served.
+
+The wake side starts every VM whose `auto_route` is on if it is not running,
+waits for each runner to be listed online (up to
+`HOMEFIELD_WATCH_WAKE_WAIT` seconds per VM, default 120), and runs the
+start-side restore. A VM that does not come back, and a GitHub that cannot
+be asked, keep their pending entries for the next `start` or the next wake
+and the run says so. A VM with `auto_route` off is never touched by the
+watcher on either side: its routing stays exactly where the operator left
+it, and its pending entries keep waiting for the explicit `start
+--route-local`.
+
+The watcher is fail-safe in the same direction as the rest of the fallback:
+when a flip cannot be proven, a VM cannot be asked, or a restore cannot
+run, the records stay as they are and the run is reported as failed. Each
+run is recorded in `route-watcher.state` (the same directory as the routing
+records), `status` shows the last run for every VM with the fallback on,
+and `diagnose` turns a missing agent into a problem with the fixing
+command, and a failed last run into a hint naming the log. The log,
+`route-watcher.log` in the same directory, carries every flip, skip and
+failure in full. macOS grants about 30 seconds before it forces a sleep,
+so the sleep side is bounded by `HOMEFIELD_WATCH_SLEEP_BUDGET` (default
+20 s): a flip that does not finish in time is killed and logged loudly, and
+the repositories it did not reach keep their routing until the next wake or
+start.
+
+`--no-auto-route`, `uninstall` and `reset` remove the agent when no
+remaining VM on this Mac has the fallback on; while any VM wants it, the
+agent stays, because it is per-Mac and the switch is per-VM. A Mac where
+some VM has the fallback off still gets the agent — it covers every VM that
+has it on.
 
 ## Failure modes
 
@@ -1077,7 +1127,10 @@ with new values changes nothing.
 
 `bin/homefield uninstall` deregisters the runner (fetching or asking for a
 remove token), turns off autostart and deletes the VM; `--keep-vm` only
-deregisters. By hand:
+deregisters. When the deleted VM was the last one on this Mac with the
+automatic fallback on, `uninstall` also removes the sleep/wake agent
+([The sleep/wake watcher](#the-sleep-wake-watcher-sleep-and-login)); a
+`reset` does the same once its state file is gone. By hand:
 
 ```bash
 # Every repository that routes to it: switch to hosted first

@@ -30,8 +30,18 @@ printf '# Lima VM.\n' >"$work/home/.lima/homefield/lima.yaml"
 # The stub shebangs are #!/usr/bin/env bash and a stub-only PATH cannot
 # resolve that without bash on it (the same rule tests/fakes.sh's sh default
 # follows), so bash — and everything the route code and the records call —
-# is on the stubs' PATH from the start.
-for t in awk bash cat dirname grep mktemp mkdir mv rm sleep tr; do ln -s "$(command -v "$t")" "$stubs/$t"; done
+# is on the stubs' PATH from the start. python3 is the route watcher's
+# power-event helper (its --auto-route check refuses without it); date writes
+# the watcher's run record.
+for t in awk bash cat date dirname grep mktemp mkdir mv rm sed sleep tr python3; do ln -s "$(command -v "$t")" "$stubs/$t"; done
+
+# launchctl: the route watcher agent's load and unload, recorded.
+cat >"$stubs/launchctl" <<'EOF'
+#!/usr/bin/env bash
+echo "launchctl $*" >>"$CALLS"
+exit 0
+EOF
+chmod +x "$stubs/launchctl"
 
 # ── the gh stub: variables, runner lists, runs, jobs, cancel/rerun ─────────
 cat >"$stubs/gh" <<'EOF'
@@ -562,10 +572,16 @@ cat >"$stubs/limactl" <<'EOF'
 echo "limactl $*" >>"$CALLS"
 case "$1" in
   --version) echo "limactl version 2.3.0" ;;
-  list) [ -z "${LIMA_STATUS:-}" ] || echo "homefield ${LIMA_STATUS}" ;;
+  list)
+    # LIMA_ROWS: a multi-VM Mac (the watcher's fleet tests); otherwise one VM.
+    if [ -n "${LIMA_ROWS:-}" ]; then printf '%b' "$LIMA_ROWS"
+    else [ -z "${LIMA_STATUS:-}" ] || echo "homefield ${LIMA_STATUS}"
+    fi ;;
   start) [ -z "${START_FAIL:-}" ] || { echo "limactl: could not start" >&2; exit 1; } ;;
   stop) [ -z "${STOP_FAIL:-}" ] || { echo "limactl: could not stop" >&2; exit 1; } ;;
   shell)
+    # guest() calls: limactl shell --workdir / <vm> [--] <through> <cmd> ...
+    vm="$4"
     shift 4
     [ "$1" != sudo ] || shift
     case "$1" in
@@ -573,10 +589,19 @@ case "$1" in
         script="$3"
         case "$script" in
           *'test -f'*) [ "${REG:-0}" = 0 ] && echo yes || echo no ;;
-          *pgrep*) [ "${JOB:-no}" = yes ] && echo yes || echo no ;;
+          *pgrep*)
+            [ -z "${PGREP_FAIL:-}" ] || exit 2
+            if [ -n "${JOBS_DIR:-}" ]; then [ -f "$JOBS_DIR/$vm" ] && echo yes || echo no
+            else [ "${JOB:-no}" = yes ] && echo yes || echo no
+            fi ;;
         esac
         ;;
-      python3) printf '%b' "${SETTING_OUT-}" ;;
+      python3)
+        # SETTINGS_DIR: per-VM settings for a multi-VM Mac; otherwise the one
+        # SETTING_OUT every VM answers with.
+        if [ -n "${SETTINGS_DIR:-}" ] && [ -f "$SETTINGS_DIR/$vm" ]; then cat "$SETTINGS_DIR/$vm"
+        else printf '%b' "${SETTING_OUT-}"
+        fi ;;
       cat)
         case "$2" in
           */.service) [ -z "${SVC_NAME:-}" ] || printf '%s' "$SVC_NAME" ;;
@@ -716,6 +741,100 @@ record "an unknown start option: refused" "1/yes" \
   "$rc/$(has "$err" 'start takes no options besides --instance and --route-local')"
 
 echo
+echo "the sleep/wake watcher"
+
+# watcher_state_value <key>: the per-Mac run record's value (route-watcher.state).
+watcher_state_value() { awk -v k="$1" 'index($0, k "=") == 1 { print substr($0, length(k) + 2); exit }' "$state/route-watcher.state" 2>/dev/null; }
+
+# sleep: one Running VM, idle, the automatic fallback on, one repo routed
+# local under the runner's label. Jobs are queued (JOB=no), GitHub lists the
+# runner online (the still-served check must skip it by name).
+sleep_env=(LIMA_STATUS=Running REG=0 SETTING_OUT="$settings" SVC_NAME='actions.runner.acme.test.service' JOB=no)
+
+printf 'auto_route=1\n' >"$state/homefield.state"
+printf 'homefield-ci acme/api\n' >"$state/routing"
+rm -f "$state/autoflip"
+hf "${sleep_env[@]}" GH_RUNNERS="$runner_rows" -- route-watch sleep
+record "route-watch sleep, jobs queued: the repo is flipped to hosted, the VM is not stopped, exit 0" "0/yes/no/no" \
+  "$rc/$(grep -q 'variable set CI_RUNNER --repo github.com/acme/api --body hosted' "$calls" && echo yes || echo no)/$(grep -q '^limactl stop' "$calls" && echo yes || echo no)/$(has "$out" 'VM homefield: Stopped')"
+record "...the flipped repo waits in autoflip" "homefield-ci acme/api github.com" "$(cat "$state/autoflip" 2>/dev/null)"
+record "...the run is recorded" "sleep/ok" "$(watcher_state_value last_mode)/$(watcher_state_value last_result)"
+
+printf 'homefield-ci acme/api\n' >"$state/routing"
+rm -f "$state/autoflip"
+hf "${sleep_env[@]}" JOB=yes -- route-watch sleep
+record "route-watch sleep, a job running: skipped, the records are untouched, exit 0" "0/0/yes" \
+  "$rc/$(grep -c 'variable set' "$calls" || true)/$(has "$out" 'a job is running')"
+record "...nothing waits in autoflip" "0" "$([ -f "$state/autoflip" ] && wc -l <"$state/autoflip" | tr -d ' ' || echo 0)"
+
+printf 'homefield-ci acme/api\n' >"$state/routing"
+rm -f "$state/autoflip"
+hf "${sleep_env[@]}" PGREP_FAIL=1 -- route-watch sleep
+record "route-watch sleep, the VM cannot be asked: fail safe, nothing flips, exit 1" "1/0/yes" \
+  "$rc/$(grep -c 'variable set' "$calls" || true)/$(has "$err" 'could not ask whether a job is running')"
+record "...the routing record is untouched" "homefield-ci acme/api" "$(cat "$state/routing")"
+record "...the failed run is recorded" "sleep/failed" "$(watcher_state_value last_mode)/$(watcher_state_value last_result)"
+
+printf 'auto_route=0\n' >"$state/homefield.state"
+printf 'homefield-ci acme/api\n' >"$state/routing"
+hf "${sleep_env[@]}" GH_RUNNERS="$runner_rows" -- route-watch sleep
+record "route-watch sleep, auto_route=0: the VM's routing is left alone" "0/0" \
+  "$rc/$(grep -c 'variable set' "$calls" || true)"
+printf 'auto_route=1\n' >"$state/homefield.state"
+
+# wake: the VM is down (it does not survive sleep cleanly), one repo waits in
+# autoflip, GitHub lists the runner online once it is up.
+printf 'homefield-ci acme/api\n' >"$state/autoflip"
+hf LIMA_STATUS=Stopped REG=0 SETTING_OUT="$settings" SVC_NAME='actions.runner.acme.test.service' \
+  GH_RUNNERS='42\tonline\tfalse\n' GH_RUNNERS_NAMED="$runner_rows" HOMEFIELD_WATCH_WAKE_WAIT=1 -- route-watch wake
+record "route-watch wake: the VM is started and the pending repo restored, exit 0" "0/yes/yes/0" \
+  "$rc/$(grep -q '^limactl start --tty=false homefield' "$calls" && echo yes || echo no)/$(grep -q 'variable set CI_RUNNER --repo github.com/acme/api --body local' "$calls" && echo yes || echo no)/$([ -f "$state/autoflip" ] && wc -l <"$state/autoflip" | tr -d ' ' || echo 0)"
+record "...the repo is recorded as routed local" "homefield-ci acme/api github.com" "$(cat "$state/routing" 2>/dev/null)"
+record "...the run is recorded" "wake/ok" "$(watcher_state_value last_mode)/$(watcher_state_value last_result)"
+
+printf 'homefield-ci acme/api\n' >"$state/autoflip"
+hf LIMA_STATUS=Running REG=0 SETTING_OUT="$settings" GH_RUNNERS_FAIL=1 HOMEFIELD_WATCH_WAKE_WAIT=1 -- route-watch wake
+record "route-watch wake, GitHub cannot be asked: the entries are kept, exit 1" "1/yes/yes" \
+  "$rc/$(grep -q acme/api "$state/autoflip" && echo yes || echo no)/$(has "$err" 'not online after')"
+record "...the failed run is recorded" "wake/failed" "$(watcher_state_value last_mode)/$(watcher_state_value last_result)"
+
+printf 'auto_route=0\n' >"$state/homefield.state"
+printf 'homefield-ci acme/api\n' >"$state/autoflip"
+hf LIMA_STATUS=Stopped REG=0 SETTING_OUT="$settings" -- route-watch wake
+record "route-watch wake, auto_route=0: nothing is started or restored" "0/0/0/yes" \
+  "$rc/$(grep -c '^limactl start' "$calls" || true)/$(grep -c 'variable set' "$calls" || true)/$(grep -q acme/api "$state/autoflip" && echo yes || echo no)"
+printf 'auto_route=1\n' >"$state/homefield.state"
+
+# A two-VM Mac whose runners share a label: at sleep both runners go away
+# together, so neither may keep the other's repositories served — the flip's
+# still-served check must exclude every runner on this Mac.
+lima="$work/lima"
+mkdir -p "$lima/second" "$work/settings" "$work/jobs"
+printf '%s\n' '# Lima VM for the local GitHub Actions runner.' >"$lima/second/lima.yaml"
+printf 'my-mac-homefield\nhttps://github.com/acme\n42\n' >"$work/settings/homefield"
+printf 'second-mac\nhttps://github.com/acme\n43\n' >"$work/settings/second"
+printf 'auto_route=1\n' >"$state/second.state"
+printf 'homefield-ci acme/api\nhomefield-ci acme/web\n' >"$state/routing"
+rm -f "$state/autoflip"
+hf LIMA_ROWS='homefield Running\nsecond Running\n' LIMA_HOME="$lima" SETTINGS_DIR="$work/settings" \
+  JOBS_DIR="$work/jobs" REG=0 \
+  GH_RUNNERS='42\tmy-mac-homefield\tonline\tself-hosted,linux,arm64,homefield-ci\n43\tsecond-mac\tonline\tself-hosted,linux,arm64,homefield-ci\n' \
+  -- route-watch sleep
+record "sleep on a two-VM Mac sharing a label: both repos flip (each runner would keep the other's served)" "0/yes/yes" \
+  "$rc/$(grep -q 'variable set CI_RUNNER --repo github.com/acme/api --body hosted' "$calls" && echo yes || echo no)/$(grep -q 'variable set CI_RUNNER --repo github.com/acme/web --body hosted' "$calls" && echo yes || echo no)"
+
+# A stopped VM is not asked and not flipped: its runner is not taking jobs.
+printf 'homefield-ci acme/api\n' >"$state/routing"
+rm -f "$state/autoflip" "$state/second.state"
+hf LIMA_ROWS='homefield Running\nsecond Stopped\n' LIMA_HOME="$lima" SETTINGS_DIR="$work/settings" \
+  JOBS_DIR="$work/jobs" REG=0 SETTING_OUT="$settings" GH_RUNNERS="$runner_rows" -- route-watch sleep
+record "sleep skips a Stopped VM: it is not asked and its records stay" "0/no" \
+  "$rc/$(grep -q 'second-mac' "$calls" && echo yes || echo no)"
+record "...the Running VM still flips" "homefield-ci acme/api github.com" "$(cat "$state/autoflip" 2>/dev/null)"
+rm -rf "$lima" "$work/settings" "$work/jobs"
+rm -f "$state/second.state" "$state/homefield.state" "$state/routing" "$state/autoflip" "$state/route-watcher.state"
+
+echo
 echo "the --auto-route switch on install and upgrade"
 cat >"$stubs/scutil" <<'EOF'
 #!/bin/sh
@@ -779,6 +898,10 @@ record "install --auto-route: the switch is saved on" "0/1" \
   "$rc/$(state_value auto_route)"
 record "...and the records are seeded from the group's already-local repositories" "homefield-ci acme/api github.com" \
   "$(cat "$state/routing" 2>/dev/null)"
+record "...the route watcher LaunchAgent is installed and loaded" "yes/yes" \
+  "$([ -f "$work/home/Library/LaunchAgents/com.homefield.route-watcher.plist" ] && echo yes || echo no)/$(grep -q 'launchctl load -w' "$calls" && echo yes || echo no)"
+record "...the agent logs to the state directory" "yes" \
+  "$(grep -q 'route-watcher.log' "$work/home/Library/LaunchAgents/com.homefield.route-watcher.plist" && echo yes || echo no)"
 iharness_env=()
 
 rm -f "$state/routing"
@@ -796,10 +919,10 @@ iharness cmd_install --url https://github.com/acme/api --auto-route
 record "a repository-scoped install --auto-route: the registration's repo is seeded" "0/homefield-ci acme/api github.com" \
   "$rc/$(cat "$state/routing" 2>/dev/null)"
 iharness_env=()
-rm -f "$state/homefield.state"
+rm -f "$state/homefield.state" "$work/home/Library/LaunchAgents/com.homefield.route-watcher.plist"
 iharness cmd_install --url https://github.com/acme --org
-record "plain install: the switch is saved off" "0/0" \
-  "$rc/$(state_value auto_route)"
+record "plain install: the switch is saved off, the watcher stays out" "0/0/no" \
+  "$rc/$(state_value auto_route)/$([ -f "$work/home/Library/LaunchAgents/com.homefield.route-watcher.plist" ] && echo yes || echo no)"
 
 printf 'auto_route=1\n' >"$state/homefield.state"
 printf 'group_created=acme/homefield-ci/7\n' >>"$state/homefield.state"
@@ -814,6 +937,19 @@ iharness_env=(STUB_REG=0)
 iharness cmd_upgrade --no-auto-route
 record "upgrade --no-auto-route: the switch is saved off" "0/0" \
   "$rc/$(state_value auto_route)"
+record "...the route watcher agent is removed with it (no other VM wants it)" "no" \
+  "$([ -f "$work/home/Library/LaunchAgents/com.homefield.route-watcher.plist" ] && echo yes || echo no)"
+
+# Another VM on the Mac still wanting the watcher keeps the agent in place:
+# the agent is per-Mac, the switch is per-VM.
+printf 'auto_route=1\n' >"$state/other.state"
+iharness cmd_upgrade --auto-route
+record "upgrade --auto-route: the agent is back" "yes" \
+  "$([ -f "$work/home/Library/LaunchAgents/com.homefield.route-watcher.plist" ] && echo yes || echo no)"
+iharness cmd_upgrade --no-auto-route
+record "upgrade --no-auto-route, another VM still wants the watcher: the agent stays" "0/0/yes" \
+  "$rc/$(state_value auto_route)/$([ -f "$work/home/Library/LaunchAgents/com.homefield.route-watcher.plist" ] && echo yes || echo no)"
+rm -f "$state/other.state"
 printf 'auto_route=0\n' >"$state/homefield.state"
 iharness cmd_upgrade --auto-route
 record "upgrade --auto-route: the switch is saved on" "0/1" \

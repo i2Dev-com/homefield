@@ -125,18 +125,21 @@ serves_jobs() {
   return 0
 }
 
-# route_stop_fallback <url> <name>: the stop-side of the automatic fallback
-# (#286). Every repository routed to one of this runner's labels goes to
-# hosted, unless another online runner still serves that label — the issue's
+# route_stop_fallback <url> <name> [exclude]: the stop-side of the automatic
+# fallback (#286). Every repository routed to one of this runner's labels goes
+# to hosted, unless another online runner still serves that label — the issue's
 # own "when no local runner is online" rule, with this runner (still listed
-# online, the stop has not happened yet) excluded by name. Flipped repos move
-# from `routing` to `autoflip`, so the next start knows what to bring back.
-# A GitHub failure reads as "could not prove nobody serves the label" and
-# flips nothing: leaving jobs routed local is the status quo, flipping them
-# off a runner that is actually there is a regression. Returns 1 when
-# anything was left undone, so stop can report it.
+# online, the stop has not happened yet) excluded by name. <exclude> (a
+# newline-separated list, optional) names more runners to treat as gone: the
+# sleep/wake watcher (#290) passes every HomeField runner on this Mac, because
+# they all stop answering when the Mac sleeps, while the stop of one VM leaves
+# the Mac's others up. Flipped repos move from `routing` to `autoflip`, so the
+# next start knows what to bring back. A GitHub failure reads as "could not
+# prove nobody serves the label" and flips nothing: leaving jobs routed local
+# is the status quo, flipping them off a runner that is actually there is a
+# regression. Returns 1 when anything was left undone, so stop can report it.
 route_stop_fallback() {
-  local url="$1" name="$2" rows rname rstatus rlabels label repo served flipped=0 rc=0 host
+  local url="$1" name="$2" exclude="${3:-}" rows rname rstatus rlabels label repo served flipped=0 rc=0 host
   host="$(github_host "$url")"
   # Nothing routed to any local runner: nothing to flip, and GitHub need not
   # be asked. (A missing file reads as empty: set -e turns a failed
@@ -196,6 +199,12 @@ route_stop_fallback() {
     served=0
     while IFS=$'\t' read -r rid rname rstatus rlabels; do
       [ "$rname" = "$name" ] && continue
+      # A runner in the exclusion list goes away with this Mac (the watcher's
+      # sleep side), so it does not keep the label served, however online
+      # GitHub still lists it.
+      if [ -n "$exclude" ] && printf '%s\n' "$exclude" | grep -qx "$rname"; then
+        continue
+      fi
       [ "$rstatus" = online ] || continue
       # The custom label is not enough: the workflow's runs-on also needs
       # self-hosted, linux and arm64 (the canonical expression), and the

@@ -196,7 +196,10 @@ bypasses](docs/security.md).
 - **Only while the Mac is up.** Routed jobs wait while the Mac sleeps or the
   VM is stopped; GitHub fails them after 24 hours. `homefield route hosted`
   is the recovery path
-  ([runbook: Switching](docs/runbook.md#switching-per-repository)).
+  ([runbook: Switching](docs/runbook.md#switching-per-repository)), and the
+  automatic fallback with `--auto-route` covers VM stop/start and the Mac's
+  sleep and wake (or login)
+  ([runbook: The automatic hosted fallback](docs/runbook.md#the-automatic-hosted-fallback-stopstart)).
 - **Organizations and plans.** A custom runner group needs Team or
   Enterprise; on Free, `--group Default` admits every repository in the
   organization. A personal account has no account-wide runner: each
@@ -263,7 +266,7 @@ HomeField sits in a specific gap in the [self-hosted runner landscape](https://g
 |---|---|---|---|---|---|---|
 | **Free & open-source (zero ongoing fees)?** | ✅ (MIT; \$0 on your Mac) | ✅ Stock / ❌ Codemany (\$20/mo per 2 machines) | ✅ (OSS; \$0 on your Linux host) | ✅ (OSS; host compute cost) | ✅ Tart CLI / ❌ Cirrus (paid) | ❌ (ongoing cloud VM/cluster spend; some require a paid license) |
 | **VM-isolated from macOS host files & loopback?** | ✅ (Lima `vz` VM; zero host mounts + host loopback blocked & probed from guest) | ❌ (runs as your macOS user on Mac; Codemany VM mode is Linux KVM only) | ❌ (user-level Linux process, no VM boundary) | ❌ (shared container kernel; often privileged `DinD`) | ✅ (Apple `Virtualization.framework` VM) | ✅ (dedicated cloud VM or K8s pod) |
-| **Offline / hosted-runner fallback switch?** | ✅ (explicit `CI_RUNNER` / `homefield route hosted` switch + re-runs queued jobs; automatic switch on `stop`/`start` with `--auto-route` in [#292](https://github.com/i2Dev-com/homefield/pull/292), on sleep in [#290](https://github.com/i2Dev-com/homefield/issues/290)) | ❌ (jobs queue while Mac sleeps and fail after 24h) | ❌ (jobs queue when host is offline) | ❌ (jobs queue when container/host is down) | ❌ (requires always-on Mac host or paid pool) | ❌ (requires always-on cloud control plane) |
+| **Offline / hosted-runner fallback switch?** | ✅ (explicit `CI_RUNNER` / `homefield route hosted` switch + re-runs queued jobs; automatic switch on `stop`/`start` with `--auto-route` in [#292](https://github.com/i2Dev-com/homefield/pull/292), and on sleep/wake/login via the route-watcher LaunchAgent in [#290](https://github.com/i2Dev-com/homefield/issues/290)) | ❌ (jobs queue while Mac sleeps and fail after 24h) | ❌ (jobs queue when host is offline) | ❌ (jobs queue when container/host is down) | ❌ (requires always-on Mac host or paid pool) | ❌ (requires always-on cloud control plane) |
 | **Workflow `runs-on` guard against unreviewed widening?** | ✅ (`routing-guard` Action fails CI on unreviewed `runs-on`; `adopt` refuses public repos) | ❌ (any PR editing `.github/workflows` can target `self-hosted`) | ❌ | ❌ | ❌ | ❌ (runner-group scoping only) |
 | **Keeps fork PRs & Dependabot off the local runner?** | ✅ (in `--guards` mode / default guarded expression; `adopt --setup` defaults to simple mode) | ❌ | ❌ | ❌ | ❌ | ❌ |
 | **Zero PAT inside the runner (`stdin`-only registration)?** | ✅ (1-hour registration token piped on `stdin`, never on `cmdline` or env) | ✅ (manual token or Codemany single-use JIT config) | ✅ (short-lived token piped over SSH `stdin`) | ❌ in `myoung34` (PAT in env) / ✅ in `zoomies` (JIT) | ✅ (GitHub App / JIT token) | ✅ (GitHub App / short-lived JIT config) |
