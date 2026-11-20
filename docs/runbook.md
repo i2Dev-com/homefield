@@ -418,9 +418,12 @@ exist — only install creates it), `--no-reset-vm` turns it off, and
 Failure policy: a reset that cannot run (the base is missing, or the stop or
 delete failed) is skipped — the old VM is re-registered as it is and `status`
 reports the `reset_error`, retried on the next cycle; a clone that fails after
-the delete leaves the VM gone with `ephemeral_error` recorded, and the next
-`--watch` cycle (or a manual `re-register`) clones it back from the base —
-recovery is exactly what the base is for. `start`/`stop`/`status`/`fleet` and
+the delete leaves the VM gone with `ephemeral_error` recorded, a one-shot
+`re-register` exits nonzero, and the `--watch` loop stays alive — its next
+cycle (or a manual `re-register`) clones the VM back from the base; recovery
+is exactly what the base is for. Only a base that install marked as a reset
+base is ever replaced: an ordinary runner named `<instance>-base` is refused,
+never deleted. `start`/`stop`/`status`/`fleet` and
 the watch loop never touch the base VM (`vm_instances` skips it; use
 `--instance <name>-base` to act on it directly).
 

@@ -89,6 +89,23 @@ is_homefield_vm() {
   [ "$first" = "$HF_VM_MARKER" ]
 }
 
+# The line install --reset-vm appends to the base VM's stored lima.yaml after
+# cloning it. It marks the VM as a reset base, so a later install replaces
+# only a VM it created for this purpose: an ordinary HomeField runner that
+# happens to be named <instance>-base (check_instance allows the name) is
+# refused, never deleted.
+HF_RESET_BASE_MARKER='# HomeField reset base VM (created by install --reset-vm)'
+
+# is_reset_base <name>: whether that instance is a HomeField reset base: a
+# HomeField VM whose stored config carries the reset-base marker.
+is_reset_base() {
+  local f="${LIMA_HOME:-$HOME/.lima}/$1/lima.yaml" first=""
+  [ -f "$f" ] || return 1
+  IFS= read -r first <"$f" || true
+  [ "$first" = "$HF_VM_MARKER" ] || return 1
+  grep -qF "$HF_RESET_BASE_MARKER" "$f"
+}
+
 # vm_instances: every HomeField VM on this Mac, one name per line, in Lima's
 # order. The default instance counts even without the marker (a config edited by
 # hand), because install creates it under that name. A --reset-vm base VM

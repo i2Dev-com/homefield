@@ -833,8 +833,11 @@ cmd_install() {
         local bs=""
         bs="$(vm_status_of "$RESET_BASE")" ||
           die "${cmd}: could not ask Lima about the base VM ${RESET_BASE}"
-        [ -n "$bs" ] ||
+        if [ -z "$bs" ]; then
           die "${cmd}: no base VM ${RESET_BASE}; --reset-vm needs a base created by install --ephemeral --reset-vm (uninstall this VM and install again with --reset-vm)"
+        fi
+        is_reset_base "$RESET_BASE" ||
+          die "${cmd}: VM ${RESET_BASE} exists but is not a HomeField reset base VM (an ordinary runner may be named that); --reset-vm needs the base install --ephemeral --reset-vm creates (uninstall this VM and install again with --reset-vm)"
         state_set reset_vm 1
         log "vm reset on: each re-register clones a fresh VM from ${RESET_BASE}"
       else
@@ -893,12 +896,12 @@ cmd_install() {
     bstatus="$(vm_status_of "$RESET_BASE")" ||
       die "${cmd}: could not ask Lima about the base VM ${RESET_BASE}"
     if [ -n "$bstatus" ]; then
-      if is_homefield_vm "$RESET_BASE"; then
+      if is_reset_base "$RESET_BASE"; then
         log "deleting the previous base VM ${RESET_BASE} (a fresh one is cloned from this install)"
         limactl delete -f "$RESET_BASE" </dev/null ||
           die "${cmd}: could not delete the previous base VM ${RESET_BASE}"
       else
-        die "${cmd}: a VM named ${RESET_BASE} already exists and is not a HomeField base VM; remove or rename it first (limactl delete -f ${RESET_BASE})"
+        die "${cmd}: a VM named ${RESET_BASE} already exists and is not a HomeField reset base VM (an ordinary runner may be named that); remove or rename it first (limactl delete -f ${RESET_BASE})"
       fi
     fi
     local penv=()
@@ -914,6 +917,12 @@ cmd_install() {
       die "${cmd}: could not stop VM ${INSTANCE} to clone the base VM ${RESET_BASE}"
     limactl clone --start=false "$INSTANCE" "$RESET_BASE" </dev/null ||
       die "${cmd}: could not clone the base VM ${RESET_BASE} from ${INSTANCE}"
+    # Mark the base as a reset base, so a later install replaces only a VM it
+    # created for this purpose and never an ordinary runner that happens to
+    # be named <instance>-base. A marking failure leaves the base unmarked:
+    # the next install refuses it instead of deleting it.
+    printf '%s\n' "$HF_RESET_BASE_MARKER" >>"${LIMA_HOME:-$HOME/.lima}/${RESET_BASE}/lima.yaml" ||
+      die "${cmd}: could not mark the base VM ${RESET_BASE} as a reset base"
     log "base VM ${RESET_BASE} is ready (stopped, unregistered); starting ${INSTANCE} to register it"
     ensure_vm "" ""
     verify_isolation
@@ -1004,8 +1013,11 @@ upgrade_single() {
     local bs=""
     bs="$(vm_status_of "$RESET_BASE")" ||
       die "upgrade: could not ask Lima about the base VM ${RESET_BASE}"
-    [ -n "$bs" ] ||
+    if [ -z "$bs" ]; then
       die "upgrade: no base VM ${RESET_BASE}; --reset-vm needs a base created by install --ephemeral --reset-vm (uninstall this VM and install again with --reset-vm)"
+    fi
+    is_reset_base "$RESET_BASE" ||
+      die "upgrade: VM ${RESET_BASE} exists but is not a HomeField reset base VM (an ordinary runner may be named that); --reset-vm needs the base install --ephemeral --reset-vm creates (uninstall this VM and install again with --reset-vm)"
   fi
   # A registration GitHub removed would only fail at the end, when the runner
   # cannot start a session; one that cannot be checked goes ahead.
@@ -1696,20 +1708,21 @@ reset_effective() {
 # clone a fresh one from its base (<instance>-base, the unregistered VM install
 # --reset-vm left behind; limactl clone refuses a running source, so a base a
 # hand started is stopped first). Returns 0 when the fresh clone exists
-# (stopped — the caller starts it) and 1 when the reset was skipped with the
-# old VM still there (the caller re-registers it as it is): the runner staying
+# (stopped — the caller starts it), 1 when the reset was skipped with the old
+# VM still there (the caller re-registers it as it is): the runner staying
 # available matters more than the reset happening this cycle, and the next
-# cycle retries. Dies only when the clone failed after the delete: the VM is
-# then gone, the error is recorded for status, and the next watch cycle (or a
-# manual re-register) clones it again from the base — the retry the design
-# allows, because the base is exactly what it restores from.
+# cycle retries. Returns 2 when the clone failed after the delete: the VM is
+# then gone, the error is recorded for status, and the caller must not try to
+# re-register — the next watch cycle (or a manual re-register) clones it again
+# from the base, the retry the design allows, because the base is exactly what
+# it restores from.
 reset_vm_cycle() {
   local base="$RESET_BASE" bs
   bs="$(vm_status_of "$base")" ||
     die "re-register: could not ask Lima about the base VM ${base}"
-  if [ -z "$bs" ]; then
-    state_set reset_error "no base VM ${base} (install --ephemeral --reset-vm creates it)"
-    log "warning: no base VM ${base}; re-registering ${INSTANCE} without the reset"
+  if [ -z "$bs" ] || ! is_reset_base "$base"; then
+    state_set reset_error "no reset base VM ${base} (install --ephemeral --reset-vm creates it)"
+    log "warning: no reset base VM ${base}; re-registering ${INSTANCE} without the reset"
     return 1
   fi
   if [ "$bs" = "Running" ]; then
@@ -1732,7 +1745,8 @@ reset_vm_cycle() {
   fi
   if ! limactl clone --start=false "$base" "$INSTANCE" </dev/null; then
     state_set ephemeral_error "reset: clone from ${base} failed; the VM is gone"
-    die "reset: could not clone VM ${INSTANCE} from ${base}; the next watch cycle clones it again (or run bin/homefield re-register --instance ${INSTANCE})"
+    log "reset: could not clone VM ${INSTANCE} from ${base}; the next watch cycle clones it again (or run bin/homefield re-register --instance ${INSTANCE})"
+    return 2
   fi
   state_set reset_error ""
   log "cloned a fresh VM ${INSTANCE} from ${base}"
@@ -1764,10 +1778,13 @@ re_register_single() {
     local bs=""
     bs="$(vm_status_of "$RESET_BASE")" ||
       die "re-register: could not ask Lima about the base VM $RESET_BASE"
-    if [ "$(reset_effective)" = "1" ] && [ -n "$bs" ]; then
+    if [ "$(reset_effective)" = "1" ] && [ -n "$bs" ] && is_reset_base "$RESET_BASE"; then
       log "VM ${INSTANCE} is gone; cloning it from the base VM $RESET_BASE"
-      limactl clone --start=false "$RESET_BASE" "$INSTANCE" </dev/null ||
-        { state_set ephemeral_error "reset: clone from $RESET_BASE failed"; die "reset: could not clone VM ${INSTANCE} from $RESET_BASE; run bin/homefield re-register --instance ${INSTANCE} to retry"; }
+      if ! limactl clone --start=false "$RESET_BASE" "$INSTANCE" </dev/null; then
+        state_set ephemeral_error "reset: clone from $RESET_BASE failed"
+        log "reset: could not clone VM ${INSTANCE} from $RESET_BASE; the next watch cycle retries (or run bin/homefield re-register --instance ${INSTANCE})"
+        return 1
+      fi
       state_set reset_error ""
       recovery=1
     else
@@ -1783,8 +1800,15 @@ re_register_single() {
   if [ "$(reset_effective)" = "1" ] && [ "$recovery" != 1 ]; then
     # The clone is stopped; the re-register below configures it. A skipped
     # reset (no base, or a step failed before the delete) leaves the old VM in
-    # place, stopped or running; ensure_vm covers both.
-    reset_vm_cycle || true
+    # place, stopped or running; ensure_vm covers both. A clone that failed
+    # after the delete (2) leaves the VM gone: return nonzero so a one-shot
+    # re-register fails visibly while the watch loop stays alive — its next
+    # cycle takes the recovery path above and clones the VM back.
+    local cycle_rc=0
+    reset_vm_cycle || cycle_rc=$?
+    if [ "$cycle_rc" = 2 ]; then
+      return 1
+    fi
     ensure_vm "" ""
   else
     state_set reset_error ""
@@ -1901,13 +1925,19 @@ cmd_re_register() {
         # nothing to watch.
         if [ "$(reset_effective)" = "1" ]; then
           log "ephemeral runner ${INSTANCE} has no VM; cloning it from its base and re-registering"
-          re_register_single
+          # A failed recovery clone returns nonzero without dying: the loop
+          # stays alive and the next cycle retries it.
+          re_register_single ||
+            echo "homefield: warning: re-register of ${INSTANCE} failed; the next cycle retries" >&2
         else
           echo "homefield: warning: ephemeral runner ${INSTANCE} has no VM; run bin/homefield install --ephemeral to bring it back" >&2
         fi
       elif ! is_job_running && ! runner_service_state; then
         log "ephemeral runner ${INSTANCE} finished a job; re-registering"
-        re_register_single
+        # Tolerated for the same reason: a reset whose clone failed after the
+        # delete returns nonzero, and the next cycle's recovery path retries.
+        re_register_single ||
+          echo "homefield: warning: re-register of ${INSTANCE} failed; the next cycle retries" >&2
       fi
     done
     if [ "$max_cycles" -gt 0 ] && [ "$cycle" -ge "$max_cycles" ]; then

@@ -43,7 +43,15 @@ case "${1:-}" in
     case "${1:-}" in
       stop) [ "${STUB_STOP_FAIL:-0}" = "0" ] || exit 1 ;;
       delete) [ "${STUB_DELETE_FAIL:-0}" = "0" ] || exit 1 ;;
-      clone) [ "${STUB_CLONE_FAIL:-0}" = "0" ] || exit 1 ;;
+      clone)
+        [ "${STUB_CLONE_FAIL:-0}" = "0" ] || exit 1
+        # clone --start=false SRC DST: the clone's stored config is the
+        # source's, as limactl copies it, so the reset-base marking and
+        # is_reset_base have a file to work on.
+        cp "$HOME/.lima/${3}/lima.yaml" "$HOME/.lima/${4}/lima.yaml" 2>/dev/null ||
+          { mkdir -p "$HOME/.lima/${4}" && cp "$HOME/.lima/${3}/lima.yaml" "$HOME/.lima/${4}/lima.yaml"; } ||
+          exit 1
+        ;;
     esac
     exit 0
     ;;
@@ -107,6 +115,7 @@ EOF
 
 hrun() {
   : >"$CALLS"
+  rm -f "$CALLS.clonecount"
   out="$(env -i \
     HOME="$WORK/home" \
     PATH="$STUBS" \
@@ -124,6 +133,16 @@ hrun() {
     STUB_CLONE_FAIL="${STUB_CLONE_FAIL:-0}" \
     bash "$HARNESS" "$@" 2>&1 </dev/null)"
   rc=$?
+}
+
+# mkbase: the reset base VM on disk, the way install --reset-vm leaves it:
+# a HomeField config carrying the reset-base marker (is_reset_base).
+mkbase() {
+  mkdir -p "$WORK/home/.lima/homefield-base"
+  {
+    printf '# Lima VM for the local GitHub Actions runner.\n'
+    printf '%s\n' '# HomeField reset base VM (created by install --reset-vm)'
+  } >"$WORK/home/.lima/homefield-base/lima.yaml"
 }
 
 # 1. re-register refuses non-ephemeral instance
@@ -524,15 +543,17 @@ out="$(env -i HOME="$WORK/home" PATH="$STUBS" REPO_ROOT="$REPO_ROOT" CALLS="$CAL
 record "an instance whose base name would be too long: refused" "nonzero/yes" \
   "$(nonzero "$rc")/$(has "$out" "not a valid Lima instance name")"
 
-# 20. a VM named homefield-base that is not a HomeField base: refused, not deleted
+# 20. a VM named homefield-base that is not a reset base (an ordinary runner
+# may be named that): refused, not deleted
 mkdir -p "$WORK/home/.lima/homefield-base"
+printf '# Lima VM for the local GitHub Actions runner.\n' >"$WORK/home/.lima/homefield-base/lima.yaml"
 STUB_BASE_PRESENT=1 hrun cmd_install --url https://github.com/acme --org --ephemeral --reset-vm
 calls="$(cat "$CALLS")"
 record "a foreign VM named homefield-base: refused, not deleted" "nonzero/yes/no" \
-  "$(nonzero "$rc")/$(has "$out" "not a HomeField base VM")/$(has "$calls" "limactl:delete")"
+  "$(nonzero "$rc")/$(has "$out" "not a HomeField reset base VM")/$(has "$calls" "limactl:delete")"
 
 # 21. a stale HomeField base from an earlier install: deleted, then re-cloned
-printf '# Lima VM for the local GitHub Actions runner.\n' >"$WORK/home/.lima/homefield-base/lima.yaml"
+mkbase
 STUB_BASE_PRESENT=1 hrun cmd_install --url https://github.com/acme --org --ephemeral --reset-vm
 calls="$(cat "$CALLS")"
 record "a stale HomeField base VM: deleted, then a fresh one cloned" "0/yes/yes" \
@@ -541,6 +562,7 @@ record "a stale HomeField base VM: deleted, then a fresh one cloned" "0/yes/yes"
 # 22. one-shot re-register with reset_vm=1: stop, delete, clone, re-register
 rm -rf "$WORK/state"/*
 printf 'ephemeral=1\nephemeral_url=https://github.com/acme\nephemeral_name=test-mac-homefield\nreset_vm=1\n' >"$WORK/state/homefield.state"
+mkbase
 STUB_BASE_PRESENT=1 STUB_JOB_RC=1 hrun cmd_re_register
 calls="$(cat "$CALLS")"
 record "re-register with reset_vm=1: stop, delete, clone, then the re-register" "0/yes/yes/yes/yes" \
@@ -553,6 +575,7 @@ record "...a successful cycle clears reset_error" "yes" \
   "$(grep -qx 'reset_error=' "$WORK/state/homefield.state" && echo yes || echo no)"
 
 # 23. the stop fails: the reset is skipped, the VM and the re-register remain
+mkbase
 STUB_STOP_FAIL=1 STUB_BASE_PRESENT=1 STUB_JOB_RC=1 hrun cmd_re_register
 st_body="$(cat "$WORK/state/homefield.state")"; calls="$(cat "$CALLS")"
 record "reset with a failing stop: skipped, the re-register still runs, reset_error recorded" "0/yes/no/no/yes" \
@@ -560,12 +583,14 @@ record "reset with a failing stop: skipped, the re-register still runs, reset_er
 
 # 24. the clone fails after the delete: the VM is gone, the error is recorded,
 # the re-register does not run
+mkbase
 STUB_CLONE_FAIL=1 STUB_BASE_PRESENT=1 STUB_JOB_RC=1 hrun cmd_re_register
 st_body="$(cat "$WORK/state/homefield.state")"; calls="$(cat "$CALLS")"
 record "reset with a failing clone: exits nonzero, ephemeral_error recorded, no re-register" "nonzero/yes/no" \
   "$(nonzero "$rc")/$(has "$st_body" "ephemeral_error=reset: clone from homefield-base failed")/$(has "$calls" "cmd=re-register")"
 
 # 25. the VM is already gone (a failed reset): the base brings it back
+mkbase
 STUB_VM_GONE=1 STUB_BASE_PRESENT=1 STUB_JOB_RC=1 hrun cmd_re_register
 calls="$(cat "$CALLS")"; st_body="$(cat "$WORK/state/homefield.state")"
 record "VM gone with reset_vm=1: cloned from the base (no stop/delete), re-registered" "0/yes/no/no/yes/no" \
@@ -583,6 +608,7 @@ calls="$(cat "$CALLS")"; st_body="$(cat "$WORK/state/homefield.state")"
 record "re-register --no-reset-vm: no cycle even with reset_vm=1, error cleared" "0/no/no/yes/yes" \
   "$rc/$(has "$calls" "limactl:stop homefield")/$(has "$calls" "limactl:clone")/$(has "$calls" "cmd=re-register")/$(grep -qx 'reset_error=' "$WORK/state/homefield.state" && echo yes || echo no)"
 printf 'ephemeral=1\nephemeral_url=https://github.com/acme\nephemeral_name=test-mac-homefield\nreset_vm=0\n' >"$WORK/state/homefield.state"
+mkbase
 STUB_BASE_PRESENT=1 STUB_JOB_RC=1 hrun cmd_re_register --reset-vm
 calls="$(cat "$CALLS")"
 record "re-register --reset-vm: the cycle runs even with reset_vm=0" "0/yes/yes" \
@@ -590,6 +616,7 @@ record "re-register --reset-vm: the cycle runs even with reset_vm=0" "0/yes/yes"
 
 # 28. the watch loop with the VM gone: recovery with the reset, a warning without
 printf 'ephemeral=1\nephemeral_url=https://github.com/acme\nephemeral_name=test-mac-homefield\nreset_vm=1\n' >"$WORK/state/homefield.state"
+mkbase
 STUB_VM_GONE=1 STUB_BASE_PRESENT=1 STUB_JOB_RC=1 STUB_SVC_RC=1 hrun cmd_re_register --watch --interval 0 --max-cycles 1
 calls="$(cat "$CALLS")"
 record "--watch with the VM gone and reset on: clones from the base and re-registers" "0/yes/yes/yes" \
@@ -599,6 +626,16 @@ STUB_VM_GONE=1 STUB_JOB_RC=1 STUB_SVC_RC=1 hrun cmd_re_register --watch --interv
 calls="$(cat "$CALLS")"
 record "--watch with the VM gone and reset off: warns, does not re-register, exits 0" "0/yes/no" \
   "$rc/$(has "$out" "has no VM; run bin/homefield install --ephemeral")/$(has "$calls" "cmd=re-register")"
+
+# 28b. a clone that fails after the delete must not kill the watch loop: the
+# next cycle retries the recovery (the old code died on the spot, so the
+# promised next-cycle recovery never ran)
+printf 'ephemeral=1\nephemeral_url=https://github.com/acme\nephemeral_name=test-mac-homefield\nreset_vm=1\n' >"$WORK/state/homefield.state"
+mkbase
+STUB_CLONE_FAIL=1 STUB_BASE_PRESENT=1 STUB_JOB_RC=1 STUB_SVC_RC=1 hrun cmd_re_register --watch --interval 0 --max-cycles 2
+calls="$(cat "$CALLS")"; st_body="$(cat "$WORK/state/homefield.state")"
+record "--watch survives a failing reset clone: loops on, retries the clone" "0/2/yes" \
+  "$rc/$(grep -c 'limactl:clone' "$CALLS")/$(has "$st_body" "ephemeral_error=reset: clone from homefield-base failed")"
 
 # 29. upgrade --reset-vm: the switch follows the base (which only install
 # creates); --no-reset-vm always works
@@ -634,6 +671,7 @@ uprun() {
 }
 rm -rf "$WORK/state"/*
 printf 'ephemeral=1\n' >"$WORK/state/homefield.state"
+mkbase
 STUB_BASE_PRESENT=1 uprun cmd_upgrade --reset-vm
 st_body="$(cat "$WORK/state/homefield.state")"
 record "upgrade --reset-vm with a base: reset_vm=1 saved" "0/yes" "$rc/$(has "$st_body" "reset_vm=1")"
