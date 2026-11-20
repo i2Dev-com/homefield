@@ -90,6 +90,16 @@ case "$*" in
     printf '%b' "${GH_JOBS-}" ;;
   "run view"*)
     [ -z "${GH_RUNVIEW_FAIL:-}" ] || { echo "gh: HTTP 502" >&2; exit 1; }
+    # The interrupted-flip probe (#290's review): when set, record whether the
+    # repo's autoflip entry is on disk at the moment the stuck-run recovery's
+    # wait loop starts — the kill-during-recovery case must find it there.
+    if [ -n "${GH_RUNVIEW_PROBE_REPO:-}" ]; then
+      if grep -q "$GH_RUNVIEW_PROBE_REPO" "$STATE_DIR/autoflip" 2>/dev/null; then
+        echo present >>"$PROBE_FILE"
+      else
+        echo absent >>"$PROBE_FILE"
+      fi
+    fi
     echo "${GH_RUN_STATUS:-completed}" ;;
   "run cancel"*)
     [ -z "${GH_CANCEL_FAIL:-}" ] || { echo "gh: HTTP 409" >&2; exit 1; } ;;
@@ -335,6 +345,22 @@ harness_env=(GH_RUNNERS="$runner_rows" GH_RUNS_FAIL=1)
 harness route_stop_fallback https://github.com/acme my-mac-homefield
 record "the flip lands but the stuck-run recovery fails: the repo still waits in autoflip, exit 1" "1/yes/no/no" \
   "$rc/$(grep -q acme/api "$state/autoflip" 2>/dev/null && echo yes || echo no)/$(grep -q acme/api "$state/routing" 2>/dev/null && echo yes || echo no)/$([ -f "$state/routing" ] && grep -q . "$state/routing" && echo yes || echo no)"
+
+# A flip killed during the stuck-run recovery — the watcher's sleep budget
+# killing an overrunning flip — must leave the restore intent on disk: the
+# variable has landed, so a repo in neither record could never be brought
+# back by a start or a wake. The entry is persisted before the recovery, so
+# the probe (the recovery's first wait-loop step) must find it there.
+reset_records
+printf 'homefield-ci acme/api\n' >"$state/routing"
+probe="$work/probe"
+: >"$probe"
+harness_env=(GH_RUNNERS="$runner_rows" GH_RUNS='123\n' GH_JOBS='5\n' \
+  GH_RUNVIEW_PROBE_REPO=acme/api PROBE_FILE="$probe")
+harness route_stop_fallback https://github.com/acme my-mac-homefield
+record "a flip killed mid-recovery would find the entry on disk already: it is persisted before the recovery" "present/yes/no/1" \
+  "$(cat "$probe" 2>/dev/null)/$(grep -q acme/api "$state/autoflip" 2>/dev/null && echo yes || echo no)/$(grep -q acme/api "$state/routing" 2>/dev/null && echo yes || echo no)/$(grep -c 'variable set' "$calls" || true)"
+rm -f "$probe"
 
 reset_records
 harness_env=(GH_RUNNERS="$runner_rows")
@@ -935,6 +961,14 @@ record "...the route watcher LaunchAgent is installed and loaded" "yes/yes" \
   "$([ -f "$work/home/Library/LaunchAgents/com.homefield.route-watcher.plist" ] && echo yes || echo no)/$(grep -q 'launchctl load -w' "$calls" && echo yes || echo no)"
 record "...the agent logs to the state directory" "yes" \
   "$(grep -q 'route-watcher/log' "$work/home/Library/LaunchAgents/com.homefield.route-watcher.plist" && echo yes || echo no)"
+# The operator's tuning at install time reaches the agent: launchd does not
+# inherit a shell's environment, so every HOMEFIELD_WATCH_* the docs document
+# must be baked into the plist's own environment block.
+iharness_env=(HOMEFIELD_WATCH_SLEEP_BUDGET=7 HOMEFIELD_WATCH_WAKE_WAIT=9 HOMEFIELD_WATCH_WAKE_BUDGET=300)
+iharness cmd_install --url https://github.com/acme --org --auto-route
+plist_env="$work/home/Library/LaunchAgents/com.homefield.route-watcher.plist"
+record "...the watcher budgets the operator set at install time reach the agent" "yes/yes/yes" \
+  "$(grep -q '<key>HOMEFIELD_WATCH_SLEEP_BUDGET</key>' "$plist_env" && grep -A1 '<key>HOMEFIELD_WATCH_SLEEP_BUDGET</key>' "$plist_env" | grep -q '<string>7</string>' && echo yes || echo no)/$(grep -A1 '<key>HOMEFIELD_WATCH_WAKE_WAIT</key>' "$plist_env" | grep -q '<string>9</string>' && echo yes || echo no)/$(grep -A1 '<key>HOMEFIELD_WATCH_WAKE_BUDGET</key>' "$plist_env" | grep -q '<string>300</string>' && echo yes || echo no)"
 iharness_env=()
 
 rm -f "$state/routing"

@@ -228,8 +228,14 @@ route_stop_fallback() {
     local landed=0
     # cmd_route reads its GitHub host from the environment (it takes no
     # --url), so lend it this instance's for the flip. The assignment is
-    # temporary: it does not outlive the function call.
-    if HOMEFIELD_GITHUB_HOST="$host" cmd_route hosted --repo "$repo" --label "$label"; then
+    # temporary: it does not outlive the function call. HOMEFIELD_ROUTE_AUTOFLIP
+    # says the caller is the automatic fallback, so cmd_route persists the
+    # restore intent (the autoflip entry) before its stuck-run recovery — the
+    # one part of the flip that can wait a minute, longer than the watcher's
+    # sleep budget: killed there, the repo would be CI_RUNNER=hosted with
+    # neither record left, and no start or wake could bring it back. Adding it
+    # again below is a no-op (one line per repo and host).
+    if HOMEFIELD_ROUTE_AUTOFLIP=1 HOMEFIELD_GITHUB_HOST="$host" cmd_route hosted --repo "$repo" --label "$label"; then
       landed=1
     else
       rc=1
@@ -540,7 +546,18 @@ cmd_route() {
         record_drop "$(autoflip_file)" "$repo" "$host" || { rc=1; log "${repo}: could not update $(autoflip_file)" >&2; }
       else
         record_drop "$(routing_file)" "$repo" "$host" || { rc=1; log "${repo}: could not update $(routing_file)" >&2; }
-        record_drop "$(autoflip_file)" "$repo" "$host" || { rc=1; log "${repo}: could not update $(autoflip_file)" >&2; }
+        if [ -n "${HOMEFIELD_ROUTE_AUTOFLIP:-}" ]; then
+          # The automatic fallback's caller (#286, route_stop_fallback) wants
+          # the restore intent on disk before the stuck-run recovery below:
+          # the recovery can wait a minute, longer than the watcher's sleep
+          # budget, and a kill there must leave the entry a start or wake can
+          # restore from. A direct `route hosted` has no restore intent — the
+          # operator decided for hosted — and keeps dropping the entry.
+          record_add "$(autoflip_file)" "$label" "$repo" "$host" ||
+            { rc=1; log "${repo}: flipped to hosted but could not record it for the next start; run bin/homefield route local --repo ${repo} --label ${label} by hand" >&2; }
+        else
+          record_drop "$(autoflip_file)" "$repo" "$host" || { rc=1; log "${repo}: could not update $(autoflip_file)" >&2; }
+        fi
       fi
       log "${repo}: CI_RUNNER ${current} -> ${target}"
     fi

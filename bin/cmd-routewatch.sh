@@ -146,6 +146,9 @@ route_watcher_install() {
   if [ -n "${HOMEFIELD_WATCH_WAKE_WAIT:-}" ]; then
     env_xml="${env_xml}    <key>HOMEFIELD_WATCH_WAKE_WAIT</key>"$'\n'"    <string>$(route_watcher_xml_escape "$HOMEFIELD_WATCH_WAKE_WAIT")</string>"$'\n'
   fi
+  if [ -n "${HOMEFIELD_WATCH_WAKE_BUDGET:-}" ]; then
+    env_xml="${env_xml}    <key>HOMEFIELD_WATCH_WAKE_BUDGET</key>"$'\n'"    <string>$(route_watcher_xml_escape "$HOMEFIELD_WATCH_WAKE_BUDGET")</string>"$'\n'
+  fi
   cat >"$plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

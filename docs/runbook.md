@@ -738,9 +738,13 @@ with the fixing command, and a failed last run into a hint naming the log.
 The log, the `log` file in the same subdirectory, carries every flip, skip
 and failure in full. macOS grants about 30 seconds before it forces a sleep,
 so the sleep side is bounded by `HOMEFIELD_WATCH_SLEEP_BUDGET` (default
-20 s): a flip that does not finish in time is killed and logged loudly, and
-the repositories it did not reach keep their routing until the next wake or
-start. The wake side runs in a thread of its own, because it can wait
+20 s): a flip that does not finish in time is killed and logged loudly. A
+kill cannot lose the restore intent: the pending `autoflip` entry is written
+before the flip's slowest part (the stuck-job recovery, which can wait a
+minute), so a flip killed there leaves the repository waiting for the next
+wake or start instead of hosted with no way back; the repositories the flip
+did not reach keep their routing until then. The wake side runs in a thread
+of its own, because it can wait
 minutes per VM: if the Mac goes back to sleep while a wake recovery is
 still running, the sleep notification kills the recovery and runs the
 sleep-side flip, so the repositories are never left routed to a runner that

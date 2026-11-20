@@ -72,6 +72,8 @@ agents that drive the tool without a human in the loop. The guides:
 | `HOMEFIELD_WATCH_SLEEP_BUDGET` | Seconds the sleep-side flip may take before the watcher kills it (default 20, of the ~30 s macOS grants before it forces the sleep) |
 | `HOMEFIELD_WATCH_WAKE_WAIT` | Seconds `route-watch wake` waits per VM for its runner to be listed online (default 120) |
 | `HOMEFIELD_WATCH_WAKE_BUDGET` | Seconds the whole wake run may take before the watcher kills it (default 600) |
+
+The `HOMEFIELD_WATCH_*` variables set when `install`/`upgrade --auto-route` runs are baked into the LaunchAgent's plist environment, so the agent runs with the tuning the installer chose (launchd does not inherit a shell's environment).
 | `HOMEFIELD_SOURCE_ONLY=1` | Internal: source `bin/homefield` for its functions, run nothing |
 
 ## Machine-readable output (`--json`)
