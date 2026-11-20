@@ -3,10 +3,12 @@
 
 # The instance's state file on this Mac: what install did that reset has to
 # undo, as `key=value` lines. Today one key, group_created=<org>/<group
-# name>/<group id>, set only when install itself created the runner group (a
-# group that was already there is never recorded, so reset never deletes
-# it). Per instance, and outside the tool's own directory, which install.sh
-# replaces on every update. docs/runbook.md, "Rolling back a failed install".
+# name>/<group id>[/<host>], set only when install itself created the runner
+# group (a group that was already there is never recorded, so reset never
+# deletes it); the host is the one the group lives on, github.com for a
+# record written before the host support. Per instance, and outside the
+# tool's own directory, which install.sh replaces on every update.
+# docs/runbook.md, "Rolling back a failed install".
 state_file() { printf '%s/%s.state' "${HOMEFIELD_STATE_DIR:-$HOME/.local/state/homefield}" "$INSTANCE"; }
 
 # state_get <key>: its value, or nothing. The key goes to awk as data (-v),

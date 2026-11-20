@@ -380,7 +380,16 @@ seed_routing_records() {
       org="${scope#orgs/}"
       if [ -z "$gid" ]; then
         gc="$(state_get group_created)"
-        if [ -n "$gc" ] && [ "${gc%%/*}" = "$org" ]; then gid="${gc##*/}"; fi
+        if [ -n "$gc" ] && [ "${gc%%/*}" = "$org" ]; then
+          # org/group/id, or org/group/id/host since the host support: the id
+          # is the last field when it is numeric, the one before the host
+          # otherwise (an empty id stays empty).
+          last="${gc##*/}"
+          case "$last" in
+            *[!0-9]*) rest="${gc%/*}"; gid="${rest##*/}" ;;
+            *) gid="$last" ;;
+          esac
+        fi
       fi
       if [ -n "$gid" ]; then
         repos="$(group_repositories "$org" "$gid" "$host" 2>/dev/null)" || repos=""

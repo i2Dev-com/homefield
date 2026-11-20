@@ -476,6 +476,22 @@ harness seed_routing_records https://github.com/acme my-mac-homefield
 record "a runner with no custom label: nothing routes to it, nothing to seed" "0/yes" \
   "$rc/$(has "$out" 'nothing to seed')"
 
+# The gid comes from the group_created record when the caller does not know
+# it: org/group/id/host since the host support, org/group/id before it.
+reset_records
+printf 'group_created=acme/homefield-ci/7/github.com\n' >"$state/homefield.state"
+printf 'acme/api local\n' >"$work/byrepo"
+harness_env=(GH_RUNNERS="$runner_rows" GH_CI_RUNNER_BY_REPO="$work/byrepo" GH_GROUP_REPOS='acme/api\n')
+harness seed_routing_records https://github.com/acme my-mac-homefield
+record "the gid read from a host-carrying group_created record: the group's repositories are enumerated" "0/yes/homefield-ci acme/api github.com" \
+  "$rc/$(grep -q 'actions/runner-groups/7/repositories' "$calls" && echo yes || echo no)/$(cat "$state/routing" 2>/dev/null)"
+reset_records
+printf 'group_created=acme/homefield-ci/7\n' >"$state/homefield.state"
+harness_env=(GH_RUNNERS="$runner_rows" GH_CI_RUNNER_BY_REPO="$work/byrepo" GH_GROUP_REPOS='acme/api\n')
+harness seed_routing_records https://github.com/acme my-mac-homefield
+record "...and from a legacy three-field record" "0/yes/homefield-ci acme/api github.com" \
+  "$rc/$(grep -q 'actions/runner-groups/7/repositories' "$calls" && echo yes || echo no)/$(cat "$state/routing" 2>/dev/null)"
+
 reset_records
 printf 'acme/api local\n' >"$work/byrepo"
 harness_env=(GH_RUNNERS='45\trepo-runner\tonline\tself-hosted,linux,arm64,homefield-ci\n' GH_CI_RUNNER_BY_REPO="$work/byrepo")
