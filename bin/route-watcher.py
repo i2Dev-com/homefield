@@ -166,16 +166,28 @@ def run_route_watch(mode, budget):
 # one that must receive and acknowledge the next sleep notification — busy.
 # wake_proc is the run's process, guarded by state_lock; a sleep notification
 # kills it (the Mac is going back to sleep, so a half-finished restore is
-# exactly what the sleep-side flip then re-flips).
+# exactly what the sleep-side flip then re-flips). wake_generation counts the
+# starts: a run publishes its process only if its generation is still the
+# newest, so a sleep notification arriving between a thread's start and its
+# process creation invalidates the run instead of racing it — the thread sees
+# the stale generation at publication, kills its own fresh process, and runs
+# nothing (the sleep-side flip then re-flips whatever the half recovery did).
 state_lock = threading.Lock()
 wake_proc = None
 wake_thread = None
+wake_generation = 0
 
 
-def _wake_run():
+def _wake_run(gen):
     global wake_proc
     proc = subprocess.Popen([HOMEFIELD, "route-watch", "wake"], start_new_session=True)
     with state_lock:
+        if gen != wake_generation:
+            # Superseded between our start and this publication: a newer
+            # start_wake took over, or a sleep notification cancelled the
+            # recovery outright. The fresh process must not run.
+            kill_tree(proc)
+            return
         wake_proc = proc
     deadline = time.time() + WAKE_BUDGET
     while True:
@@ -187,9 +199,9 @@ def _wake_run():
         except subprocess.TimeoutExpired:
             pass
         if time.time() >= deadline:
+            kill_tree(proc)
             with state_lock:
                 wake_proc = None
-            kill_tree(proc)
             log(
                 "route-watch wake did not finish within %ds; killed. Repositories "
                 "it did not reach keep their previous routing; the next wake or "
@@ -200,24 +212,35 @@ def _wake_run():
 
 def start_wake():
     """Start (or restart) the wake recovery in its own thread."""
-    global wake_thread
+    global wake_thread, wake_generation
     stop_wake()
-    wake_thread = threading.Thread(target=_wake_run, daemon=True)
-    wake_thread.start()
+    with state_lock:
+        wake_generation += 1
+        gen = wake_generation
+    thread = threading.Thread(target=_wake_run, args=(gen,), daemon=True)
+    with state_lock:
+        wake_thread = thread
+    thread.start()
 
 
 def stop_wake():
     """Kill a running wake recovery and wait for its thread to end."""
-    global wake_proc, wake_thread
+    global wake_proc, wake_thread, wake_generation
     with state_lock:
+        # The generation bump also invalidates a run whose thread has started
+        # but not published its process yet: it kills the fresh process at
+        # publication, so nothing of it races the sleep-side flip.
+        wake_generation += 1
         proc = wake_proc
         wake_proc = None
     if proc is not None and proc.poll() is None:
         kill_tree(proc)
-    thread = wake_thread
-    wake_thread = None
+    with state_lock:
+        thread = wake_thread
+        wake_thread = None
     if thread is not None and thread is not threading.current_thread():
-        # The thread notices the kill within its 0.5 s wait slice; the join
+        # The thread notices the kill within its 0.5 s wait slice (or kills
+        # its own fresh process at a stale-generation publication); the join
         # only bounds a thread stuck somewhere without the GIL released.
         thread.join(timeout=10)
 
