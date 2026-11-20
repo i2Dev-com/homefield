@@ -255,6 +255,19 @@ case_gh_logged_out() {
   fi
 }
 
+# case_gh_logged_out_host: PF_HOST names the registration host (setup and
+# install pass it): the gh check and its fix command ask that host, not
+# github.com's login.
+case_gh_logged_out_host() {
+  local d="$work/gh-out-host"; ok_stub "$d"
+  preflight "$d" GH_HOSTS='{"hosts":{}}' GH_JQ_OUT='|' PF_HOST=ghes.acme.example
+  if [ "$pf_rc" -eq 1 ] && has "$pf_out" "FAIL  gh not logged in: run 'gh auth login -h ghes.acme.example'"; then
+    record "PF_HOST set: the gh check and its fix command name that host" "$pf_rc" "1"
+  else
+    record "PF_HOST set: the gh check and its fix command name that host" "$pf_rc" "1 (got: $pf_out)"
+  fi
+}
+
 # case_gh_logged_out_terminal: even on a terminal (have_terminal forced true),
 # preflight only reports a logged-out gh: it never offers `gh auth login`, which
 # is setup's alone (#146), and never runs it. The report is the same as without
@@ -431,6 +444,7 @@ case_lima_old
 case_missing "gh missing" gh "FAIL  gh (GitHub CLI) not found: run 'brew install gh'"
 case_gh_too_old
 case_gh_logged_out
+case_gh_logged_out_host
 case_gh_logged_out_terminal
 case_gh_uses_helper
 case_gh_app_token

@@ -123,7 +123,7 @@ group_advice() {
   case "$GROUP_STATE" in
     narrow | created)
       echo "${first}It is in the runner group ${group}, which admits only the"
-      echo "${rest}repositories added to it: homefield adopt --repo <owner>/<repo> adds one."
+      echo "${rest}repositories added to it: $(setup_adopt_hint) --repo <owner>/<repo> adds one."
       ;;
     default)
       echo "${first}It is in the Default group: every repository in the organization can"
@@ -299,9 +299,9 @@ setup_repositories() {
     narrow | created)
       if [ -z "$GROUP_ID" ]; then
         echo "  could not be listed (the group's id is not known); see the runner group's page in ${org}'s settings"
-      elif repos="$(group_repositories "$org" "$GROUP_ID" "$(github_host "")")"; then
+      elif repos="$(group_repositories "$org" "$GROUP_ID" "$SETUP_GH_HOST")"; then
         if [ -z "$repos" ]; then
-          echo "  none yet: homefield adopt --repo <owner>/<repo> adds one"
+          echo "  none yet: $(setup_adopt_hint) --repo <owner>/<repo> adds one"
         else
           while IFS= read -r r; do
             if [ -n "$r" ]; then echo "  ${r}"; fi
@@ -349,6 +349,11 @@ setup_summary() {
 # route on the label this runner carries, and the adopt that follows must look
 # at the group it joined.
 SETUP_ROUTING_ARGS=()
+# SETUP_GH_HOST: the GitHub host the registration used, for the setup-to-adopt
+# delegation and the hand-run hints: adopt takes its host from
+# HOMEFIELD_GITHUB_HOST (it has no --url), so a host other than github.com has
+# to travel in the environment, the way cmd_route's delegation carries it.
+SETUP_GH_HOST=""
 SETUP_LABEL=""
 SETUP_GROUP=""
 
@@ -358,6 +363,17 @@ setup_routing_args() {
   [ -z "$SETUP_GROUP" ] || SETUP_ROUTING_ARGS+=(--group "$SETUP_GROUP")
 }
 
+# setup_adopt_hint: the adopt command for the hand-run hints, with the
+# registration's host when it is not github.com (a HOMEFIELD_GITHUB_HOST=host
+# prefix): the user's shell has no such variable, and without it the command
+# would work on github.com.
+setup_adopt_hint() {
+  if [ -n "$SETUP_GH_HOST" ] && [ "$SETUP_GH_HOST" != github.com ]; then
+    printf 'HOMEFIELD_GITHUB_HOST=%s ' "$SETUP_GH_HOST"
+  fi
+  printf 'homefield adopt'
+}
+
 # setup_plain_adopt <owner/repo>: the plain adopt that finishes what the
 # routing pull request starts, with the label and group the runner was
 # registered with (a plain adopt without --group looks at homefield-ci, and
@@ -365,7 +381,7 @@ setup_routing_args() {
 # name may hold a space.
 setup_plain_adopt() {
   local c
-  c="homefield adopt --repo $(printf '%q' "$1")"
+  c="$(setup_adopt_hint) --repo $(printf '%q' "$1")"
   [ -z "$SETUP_LABEL" ] || c="$c --label $(printf '%q' "$SETUP_LABEL")"
   [ -z "$SETUP_GROUP" ] || c="$c --group $(printf '%q' "$SETUP_GROUP")"
   printf '%s' "$c"
@@ -405,7 +421,13 @@ setup_route_repo() {
   # $$ inside the subshell is still setup's pid
   # shellcheck disable=SC2034  # read by cmd-adopt.sh's adopt_check_parent
   ADOPT_PARENT_PID=$$
-  ( set -e; cmd_adopt "${SETUP_ROUTING_ARGS[@]}" )
+  ( set -e
+  # adopt takes its host from HOMEFIELD_GITHUB_HOST (no --url): the
+  # registration's host must win over the ambient one, the way cmd_route's
+  # delegation carries it. The assignment stays in the subshell.
+  # shellcheck disable=SC2034  # read by github_host inside cmd_adopt
+  HOMEFIELD_GITHUB_HOST="$SETUP_GH_HOST"
+  cmd_adopt "${SETUP_ROUTING_ARGS[@]}" )
   rc=$?
   set -e
   [ "$rc" -eq 0 ] && return 0
@@ -423,7 +445,7 @@ setup_route_repo() {
       ;;
     *)
       echo "The runner is set up. The routing pull request was not opened (adopt says why above)."
-      echo "To try again: homefield adopt ${SETUP_ROUTING_ARGS[*]}"
+      echo "To try again: $(setup_adopt_hint) ${SETUP_ROUTING_ARGS[*]}"
       ;;
   esac
 }
@@ -431,7 +453,7 @@ setup_route_repo() {
 # setup_skip_routing <owner/repo>: a declined offer, with the command for later.
 setup_skip_routing() {
   setup_routing_args "$1"
-  echo "Route it later with: homefield adopt ${SETUP_ROUTING_ARGS[*]}"
+  echo "Route it later with: $(setup_adopt_hint) ${SETUP_ROUTING_ARGS[*]}"
 }
 
 # setup_offer_routing <url>: the end of a fresh setup on a terminal. The
@@ -744,11 +766,17 @@ cmd_install() {
   # On a terminal, setup first offers to log gh in, so that check can pass.
   if [ "$SETUP" = 1 ]; then
     local preflight_rc=0
+    # The gh check and the login offer ask the registration host's login, not
+    # github.com's (PF_HOST is read by preflight_collect).
+    # shellcheck disable=SC2034  # read by cmd-preflight.sh's preflight_collect
+    PF_HOST="$(github_host "$url")"
     offer_gh_login "$url"
     cmd_preflight --no-prefetch || preflight_rc=$?
     [ "$preflight_rc" -eq 0 ] ||
       die "setup stopped: fix the failed checks above and run it again; nothing was created"
   else
+    # shellcheck disable=SC2034  # read by cmd-preflight.sh's preflight_collect
+    PF_HOST="$(github_host "$url")"
     cmd_preflight --no-prefetch || true
   fi
   check_host
@@ -871,6 +899,10 @@ cmd_install() {
   { IFS= read -r registered_name || true; IFS= read -r registered_id || true; } < <(runner_setting agentName agentId)
   wait_online "$url" "$registered_name" "${group:-homefield-ci}"
   warm_vm
+  # The host the routing offer and its hand-run hints work on: the
+  # registration's (setup_summary, setup_offer_routing, setup_route_repo read
+  # SETUP_GH_HOST).
+  SETUP_GH_HOST="$(github_host "$url")"
   if [ "$SETUP" = 1 ]; then
     setup_summary "${group:-homefield-ci}" "$url" "$registered_name" "$registered_id"
     SETUP_LABEL="$label" SETUP_GROUP="$group"

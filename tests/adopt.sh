@@ -50,6 +50,9 @@ hang "${GH_HANG2:-}" 2 "${GH_HANG2_SECS:-30}"
 if [ -n "${GH_TOKEN:-}" ]; then
   echo "TOKEN:${GH_TOKEN}" >>"$state/gh_tokens"
 fi
+if [ -n "${GH_ENTERPRISE_TOKEN:-}" ]; then
+  echo "ENT:${GH_ENTERPRISE_TOKEN}" >>"$state/gh_tokens"
+fi
 case "$*" in
   # gh auth status (gh_active_account): GH_AUTH is "login|scopes" the way the
   # real gh answers, empty when nobody is logged in, GH_AUTH_FAIL a gh that
@@ -2360,6 +2363,16 @@ record "adopt with GitHub App key file: exits 0" "0" "$rc"
 record "...authenticated using minted token" "yes" "$(has "$out" "authenticated as GitHub App")"
 record "...token was passed to gh via GH_TOKEN" "yes" "$(grep -q 'ghs_mock_app_token_12345' "$work/gh_tokens" 2>/dev/null && echo yes || echo no)"
 record "...private key never entered argv" "0" "$(called 'BEGIN RSA PRIVATE KEY')"
+
+# A GitHub Enterprise Server host: gh serves that host from
+# GH_ENTERPRISE_TOKEN, not GH_TOKEN, so the minted token has to be in both.
+rm -f "$work/gh_tokens"
+run_fn GITHUB_API_URL="$mock_api_url" HOMEFIELD_GITHUB_HOST=ghes.acme.example GH_GROUPS="$work/groups-selected" GH_MEMBERS="$work/members-other" GH_WF="$work/wf-ready" \
+  -- cmd_adopt --repo acme/app --app-id 12345 --app-key-file "$work/test-app-key.pem"
+record "adopt --app on a GHES host: exits 0" "0" "$rc"
+record "...token passed to gh via GH_ENTERPRISE_TOKEN" "yes" "$(grep -q 'ENT:ghs_mock_app_token_12345' "$work/gh_tokens" 2>/dev/null && echo yes || echo no)"
+record "...and via GH_TOKEN (github.com and *.ghe.com serve from it)" "yes" "$(grep -q 'TOKEN:ghs_mock_app_token_12345' "$work/gh_tokens" 2>/dev/null && echo yes || echo no)"
+record "...gh calls name the GHES host" "yes" "$(grep -q 'gh api --hostname ghes.acme.example' "$calls" 2>/dev/null && echo yes || echo no)"
 
 run_fn GITHUB_API_URL="$mock_api_url" GH_GROUPS="$work/groups-selected" GH_MEMBERS="$work/members-other" GH_WF="$work/wf-ready" \
   -- eval "cmd_adopt --repo acme/app --app-id 12345 --app-key-stdin <$(printf '%q' "$work/test-app-key.pem")"

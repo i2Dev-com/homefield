@@ -276,7 +276,10 @@ pull request and carry on once you merge it, so the next commands do not have
 to be typed. A repository-scoped registration (a personal account, or a
 repository URL) knows the repository and asks `Open the routing pull request
 for <owner>/<repo> now, and carry on once you merge it? [Y/n]`; Enter or `y`
-runs `homefield adopt --repo <owner>/<repo> --setup --wait`. An organization asks
+runs `homefield adopt --repo <owner>/<repo> --setup --wait` (on a GitHub host
+other than github.com, in that host's environment, so the offer works on the
+host the runner was registered at; the commands printed for later carry
+`HOMEFIELD_GITHUB_HOST=<host>` for the same reason). An organization asks
 `Repository to route first (name or owner/repo; Enter to skip)`: a bare name
 means `<org>/<name>`, and text that is not a repository name is refused without
 running anything. `n`, Enter at the organization question and end of input

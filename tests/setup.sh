@@ -143,6 +143,8 @@ get_token() { echo tok123; }
 # and SIGTERM's.
 cmd_adopt() {
   echo "cmd_adopt $*" >>"$CALLS"
+  # the host setup delegated with (HOMEFIELD_GITHUB_HOST inside the subshell)
+  echo "adopt_host ${HOMEFIELD_GITHUB_HOST:-none}" >>"$CALLS"
   # the pid adopt was told is its parent, and its own $$ (a subshell keeps its
   # parent's, so these are setup's)
   echo "adopt_parent ${ADOPT_PARENT_PID:-none} $$" >>"$CALLS"
@@ -258,6 +260,12 @@ login_case() { # <description> <expected login call count with -s> <expected pla
 login_case "...a trailing slash on the URL is the same" 1 0 -- cmd_setup --url $org/
 login_case "--org says it is an organization, whatever the lookup: admin:org" 1 0 GH_OWNER_TYPE=User -- cmd_setup --url $org --org
 login_case "--personal says it is not: gh's default login" 0 1 -- cmd_setup --url $org --personal
+
+# A GHES registration: the login offer and the preflight's gh check ask the
+# registration host's login, not github.com's (PF_HOST, #287).
+SRUN_IN="$work/answer" srun PF=login LOGGED_OUT=1 TTY=1 GH_OWNER_TYPE=User -- cmd_setup --url https://ghes.acme.example/someone/app
+record "a GHES URL, logged out, terminal, y: the login offer runs on the URL's host" "1/yes/yes" \
+  "$(called '^gh auth login -h ghes.acme.example$')/$(grep -q 'gh auth status --hostname ghes.acme.example' "$calls" && echo yes || echo no)/$(has "$out" 'OK    gh authenticated as tester')"
 login_case "a repository URL registers one repository and needs no group: gh's default login" 0 1 -- cmd_setup --url $org/app
 login_case "an owner that is a personal account: gh's default login" 0 1 GH_OWNER_TYPE=User -- cmd_setup --url https://github.com/someone
 login_case "no URL given (asked after the login): gh's default login" 0 1 -- cmd_setup
@@ -482,6 +490,16 @@ record "personal account, n: adopt is not run; one line with the command for lat
   "$rc/$(called '^cmd_adopt')/$(has "$out" 'Route it later with: homefield adopt --repo someone/app --setup --wait')/$(has "$out" 'adopt ran')"
 SRUN_IN="$work/yes" srun GH_OWNER_TYPE=Organization TTY=1 -- cmd_setup --url https://github.com/acme/app
 record "a repository URL, y: the repository from the URL" "0/1/cmd_adopt --repo acme/app --setup --wait" "$rc/$(called '^cmd_adopt')/$(adopt_line)"
+
+# The registration's host travels into the delegation: adopt takes its host
+# from HOMEFIELD_GITHUB_HOST (it has no --url), so setup's --url to a GHES
+# host sets it for the adopt subshell, and the hand-run hints carry it (#287).
+SRUN_IN="$work/yes" srun GH_OWNER_TYPE=User TTY=1 -- cmd_setup --url https://ghes.acme.example/someone/app
+record "a GHES URL, y: adopt runs in the registration host's environment" "0/1/adopt_host ghes.acme.example" \
+  "$rc/$(called '^cmd_adopt')/$(grep '^adopt_host' "$calls")"
+SRUN_IN="$work/no" srun GH_OWNER_TYPE=User TTY=1 -- cmd_setup --url https://ghes.acme.example/someone/app
+record "...and the command printed for later carries the host" "yes" \
+  "$(has "$out" 'Route it later with: HOMEFIELD_GITHUB_HOST=ghes.acme.example homefield adopt --repo someone/app --setup --wait')"
 : >"$work/eof"
 SRUN_IN="$work/eof" srun GH_OWNER_TYPE=User TTY=1 -- cmd_setup --url $personal_url
 record "repository question, end of input: a no; adopt not run; exit 0, the reminder printed" "0/0/yes" \

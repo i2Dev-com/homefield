@@ -20,8 +20,16 @@ PF_NAME=()
 PF_LEVEL=()
 PF_MSG=()
 
+# PF_HOST: the host the gh check asks about, set by a caller that knows the
+# registration's URL (setup, install): a --url to a GitHub Enterprise Server
+# must check that host's login, not github.com's. Empty (the default, and the
+# standalone `homefield preflight`) means github_host's host. The :- keeps a
+# value the caller's environment passed in (how the tests set it).
+PF_HOST="${PF_HOST:-}"
+
 preflight_collect() {
   local login scopes whoami py_version host
+  host="${PF_HOST:-$(github_host "")}"
   PF_NAME=()
   PF_LEVEL=()
   # PF_MSG is read by lib/emit.sh's pf_render_row
@@ -46,13 +54,13 @@ preflight_collect() {
   elif ! gh_at_least "$GH_MIN_MAJOR" "$GH_MIN_MINOR"; then
     pf_add gh fail "gh >= ${GH_MIN_MAJOR}.${GH_MIN_MINOR} required (auth status --json, api --jq), found ${GH_MAJOR:-unknown}.${GH_MINOR:-unknown}: run 'brew upgrade gh'"
   else
-    whoami="$(gh_active_account)" || whoami="|"
+    whoami="$(gh_active_account "$host")" || whoami="|"
     login="${whoami%%|*}"
     scopes="${whoami#*|}"
-    # The host the gh check asked about (HOMEFIELD_GITHUB_HOST, or
-    # github.com): the fix-up commands name it, so they fix the check that
+    # The host the gh check asked about (the registration's when the caller
+    # set PF_HOST, else HOMEFIELD_GITHUB_HOST, or github.com): the fix-up
+    # commands name it, so they fix the check that
     # failed and not another host's login.
-    host="$(github_host "")"
     # GitHub reports scopes comma-space separated ("repo, admin:org"); the
     # spaces come off here, so the `,scope,` match works whichever order they
     # come back in (gh_active_account strips them too; an override in a test

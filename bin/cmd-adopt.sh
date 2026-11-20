@@ -34,6 +34,13 @@ ADOPT_APP_KEY_PATH=""
 ADOPT_APP_TOKEN_TS=0
 ADOPT_ORIG_GH_TOKEN=""
 ADOPT_ORIG_GH_TOKEN_SET=""
+# gh picks the token for a host from two variables: GH_TOKEN serves github.com
+# and the *.ghe.com data-residency subdomains, GH_ENTERPRISE_TOKEN a GitHub
+# Enterprise Server host. A minted App token is exported as both, so the
+# host-pinned gh calls use it whichever host adopt works on; the user's own
+# values are saved and restored beside GH_TOKEN's.
+ADOPT_ORIG_GH_ENT_TOKEN=""
+ADOPT_ORIG_GH_ENT_TOKEN_SET=""
 
 # Shell <-> Python row contracts. tools/adopt.py parses and prints; this
 # script consumes its stdout. Keep these schemas next to the producers when
@@ -854,6 +861,11 @@ adopt_setup_exit() {
   else
     unset GH_TOKEN
   fi
+  if [ -n "$ADOPT_ORIG_GH_ENT_TOKEN_SET" ]; then
+    export GH_ENTERPRISE_TOKEN="$ADOPT_ORIG_GH_ENT_TOKEN"
+  else
+    unset GH_ENTERPRISE_TOKEN
+  fi
   [ "$rc" -ne 0 ] && [ "$rc" -ne 130 ] && [ "$rc" -ne 143 ] &&
     [ "$ADOPT_WAIT" = 1 ] && [ "$ADOPT_SETUP_PR_MADE" = 1 ] || return 0
   if [ "$ADOPT_WAIT_MERGED" = 1 ]; then exit "$ADOPT_EXIT_MERGED"; fi
@@ -870,13 +882,13 @@ adopt_setup_exit() {
 # judged, and must not be read as "missing". 0 = proven present, 1 = proven
 # absent, 2 = cannot tell.
 adopt_workflow_scope() {
-  local account scopes
-  if [ -n "${GITHUB_TOKEN:-}${GH_TOKEN:-}" ]; then
+  local account scopes host="$1"
+  if [ -n "${GITHUB_TOKEN:-}${GH_TOKEN:-}${GH_ENTERPRISE_TOKEN:-}" ]; then
     # gh uses the variable instead of its stored login, and gh's status does
     # not answer for it; what the token may do is told by the write itself.
     return 2
   fi
-  account="$(gh_active_account)" || return 2
+  account="$(gh_active_account "$host")" || return 2
   scopes="${account#*|}"
   [ -n "$scopes" ] || return 2
   case ",$scopes," in
@@ -1058,11 +1070,10 @@ adopt_setup_check() {
 # the branch exists; one that cannot be told goes on, and the write's own 404
 # below says so.
 adopt_setup_scope() {
-  local ws=0 host
-  host="$(github_host "")"
-  adopt_workflow_scope || ws=$?
+  local ws=0
+  adopt_workflow_scope "$ADOPT_GH_HOST" || ws=$?
   if [ "$ws" = 1 ]; then
-    die "adopt: setup: gh's active login has no workflow scope, and writing .github/workflows/ needs it (a bare 404 is all GitHub says): gh auth refresh -h ${host} -s workflow, then run this again"
+    die "adopt: setup: gh's active login has no workflow scope, and writing .github/workflows/ needs it (a bare 404 is all GitHub says): gh auth refresh -h ${ADOPT_GH_HOST} -s workflow, then run this again"
   fi
 }
 
@@ -1301,6 +1312,11 @@ adopt_mint_app_token() {
   [ -n "$app_token" ] || die "adopt: GitHub App token minting returned an empty token"
   ADOPT_APP_TOKEN_TS="$SECONDS"
   export GH_TOKEN="$app_token"
+  # gh serves a GitHub Enterprise Server host from GH_ENTERPRISE_TOKEN, not
+  # GH_TOKEN (which covers github.com and the *.ghe.com subdomains): the same
+  # minted token goes into both, so the host-pinned calls use it whichever
+  # host ADOPT_GH_HOST names.
+  export GH_ENTERPRISE_TOKEN="$app_token"
 }
 
 adopt_ensure_fresh_app_token() {
@@ -1322,6 +1338,8 @@ cmd_adopt() {
   ADOPT_APP_TOKEN_TS=0
   ADOPT_ORIG_GH_TOKEN="${GH_TOKEN:-}"
   ADOPT_ORIG_GH_TOKEN_SET="${GH_TOKEN+1}"
+  ADOPT_ORIG_GH_ENT_TOKEN="${GH_ENTERPRISE_TOKEN:-}"
+  ADOPT_ORIG_GH_ENT_TOKEN_SET="${GH_ENTERPRISE_TOKEN+1}"
   ADOPT_FLAG_EVENTS="" ADOPT_FLAG_DEPENDABOT="" ADOPT_FLAG_FALLBACK="" ADOPT_FLAG_GUARDS=0
   ADOPT_WAIT=0 ADOPT_WAIT_MERGED=0 ADOPT_SWITCH_DONE=0 ADOPT_HANDLER=0
   while [ $# -gt 0 ]; do
@@ -1417,6 +1435,11 @@ cmd_adopt() {
       export GH_TOKEN="$ADOPT_ORIG_GH_TOKEN"
     else
       unset GH_TOKEN
+    fi
+    if [ -n "$ADOPT_ORIG_GH_ENT_TOKEN_SET" ]; then
+      export GH_ENTERPRISE_TOKEN="$ADOPT_ORIG_GH_ENT_TOKEN"
+    else
+      unset GH_ENTERPRISE_TOKEN
     fi
   }
   trap adopt_cleanup EXIT

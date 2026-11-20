@@ -96,20 +96,23 @@ gh_at_least() {
   [ "$GH_MAJOR" -eq "$1" ] && [ "$GH_MINOR" -ge "$2" ]
 }
 
-# gh_active_account: "login|scopes" of the active login on github_host's host
-# (github.com by default), "|" when there is none. The one place that asks,
-# for preflight_collect's gh check and setup's offer to log in (offer_gh_login),
-# so the two cannot disagree. gh's own status comes through: with --json it
+# gh_active_account [host]: "login|scopes" of the active login on <host>
+# (github_host's host: HOMEFIELD_GITHUB_HOST, github.com by default), "|"
+# when there is none. The one place that asks, for preflight_collect's gh
+# check and setup's offer to log in (offer_gh_login), so the two cannot
+# disagree. Callers with a registration URL pass its host, so a --url to a
+# GitHub Enterprise Server checks that host's login and not github's. gh's
+# own status comes through: with --json it
 # exits 0 when nobody is logged in, so a non-zero status means the question
 # could not be answered (a gh too old for --json, a broken install), which is
 # not the same as "not logged in". GitHub reports the scopes comma-space
 # separated ("repo, workflow"); the spaces are stripped here, so a caller's
 # `,scope,` match works whichever order the scopes come back in. The host is
-# interpolated into the jq filter, which is safe: github_host only returns a
-# validated hostname.
+# interpolated into the jq filter, which is safe: only a validated hostname
+# reaches it.
 gh_active_account() {
-  local host
-  host="$(github_host "")"
+  local host="${1:-}"
+  [ -n "$host" ] || host="$(github_host "")"
   gh auth status --hostname "$host" --json hosts \
     --jq '.hosts["'"$host"'"] // [] | map(select(.active)) | (.[0] // {}) | "\(.login // "")|\(.scopes // "" | gsub(" "; ""))"' 2>/dev/null </dev/null
 }
@@ -242,7 +245,10 @@ offer_gh_login() {
   have_terminal || return 0
   local account answer i url="${1:-}" scopes="" host
   host="$(github_host "$url")"
-  account="$(gh_active_account)" || return 0
+  # The preflight that follows asks the same host's login: the offer logs
+  # into the registration's host, so the check must not ask another one.
+  PF_HOST="$host"
+  account="$(gh_active_account "$host")" || return 0
   [ -z "${account%%|*}" ] || return 0
   preflight_collect
   for ((i = 0; i < ${#PF_NAME[@]}; i++)); do
