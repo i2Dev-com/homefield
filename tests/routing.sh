@@ -171,6 +171,20 @@ record "route hosted: the repo leaves the routing record" "0/homefield-ci acme/w
 record "...and it leaves autoflip too (a stop's pending restore is undone)" "0" \
   "$(grep -c acme/api "$state/autoflip" 2>/dev/null || true)"
 
+# Hosted runners exist on github.com and the *.ghe.com data-residency
+# subdomains (Linux and Windows; macOS is the only kind missing there), not on
+# a GitHub Enterprise Server (#287, Codex #295 round 3).
+reset_records
+harness_env=(GH_CI_RUNNER=local HOMEFIELD_GITHUB_HOST=ghes.acme.example)
+harness cmd_route hosted --repo acme/api --label homefield-ci
+record "route hosted on a GHES host: refused, nothing set" "nonzero/yes/0" \
+  "$(nonzero "$rc")/$(has "$out" "hosted runners do not exist on ghes.acme.example")/$(grep -c 'variable set' "$calls" || true)"
+reset_records
+harness_env=(GH_CI_RUNNER=local HOMEFIELD_GITHUB_HOST=acme.ghe.com)
+harness cmd_route hosted --repo acme/api --label homefield-ci
+record "route hosted on a GHE.com host: allowed, the variable is set" "0/1/no" \
+  "$rc/$(grep -c 'variable set CI_RUNNER --repo acme.ghe.com/acme/api --body hosted' "$calls" || true)/$(grep -q acme/api "$state/autoflip" 2>/dev/null && echo yes || echo no)"
+
 reset_records
 harness_env=(GH_CI_RUNNER=hosted)
 harness cmd_route local --repo acme/api --label homefield-ci --dry-run
@@ -326,6 +340,23 @@ harness_env=(GH_RUNNERS="$runner_rows")
 harness route_stop_fallback https://github.com/acme my-mac-homefield
 record "a record for another host: not flipped, GitHub's runners not asked for it" "0/yes/0" \
   "$rc/$(has "$out" 'routed on ghes.acme.example, not github.com')/$(grep -c 'variable set' "$calls" || true)"
+
+# Hosted runners exist on a GHE.com host (Linux and Windows), so the
+# stop-side fallback runs there as on github.com; a GitHub Enterprise Server
+# has none, so it skips (the stop itself still happens).
+reset_records
+printf 'homefield-ci acme/api\n' >"$state/routing"
+harness_env=(GH_RUNNERS="$runner_rows")
+harness route_stop_fallback https://ghes.acme.example/acme my-mac-homefield
+record "the stop-side fallback on a GHES host: skipped, nothing flipped" "0/yes/0" \
+  "$rc/$(has "$out" 'which ghes.acme.example does not have')/$(grep -c 'variable set' "$calls" || true)"
+
+reset_records
+printf 'homefield-ci acme/api\n' >"$state/routing"
+harness_env=(GH_RUNNERS="$runner_rows")
+harness route_stop_fallback https://acme.ghe.com/acme my-mac-homefield
+record "the stop-side fallback on a GHE.com host: the flip runs and waits in autoflip" "0/1/homefield-ci acme/api acme.ghe.com" \
+  "$rc/$(grep -c 'variable set CI_RUNNER --repo acme.ghe.com/acme/api --body hosted' "$calls" || true)/$(cat "$state/autoflip" 2>/dev/null)"
 
 echo
 echo "the start-side restore"

@@ -637,11 +637,14 @@ GitHub's runner list, or a flip fails, nothing is flipped, the stop (or start)
 still happens, and the command exits 1 — jobs keep routing to the local
 runner, which is the state a human can see and fix with `route`. Queued jobs
 that the flip catches are cancelled and re-run, the same as `route hosted`
-does by hand. On a GitHub host other than github.com (GHES, GHE.com) the
-stop-side fallback skips with a warning, and `route hosted` refuses: GitHub's
-hosted runners exist only on github.com, so there is nothing to fall back to
-there ([#287](https://github.com/i2Dev-com/homefield/issues/287) added the
-host support). The records carry the host they were written for (a line
+does by hand. On a GitHub Enterprise Server host the stop-side fallback
+skips with a warning, and `route hosted` refuses: a GHES host has no hosted
+runners, so there is nothing to fall back to there. A GHE.com
+data-residency host has hosted Linux and Windows runners (macOS is the only
+kind GitHub does not serve there), and the fallback's labels are Linux ones,
+so the fallback and `route hosted` work on it as on github.com
+([#287](https://github.com/i2Dev-com/homefield/issues/287) added the host
+support). The records carry the host they were written for (a line
 without one, from before the host support, reads as github.com): a Mac with
 runners for the same owner/repo on github.com and a GHES host keeps the two
 hosts' records apart, so one host's start does not consume the other's

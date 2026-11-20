@@ -65,6 +65,16 @@ url_path() {
   printf '%s' "${url#https://*/}"
 }
 
+# hosted_runners <host>: whether GitHub's hosted runners exist on <host>:
+# github.com has them, and so do the *.ghe.com data-residency subdomains
+# (Linux and Windows; macOS is the only kind GitHub does not serve there), but
+# a GitHub Enterprise Server has none — it has only the runners its own VMs
+# register. The hosted fallback's labels (ubuntu-latest and the like) are
+# Linux ones, so a GHE.com host can fall back to them.
+hosted_runners() {
+  [ "$1" = github.com ] || [[ "$1" == *.ghe.com ]]
+}
+
 # gh_major_minor: GH_MAJOR/GH_MIN[OR] from `gh --version`'s first line
 # ("gh version 2.32.1"); empty when unreadable, like lima_major_minor.
 gh_major_minor() {
@@ -736,10 +746,12 @@ ensure_group() {
   GROUP_STATE=created
   # Recorded now, before the VM exists, so that a failed install still leaves
   # reset the one fact it needs to undo this (the first "id" in the response is
-  # the group's). Without an id, reset finds the group by its name.
+  # the group's), plus the host the group lives on, so reset finds it there
+  # even when the registration never happened and R_URL is empty. Without an
+  # id, reset finds the group by its name.
   gid="$(printf '%s' "$out" | grep -o '"id": *[0-9][0-9]*' | head -1 | tr -cd '0-9')" || gid=""
   GROUP_ID="$gid"
-  state_set group_created "${org}/${group}/${gid}" ||
+  state_set group_created "${org}/${group}/${gid}/${host}" ||
     echo "homefield: warning: could not record that this install created the runner group ${group} (${org}); reset will not delete it, so remove it by hand if you roll back (docs/runbook.md, \"Rolling back a failed install\")" >&2
   log "created runner group ${group}. No repository can use it yet: homefield adopt --repo <owner>/<repo> adds one (docs/adopting.md, step 5)"
 }

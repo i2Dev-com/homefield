@@ -142,11 +142,13 @@ route_stop_fallback() {
   # be asked. (A missing file reads as empty: set -e turns a failed
   # redirection on it into an aborted command.)
   [ -f "$(routing_file)" ] || { log "no routed repository needed the fallback"; return 0; }
-  # "hosted" is GitHub's hosted runners, which only github.com has: on another
-  # GitHub host the flip would send the jobs to a label nothing serves. The
-  # stop still happens; the repositories stay routed local, where the local
-  # runner (or a human) can be reached.
-  if [ "$host" != github.com ]; then
+  # "hosted" is GitHub's hosted runners: github.com has them, and so do the
+  # *.ghe.com data-residency subdomains (Linux and Windows; the fallback's
+  # labels are Linux ones). A GitHub Enterprise Server has none: on one, the
+  # flip would send the jobs to a label nothing serves. The stop still
+  # happens; the repositories stay routed local, where the local runner (or a
+  # human) can be reached.
+  if ! hosted_runners "$host"; then
     log "the hosted fallback needs GitHub's hosted runners, which ${host} does not have; leaving the routed repositories as they are"
     return 0
   fi
@@ -487,10 +489,12 @@ cmd_route() {
   [[ "$label" =~ ^[A-Za-z0-9._-]+$ ]] || die "route: --label must be one label"
   command -v gh >/dev/null || die "route needs gh (https://cli.github.com)"
   host="$(github_host "")"
-  # "hosted" means GitHub's hosted runners, which only github.com has: on a
-  # GHES or GHE.com host the fallback label matches no runner and the jobs
-  # would queue forever, so refuse instead of switching them off.
-  if [ "$target" = hosted ] && [ "$host" != github.com ]; then
+  # "hosted" means GitHub's hosted runners: github.com has them, and so do the
+  # *.ghe.com data-residency subdomains (Linux and Windows; macOS is the only
+  # kind missing there, and the fallback's labels are Linux ones). On a GHES
+  # host the fallback label matches no runner and the jobs would queue
+  # forever, so refuse instead of switching them off.
+  if [ "$target" = hosted ] && ! hosted_runners "$host"; then
     die "route: GitHub's hosted runners do not exist on ${host}; keep the repository routed local (bin/homefield route local --repo <owner>/<repo>)"
   fi
 

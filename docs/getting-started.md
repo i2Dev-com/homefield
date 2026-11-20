@@ -31,8 +31,9 @@ online. Any other option is appended after `bash -s --`, like `--url`:
 From a checkout, with Lima ≥ 2.3, run `bin/homefield setup --url
 https://github.com/<org>` instead. On a GitHub Enterprise Server or GHE.com
 host, the `--url` carries that host instead of `github.com` (and commands
-without a `--url` take it from `HOMEFIELD_GITHUB_HOST`); GitHub's hosted
-runners do not exist there, so the hosted fallback does not apply. `setup` is
+without a `--url` take it from `HOMEFIELD_GITHUB_HOST`); a GHES host has no
+hosted runners, so the hosted fallback does not apply there, while a GHE.com
+host has hosted Linux and Windows runners and the fallback works. `setup` is
 the whole first-time setup in one
 command: it runs `preflight` first and stops, with nothing created, if any check
 fails (a warning does not stop it; on a terminal, a `gh` that is not logged in
