@@ -40,16 +40,17 @@ check_instance() {
     die "--instance (or HOMEFIELD_INSTANCE) must be a Lima instance name: letters and digits, with a single '.', '_' or '-' between them, at most 76 characters, not ending in .yml or .yaml; got: $INSTANCE"
 }
 
-# vm_status: prints the VM's status (Running, Stopped, ...), or nothing when
-# there is no such VM. Returns 2 when Lima could not be asked, or lists the VM
-# without a status. It lists every instance and picks its own: `limactl list
-# NAME` exits 1 for a missing VM ("unmatched instances", Lima 2.2.0) as it
-# does when Lima itself fails, so only a successful list can say "no VM".
-vm_status() {
-  local rows name status
+# vm_status_of <name>: prints that VM's status (Running, Stopped, ...), or
+# nothing when there is no such VM. Returns 2 when Lima could not be asked, or
+# lists the VM without a status. It lists every instance and picks its own:
+# `limactl list NAME` exits 1 for a missing VM ("unmatched instances", Lima
+# 2.2.0) as it does when Lima itself fails, so only a successful list can say
+# "no VM".
+vm_status_of() {
+  local target="$1" rows name status
   rows="$(limactl list --format '{{.Name}} {{.Status}}' 2>/dev/null)" || return 2
   while read -r name status; do
-    if [ "$name" = "$INSTANCE" ]; then
+    if [ "$name" = "$target" ]; then
       # Listed with no status: its config is broken (Lima warns and lists it
       # with an empty status). It exists, so it is not "no VM".
       [ -n "$status" ] || return 2
@@ -58,6 +59,20 @@ vm_status() {
     fi
   done <<<"$rows"
   return 0
+}
+
+# vm_status: this instance's status, for the commands that act on "no VM":
+# create one, or report that there is none. A Lima that could not be asked
+# ends the command (install would otherwise register a runner group and
+# then fail to create a VM that exists). Not a $(...), so die ends the command.
+VM_STATUS=""
+
+vm_status() {
+  vm_status_of "$INSTANCE"
+}
+
+vm_lookup() {
+  VM_STATUS="$(vm_status)" || die "could not ask Lima about VM ${INSTANCE} (limactl list failed, or lists it without a status); stopping here"
 }
 
 # The line every HomeField VM's stored Lima config starts with: lima.yaml is
@@ -74,10 +89,46 @@ is_homefield_vm() {
   [ "$first" = "$HF_VM_MARKER" ]
 }
 
+# The line install --reset-vm appends to the base VM's stored lima.yaml after
+# cloning it. It marks the VM as a reset base, so a later install replaces
+# only a VM it created for this purpose: an ordinary HomeField runner that
+# happens to be named <instance>-base (check_instance allows the name) is
+# refused, never deleted.
+HF_RESET_BASE_MARKER='# HomeField reset base VM (created by install --reset-vm)'
+
+# is_reset_base <name>: whether that instance is a HomeField reset base: a
+# HomeField VM whose stored config carries the reset-base marker.
+is_reset_base() {
+  local f="${LIMA_HOME:-$HOME/.lima}/$1/lima.yaml" first=""
+  [ -f "$f" ] || return 1
+  IFS= read -r first <"$f" || true
+  [ "$first" = "$HF_VM_MARKER" ] || return 1
+  grep -qF "$HF_RESET_BASE_MARKER" "$f"
+}
+
+# strip_base_marker <name>: take the reset-base marker back out of that
+# instance's stored config. A working VM cloned from its base inherits the
+# base's config verbatim, marker included — and a working VM that looks like a
+# base would be skipped by vm_instances and never started, stopped or watched.
+# Called on every clone that produces a working VM; the base keeps its marker.
+strip_base_marker() {
+  local f="${LIMA_HOME:-$HOME/.lima}/$1/lima.yaml" tmp
+  [ -f "$f" ] || return 0
+  tmp="$(mktemp "${f%.yaml}.XXXXXX")" || return 1
+  grep -vF "$HF_RESET_BASE_MARKER" "$f" >"$tmp" || true
+  mv "$tmp" "$f"
+}
+
 # vm_instances: every HomeField VM on this Mac, one name per line, in Lima's
 # order. The default instance counts even without the marker (a config edited by
-# hand), because install creates it under that name. Returns 1 when Lima is not
-# installed or cannot list; a command then falls back to its single-instance path.
+# hand), because install creates it under that name. A --reset-vm base VM
+# (<instance>-base, marked as such in its stored config) is a HomeField VM too,
+# but the tool never starts it — it exists to be cloned from — so the commands
+# that cover "every VM" (start, stop, status, fleet, the watch loop) skip it;
+# name it with --instance to act on it. An ordinary runner that happens to be
+# named <something>-base is not a base (no marker) and stays listed. Returns 1
+# when Lima is not installed or cannot list; a command then falls back to its
+# single-instance path.
 vm_instances() {
   local rows name status found=""
   command -v limactl >/dev/null || return 1
@@ -85,6 +136,7 @@ vm_instances() {
   while read -r name status; do
     [ -n "$name" ] || continue
     if is_homefield_vm "$name" || [ "$name" = "$DEFAULT_INSTANCE" ]; then
+      is_reset_base "$name" && continue
       found="${found}${name}"$'\n'
     fi
   done <<<"$rows"

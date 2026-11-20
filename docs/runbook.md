@@ -394,6 +394,45 @@ each job incurs a few seconds of cold registration instead of reusing a
 persistent registration. If re-registration fails, the runner is left visibly
 offline (`homefield status` reports the error).
 
+**VM reset (`--reset-vm`).** `homefield install --ephemeral --reset-vm` adds a
+clean root disk to every job: the install provisions the VM unregistered
+(a prepare-only provision run), clones it while stopped to a base VM named
+`<instance>-base` (an instant APFS copy-on-write `limactl clone`), and only then
+registers the working VM, so the base stays behind as the stopped, unregistered
+source every later reset clones from. Each `re-register` with the reset on —
+one-shot or `--watch` after every job — stops the VM, deletes it, clones a fresh
+one from the base and registers that instead, so each job starts from a clean
+root disk. What survives the reset is what the base's disk image carries (apt
+packages, hooks, sudoers, timers, the runner binary); what does not is what the
+job created (Docker images, caches, anything outside the base). The trade-off
+against plain `--ephemeral`: a reset pays one clone (seconds) and a full boot
+plus registration per job, and a Docker cache has to rebuild from zero, so
+image-heavy jobs should prefer `--job-cleanup` (keeps tagged images warm) or
+plain ephemeral mode.
+
+The switch is saved in the instance state, and `homefield status` shows it
+(`vm reset: on (each re-register clones a fresh VM from <instance>-base)`).
+`upgrade --reset-vm` turns it on for an installed VM (the base must already
+exist — only install creates it), `--no-reset-vm` turns it off, and
+`re-register --reset-vm` / `--no-reset-vm` override it for one invocation.
+Failure policy: a reset that cannot run (the base is missing, or the stop or
+delete failed) is skipped — the old VM is re-registered as it is and `status`
+reports the `reset_error`, retried on the next cycle; a clone that fails after
+the delete leaves the VM gone with `ephemeral_error` recorded, a one-shot
+`re-register` exits nonzero, and the `--watch` loop stays alive — its next
+cycle (or a manual `re-register`) clones the VM back from the base; recovery
+is exactly what the base is for. Only a base that install marked as a reset
+base is ever replaced: an ordinary runner named `<instance>-base` is refused,
+never deleted. `start`/`stop`/`status`/`fleet` and
+the watch loop never touch the base VM (`vm_instances` skips it; use
+`--instance <name>-base` to act on it directly).
+
+Two known limitations: `uninstall` does not delete the base VM — remove it with
+`limactl delete -f <instance>-base` — and the base is never upgraded: clones
+get OS updates through the in-guest maintenance, but a change to the VM's own
+settings (CPU, memory, disk) or a provisioning change needs the base rebuilt,
+which means uninstall and install again with `--reset-vm`.
+
 ## What the VM has, compared with a hosted runner
 
 The bar for switching a job is that it runs the same on the VM as on a hosted

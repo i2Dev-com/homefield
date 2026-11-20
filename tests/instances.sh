@@ -117,6 +117,21 @@ record "the marked instance and the default name are listed, in Lima's order" \
 homefield" "$out"
 run vm_instances HOME_DIR="$work/home" LIMA_ROWS='plain Running\nforeign Running'
 record "...an unmarked config that is not the default name is left out" "" "$out"
+# A --reset-base VM (<instance>-base) carries the marker too (it is cloned from
+# a HomeField VM), but the commands that cover "every VM" must not act on it:
+# it is the stopped, unregistered source the resets clone from. Only a marked
+# base is excluded: an ordinary runner that happens to be named <x>-base is a
+# normal VM and stays listed.
+mkdir -p "$work/home/.lima/homefield-base" "$work/home/.lima/build-base"
+{
+  printf '%s\n' '# Lima VM for the local GitHub Actions runner.'
+  printf '%s\n' '# HomeField reset base VM (created by install --reset-vm)'
+} >"$work/home/.lima/homefield-base/lima.yaml"
+printf '%s\n' '# Lima VM for the local GitHub Actions runner.' >"$work/home/.lima/build-base/lima.yaml"
+run vm_instances HOME_DIR="$work/home" LIMA_ROWS='homefield-base Stopped\nbuild-base Running\nhomefield Stopped'
+record "...a --reset-vm base VM (marked <instance>-base) is left out, an ordinary <x>-base runner is listed" \
+  "build-base
+homefield" "$out"
 run vm_instances HOME_DIR="$work/home" LIMA_LIST_FAIL=1
 record "Lima cannot be asked: nothing printed, nonzero so callers take their own path" \
   "nonzero/" "$(case "$rc" in (0) echo zero ;; (*) echo nonzero ;; esac)/$out"

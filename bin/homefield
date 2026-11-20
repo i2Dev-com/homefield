@@ -127,7 +127,11 @@ usage_cmd_re_register() {
   cat <<'EOF'
   re-register  Re-register an ephemeral runner with a fresh one-hour token
                (fetched on the host and piped on stdin). With --watch, polls and
-               re-registers automatically after each job completes.
+               re-registers automatically after each job completes. With the
+               VM reset on (install --ephemeral --reset-vm, or this command's
+               --reset-vm), each re-register first clones a fresh VM from the
+               stopped base VM, so every job starts from a clean root disk;
+               --no-reset-vm re-registers without the reset for one run.
 EOF
 }
 usage_cmd_status() {
@@ -339,6 +343,13 @@ install (and setup, which takes the same options):
                      (ACTIONS_RUNNER_HOOK_JOB_COMPLETED). Off by default; the
                      daily cleanup timer runs either way
   --no-job-cleanup   take the per-job cleanup hook back out
+  --reset-vm         with --ephemeral: after every job, re-register runs on a
+                     fresh APFS clone of a stopped, unregistered base VM
+                     (<instance>-base, created by this install), so each job
+                     starts from a clean root disk. Requires Lima's APFS
+                     clone; the base stays on disk (~2 GiB used)
+  --no-reset-vm      turn the VM reset back off (the base VM stays; remove it
+                     with limactl delete -f <instance>-base)
   --auto-route       on stop, route the adopted repositories to hosted
                      runners when no local runner is left online; on start,
                      route them back to this runner (the automatic fallback,
