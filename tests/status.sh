@@ -203,11 +203,12 @@ record "status with auto_route=1, no agent: the watcher line says so, with the f
   "$rc/$(has "$out" 'route watcher: NOT installed')/$(has "$out" 'upgrade --auto-route')"
 
 mkdir -p "$work/la"
-printf 'last_run=1\nlast_run_at=2026-11-20 08:00:00\nlast_mode=sleep\nlast_result=ok\n' >"$work/state/route-watcher.state"
+mkdir -p "$work/state/route-watcher"
+printf 'last_run=1\nlast_run_at=2026-11-20 08:00:00\nlast_mode=sleep\nlast_result=ok\n' >"$work/state/route-watcher/state"
 : >"$work/la/com.homefield.route-watcher.plist"
 status HOMEFIELD_STATE_DIR="$work/state" HOMEFIELD_LAUNCH_AGENTS_DIR="$work/la" SETTING_OUT='my-mac-homefield\nhttps://github.com/acme\n42\n'
 record "status with the agent installed: the last run, and where the log is" "0/yes/yes" \
-  "$rc/$(has "$out" 'route watcher: last ran sleep at 2026-11-20 08:00:00: ok')/$(has "$out" 'route-watcher.log')"
+  "$rc/$(has "$out" 'route watcher: last ran sleep at 2026-11-20 08:00:00: ok')/$(has "$out" 'route-watcher/log')"
 
 printf 'auto_route=0\n' >"$work/state/homefield.state"
 status HOMEFIELD_STATE_DIR="$work/state" HOMEFIELD_LAUNCH_AGENTS_DIR="$work/la" SETTING_OUT='my-mac-homefield\nhttps://github.com/acme\n42\n'

@@ -268,7 +268,8 @@ stat "${healthy[@]}" -- --json
 record "route_watcher: no agent is installed=false, no run yet" "False/None" \
   "$(json_field "$out" 'd["route_watcher"]["installed"]')/$(json_field "$out" 'd["route_watcher"]["last_run"]')"
 
-printf 'last_run=1\nlast_run_at=2026-11-20 08:00:00\nlast_mode=wake\nlast_result=ok\n' >"$home/.local/state/homefield/route-watcher.state"
+mkdir -p "$home/.local/state/homefield/route-watcher"
+printf 'last_run=1\nlast_run_at=2026-11-20 08:00:00\nlast_mode=wake\nlast_result=ok\n' >"$home/.local/state/homefield/route-watcher/state"
 : >"$home/Library/LaunchAgents/com.homefield.route-watcher.plist"
 stat "${healthy[@]}" -- --json
 record "route_watcher: the agent and the last run's mode, result and time" "True/wake/ok/2026-11-20 08:00:00" \

@@ -710,7 +710,11 @@ running is skipped — the same rule `stop` applies — and so is a VM that
 cannot be asked whether one is: neither is flipped and neither's records
 are touched. Because every runner on the Mac goes away together at sleep,
 the flip's still-served check treats all of them as gone: two VMs sharing a
-label do not leave each other's repositories served.
+label do not leave each other's repositories served. The exclusion follows
+each runner's registration scope (the url it registered under), so a Mac
+with runners for two organizations does not let one org's local runner name
+exclude a same-named remote runner of the other org — that remote runner is
+still there and still serves its repositories.
 
 The wake side starts every VM whose `auto_route` is on if it is not running,
 waits for each runner to be listed online (up to
@@ -725,16 +729,22 @@ it, and its pending entries keep waiting for the explicit `start
 The watcher is fail-safe in the same direction as the rest of the fallback:
 when a flip cannot be proven, a VM cannot be asked, or a restore cannot
 run, the records stay as they are and the run is reported as failed. Each
-run is recorded in `route-watcher.state` (the same directory as the routing
-records), `status` shows the last run for every VM with the fallback on,
-and `diagnose` turns a missing agent into a problem with the fixing
-command, and a failed last run into a hint naming the log. The log,
-`route-watcher.log` in the same directory, carries every flip, skip and
-failure in full. macOS grants about 30 seconds before it forces a sleep,
+run is recorded in the watcher's own state file, in a `route-watcher`
+subdirectory of the state directory (the directory the routing records live
+in — a subdirectory, so a VM named `route-watcher` cannot share its state
+file with the watcher's record), `status` shows the last run for every VM
+with the fallback on, and `diagnose` turns a missing agent into a problem
+with the fixing command, and a failed last run into a hint naming the log.
+The log, the `log` file in the same subdirectory, carries every flip, skip
+and failure in full. macOS grants about 30 seconds before it forces a sleep,
 so the sleep side is bounded by `HOMEFIELD_WATCH_SLEEP_BUDGET` (default
 20 s): a flip that does not finish in time is killed and logged loudly, and
 the repositories it did not reach keep their routing until the next wake or
-start.
+start. The wake side runs in a thread of its own, because it can wait
+minutes per VM: if the Mac goes back to sleep while a wake recovery is
+still running, the sleep notification kills the recovery and runs the
+sleep-side flip, so the repositories are never left routed to a runner that
+is about to disappear with the Mac.
 
 `--no-auto-route`, `uninstall` and `reset` remove the agent when no
 remaining VM on this Mac has the fallback on; while any VM wants it, the

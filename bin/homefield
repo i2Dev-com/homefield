@@ -473,8 +473,9 @@ route-watch <sleep|wake>:
                     online (up to HOMEFIELD_WATCH_WAKE_WAIT seconds, default
                     120), and route the repositories a flip sent to hosted
                     back to local
-  One run is recorded in route-watcher.state, next to the routing records;
-  the log is route-watcher.log. Needs Lima. install/upgrade --auto-route
+  One run is recorded in the watcher's state file, in the route-watcher
+  subdirectory of the state directory; the log is the log file in the same
+  subdirectory. Needs Lima. install/upgrade --auto-route
   installs the LaunchAgent that runs both at the right moments;
   --no-auto-route, uninstall and reset take it back out when no VM on this
   Mac wants it anymore.

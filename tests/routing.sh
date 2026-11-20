@@ -743,8 +743,9 @@ record "an unknown start option: refused" "1/yes" \
 echo
 echo "the sleep/wake watcher"
 
-# watcher_state_value <key>: the per-Mac run record's value (route-watcher.state).
-watcher_state_value() { awk -v k="$1" 'index($0, k "=") == 1 { print substr($0, length(k) + 2); exit }' "$state/route-watcher.state" 2>/dev/null; }
+# watcher_state_value <key>: the per-Mac run record's value (the watcher's
+# own state file, in its subdirectory of the state directory).
+watcher_state_value() { awk -v k="$1" 'index($0, k "=") == 1 { print substr($0, length(k) + 2); exit }' "$state/route-watcher/state" 2>/dev/null; }
 
 # sleep: one Running VM, idle, the automatic fallback on, one repo routed
 # local under the runner's label. Jobs are queued (JOB=no), GitHub lists the
@@ -823,6 +824,20 @@ hf LIMA_ROWS='homefield Running\nsecond Running\n' LIMA_HOME="$lima" SETTINGS_DI
 record "sleep on a two-VM Mac sharing a label: both repos flip (each runner would keep the other's served)" "0/yes/yes" \
   "$rc/$(grep -q 'variable set CI_RUNNER --repo github.com/acme/api --body hosted' "$calls" && echo yes || echo no)/$(grep -q 'variable set CI_RUNNER --repo github.com/acme/web --body hosted' "$calls" && echo yes || echo no)"
 
+# A runner name is only excluded within its own registration scope: a Mac
+# with runners for two organizations must not let one org's local runner name
+# exclude a same-named remote runner of the other org, which still serves its
+# repositories.
+printf 'other-mac\nhttps://github.com/beta\n43\n' >"$work/settings/second"
+printf 'homefield-ci acme/api\n' >"$state/routing"
+rm -f "$state/autoflip"
+hf LIMA_ROWS='homefield Running\nsecond Running\n' LIMA_HOME="$lima" SETTINGS_DIR="$work/settings" \
+  JOBS_DIR="$work/jobs" REG=0 \
+  GH_RUNNERS='42\tmy-mac-homefield\tonline\tself-hosted,linux,arm64,homefield-ci\n43\tother-mac\tonline\tself-hosted,linux,arm64,homefield-ci\n' \
+  -- route-watch sleep
+record "sleep does not exclude another scope's runner: the remote namesake keeps the repos served" "0/0/0" \
+  "$rc/$(grep -c 'variable set' "$calls" || true)/$([ -f "$state/autoflip" ] && wc -l <"$state/autoflip" | tr -d ' ' || echo 0)"
+
 # A stopped VM is not asked and not flipped: its runner is not taking jobs.
 printf 'homefield-ci acme/api\n' >"$state/routing"
 rm -f "$state/autoflip" "$state/second.state"
@@ -831,8 +846,26 @@ hf LIMA_ROWS='homefield Running\nsecond Stopped\n' LIMA_HOME="$lima" SETTINGS_DI
 record "sleep skips a Stopped VM: it is not asked and its records stay" "0/no" \
   "$rc/$(grep -q 'second-mac' "$calls" && echo yes || echo no)"
 record "...the Running VM still flips" "homefield-ci acme/api github.com" "$(cat "$state/autoflip" 2>/dev/null)"
+
+# A VM literally named route-watcher: its own state file (route-watcher.state)
+# must survive a watcher run, because the watcher's records live in their own
+# subdirectory — the run summary would otherwise overwrite the VM's
+# auto_route and silently disable its automatic fallback.
+mkdir -p "$lima/route-watcher"
+printf '%s\n' '# Lima VM for the local GitHub Actions runner.' >"$lima/route-watcher/lima.yaml"
+printf 'rw-mac\nhttps://github.com/acme\n44\n' >"$work/settings/route-watcher"
+printf 'auto_route=1\n' >"$state/route-watcher.state"
+printf 'homefield-ci acme/api\n' >"$state/routing"
+rm -f "$state/autoflip"
+hf LIMA_ROWS='route-watcher Running\n' LIMA_HOME="$lima" SETTINGS_DIR="$work/settings" \
+  JOBS_DIR="$work/jobs" REG=0 GH_RUNNERS='44\trw-mac\tonline\tself-hosted,linux,arm64,homefield-ci\n' -- route-watch sleep
+record "a VM named route-watcher: its state file survives the watcher run" "0/yes/yes" \
+  "$rc/$(grep -qx 'auto_route=1' "$state/route-watcher.state" && echo yes || echo no)/$(grep -q '^last_mode=sleep$' "$state/route-watcher/state" 2>/dev/null && echo yes || echo no)"
+record "...the run record carries the run, not the VM's state" "sleep/ok" \
+  "$(watcher_state_value last_mode)/$(watcher_state_value last_result)"
 rm -rf "$lima" "$work/settings" "$work/jobs"
 rm -f "$state/second.state" "$state/homefield.state" "$state/routing" "$state/autoflip" "$state/route-watcher.state"
+rm -rf "$state/route-watcher"
 
 echo
 echo "the --auto-route switch on install and upgrade"
@@ -901,7 +934,7 @@ record "...and the records are seeded from the group's already-local repositorie
 record "...the route watcher LaunchAgent is installed and loaded" "yes/yes" \
   "$([ -f "$work/home/Library/LaunchAgents/com.homefield.route-watcher.plist" ] && echo yes || echo no)/$(grep -q 'launchctl load -w' "$calls" && echo yes || echo no)"
 record "...the agent logs to the state directory" "yes" \
-  "$(grep -q 'route-watcher.log' "$work/home/Library/LaunchAgents/com.homefield.route-watcher.plist" && echo yes || echo no)"
+  "$(grep -q 'route-watcher/log' "$work/home/Library/LaunchAgents/com.homefield.route-watcher.plist" && echo yes || echo no)"
 iharness_env=()
 
 rm -f "$state/routing"

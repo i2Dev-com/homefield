@@ -27,18 +27,23 @@
 # keeps its explicit control (its pending autoflip entries keep waiting for
 # the explicit `start --route-local`).
 #
-# Each run is recorded in route-watcher.state (read by status and diagnose);
-# the agent's stdout and stderr land in route-watcher.log. The agent itself
-# is a thin Python helper (bin/route-watcher.py) that translates IOKit's
-# power events into these two commands — everything else is shell, so the
-# tests can drive both modes with stubs.
+# Each run is recorded in the watcher's state file (read by status and
+# diagnose); the agent's stdout and stderr land in the watcher's log. The
+# agent itself is a thin Python helper (bin/route-watcher.py) that translates
+# IOKit's power events into these two commands — everything else is shell, so
+# the tests can drive both modes with stubs.
 
-# The watcher's own records, next to the per-Mac routing records (the same
-# directory: per-Mac, not per-VM). route-watcher.state holds the last run
-# (status and diagnose surface it); route-watcher.log is the agent's stdout
-# and stderr, where every flip, skip and failure is told in full.
-route_watcher_state_file() { printf '%s/route-watcher.state' "${HOMEFIELD_STATE_DIR:-$HOME/.local/state/homefield}"; }
-route_watcher_log_file() { printf '%s/route-watcher.log' "${HOMEFIELD_STATE_DIR:-$HOME/.local/state/homefield}"; }
+# The watcher's own records, in a subdirectory of the per-Mac state
+# directory (the same directory the routing records live in: per-Mac, not
+# per-VM). The subdirectory keeps the watcher's files out of the per-instance
+# `<name>.state` namespace — check_instance accepts a VM named route-watcher,
+# and its state file would otherwise be this record, with the run summary
+# overwriting the VM's auto_route and group records. `state` holds the last
+# run (status and diagnose surface it); `log` is the agent's stdout and
+# stderr, where every flip, skip and failure is told in full.
+route_watcher_dir() { printf '%s/route-watcher' "${HOMEFIELD_STATE_DIR:-$HOME/.local/state/homefield}"; }
+route_watcher_state_file() { printf '%s/state' "$(route_watcher_dir)"; }
+route_watcher_log_file() { printf '%s/log' "$(route_watcher_dir)"; }
 route_watcher_plist_path() { printf '%s/com.homefield.route-watcher.plist' "${HOMEFIELD_LAUNCH_AGENTS_DIR:-$HOME/Library/LaunchAgents}"; }
 
 # route_watcher_record <mode> <rc>: the run's summary, written whole (a temp
@@ -88,7 +93,7 @@ route_watcher_last_run() {
 # it) and must not keep the agent for a VM that is gone.
 route_watcher_needed() {
   local dir f exclude="${1:-}"
-  dir="$(dirname "$(route_watcher_state_file)")"
+  dir="${HOMEFIELD_STATE_DIR:-$HOME/.local/state/homefield}"
   [ -d "$dir" ] || return 1
   for f in "$dir"/*.state; do
     [ -f "$f" ] || continue
@@ -201,17 +206,22 @@ route_watcher_remove_if_unneeded() {
   route_watcher_remove
 }
 
-# route_watch_collect_runners: every Running HomeField VM's runner name, one
-# per line, into ROUTE_EXCLUDE_RUNNERS — the pre-pass of the sleep side.
-# The flip's "another online runner serves the label" check excludes the
-# runner being stopped by name, but at sleep time every runner on this Mac
-# goes away together, so all of their names must be excluded: without that,
-# two VMs sharing a label would each leave the repositories to the other and
-# nothing would be flipped. A Stopped VM's runner is not heartbeating and is
-# no threat, so only Running VMs are asked (a `limactl shell` on a stopped
-# VM starts it). A VM that cannot be asked poisons the whole flip — its
-# runner may still be listed online and serving the label — so a failure
-# here flips nothing (fail safe, the same direction as Part 1's).
+# route_watch_collect_runners: every Running HomeField VM's registration
+# (url and runner name, tab-separated per line), into ROUTE_EXCLUDE_RUNNERS —
+# the pre-pass of the sleep side. The flip's "another online runner serves the
+# label" check excludes the runner being stopped by name, but at sleep time
+# every runner on this Mac goes away together, so all of their names must be
+# excluded: without that, two VMs sharing a label would each leave the
+# repositories to the other and nothing would be flipped. The registrations
+# carry their scope (the url) because the names alone do not: a Mac with
+# runners for two organizations must not let one org's local runner name
+# exclude a same-named remote runner of the other org, which still serves its
+# repositories. Only names from the same registration scope are excluded, and
+# a Stopped VM's runner is not heartbeating and is no threat, so only Running
+# VMs are asked (a `limactl shell` on a stopped VM starts it). A VM that
+# cannot be asked poisons the whole flip — its runner may still be listed
+# online and serving the label — so a failure here flips nothing (fail safe,
+# the same direction as Part 1's).
 route_watch_collect_runners() {
   local list name saved status
   saved="$INSTANCE"
@@ -232,12 +242,12 @@ route_watch_collect_runners() {
     fi
     [ "$status" = "Running" ] || continue
     load_runner_settings
-    if [ -z "$RS_NAME" ]; then
-      echo "homefield: could not read VM ${name}'s runner name; the routed repositories stay as they are (fail safe: a runner that may still be online must not lose its jobs)" >&2
+    if [ -z "$RS_NAME" ] || [ -z "$RS_URL" ]; then
+      echo "homefield: could not read VM ${name}'s runner identity; the routed repositories stay as they are (fail safe: a runner that may still be online must not lose its jobs)" >&2
       INSTANCE="$saved"
       return 1
     fi
-    ROUTE_EXCLUDE_RUNNERS="${ROUTE_EXCLUDE_RUNNERS}${RS_NAME}"$'\n'
+    ROUTE_EXCLUDE_RUNNERS="${ROUTE_EXCLUDE_RUNNERS}${RS_URL}"$'\t'"${RS_NAME}"$'\n'
   done <<<"$list"
   INSTANCE="$saved"
   return 0
@@ -275,7 +285,18 @@ route_watch_sleep_single() {
     return 1
   fi
   log "VM ${INSTANCE}: the Mac is going to sleep; switching its routed repositories to hosted"
-  route_stop_fallback "$RS_URL" "$RS_NAME" "${ROUTE_EXCLUDE_RUNNERS:-}"
+  # Only the exclusions from this VM's own registration scope: the flip asks
+  # GitHub for the runners of RS_URL's scope, so a same-named runner of
+  # another org is not in the list to begin with — and its name must not
+  # exclude one of this scope's runners that is still there.
+  local scoped="" eurl ename
+  while IFS=$'\t' read -r eurl ename; do
+    [ -n "$eurl" ] || continue
+    if [ "$eurl" = "$RS_URL" ]; then
+      scoped="${scoped}${ename}"$'\n'
+    fi
+  done <<<"${ROUTE_EXCLUDE_RUNNERS:-}"
+  route_stop_fallback "$RS_URL" "$RS_NAME" "$scoped"
 }
 
 # route_watch_wake_single: one VM's wake side. Start it if it is not running

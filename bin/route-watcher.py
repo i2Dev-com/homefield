@@ -23,7 +23,9 @@ the Mac is not held up:
   VMs, wait for the runners to be online, restore), bounded by
   HOMEFIELD_WATCH_WAKE_BUDGET (default 10 min; the wake path's own waits are
   bounded per VM, and a stuck one must not keep the agent from the next
-  sleep).
+  sleep). It runs in a thread of its own, because it can wait minutes and
+  the run-loop thread must stay free to receive the next sleep notification;
+  a WillSleep kills a running wake recovery before the sleep-side flip.
 
 At load — login, or launchd restarting the agent — the wake path runs once:
 the agent's RunAtLoad makes a login a wake for this purpose, and a crashed
@@ -39,6 +41,7 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 
 # IOKit's power messages (IOPMLib.h): iokit_common_msg(0x270) etc., i.e.
@@ -123,7 +126,7 @@ def kill_tree(proc):
 
 
 def run_route_watch(mode, budget):
-    """Run one route-watch mode, bounded by wall time.
+    """Run one route-watch mode synchronously, bounded by wall time.
 
     subprocess.run's timeout uses the monotonic clock, which does not advance
     while the Mac sleeps: a force-sleep in the middle of a flip would resume
@@ -131,21 +134,24 @@ def run_route_watch(mode, budget):
     to hosted after the Mac is back. Waiting in small slices on the wall clock
     expires the budget the moment the Mac is awake, the stale child is killed,
     and the run loop's next message (the wake) takes over.
+
+    Only the sleep side runs here, on the run-loop thread and bounded to a
+    fraction of the ~30 s macOS grants before it forces the sleep: the sleep
+    notification must be answered after the flip, and the flip must finish
+    before the Mac is gone. The wake side runs in a thread of its own (see
+    start_wake), because it can wait minutes and must not keep this thread
+    from the next sleep notification.
     """
-    global sleep_child
     proc = subprocess.Popen([HOMEFIELD, "route-watch", mode], start_new_session=True)
-    sleep_child = proc
     deadline = time.time() + budget
     while True:
         try:
             proc.wait(timeout=0.5)
-            sleep_child = None
             return True
         except subprocess.TimeoutExpired:
             pass
         if time.time() >= deadline:
             kill_tree(proc)
-            sleep_child = None
             log(
                 "route-watch %s did not finish within %ds; killed. Repositories "
                 "it did not reach keep their previous routing; the next wake or "
@@ -153,6 +159,67 @@ def run_route_watch(mode, budget):
                 % (mode, int(budget))
             )
             return False
+
+
+# The wake recovery, in a thread of its own: it can wait minutes per VM
+# (HOMEFIELD_WATCH_WAKE_WAIT) and must never keep the run-loop thread — the
+# one that must receive and acknowledge the next sleep notification — busy.
+# wake_proc is the run's process, guarded by state_lock; a sleep notification
+# kills it (the Mac is going back to sleep, so a half-finished restore is
+# exactly what the sleep-side flip then re-flips).
+state_lock = threading.Lock()
+wake_proc = None
+wake_thread = None
+
+
+def _wake_run():
+    global wake_proc
+    proc = subprocess.Popen([HOMEFIELD, "route-watch", "wake"], start_new_session=True)
+    with state_lock:
+        wake_proc = proc
+    deadline = time.time() + WAKE_BUDGET
+    while True:
+        try:
+            proc.wait(timeout=0.5)
+            with state_lock:
+                wake_proc = None
+            return
+        except subprocess.TimeoutExpired:
+            pass
+        if time.time() >= deadline:
+            with state_lock:
+                wake_proc = None
+            kill_tree(proc)
+            log(
+                "route-watch wake did not finish within %ds; killed. Repositories "
+                "it did not reach keep their previous routing; the next wake or "
+                "start sorts the rest out." % int(WAKE_BUDGET)
+            )
+            return
+
+
+def start_wake():
+    """Start (or restart) the wake recovery in its own thread."""
+    global wake_thread
+    stop_wake()
+    wake_thread = threading.Thread(target=_wake_run, daemon=True)
+    wake_thread.start()
+
+
+def stop_wake():
+    """Kill a running wake recovery and wait for its thread to end."""
+    global wake_proc, wake_thread
+    with state_lock:
+        proc = wake_proc
+        wake_proc = None
+    if proc is not None and proc.poll() is None:
+        kill_tree(proc)
+    thread = wake_thread
+    wake_thread = None
+    if thread is not None and thread is not threading.current_thread():
+        # The thread notices the kill within its 0.5 s wait slice; the join
+        # only bounds a thread stuck somewhere without the GIL released.
+        thread.join(timeout=10)
 
 
 def acknowledge(root_port, message_argument):
@@ -168,15 +235,14 @@ def on_power_event(_refcon, _service, message_type, message_argument):
         # announces separately. Not answering would delay every idle sleep.
         acknowledge(root_port, message_argument)
     elif message_type == kIOMessageSystemWillSleep:
+        # A wake recovery still running from the previous wake is obsolete —
+        # the Mac is going back to sleep — and this thread must stay free to
+        # answer this notification: kill it before the flip.
+        stop_wake()
         run_route_watch("sleep", SLEEP_BUDGET)
         acknowledge(root_port, message_argument)
     elif message_type == kIOMessageSystemHasPoweredOn:
-        if sleep_child is not None and sleep_child.poll() is None:
-            # Unreachable while the run loop is single-threaded (the wake
-            # cannot be delivered inside the sleep callback), but a stale
-            # flip must never outlive the sleep it served.
-            kill_tree(sleep_child)
-        run_route_watch("wake", WAKE_BUDGET)
+        start_wake()
 
 
 # The callback must outlive the registration: a garbage-collected one would
@@ -211,8 +277,9 @@ def main():
         return 1
     CF.CFRunLoopAddSource(CF.CFRunLoopGetCurrent(), source, kCFRunLoopDefaultMode)
     # Login or a restart counts as a wake (RunAtLoad): restore what is
-    # pending before settling into the event loop.
-    run_route_watch("wake", WAKE_BUDGET)
+    # pending, in its own thread so the run loop below stays free for the
+    # sleep notification if the Mac goes back under immediately.
+    start_wake()
     CF.CFRunLoopRun()
     return 0
 

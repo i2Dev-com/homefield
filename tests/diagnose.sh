@@ -602,10 +602,11 @@ diag "${healthy[@]}" --
 record "the agent installed, no run recorded: no problem, exit 0" "0/yes/no" \
   "$rc/$(has "$out" 'Route watcher: installed (no run recorded yet)')/$(has "$out" 'problem')"
 
-printf 'last_run=1\nlast_run_at=2026-11-20 08:00:00\nlast_mode=sleep\nlast_result=failed\n' >"$state_dir/route-watcher.state"
+mkdir -p "$state_dir/route-watcher"
+printf 'last_run=1\nlast_run_at=2026-11-20 08:00:00\nlast_mode=sleep\nlast_result=failed\n' >"$state_dir/route-watcher/state"
 diag "${healthy[@]}" --
 record "a failed last run: a hint naming the log, exit 0" "0/yes/yes" \
-  "$rc/$(has "$out" 'Next: the route watcher')/$(has "$out" 'route-watcher.log')"
+  "$rc/$(has "$out" 'Next: the route watcher')/$(has "$out" 'route-watcher/log')"
 record "...the human line says which run failed" "yes" \
   "$(has "$out" 'last ran sleep at 2026-11-20 08:00:00: FAILED')"
 
