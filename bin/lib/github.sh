@@ -275,7 +275,7 @@ offer_gh_login() {
 # login_wants_org_scope <url>: whether the inline login should ask for
 # admin:org: --url is an organization's owner URL (the registration that
 # creates a runner group). --org says so, --personal says no, and otherwise the
-# owner is looked up as check_scope_owner does (the public API when gh is not
+# owner is looked up as check_scope_owner does (the host's API when gh is not
 # logged in yet). A repository URL registers one repository and needs no
 # group; an owner that cannot be looked up keeps gh's default login.
 login_wants_org_scope() {
