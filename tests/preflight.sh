@@ -51,10 +51,16 @@ if [ "$1" = "--version" ]; then
 fi
 # `gh auth status --json hosts` exits 0 even when nobody is logged in and
 # prints {"hosts":{}}; the message goes to stderr. --jq prints one line.
+# The flags are matched by name, not position: gh_active_account passes
+# --hostname before them.
 if [ "$1" = "auth" ] && [ "$2" = "status" ]; then
-  if [ "$3" = "--json" ] && [ "$5" = "--jq" ]; then
+  json=0; jq=0
+  for a in "$@"; do
+    case "$a" in --json) json=1 ;; --jq) jq=1 ;; esac
+  done
+  if [ "$json" = 1 ] && [ "$jq" = 1 ]; then
     echo "${GH_JQ_OUT:-stub-user|admin:org, repo}"
-  elif [ "$3" = "--json" ]; then
+  elif [ "$json" = 1 ]; then
     echo "${GH_HOSTS:-{\"hosts\":{\"github.com\":[{\"state\":\"success\",\"active\":true,\"host\":\"github.com\",\"login\":\"stub-user\",\"tokenSource\":\"keyring\",\"scopes\":\"admin:org, repo\",\"gitProtocol\":\"ssh\"}]}}}"
   fi
   echo "You are not logged into any GitHub hosts. To log in, run: gh auth login" >&2
@@ -242,7 +248,7 @@ case_lima_old() {
 case_gh_logged_out() {
   local d="$work/gh-out"; ok_stub "$d"
   preflight "$d" GH_HOSTS='{"hosts":{}}' GH_JQ_OUT='|'
-  if [ "$pf_rc" -eq 1 ] && has "$pf_out" "FAIL  gh not logged in: run 'gh auth login'"; then
+  if [ "$pf_rc" -eq 1 ] && has "$pf_out" "FAIL  gh not logged in: run 'gh auth login -h github.com'"; then
     record "gh logged out: FAIL with fix command, exit 1" "$pf_rc" "1"
   else
     record "gh logged out: FAIL with fix command, exit 1" "$pf_rc" "1 (got: $pf_out)"
@@ -263,7 +269,7 @@ case_gh_logged_out_terminal() {
   out="$(env -u GITHUB_TOKEN -u GH_TOKEN PATH="$d" HOMEFIELD_SOURCE_ONLY=1 GH_HOSTS='{"hosts":{}}' GH_JQ_OUT='|' GH_CALLS="$calls" \
     "$BASH_BIN" -c '. "$1"; have_terminal() { true; }; cmd_preflight' _ "$ROOT/bin/homefield" 2>&1 </dev/null)"
   rc=$?
-  if [ "$rc" -eq 1 ] && has "$out" "FAIL  gh not logged in: run 'gh auth login'" &&
+  if [ "$rc" -eq 1 ] && has "$out" "FAIL  gh not logged in: run 'gh auth login -h github.com'" &&
     ! has "$out" "[Y/n]" && ! grep -q '^auth login' "$calls"; then
     record "gh logged out on a terminal: preflight reports it, never offers or runs a login" "$rc" "1"
   else
@@ -292,7 +298,7 @@ case_gh_uses_helper() {
   out="$(env PATH="$d" HOMEFIELD_SOURCE_ONLY=1 \
     "$BASH_BIN" -c '. "$1"; gh_active_account() { return 1; }; cmd_preflight' _ "$ROOT/bin/homefield" 2>&1 </dev/null)"
   rc=$?
-  if [ "$rc" -eq 1 ] && has "$out" "FAIL  gh not logged in: run 'gh auth login'"; then
+  if [ "$rc" -eq 1 ] && has "$out" "FAIL  gh not logged in: run 'gh auth login -h github.com'"; then
     record "...a helper that cannot answer reads as not logged in, as before" "$rc" "1"
   else
     record "...a helper that cannot answer reads as not logged in, as before" "$rc" "1 (got: $out)"
@@ -320,7 +326,7 @@ case_gh_scope_warn() {
   local d="$work/gh-warn"; ok_stub "$d"
   preflight "$d" GH_JQ_OUT='person|repo, read:org'
   if [ "$pf_rc" -eq 0 ] && has "$pf_out" "WARN  gh authenticated as person" &&
-    has "$pf_out" "gh auth refresh -s admin:org" && has "$pf_out" "All checks passed (6/6)."; then
+    has "$pf_out" "gh auth refresh -h github.com -s admin:org" && has "$pf_out" "All checks passed (6/6)."; then
     record "gh no admin:org scope: WARN, exit 0" "$pf_rc" "0"
   else
     record "gh no admin:org scope: WARN, exit 0" "$pf_rc" "0 (got: $pf_out)"

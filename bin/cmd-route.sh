@@ -45,25 +45,26 @@ record_add() {
 # which needs the id, because a runner serves a repository only if its group
 # admits it (runners in different groups can share a label).
 runners_on_github() {
-  local scope
+  local scope host
   scope="$(api_scope "$1" 2>/dev/null)" || return 1
-  gh api --hostname github.com --paginate "${scope}/actions/runners?per_page=100" \
+  host="$(github_host "$1")"
+  gh api --hostname "$host" --paginate "${scope}/actions/runners?per_page=100" \
     --jq '.runners[] | [.id, .name, .status, (.labels | map(.name) | join(","))] | @tsv' \
     </dev/null 2>/dev/null
 }
 
-# runner_serves_repo <org> <runner id> <repo>: whether the runner can take
+# runner_serves_repo <org> <runner id> <repo> <host>: whether the runner can take
 # the repository's jobs — its group admits the repository (a selected group
 # only its listed ones, the Default group every repository in the org).
 # 0 serves, 1 does not, 2 could not be asked (the caller fails safe and
 # keeps the repository routed local).
 runner_serves_repo() {
-  local org="$1" rid="$2" repo="$3" row vis gid repos
-  row="$(find_runner_group "$org" "$rid")" || return 2
+  local org="$1" rid="$2" repo="$3" host="$4" row vis gid repos
+  row="$(find_runner_group "$org" "$rid" "$host")" || return 2
   IFS=$'\t' read -r _gname vis _pub gid <<<"$row"
   case "$vis" in
     selected)
-      repos="$(group_repositories "$org" "$gid" 2>/dev/null)" || return 2
+      repos="$(group_repositories "$org" "$gid" "$host" 2>/dev/null)" || return 2
       printf '%s\n' "$repos" | grep -qx "$repo" && return 0
       return 1
       ;;
@@ -72,15 +73,17 @@ runner_serves_repo() {
   esac
 }
 
-# scope_owner <url>: what a runner is registered to — the path after
-# github.com in its gitHubUrl: the organization (`https://github.com/acme`
+# scope_owner <url>: what a runner is registered to — the path after the
+# host in its gitHubUrl: the organization (`https://github.com/acme`
 # -> `acme`) or, for a repository-scoped registration, the repository itself
 # (`https://github.com/acme/api` -> `acme/api`). The fallback may only touch
 # repositories in that scope: the runners it can see (and the labels it
 # matched) are the scope's runners, so a record for another organization's
 # repo is someone else's to flip.
 scope_owner() {
-  local owner="${1#*github.com/}"
+  local host owner
+  host="$(github_host "$1")"
+  owner="${1#*${host}/}"
   printf '%s' "${owner%/}"
 }
 
@@ -122,11 +125,20 @@ serves_jobs() {
 # off a runner that is actually there is a regression. Returns 1 when
 # anything was left undone, so stop can report it.
 route_stop_fallback() {
-  local url="$1" name="$2" rows rname rstatus rlabels label repo served flipped=0 rc=0
+  local url="$1" name="$2" rows rname rstatus rlabels label repo served flipped=0 rc=0 host
+  host="$(github_host "$url")"
   # Nothing routed to any local runner: nothing to flip, and GitHub need not
   # be asked. (A missing file reads as empty: set -e turns a failed
   # redirection on it into an aborted command.)
   [ -f "$(routing_file)" ] || { log "no routed repository needed the fallback"; return 0; }
+  # "hosted" is GitHub's hosted runners, which only github.com has: on another
+  # GitHub host the flip would send the jobs to a label nothing serves. The
+  # stop still happens; the repositories stay routed local, where the local
+  # runner (or a human) can be reached.
+  if [ "$host" != github.com ]; then
+    log "the hosted fallback needs GitHub's hosted runners, which ${host} does not have; leaving the routed repositories as they are"
+    return 0
+  fi
   rows="$(runners_on_github "$url")" || {
     echo "homefield: could not read the runners from GitHub; leaving the routed repositories as they are (jobs will queue while the VM is down)" >&2
     return 1
@@ -174,7 +186,7 @@ route_stop_fallback() {
       if [ "$repo_scope" = repo ]; then
         served=1
       else
-        runner_serves_repo "$owner" "$rid" "$repo"
+        runner_serves_repo "$owner" "$rid" "$repo" "$host"
         case $? in 0 | 2) served=1 ;; esac
       fi
     done <<<"$rows"
@@ -183,7 +195,10 @@ route_stop_fallback() {
       continue
     fi
     local landed=0
-    if cmd_route hosted --repo "$repo" --label "$label"; then
+    # cmd_route reads its GitHub host from the environment (it takes no
+    # --url), so lend it this instance's for the flip. The assignment is
+    # temporary: it does not outlive the function call.
+    if HOMEFIELD_GITHUB_HOST="$host" cmd_route hosted --repo "$repo" --label "$label"; then
       landed=1
     else
       rc=1
@@ -216,7 +231,8 @@ route_stop_fallback() {
 # "cannot prove what this runner serves": nothing restored, entries kept,
 # 1 to the caller.
 route_start_restore() {
-  local url="$1" name="$2" rows rname rstatus rlabels label repo rc=0 restored=0 owner
+  local url="$1" name="$2" rows rname rstatus rlabels label repo rc=0 restored=0 owner host
+  host="$(github_host "$url")"
   # Nothing waiting: quiet, and GitHub need not be asked.
   [ -f "$(autoflip_file)" ] || { log "no repository waiting to be routed back"; return 0; }
   rows="$(runners_on_github "$url")" || {
@@ -242,7 +258,8 @@ route_start_restore() {
     # The started runner must be able to take the repository's jobs: the
     # workflow's full runs-on set, not just the label (see serves_jobs).
     serves_jobs "$labels" "$label" || continue
-    if cmd_route local --repo "$repo" --label "$label"; then
+    # See route_stop_fallback: cmd_route reads its host from the environment.
+    if HOMEFIELD_GITHUB_HOST="$host" cmd_route local --repo "$repo" --label "$label"; then
       record_drop "$(autoflip_file)" "$repo" ||
         { rc=1; echo "homefield: ${repo}: routed local but could not update the record; it will be routed local again on the next start" >&2; }
       restored=$((restored + 1))
@@ -306,8 +323,9 @@ routing_label_from_rows() {
 # failure: the fallback stays silent-but-uncovered until the repositories
 # are recorded by hand, which is exactly what the warnings say to do.
 seed_routing_records() {
-  local url="$1" name="$2" label="${3:-}" gid="${4:-}" scope org repos r current rc=0 n=0 preserved=0 gc
+  local url="$1" name="$2" label="${3:-}" gid="${4:-}" scope org repos r current rc=0 n=0 preserved=0 gc host
   local rows="" rid rname rstatus rlabels other conflict owner repo_scope
+  host="$(github_host "$url")"
   scope="$(api_scope "$url" 2>/dev/null)" || {
     echo "homefield: could not read the scope of ${url}; the routing records were not seeded (repositories already routed local are not covered by the automatic fallback until each is recorded: bin/homefield route local --repo <owner>/<repo>)" >&2
     return 1
@@ -337,7 +355,7 @@ seed_routing_records() {
         if [ -n "$gc" ] && [ "${gc%%/*}" = "$org" ]; then gid="${gc##*/}"; fi
       fi
       if [ -n "$gid" ]; then
-        repos="$(group_repositories "$org" "$gid" 2>/dev/null)" || repos=""
+        repos="$(group_repositories "$org" "$gid" "$host" 2>/dev/null)" || repos=""
       fi
       if [ -z "${repos:-}" ]; then
         echo "homefield: could not list the runner group's repositories; repositories already routed local are not covered by the automatic fallback until each is recorded: bin/homefield route local --repo <owner>/<repo>" >&2
@@ -345,7 +363,7 @@ seed_routing_records() {
       fi
       ;;
     repos/*)
-      repos="${url#*github.com/}" ;;
+      repos="${scope#repos/}" ;;
     *)
       echo "homefield: unexpected scope ${scope}; the routing records were not seeded" >&2
       return 1 ;;
@@ -359,7 +377,7 @@ seed_routing_records() {
       preserved=$((preserved + 1))
       continue
     fi
-    current="$(repo_variable_get "$r" CI_RUNNER)"
+    current="$(repo_variable_get "$r" CI_RUNNER "$host")"
     if [ "$current" != local ]; then continue; fi
     # Establish the actual routing label. Another runner in the scope with
     # a different custom label that can take this repository's jobs (its
@@ -378,7 +396,7 @@ seed_routing_records() {
       if [ "$repo_scope" = repo ]; then
         conflict=1
       else
-        runner_serves_repo "$owner" "$rid" "$r"
+        runner_serves_repo "$owner" "$rid" "$r" "$host"
         case $? in 0 | 2) conflict=1 ;; esac
       fi
     done <<<"$rows"
@@ -403,20 +421,20 @@ seed_routing_records() {
   return "$rc"
 }
 
-# stuck_runs <owner/repo> <label>: ids of the repository's active runs that
-# have a job still queued for a runner with the label: the jobs that keep
+# stuck_runs <owner/repo> <label> <host>: ids of the repository's active runs
+# that have a job still queued for a runner with the label: the jobs that keep
 # waiting after a switch to hosted, because runs-on was decided when they
 # were queued.
 stuck_runs() {
-  local repo="$1" label="$2" status ids id waiting
+  local repo="$1" label="$2" host="$3" status ids id waiting
   label="$(printf '%s' "$label" | tr '[:upper:]' '[:lower:]')"
   # --paginate: after a long outage there can be more than one page of
   # active runs, or of jobs in a run. With --paginate, --jq runs per page,
   # so both filters emit one line per match and a match on any page counts.
   for status in queued in_progress; do
-    ids="$(gh api --paginate "repos/${repo}/actions/runs?status=${status}&per_page=100" --jq '.workflow_runs[].id')" || return 1
+    ids="$(gh api --hostname "$host" --paginate "repos/${repo}/actions/runs?status=${status}&per_page=100" --jq '.workflow_runs[].id')" || return 1
     for id in $ids; do
-      waiting="$(gh api --paginate "repos/${repo}/actions/runs/${id}/jobs?per_page=100" \
+      waiting="$(gh api --hostname "$host" --paginate "repos/${repo}/actions/runs/${id}/jobs?per_page=100" \
         --jq ".jobs[] | select(.status == \"queued\" and ((.labels | map(ascii_downcase)) | index(\"${label}\"))) | .id")" || return 1
       [ -n "$waiting" ] && echo "$id"
     done
@@ -425,7 +443,7 @@ stuck_runs() {
 }
 
 cmd_route() {
-  local target="${1:-}" label="homefield-ci" dry=0 repos=() repo current stuck id status tries rc=0
+  local target="${1:-}" label="homefield-ci" dry=0 repos=() repo current stuck id status tries rc=0 host
   [ $# -gt 0 ] && shift
   case "$target" in
     hosted | local) ;;
@@ -442,15 +460,22 @@ cmd_route() {
   [ "${#repos[@]}" -gt 0 ] || die "route: --repo <owner>/<repo> is required"
   [[ "$label" =~ ^[A-Za-z0-9._-]+$ ]] || die "route: --label must be one label"
   command -v gh >/dev/null || die "route needs gh (https://cli.github.com)"
+  host="$(github_host "")"
+  # "hosted" means GitHub's hosted runners, which only github.com has: on a
+  # GHES or GHE.com host the fallback label matches no runner and the jobs
+  # would queue forever, so refuse instead of switching them off.
+  if [ "$target" = hosted ] && [ "$host" != github.com ]; then
+    die "route: GitHub's hosted runners do not exist on ${host}; keep the repository routed local (bin/homefield route local --repo <owner>/<repo>)"
+  fi
 
   for repo in "${repos[@]}"; do
     [[ "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die "route: --repo must be <owner>/<repo>, got: $repo"
-    current="$(repo_variable_get "$repo" CI_RUNNER)"
+    current="$(repo_variable_get "$repo" CI_RUNNER "$host")"
     if [ "$dry" = 1 ]; then
       log "${repo}: CI_RUNNER ${current} -> ${target} (dry run)"
     else
-      repo_variable_set "$repo" CI_RUNNER "$target" ||
-        { rc=1; log "${repo}: could not set CI_RUNNER to ${target}; set it by hand: gh variable set CI_RUNNER --repo ${repo} --body ${target}" >&2; continue; }
+      repo_variable_set "$repo" CI_RUNNER "$target" "$host" ||
+        { rc=1; log "${repo}: could not set CI_RUNNER to ${target}; set it by hand: gh variable set CI_RUNNER --repo $(host_repo "$host" "$repo") --body ${target}" >&2; continue; }
       # The records mirror the variable, so the automatic fallback (#286)
       # knows what a stop may flip and a start may bring back. A record
       # failure is a real gap — the fallback would not cover the repo — so
@@ -476,16 +501,16 @@ cmd_route() {
     # local runner whatever the variable says now. Cancel and re-run them;
     # the re-run is routed afresh, to hosted.
     # A failed lookup must not read as "nothing stuck".
-    stuck="$(stuck_runs "$repo" "$label")" ||
-      { rc=1; log "${repo}: could not list its runs with gh; look for stuck jobs by hand: gh run list --repo ${repo} --status queued" >&2; continue; }
+    stuck="$(stuck_runs "$repo" "$label" "$host")" ||
+      { rc=1; log "${repo}: could not list its runs with gh; look for stuck jobs by hand: gh run list --repo $(host_repo "$host" "$repo") --status queued" >&2; continue; }
     for id in $stuck; do
       if [ "$dry" = 1 ]; then
         log "${repo}: run ${id} has jobs waiting for ${label}; would cancel and re-run it"
         continue
       fi
       log "${repo}: run ${id} has jobs waiting for ${label}; cancelling and re-running it"
-      gh run cancel "$id" --repo "$repo" >/dev/null ||
-        { rc=1; log "${repo}: run ${id}: the cancel failed; re-run it yourself: gh run rerun ${id} --repo ${repo}" >&2; continue; }
+      gh run cancel "$id" --repo "$(host_repo "$host" "$repo")" >/dev/null ||
+        { rc=1; log "${repo}: run ${id}: the cancel failed; re-run it yourself: gh run rerun ${id} --repo $(host_repo "$host" "$repo")" >&2; continue; }
       # Up to a minute for the cancel to land; a re-run is refused before.
       # A shell counter, so nothing outside bash can make the wait vanish.
       # ROUTE_TRIES and ROUTE_INTERVAL are seams for the tests, as the
@@ -493,18 +518,18 @@ cmd_route() {
       status=""
       tries=0
       while [ "$tries" -lt "${ROUTE_TRIES:-30}" ]; do
-        status="$(gh run view "$id" --repo "$repo" --json status --jq .status)" ||
-          { rc=1; log "${repo}: run ${id}: could not read its status with gh; re-run it yourself: gh run rerun ${id} --repo ${repo}" >&2; status=""; break; }
+        status="$(gh run view "$id" --repo "$(host_repo "$host" "$repo")" --json status --jq .status)" ||
+          { rc=1; log "${repo}: run ${id}: could not read its status with gh; re-run it yourself: gh run rerun ${id} --repo $(host_repo "$host" "$repo")" >&2; status=""; break; }
         [ "$status" = completed ] && break
         adopt_nap "${ROUTE_INTERVAL:-2}"
         tries=$((tries + 1))
       done
       if [ "$status" = completed ]; then
         run_rerun "$repo" "$id" ||
-          { rc=1; log "${repo}: run ${id}: the re-run was refused; run it yourself: gh run rerun ${id} --repo ${repo}" >&2; continue; }
+          { rc=1; log "${repo}: run ${id}: the re-run was refused; run it yourself: gh run rerun ${id} --repo $(host_repo "$host" "$repo")" >&2; continue; }
         log "${repo}: run ${id} re-run"
       elif [ -n "$status" ]; then
-        log "${repo}: run ${id} is still ${status} after a minute; re-run it yourself: gh run rerun ${id} --repo ${repo}" >&2
+        log "${repo}: run ${id} is still ${status} after a minute; re-run it yourself: gh run rerun ${id} --repo $(host_repo "$host" "$repo")" >&2
       fi
     done
   done

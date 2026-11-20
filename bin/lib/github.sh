@@ -13,6 +13,50 @@ GH_MIN_MAJOR=2
 # shellcheck disable=SC2034
 GH_MIN_MINOR=81
 
+# github_host [url]: the GitHub host the command works on: the URL's host
+# when <url> names one (a registration URL may be a GitHub Enterprise Server
+# or a GHE.com data-residency host, not just github.com), else
+# HOMEFIELD_GITHUB_HOST, else github.com. Every gh call takes it as
+# --hostname (or, for gh's --repo commands, as the [HOST/]OWNER/REPO prefix,
+# host_repo), so the host follows the registration instead of gh's ambient
+# GH_HOST. The URL wins over the environment: it is what the runner is
+# registered at. A HOMEFIELD_GITHUB_HOST that is not a hostname stops here,
+# before it reaches a URL or a gh argv.
+github_host() {
+  local url="${1:-}"
+  if [[ "$url" =~ ^https://([A-Za-z0-9_.-]+)/ ]]; then
+    printf '%s' "${BASH_REMATCH[1]}"
+    return 0
+  fi
+  if [ -n "${HOMEFIELD_GITHUB_HOST:-}" ]; then
+    [[ "$HOMEFIELD_GITHUB_HOST" =~ ^[A-Za-z0-9_.-]+$ ]] ||
+      die "HOMEFIELD_GITHUB_HOST must be a hostname (letters, digits, '.', '-', '_'), got: $HOMEFIELD_GITHUB_HOST"
+    printf '%s' "$HOMEFIELD_GITHUB_HOST"
+    return 0
+  fi
+  printf '%s' "github.com"
+}
+
+# api_base <host>: the REST API base gh maps a GitHub host to: api.github.com
+# for github.com, api.<host> for a *.ghe.com data-residency subdomain, and
+# <host>/api/v3 for GitHub Enterprise Server. The curl fallback in owner_type
+# uses it, so an owner lookup works without gh on every host kind.
+api_base() {
+  case "$1" in
+    github.com) printf '%s' "https://api.github.com" ;;
+    *.ghe.com) printf '%s' "https://api.${1}" ;;
+    *) printf '%s' "https://${1}/api/v3" ;;
+  esac
+}
+
+# host_repo <host> <owner/repo>: the --repo argument gh's variable and run
+# commands take: gh's [HOST/]OWNER/REPO form, always with the host, so they
+# reach the same host the gh api calls do and an ambient GH_HOST cannot
+# redirect them.
+host_repo() {
+  printf '%s/%s' "$1" "$2"
+}
+
 # gh_major_minor: GH_MAJOR/GH_MIN[OR] from `gh --version`'s first line
 # ("gh version 2.32.1"); empty when unreadable, like lima_major_minor.
 gh_major_minor() {
@@ -44,17 +88,22 @@ gh_at_least() {
   [ "$GH_MAJOR" -eq "$1" ] && [ "$GH_MINOR" -ge "$2" ]
 }
 
-# gh_active_account: "login|scopes" of the active github.com login, "|" when
-# there is none. The one place that asks, for preflight_collect's gh check and
-# setup's offer to log in (offer_gh_login), so the two cannot disagree. gh's own
-# status comes through: with --json it exits 0 when nobody is logged in, so a
-# non-zero status means the question could not be answered (a gh too old for
-# --json, a broken install), which is not the same as "not logged in".
-# GitHub reports the scopes comma-space separated ("repo, workflow"); the
-# spaces are stripped here, so a caller's `,scope,` match works whichever
-# order the scopes come back in.
+# gh_active_account: "login|scopes" of the active login on github_host's host
+# (github.com by default), "|" when there is none. The one place that asks,
+# for preflight_collect's gh check and setup's offer to log in (offer_gh_login),
+# so the two cannot disagree. gh's own status comes through: with --json it
+# exits 0 when nobody is logged in, so a non-zero status means the question
+# could not be answered (a gh too old for --json, a broken install), which is
+# not the same as "not logged in". GitHub reports the scopes comma-space
+# separated ("repo, workflow"); the spaces are stripped here, so a caller's
+# `,scope,` match works whichever order the scopes come back in. The host is
+# interpolated into the jq filter, which is safe: github_host only returns a
+# validated hostname.
 gh_active_account() {
-  gh auth status --json hosts --jq '.hosts["github.com"] // [] | map(select(.active)) | (.[0] // {}) | "\(.login // "")|\(.scopes // "" | gsub(" "; ""))"' 2>/dev/null </dev/null
+  local host
+  host="$(github_host "")"
+  gh auth status --hostname "$host" --json hosts \
+    --jq '.hosts["'"$host"'"] // [] | map(select(.active)) | (.[0] // {}) | "\(.login // "")|\(.scopes // "" | gsub(" "; ""))"' 2>/dev/null </dev/null
 }
 
 # runner_on_github <url> <id>: 0 if GitHub lists a runner with the id at <url>,
@@ -73,18 +122,19 @@ RUNNER_GH_STATUS=""
 RUNNER_GH_BUSY=""
 
 runner_on_github() {
-  local scope ids id st busy rc=0
+  local scope ids id st busy rc=0 host
   RUNNER_GH_STATUS=""
   RUNNER_GH_BUSY=""
   [ -n "$2" ] && command -v gh >/dev/null || return 2
   scope="$(api_scope "$1" 2>/dev/null)" || return 2
+  host="$(github_host "$1")"
   # The killed-by-signal case is told from a plain failure by the exit code
   # (128 + TERM): the timer below is the only thing that kills this gh. The
   # timer's own kill can race gh finishing a heartbeat earlier; both answers
   # mean "not checked", and only the status wording differs.
   local tmp pid timer
   tmp="$(mktemp)" || return 2
-  gh api --hostname github.com --paginate "${scope}/actions/runners?per_page=100" --jq '.runners[] | [.id, .status, .busy] | @tsv' </dev/null >"$tmp" 2>/dev/null &
+  gh api --hostname "$host" --paginate "${scope}/actions/runners?per_page=100" --jq '.runners[] | [.id, .status, .busy] | @tsv' </dev/null >"$tmp" 2>/dev/null &
   pid=$!
   # >/dev/null on the timer matters: sleep inherits stdout, and a caller
   # that runs status inside $(...) would wait for the whole timeout before
@@ -110,26 +160,29 @@ runner_on_github() {
 }
 
 # ── Tokens ──────────────────────────────────────────────────────────────────
-# api_scope <url>: the REST path of the registration scope.
+# api_scope <url>: the REST path of the registration scope. The host is any
+# GitHub host (github.com, a GHES host, a GHE.com subdomain); the paths are
+# host-relative, so only the owner and repository are kept.
 api_scope() {
   local url="${1%/}"
-  if [[ "$url" =~ ^https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)$ ]]; then
+  if [[ "$url" =~ ^https://[A-Za-z0-9_.-]+/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)$ ]]; then
     echo "repos/${BASH_REMATCH[1]}/${BASH_REMATCH[2]}"
-  elif [[ "$url" =~ ^https://github\.com/([A-Za-z0-9_.-]+)$ ]]; then
+  elif [[ "$url" =~ ^https://[A-Za-z0-9_.-]+/([A-Za-z0-9_.-]+)$ ]]; then
     echo "orgs/${BASH_REMATCH[1]}"
   else
-    die "--url must be https://github.com/<org> or https://github.com/<owner>/<repo>, got: $1"
+    die "--url must be https://<host>/<org> or https://<host>/<owner>/<repo> (a GitHub host; github.com by default, HOMEFIELD_GITHUB_HOST otherwise), got: $1"
   fi
 }
 
 # runners_page <url>: the settings page listing the scope's runners. An
 # organization's settings live under /organizations/<org>/.
 runners_page() {
-  local scope
+  local scope host
   scope="$(api_scope "$1")" || exit 1
+  host="$(github_host "$1")"
   case "$scope" in
-    orgs/*) echo "https://github.com/organizations/${scope#orgs/}/settings/actions/runners" ;;
-    *) echo "https://github.com/${scope#repos/}/settings/actions/runners" ;;
+    orgs/*) echo "https://${host}/organizations/${scope#orgs/}/settings/actions/runners" ;;
+    *) echo "https://${host}/${scope#repos/}/settings/actions/runners" ;;
   esac
 }
 
@@ -140,7 +193,10 @@ runners_page() {
 # the group step runs in the parent first, and get_token alone in uninstall.
 scope_refresh_asked=0
 
+# offer_scope_refresh <host>: the host's login is refreshed, so the fix-up
+# message and the refresh itself name it.
 offer_scope_refresh() {
+  local host="$1"
   [ "$scope_refresh_asked" = 0 ] || return 1
   scope_refresh_asked=1
   [ -t 0 ] && command -v gh >/dev/null || return 1
@@ -152,10 +208,10 @@ offer_scope_refresh() {
     return 1
   fi
   local answer
-  read -rp "gh needs the admin:org scope. Run 'gh auth refresh -h github.com -s admin:org' now? [Y/n] " answer
+  read -rp "gh needs the admin:org scope. Run 'gh auth refresh -h ${host} -s admin:org' now? [Y/n] " answer
   case "$answer" in [Nn]*) return 1 ;; esac
   # gh prints its one-time code on stdout; the caller may be in $(...).
-  gh auth refresh -h github.com -s admin:org >&2
+  gh auth refresh -h "$host" -s admin:org >&2
 }
 
 # offer_gh_login: setup's first run on a Mac where gh is installed but never
@@ -176,7 +232,8 @@ offer_scope_refresh() {
 offer_gh_login() {
   command -v gh >/dev/null 2>&1 || return 0
   have_terminal || return 0
-  local account answer i url="${1:-}" scopes=""
+  local account answer i url="${1:-}" scopes="" host
+  host="$(github_host "$url")"
   account="$(gh_active_account)" || return 0
   [ -z "${account%%|*}" ] || return 0
   preflight_collect
@@ -201,9 +258,9 @@ offer_gh_login() {
   read -r answer || return 0
   case "$answer" in [Nn]*) return 0 ;; esac
   if [ -n "$scopes" ]; then
-    gh auth login -h github.com -s "$scopes" || echo "homefield: 'gh auth login' did not finish" >&2
+    gh auth login -h "$host" -s "$scopes" || echo "homefield: 'gh auth login' did not finish" >&2
   else
-    gh auth login -h github.com || echo "homefield: 'gh auth login' did not finish" >&2
+    gh auth login -h "$host" || echo "homefield: 'gh auth login' did not finish" >&2
   fi
 }
 
@@ -214,28 +271,30 @@ offer_gh_login() {
 # logged in yet). A repository URL registers one repository and needs no
 # group; an owner that cannot be looked up keeps gh's default login.
 login_wants_org_scope() {
-  local url="${1%/}" owner
-  [[ "$url" =~ ^https://github\.com/([A-Za-z0-9_.-]+)$ ]] || return 1
+  local url="${1%/}" owner host
+  [[ "$url" =~ ^https://[A-Za-z0-9_.-]+/([A-Za-z0-9_.-]+)$ ]] || return 1
   owner="${BASH_REMATCH[1]}"
   case "$ACCOUNT_FORCE" in
     org) return 0 ;;
     personal) return 1 ;;
   esac
-  [ "$(owner_type "$owner")" = Organization ]
+  host="$(github_host "$url")"
+  [ "$(owner_type "$owner" "$host")" = Organization ]
 }
 
 # get_token <registration|remove> <url>: prints the token. From gh when it can,
 # else pasted; never echoed.
 get_token() {
-  local kind="$1" url="$2" scope out token=""
+  local kind="$1" url="$2" scope out token="" host
   scope="$(api_scope "$url")" || exit 1
+  host="$(github_host "$url")"
   # On an error gh prints the error body to stdout, so only its exit status
   # says whether this is a token.
   if command -v gh >/dev/null; then
-    if out="$(gh api -X POST "${scope}/actions/runners/${kind}-token" --jq .token 2>/dev/null)"; then
+    if out="$(gh api --hostname "$host" -X POST "${scope}/actions/runners/${kind}-token" --jq .token 2>/dev/null)"; then
       token="$out"
-    elif [[ "$scope" == orgs/* ]] && offer_scope_refresh &&
-      out="$(gh api -X POST "${scope}/actions/runners/${kind}-token" --jq .token 2>/dev/null)"; then
+    elif [[ "$scope" == orgs/* ]] && offer_scope_refresh "$host" &&
+      out="$(gh api --hostname "$host" -X POST "${scope}/actions/runners/${kind}-token" --jq .token 2>/dev/null)"; then
       token="$out"
     fi
   fi
@@ -259,15 +318,15 @@ ACCOUNT_FORCE=""
 # tell (a repository URL whose owner could not be looked up).
 ACCOUNT_MODE=""
 
-# owner_type <owner>: prints GitHub's type for the account (User or
-# Organization), or nothing when it cannot be told.
+# owner_type <owner> <host>: prints GitHub's type for the account (User or
+# Organization) on <host>, or nothing when it cannot be told.
 owner_type() {
-  local out type=""
-  # gh when it works, else the public API with curl (no python3 needed: a
+  local out type="" host="$2"
+  # gh when it works, else the host's API with curl (no python3 needed: a
   # stock Mac only has the stub that offers to install it).
-  if command -v gh >/dev/null && out="$(gh api "users/${1}" --jq .type 2>/dev/null </dev/null)"; then
+  if command -v gh >/dev/null && out="$(gh api --hostname "$host" "users/${1}" --jq .type 2>/dev/null </dev/null)"; then
     type="$out"
-  elif out="$(curl -fsS "https://api.github.com/users/${1}" 2>/dev/null </dev/null)"; then
+  elif out="$(curl -fsS "$(api_base "$host")/users/${1}" 2>/dev/null </dev/null)"; then
     type="$(printf '%s\n' "$out" | sed -n 's/^ *"type": *"\([A-Za-z]*\)".*/\1/p' | head -1)"
   fi
   printf '%s' "$type"
@@ -279,12 +338,13 @@ owner_type() {
 # looked up is refused. A repository URL worked without any lookup before, so
 # one that fails is not fatal.
 check_scope_owner() {
-  local url="${1%/}" owner repo="" type=""
+  local url="${1%/}" owner repo="" type="" host
   ACCOUNT_MODE=""
-  if [[ "$url" =~ ^https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)$ ]]; then
+  host="$(github_host "$url")"
+  if [[ "$url" =~ ^https://[A-Za-z0-9_.-]+/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)$ ]]; then
     owner="${BASH_REMATCH[1]}"
     repo="${BASH_REMATCH[2]}"
-  elif [[ "$url" =~ ^https://github\.com/([A-Za-z0-9_.-]+)$ ]]; then
+  elif [[ "$url" =~ ^https://[A-Za-z0-9_.-]+/([A-Za-z0-9_.-]+)$ ]]; then
     owner="${BASH_REMATCH[1]}"
   else
     return 0
@@ -292,15 +352,15 @@ check_scope_owner() {
   if [ -n "$ACCOUNT_FORCE" ]; then
     ACCOUNT_MODE="$ACCOUNT_FORCE"
   else
-    type="$(owner_type "$owner")"
+    type="$(owner_type "$owner" "$host")"
     case "$type" in
       Organization) ACCOUNT_MODE=org ;;
       User) ACCOUNT_MODE=personal ;;
-      *) [ -n "$repo" ] || die "could not find ${owner} on GitHub (or reach api.github.com) to check that it is an organization; if it is one, pass --org to skip the check (--personal for a personal account)" ;;
+      *) [ -n "$repo" ] || die "could not find ${owner} on ${host} (or its API answered) to check that it is an organization; if it is one, pass --org to skip the check (--personal for a personal account)" ;;
     esac
   fi
   if [ "$ACCOUNT_MODE" = personal ] && [ -z "$repo" ] && ! have_terminal; then
-    die "${owner} is a personal account, which cannot have account-wide runners; register a repository instead: --url https://github.com/${owner}/<repo>"
+    die "${owner} is a personal account, which cannot have account-wide runners; register a repository instead: --url https://${host}/${owner}/<repo>"
   fi
 }
 
@@ -311,29 +371,33 @@ validate_scope() {
 }
 
 # ask_url: prints the URL typed at the prompt. Needs a terminal; without one
-# the URL has to come from --url.
+# the URL has to come from --url. The prompt names the host the registration
+# would land on (HOMEFIELD_GITHUB_HOST, or github.com).
 ask_url() {
-  local url
+  local url host
   [ -t 0 ] || die "install: --url is required for a new registration (no terminal to ask)"
-  read -rp "GitHub organization or repository URL (https://github.com/<org> or https://github.com/<owner>/<repo>): " url
+  host="$(github_host "")"
+  read -rp "GitHub organization or repository URL (https://${host}/<org> or https://${host}/<owner>/<repo>): " url
   [ -n "$url" ] || die "install: no URL given"
   printf '%s' "$url"
 }
 
 # ask_personal_repo <owner url>: prints the URL of the repository, in that
 # personal account, that the typed answer names (a name, or a full URL).
-# Needs a terminal; check_scope_owner has already refused without one.
+# Needs a terminal; check_scope_owner has already refused without one. The
+# repository lands on the owner URL's host.
 ask_personal_repo() {
-  local owner="${1%/}" answer url
+  local owner="${1%/}" answer url host
+  host="$(github_host "$1")"
   owner="${owner##*/}"
   echo "homefield: ${owner} is a personal account, which cannot have account-wide runners: a runner is registered for one repository." >&2
   read -rp "Repository of ${owner} to register for (name, or full URL): " answer
   [ -n "$answer" ] || die "install: no repository given"
   case "$answer" in
     https://*) url="${answer%/}" ;;
-    *) url="https://github.com/${owner}/${answer}" ;;
+    *) url="https://${host}/${owner}/${answer}" ;;
   esac
-  [[ "$url" =~ ^https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)$ && "$(lower "${BASH_REMATCH[1]}")" = "$(lower "$owner")" ]] ||
+  [[ "$url" =~ ^https://[A-Za-z0-9_.-]+/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)$ && "$(lower "${BASH_REMATCH[1]}")" = "$(lower "$owner")" ]] ||
     die "install: not a repository of ${owner}: ${answer}"
   printf '%s' "$url"
 }
@@ -342,8 +406,9 @@ ask_personal_repo() {
 # is for and, for a personal one, the two separate limits. The caller's --group
 # is passed in so that it can say a personal account ignores it.
 announce_account() {
-  local slug="${1%/}" group="$2" how="detected"
-  slug="${slug#https://github.com/}"
+  local slug="${1%/}" group="$2" how="detected" host
+  host="$(github_host "$1")"
+  slug="${slug#https://${host}/}"
   [ -z "$ACCOUNT_FORCE" ] || how="forced by --${ACCOUNT_FORCE}"
   case "$ACCOUNT_MODE" in
     personal)
@@ -354,7 +419,7 @@ announce_account() {
       [ -z "$group" ] || log "--group ${group} is ignored: a personal account has no runner groups."
       ;;
     org) log "organization (${slug%%/*}), ${how}." ;;
-    *) log "could not check whether ${slug%%/*} is a personal account or an organization (neither gh nor api.github.com answered); going on without it. --personal or --org skips the check." ;;
+    *) log "could not check whether ${slug%%/*} is a personal account or an organization (neither gh nor ${host}'s API answered); going on without it. --personal or --org skips the check." ;;
   esac
 }
 
@@ -366,7 +431,7 @@ announce_account() {
 prepare_registration() {
   [ -n "$url" ] || url="$(ask_url)" || exit 1
   validate_scope "$url"
-  if [ "$ACCOUNT_MODE" = personal ] && [[ "${url%/}" =~ ^https://github\.com/[A-Za-z0-9_.-]+$ ]]; then
+  if [ "$ACCOUNT_MODE" = personal ] && [[ "${url%/}" =~ ^https://[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
     url="$(ask_personal_repo "$url")" || exit 1
   fi
   announce_account "$url" "$group"
@@ -404,10 +469,11 @@ default_name() {
 REPLACE_ID=""
 
 check_name_free() {
-  local url="$1" name="$2" replace="$3" scope rows n status id taken="" taken_id="" page
+  local url="$1" name="$2" replace="$3" scope rows n status id taken="" taken_id="" page host
   scope="$(api_scope "$url")" || exit 1
   page="$(runners_page "$url")" || exit 1
-  if ! command -v gh >/dev/null || ! rows="$(gh api --paginate "${scope}/actions/runners?per_page=100" \
+  host="$(github_host "$url")"
+  if ! command -v gh >/dev/null || ! rows="$(gh api --hostname "$host" --paginate "${scope}/actions/runners?per_page=100" \
     --jq '.runners[] | [.name, .status, (.id | tostring)] | @tsv' 2>/dev/null)"; then
     [ "$replace" != 1 ] || die "--replace needs gh to list the runners at ${url} (org owner + admin:org, or repository admin); remove ${name} at ${page} instead and run this again without --replace"
     log "could not list the runners at ${url} to check that ${name} is free; registration refuses it if it is not"
@@ -441,50 +507,51 @@ check_name_free() {
 # group asked for. This follows token retrieval but precedes provisioning;
 # a failure between removal and registration leaves the name unregistered.
 remove_taken_name() {
-  local url="$1" name="$2" scope
+  local url="$1" name="$2" scope host
   [ -n "$REPLACE_ID" ] || return 0
   scope="$(api_scope "$url")" || exit 1
+  host="$(github_host "$url")"
   log "removing the registration of ${name} (id ${REPLACE_ID}) at ${url}"
-  gh api -X DELETE "${scope}/actions/runners/${REPLACE_ID}" >/dev/null ||
+  gh api --hostname "$host" -X DELETE "${scope}/actions/runners/${REPLACE_ID}" >/dev/null ||
     die "could not remove ${name} at ${url}; remove it at $(runners_page "$url") and run this again without --replace"
   REPLACE_ID=""
 }
 
-# list_groups_ids <org>: one line per runner group, tab separated: name,
+# list_groups_ids <org> <host>: one line per runner group, tab separated: name,
 # visibility, allows_public_repositories and id (the id for the calls that
 # address a group by it). Tabs, because a name may have spaces.
 list_groups_ids() {
-  gh api --paginate "orgs/${1}/actions/runner-groups?per_page=100" \
+  gh api --hostname "$2" --paginate "orgs/${1}/actions/runner-groups?per_page=100" \
     --jq '.runner_groups[] | [.name, .visibility, (.allows_public_repositories | tostring), (.id | tostring)] | @tsv' 2>/dev/null </dev/null
 }
 
-# group_repositories <org> <group id>: the full names of the repositories a
-# runner group admits, one per line. Meaningful for a group whose visibility is
-# "selected"; the others admit repositories by their kind, not by a list.
+# group_repositories <org> <group id> <host>: the full names of the repositories
+# a runner group admits, one per line. Meaningful for a group whose visibility
+# is "selected"; the others admit repositories by their kind, not by a list.
 group_repositories() {
-  gh api --paginate "orgs/${1}/actions/runner-groups/${2}/repositories?per_page=100" \
+  gh api --hostname "$3" --paginate "orgs/${1}/actions/runner-groups/${2}/repositories?per_page=100" \
     --jq '.repositories[].full_name' </dev/null 2>/dev/null
 }
 
-# group_runner_ids <org> <group id>: the ids of the runners in a runner group,
-# one per line. GitHub's runner list does not say which group a runner is in,
-# so the groups are asked instead.
+# group_runner_ids <org> <group id> <host>: the ids of the runners in a runner
+# group, one per line. GitHub's runner list does not say which group a runner
+# is in, so the groups are asked instead.
 group_runner_ids() {
-  gh api --paginate "orgs/${1}/actions/runner-groups/${2}/runners?per_page=100" \
+  gh api --hostname "$3" --paginate "orgs/${1}/actions/runner-groups/${2}/runners?per_page=100" \
     --jq '.runners[].id' </dev/null 2>/dev/null
 }
 
-# find_runner_group <org> <runner id>: the runner-groups row (name, visibility,
-# allows_public_repositories, id; tab separated) of the group the runner is in,
-# found by asking each group which runners it holds. Status: 0 found (the row
-# on stdout), 1 in none of the groups, 2 in none of the groups that answered
-# (another group's list failed), 3 the groups cannot be listed.
+# find_runner_group <org> <runner id> <host>: the runner-groups row (name,
+# visibility, allows_public_repositories, id; tab separated) of the group the
+# runner is in, found by asking each group which runners it holds. Status: 0
+# found (the row on stdout), 1 in none of the groups, 2 in none of the groups
+# that answered (another group's list failed), 3 the groups cannot be listed.
 find_runner_group() {
-  local rows name vis pub gid ids unasked=0
-  rows="$(list_groups_ids "$1" </dev/null)" || return 3
+  local rows name vis pub gid ids unasked=0 host="$3"
+  rows="$(list_groups_ids "$1" "$host" </dev/null)" || return 3
   while IFS=$'\t' read -r name vis pub gid; do
     [ -n "$gid" ] || continue
-    if ids="$(group_runner_ids "$1" "$gid")"; then
+    if ids="$(group_runner_ids "$1" "$gid" "$host")"; then
       case $'\n'"$ids"$'\n' in
         *$'\n'"$2"$'\n'*)
           printf '%s\t%s\t%s\t%s\n' "$name" "$vis" "$pub" "$gid"
@@ -569,9 +636,10 @@ GROUP_ID=""
 # case-insensitively, so they are compared that way. A personal account
 # (ACCOUNT_MODE) has no groups at all: nothing is asked of GitHub.
 ensure_group() {
-  local url="$1" group="${2:-homefield-ci}" scope org groups="" name vis pub found=0 why="" out gid
+  local url="$1" group="${2:-homefield-ci}" scope org groups="" name vis pub found=0 why="" out gid host
   GROUP_ID=""
   scope="$(api_scope "$url")" || exit 1
+  host="$(github_host "$url")"
   if [ "$ACCOUNT_MODE" = personal ]; then
     GROUP_STATE=personal
     return 0
@@ -591,9 +659,9 @@ ensure_group() {
     group_assumed "$group" "gh is not installed" || group_unchecked "$group" "gh is not installed"
     return 0
   fi
-  if ! groups="$(list_groups_ids "$org")"; then
-    if offer_scope_refresh; then
-      groups="$(list_groups_ids "$org")" || why="gh could not list the organization's runner groups, even after the scope refresh"
+  if ! groups="$(list_groups_ids "$org" "$host")"; then
+    if offer_scope_refresh "$host"; then
+      groups="$(list_groups_ids "$org" "$host")" || why="gh could not list the organization's runner groups, even after the scope refresh"
     else
       why="gh could not list the organization's runner groups (needs an org owner with the admin:org scope)"
     fi
@@ -631,7 +699,7 @@ ensure_group() {
   [ "$GROUP_EXISTS" = 0 ] ||
     echo "homefield: warning: --group-exists, but gh listed the runner groups of ${org} and ${group} is not among them" >&2
   log "creating runner group ${group}: selected repositories, public repositories off"
-  if ! out="$(gh api -X POST "orgs/${org}/actions/runner-groups" -f name="$group" -f visibility=selected \
+  if ! out="$(gh api --hostname "$host" -X POST "orgs/${org}/actions/runner-groups" -f name="$group" -f visibility=selected \
     -F allows_public_repositories=false 2>&1)"; then
     # Only wording about the plan counts as a plan problem. A bare 403 or 422
     # can be SAML enforcement, a missing permission or a taken name, and the
@@ -663,26 +731,35 @@ ensure_group() {
 }
 
 # ── Run and variable calls shared by adopt and route ───────────────────────
+# The host these run on is HOMEFIELD_GITHUB_HOST (github.com by default):
+# their callers pass owner/repo slugs, not registration URLs. An optional
+# trailing <host> overrides it, for callers that know the registration URL.
 
-# repo_variable_get <owner/repo> <name>: the repository variable's value, or
-# "(unset)" — the form both commands print.
+# repo_variable_get <owner/repo> <name> [host]: the repository variable's
+# value, or "(unset)" — the form both commands print.
 repo_variable_get() {
-  gh variable get "$2" --repo "$1" 2>/dev/null || echo "(unset)"
+  local host="${3:-}"
+  [ -n "$host" ] || host="$(github_host "")"
+  gh variable get "$2" --repo "$(host_repo "$host" "$1")" 2>/dev/null || echo "(unset)"
 }
 
-# repo_variable_set <owner/repo> <name> <value>: sets it, quiet on success.
+# repo_variable_set <owner/repo> <name> <value> [host]: sets it, quiet on
+# success.
 repo_variable_set() {
-  gh variable set "$2" --repo "$1" --body "$3" >/dev/null
+  local host="${4:-}"
+  [ -n "$host" ] || host="$(github_host "")"
+  gh variable set "$2" --repo "$(host_repo "$host" "$1")" --body "$3" >/dev/null
 }
 
 # run_rerun <owner/repo> <run-id> [stderr-file]: re-runs it. The empty third
 # argument leaves gh's stderr on the terminal (route); a file captures it
 # (adopt, which reports the first line itself).
 run_rerun() {
-  local repo="$1" id="$2" err="${3:-}"
+  local repo="$1" id="$2" err="${3:-}" host
+  host="$(github_host "")"
   if [ -n "$err" ]; then
-    gh run rerun "$id" --repo "$repo" >/dev/null 2>"$err" </dev/null
+    gh run rerun "$id" --repo "$(host_repo "$host" "$repo")" >/dev/null 2>"$err" </dev/null
   else
-    gh run rerun "$id" --repo "$repo" >/dev/null </dev/null
+    gh run rerun "$id" --repo "$(host_repo "$host" "$repo")" >/dev/null </dev/null
   fi
 }

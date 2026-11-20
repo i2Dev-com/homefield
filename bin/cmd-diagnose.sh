@@ -213,7 +213,7 @@ dg_collect_vm() {
 # organization's runner has one; a repository's (and so a personal account's)
 # registration has none, which is not an error.
 dg_collect_group() {
-  local scope org row name vis pub gid rc wide="" repos
+  local scope org row name vis pub gid rc wide="" repos host
   if [ -z "$DG_URL" ]; then
     DG_GROUP_WHY="$DG_SKIP_WHY"
     [ -n "$DG_GROUP_WHY" ] || DG_GROUP_WHY="the runner's registration was not read"
@@ -223,6 +223,7 @@ dg_collect_group() {
     DG_GROUP_WHY="the runner's URL (${DG_URL}) is not an organization or repository"
     return 0
   fi
+  host="$(github_host "$DG_URL")"
   case "$scope" in
     repos/*)
       DG_SCOPE="repository"
@@ -240,11 +241,11 @@ dg_collect_group() {
   # The runner list names no group, so find_runner_group asks each group which
   # runners it holds.
   rc=0
-  row="$(find_runner_group "$org" "$DG_ID")" || rc=$?
+  row="$(find_runner_group "$org" "$DG_ID" "$host")" || rc=$?
   if [ "$rc" = 3 ]; then
     DG_GROUP="not-checked"
     DG_GROUP_WHY="gh could not list the runner groups of ${org} (needs an organization owner with the admin:org scope)"
-    dg_warn "runner group not checked: ${DG_GROUP_WHY}; gh auth refresh -h github.com -s admin:org"
+    dg_warn "runner group not checked: ${DG_GROUP_WHY}; gh auth refresh -h ${host} -s admin:org"
     return 0
   fi
   if [ "$rc" != 0 ]; then
@@ -272,7 +273,7 @@ dg_collect_group() {
     fi
   fi
   if [ "$vis" = selected ]; then
-    if repos="$(group_repositories "$org" "$gid")"; then
+    if repos="$(group_repositories "$org" "$gid" "$host")"; then
       DG_REPOS="$repos"
       if [ -z "$repos" ]; then
         dg_hint "no repository is in runner group ${name} yet: bin/homefield adopt --repo <owner>/<repo>"

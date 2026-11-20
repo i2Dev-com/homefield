@@ -37,13 +37,14 @@ WAIT_GROUP=""
 WAIT_GROUP_STATE=""
 
 wait_online() {
-  local url="$1" name="$2" group="$3" scope org rows="" n status rid labels grp row rc tries=0 page seen=""
+  local url="$1" name="$2" group="$3" scope org rows="" n status rid labels grp row rc tries=0 page seen="" host
   WAIT_RESULT="unchecked"
   WAIT_SEEN=""
   WAIT_LABELS=""
   WAIT_GROUP=""
   WAIT_GROUP_STATE=""
   page="$(runners_page "$url")" || exit 1
+  host="$(github_host "$url")"
   if [ -z "$name" ] || ! command -v gh >/dev/null; then
     log "check that the runner is online at ${page}"
     return 0
@@ -56,7 +57,7 @@ wait_online() {
     if [ $((tries % ONLINE_PROGRESS_CYCLES)) -eq 0 ] && [ "$tries" -gt 0 ]; then
       log "waiting for ${name} (up to $((ONLINE_WAIT_TRIES * ONLINE_WAIT_INTERVAL)) s, waited $((tries * ONLINE_WAIT_INTERVAL)) s)"
     fi
-    if ! rows="$(gh api --paginate "${scope}/actions/runners?per_page=100" \
+    if ! rows="$(gh api --hostname "$host" --paginate "${scope}/actions/runners?per_page=100" \
       --jq '.runners[] | [.name, .status, (.id | tostring), (.labels | map(.name) | join(","))] | @tsv' 2>/dev/null)"; then
       log "could not read the runners list with gh; check that the runner is online at ${page}"
       return 0
@@ -70,7 +71,7 @@ wait_online() {
         if [[ "$scope" == orgs/* ]]; then
           org="${scope#orgs/}"
           rc=0
-          row="$(find_runner_group "$org" "$rid")" || rc=$?
+          row="$(find_runner_group "$org" "$rid" "$host")" || rc=$?
           case $rc in
             0)
               IFS=$'\t' read -r grp _ <<<"$row"
@@ -298,7 +299,7 @@ setup_repositories() {
     narrow | created)
       if [ -z "$GROUP_ID" ]; then
         echo "  could not be listed (the group's id is not known); see the runner group's page in ${org}'s settings"
-      elif repos="$(group_repositories "$org" "$GROUP_ID")"; then
+      elif repos="$(group_repositories "$org" "$GROUP_ID" "$(github_host "")")"; then
         if [ -z "$repos" ]; then
           echo "  none yet: homefield adopt --repo <owner>/<repo> adds one"
         else

@@ -21,7 +21,7 @@ PF_LEVEL=()
 PF_MSG=()
 
 preflight_collect() {
-  local login scopes whoami py_version
+  local login scopes whoami py_version host
   PF_NAME=()
   PF_LEVEL=()
   # PF_MSG is read by lib/emit.sh's pf_render_row
@@ -49,19 +49,23 @@ preflight_collect() {
     whoami="$(gh_active_account)" || whoami="|"
     login="${whoami%%|*}"
     scopes="${whoami#*|}"
+    # The host the gh check asked about (HOMEFIELD_GITHUB_HOST, or
+    # github.com): the fix-up commands name it, so they fix the check that
+    # failed and not another host's login.
+    host="$(github_host "")"
     # GitHub reports scopes comma-space separated ("repo, admin:org"); the
     # spaces come off here, so the `,scope,` match works whichever order they
     # come back in (gh_active_account strips them too; an override in a test
     # may not).
     scopes="${scopes// /}"
     if [ -z "$login" ]; then
-      pf_add gh fail "gh not logged in: run 'gh auth login'"
+      pf_add gh fail "gh not logged in: run 'gh auth login -h ${host}'"
     elif [ -z "$scopes" ]; then
       pf_add gh ok "gh authenticated as $login (no scope reported; an organization URL needs admin:org)"
     elif case ",$scopes," in *,admin:org,*) true ;; *) false ;; esac; then
       pf_add gh ok "gh authenticated as $login (admin:org scope)"
     else
-      pf_add gh warn "gh authenticated as $login, no admin:org scope (an organization URL needs it: gh auth refresh -s admin:org)"
+      pf_add gh warn "gh authenticated as $login, no admin:org scope (an organization URL needs it: gh auth refresh -h ${host} -s admin:org)"
     fi
   fi
   # python3: resolving on PATH is not enough — a broken shim prints but exits

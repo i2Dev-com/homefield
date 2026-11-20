@@ -26,7 +26,7 @@ share="$work/share"
 bin="$work/bin"
 mkdir -p "$stubs" "$work/home"
 unit="actions.runner.acme.test.service"
-DEL='gh api -X DELETE orgs/acme/actions/runner-groups/7$'
+DEL='gh api --hostname github.com -X DELETE orgs/acme/actions/runner-groups/7$'
 
 stub() { printf '#!/usr/bin/env bash\n%s\n' "$2" >"$stubs/$1"; chmod +x "$stubs/$1"; }
 stub sudo 'while [ $# -gt 0 ]; do case "$1" in -u) shift 2 ;; -n|--preserve-env=*) shift ;; *) break ;; esac; done
@@ -244,7 +244,7 @@ record "--keep-group: kept, exit 0, gh not asked, the record stays" "0/0/0/state
 fresh
 set_state acme/Default/1
 run VM=none --
-record "the Default group is never deleted" "0/0/no-state" "$rc/$(lines 'gh api -X DELETE orgs/acme/actions/runner-groups/1$')/$(has_state)"
+record "the Default group is never deleted" "0/0/no-state" "$rc/$(lines 'gh api --hostname github.com -X DELETE orgs/acme/actions/runner-groups/1$')/$(has_state)"
 record "...and says why" "yes" "$(has "$out" 'it is the Default group')"
 fresh
 set_state acme/homefield-ci/7
@@ -254,7 +254,7 @@ fresh
 set_state acme/homefield-ci/7
 run VM=none GH_GROUPS_FILE="$work/groups-new-id" --
 record "the recorded id is gone (a group of that name has another id): not deleted, stale record removed" "0/0/no-state/yes" "$rc/$(lines "$DEL")/$(has_state)/$(has "$out" 'not on GitHub any more')"
-record "...the other group is untouched" "0" "$(lines 'gh api -X DELETE orgs/acme/actions/runner-groups/9$')"
+record "...the other group is untouched" "0" "$(lines 'gh api --hostname github.com -X DELETE orgs/acme/actions/runner-groups/9$')"
 fresh
 set_state acme/homefield-ci/7
 run VM=none GH_GROUPS_FILE="$work/groups-case" --
@@ -280,7 +280,7 @@ record "no id recorded: the group is found by name, and deleted by the id GitHub
 fresh
 set_state acme/homefield-ci/
 run VM=none GH_GROUPS_FILE="$work/groups-new-id" --
-record "...the id it finds (9, not 7) is the one deleted" "1/0" "$(lines 'gh api -X DELETE orgs/acme/actions/runner-groups/9$')/$(lines "$DEL")"
+record "...the id it finds (9, not 7) is the one deleted" "1/0" "$(lines 'gh api --hostname github.com -X DELETE orgs/acme/actions/runner-groups/9$')/$(lines "$DEL")"
 fresh
 set_state acme/homefield-ci/7
 run VM=none GH_DELETE_FAIL=1 --

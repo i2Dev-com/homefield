@@ -61,7 +61,7 @@ ADOPT_VERIFY_ROWS=""
 # ADOPT_OWNER_TYPE. Only private repositories may reach the runner.
 adopt_repository() {
   local repo="$1" info private
-  if ! info="$(gh api "repos/${repo}" --jq '[.private, .id, .default_branch, .owner.type] | @tsv' 2>/dev/null)"; then
+  if ! info="$(gh api --hostname "$ADOPT_GH_HOST" "repos/${repo}" --jq '[.private, .id, .default_branch, .owner.type] | @tsv' 2>/dev/null)"; then
     die "adopt: could not read ${repo} with gh: it does not exist, or this gh login cannot see it"
   fi
   IFS=$'\t' read -r private ADOPT_REPO_ID ADOPT_BRANCH ADOPT_OWNER_TYPE <<<"$info"
@@ -87,7 +87,8 @@ adopt_repository() {
 # the docs describe.
 adopt_group_access() {
   local repo="$1" group="$2" dry="$3" org="${1%%/*}" rows="" listed=0 name vis pub gid
-  local found="" members byhand="" widen=""
+  local found="" members byhand="" widen="" host
+  host="$(github_host "")"
   [ "$ADOPT_READY" = 0 ] || byhand="; add ${repo} by hand (docs/adopting.md step 5)"
   if [ "$ADOPT_OWNER_TYPE" != Organization ]; then
     ADOPT_GROUP_OUTCOME="none needed (${org} is a personal account)"
@@ -99,9 +100,9 @@ adopt_group_access() {
     log "runner group: skipped, the Default group is open to every repository in ${org}"
     return 0
   fi
-  if rows="$(list_groups_ids "$org")"; then
+  if rows="$(list_groups_ids "$org" "$host")"; then
     listed=1
-  elif offer_scope_refresh && rows="$(list_groups_ids "$org")"; then
+  elif offer_scope_refresh "$host" && rows="$(list_groups_ids "$org" "$host")"; then
     listed=1
   fi
   if [ "$listed" = 0 ]; then
@@ -129,7 +130,7 @@ adopt_group_access() {
   if [ -n "$widen" ]; then
     adopt_warn "runner group ${found} allows public repositories. ${repo} is private, but anyone who can add a public repository to the group lets that repository's pull requests run their own workflow files on the runner, and the README's security model rests on there being none. The group stays that way after this adoption; turn off Allow public repositories for it (docs/runbook.md, \"Runner group\")"
   fi
-  if ! members="$(gh api --paginate "orgs/${org}/actions/runner-groups/${gid}/repositories?per_page=100" --jq '.repositories[].id' 2>/dev/null)"; then
+  if ! members="$(gh api --hostname "$ADOPT_GH_HOST" --paginate "orgs/${org}/actions/runner-groups/${gid}/repositories?per_page=100" --jq '.repositories[].id' 2>/dev/null)"; then
     ADOPT_GROUP_OUTCOME="not checked${widen}"
     adopt_warn "could not read the repositories of runner group ${found}${byhand}"
     return 0
@@ -147,7 +148,7 @@ adopt_group_access() {
     ADOPT_GROUP_OUTCOME="would be added (dry run)${widen}"
     log "runner group: would add ${repo} to ${found} (dry run)"
   else
-    gh api -X PUT "orgs/${org}/actions/runner-groups/${gid}/repositories/${ADOPT_REPO_ID}" >/dev/null ||
+    gh api --hostname "$ADOPT_GH_HOST" -X PUT "orgs/${org}/actions/runner-groups/${gid}/repositories/${ADOPT_REPO_ID}" >/dev/null ||
       die "adopt: could not add ${repo} to runner group ${found}; add it by hand (docs/adopting.md step 5)"
     ADOPT_GROUP_OUTCOME="added${widen}"
     log "runner group: added ${repo} to ${found}"
@@ -161,7 +162,7 @@ adopt_fetch_workflows() {
   local repo="$1" branch="$2" dir="$3" names name enc
   mkdir -p "$dir"
   ADOPT_WORKFLOWS=0
-  if ! names="$(gh api -X GET "repos/${repo}/contents/.github/workflows" -f ref="$branch" \
+  if ! names="$(gh api --hostname "$ADOPT_GH_HOST" -X GET "repos/${repo}/contents/.github/workflows" -f ref="$branch" \
     --jq '.[] | select(.type == "file") | .name' 2>"$ADOPT_TMP/err")"; then
     if grep -q 404 "$ADOPT_TMP/err"; then
       names=""
@@ -178,7 +179,7 @@ adopt_fetch_workflows() {
     # A name may have spaces or other characters a URL path cannot carry.
     enc="$(python3 -I "$ROOT/tools/adopt.py" quote "$name" </dev/null)" ||
       die "adopt: could not quote the workflow name ${name}"
-    gh api -X GET "repos/${repo}/contents/.github/workflows/${enc}" -f ref="$branch" \
+    gh api --hostname "$ADOPT_GH_HOST" -X GET "repos/${repo}/contents/.github/workflows/${enc}" -f ref="$branch" \
       -H 'Accept: application/vnd.github.raw' >"$dir/$name" 2>"$ADOPT_TMP/err" </dev/null ||
       die "adopt: could not download .github/workflows/${name} from ${repo}: $(head -1 "$ADOPT_TMP/err")"
     ADOPT_WORKFLOWS=$((ADOPT_WORKFLOWS + 1))
@@ -612,9 +613,11 @@ adopt_switch() {
 
 # adopt_verify_commands <owner/repo>: the check, for someone who does it by hand.
 adopt_verify_commands() {
+  local host
+  host="$(github_host "")"
   log "to check that the jobs land on the local runner (docs/adopting.md, step 6), re-run the latest pull-request run of a workflow other than the routing guard (\"HomeField routing\": hosted by design) and read each job's runner:"
-  echo "  gh run list --repo $1 --event pull_request --limit 15"
-  echo "  gh run rerun <run-id> --repo $1"
+  echo "  gh run list --repo $(host_repo "$host" "$1") --event pull_request --limit 15"
+  echo "  gh run rerun <run-id> --repo $(host_repo "$host" "$1")"
 }
 
 # 1 once a report of the jobs was printed (what the last line of adopt says).
@@ -647,7 +650,7 @@ adopt_verify_poll() {
   label_lc="$(printf '%s' "$ADOPT_LABEL" | tr '[:upper:]' '[:lower:]')"
   while :; do
     adopt_check_parent
-    gh api --paginate "repos/${repo}/actions/runs/${id}/jobs?per_page=100" >"$ADOPT_TMP/v.json" 2>"$ADOPT_TMP/v.err" </dev/null || {
+    gh api --hostname "$ADOPT_GH_HOST" --paginate "repos/${repo}/actions/runs/${id}/jobs?per_page=100" >"$ADOPT_TMP/v.json" 2>"$ADOPT_TMP/v.err" </dev/null || {
       adopt_warn "could not verify: gh could not list the jobs of run ${id}: $(head -1 "$ADOPT_TMP/v.err")"
       return 1
     }
@@ -655,7 +658,7 @@ adopt_verify_poll() {
       adopt_warn "could not verify: gh gave a list of jobs that this tool cannot read ($(head -1 "$ADOPT_TMP/v.err"))"
       return 1
     }
-    gh api "repos/${repo}/actions/runs/${id}" >"$ADOPT_TMP/v.json" 2>"$ADOPT_TMP/v.err" </dev/null || {
+    gh api --hostname "$ADOPT_GH_HOST" "repos/${repo}/actions/runs/${id}" >"$ADOPT_TMP/v.json" 2>"$ADOPT_TMP/v.err" </dev/null || {
       adopt_warn "could not verify: gh could not read run ${id}: $(head -1 "$ADOPT_TMP/v.err")"
       return 1
     }
@@ -761,7 +764,7 @@ adopt_verify() {
     esac
   fi
 
-  gh run list --repo "$repo" --event pull_request --limit 1 --json databaseId,status,url,displayTitle,workflowName >"$ADOPT_TMP/v.json" 2>"$ADOPT_TMP/v.err" </dev/null || {
+  gh run list --repo "$(host_repo "$ADOPT_GH_HOST" "$repo")" --event pull_request --limit 1 --json databaseId,status,url,displayTitle,workflowName >"$ADOPT_TMP/v.json" 2>"$ADOPT_TMP/v.err" </dev/null || {
     adopt_warn "could not verify: gh could not list the runs of ${repo}: $(head -1 "$ADOPT_TMP/v.err")"
     return 0
   }
@@ -776,7 +779,7 @@ adopt_verify() {
     # nothing and end in the hosted warning whatever the routing does. A run
     # of a real workflow may sit below it, which one row cannot show: fetch a
     # wider window before concluding there is nothing to re-run.
-    gh run list --repo "$repo" --event pull_request --limit 15 --json databaseId,status,url,displayTitle,workflowName >"$ADOPT_TMP/v.json" 2>"$ADOPT_TMP/v.err" </dev/null || {
+    gh run list --repo "$(host_repo "$ADOPT_GH_HOST" "$repo")" --event pull_request --limit 15 --json databaseId,status,url,displayTitle,workflowName >"$ADOPT_TMP/v.json" 2>"$ADOPT_TMP/v.err" </dev/null || {
       adopt_warn "could not verify: gh could not list the runs of ${repo}: $(head -1 "$ADOPT_TMP/v.err")"
       return 0
     }
@@ -795,10 +798,10 @@ adopt_verify() {
     return 0
   fi
   if [ "$jstatus" != completed ]; then
-    log "verify: run ${id} (${title}) is still ${jstatus}, and a run can only be re-run once it has completed. Later: gh run rerun ${id} --repo ${repo}"
+    log "verify: run ${id} (${title}) is still ${jstatus}, and a run can only be re-run once it has completed. Later: gh run rerun ${id} --repo $(host_repo "$ADOPT_GH_HOST" "$repo")"
     return 0
   fi
-  gh api "repos/${repo}/actions/runs/${id}" >"$ADOPT_TMP/v.json" 2>"$ADOPT_TMP/v.err" </dev/null || {
+  gh api --hostname "$ADOPT_GH_HOST" "repos/${repo}/actions/runs/${id}" >"$ADOPT_TMP/v.json" 2>"$ADOPT_TMP/v.err" </dev/null || {
     adopt_warn "could not verify: gh could not read run ${id}: $(head -1 "$ADOPT_TMP/v.err")"
     return 0
   }
@@ -834,7 +837,7 @@ adopt_setup_cleanup() {
   [ "$ADOPT_SETUP_BRANCH_MADE" = 1 ] && [ "$ADOPT_SETUP_PR_MADE" = 0 ] && [ "$ADOPT_SETUP_PR_PENDING" = 0 ] || return 0
   ADOPT_SETUP_BRANCH_MADE=0
   echo "homefield: removing ${SETUP_BRANCH} on ${ADOPT_SETUP_REPO}, which has no pull request" >&2
-  gh api -X DELETE "repos/${ADOPT_SETUP_REPO}/git/refs/heads/${SETUP_BRANCH}" >/dev/null 2>&1 ||
+  gh api --hostname "$ADOPT_GH_HOST" -X DELETE "repos/${ADOPT_SETUP_REPO}/git/refs/heads/${SETUP_BRANCH}" >/dev/null 2>&1 ||
     echo "homefield: could not remove ${SETUP_BRANCH} on ${ADOPT_SETUP_REPO} (it may not have been created): delete it by hand if it exists" >&2
 }
 
@@ -897,7 +900,7 @@ adopt_write_denied() {
     if [ -n "${ADOPT_APP_ID:-}" ]; then
       printf 'adopt: setup: GitHub refused to write .github/workflows/%s (404): the GitHub App token lacks workflow permissions (Repository permissions -> Workflows: Read and write). Update the App permissions and re-install it on %s\n' "$1" "$2"
     else
-      printf 'adopt: setup: GitHub refused to write .github/workflows/%s (404): the token gh is using most likely lacks the workflow scope, which Contents writes under .github/workflows/ need. Add it to gh%s login: gh auth refresh -h github.com -s workflow (a GITHUB_TOKEN or GH_TOKEN must carry the scope itself)\n' "$1" "'"
+      printf 'adopt: setup: GitHub refused to write .github/workflows/%s (404): the token gh is using most likely lacks the workflow scope, which Contents writes under .github/workflows/ need. Add it to gh%s login: gh auth refresh -h %s -s workflow (a GITHUB_TOKEN or GH_TOKEN must carry the scope itself)\n' "$1" "'" "$(github_host "")"
     fi
   else
     printf 'adopt: setup: could not write .github/workflows/%s to %s on %s: %s\n' "$1" "${SETUP_BRANCH}" "$2" "$(head -1 "$3")"
@@ -1055,10 +1058,11 @@ adopt_setup_check() {
 # the branch exists; one that cannot be told goes on, and the write's own 404
 # below says so.
 adopt_setup_scope() {
-  local ws=0
+  local ws=0 host
+  host="$(github_host "")"
   adopt_workflow_scope || ws=$?
   if [ "$ws" = 1 ]; then
-    die "adopt: setup: gh's active login has no workflow scope, and writing .github/workflows/ needs it (a bare 404 is all GitHub says): gh auth refresh -h github.com -s workflow, then run this again"
+    die "adopt: setup: gh's active login has no workflow scope, and writing .github/workflows/ needs it (a bare 404 is all GitHub says): gh auth refresh -h ${host} -s workflow, then run this again"
   fi
 }
 
@@ -1070,14 +1074,14 @@ adopt_setup_scope() {
 # and says so. Sets ADOPT_SETUP_BRANCH_MADE for the trap.
 adopt_setup_branch() {
   local repo="$1" head_sha
-  head_sha="$(gh api "repos/${repo}/commits/${ADOPT_BRANCH}" --jq .sha 2>"$ADOPT_TMP/err")" ||
+  head_sha="$(gh api --hostname "$ADOPT_GH_HOST" "repos/${repo}/commits/${ADOPT_BRANCH}" --jq .sha 2>"$ADOPT_TMP/err")" ||
     die "adopt: setup: could not read ${ADOPT_BRANCH} on ${repo}: $(head -1 "$ADOPT_TMP/err")"
-  if gh api "repos/${repo}/git/ref/heads/${SETUP_BRANCH}" --jq .object.sha >/dev/null 2>&1; then
+  if gh api --hostname "$ADOPT_GH_HOST" "repos/${repo}/git/ref/heads/${SETUP_BRANCH}" --jq .object.sha >/dev/null 2>&1; then
     die "adopt: setup: the branch ${SETUP_BRANCH} already exists on ${repo}: merge or close its pull request, or delete the branch, and run again"
   fi
   ADOPT_SETUP_BRANCH_MADE=1
   trap adopt_setup_exit EXIT
-  gh api -X POST "repos/${repo}/git/refs" -f ref="refs/heads/${SETUP_BRANCH}" -f sha="$head_sha" >/dev/null || {
+  gh api --hostname "$ADOPT_GH_HOST" -X POST "repos/${repo}/git/refs" -f ref="refs/heads/${SETUP_BRANCH}" -f sha="$head_sha" >/dev/null || {
     ADOPT_SETUP_BRANCH_MADE=0
     die "adopt: setup: could not create ${SETUP_BRANCH} on ${repo}"
   }
@@ -1095,10 +1099,10 @@ adopt_setup_write_files() {
     # A workflow that does not exist on the branch yet (the new guard file)
     # has no sha to update, and the Contents API creates it. -X GET matters:
     # -f alone would switch gh api to POST, which never answers this lookup.
-    sha="$(gh api -X GET "repos/${repo}/contents/.github/workflows/${enc}" -f ref="$SETUP_BRANCH" --jq .sha 2>/dev/null)" || sha=""
+    sha="$(gh api --hostname "$ADOPT_GH_HOST" -X GET "repos/${repo}/contents/.github/workflows/${enc}" -f ref="$SETUP_BRANCH" --jq .sha 2>/dev/null)" || sha=""
     python3 -I "$ROOT/tools/adopt.py" contents-payload "$dir/$name" "${sha:-none}" "$SETUP_MSG" "$SETUP_BRANCH" \
       >"$ADOPT_TMP/put.json" || die "adopt: setup: could not stage .github/workflows/${name}"
-    gh api -X PUT "repos/${repo}/contents/.github/workflows/${enc}" --input "$ADOPT_TMP/put.json" >/dev/null 2>"$ADOPT_TMP/err" ||
+    gh api --hostname "$ADOPT_GH_HOST" -X PUT "repos/${repo}/contents/.github/workflows/${enc}" --input "$ADOPT_TMP/put.json" >/dev/null 2>"$ADOPT_TMP/err" ||
       die "$(adopt_write_denied "$name" "$repo" "$ADOPT_TMP/err")"
     log "setup: wrote .github/workflows/${name}"
   done <<<"$ADOPT_SETUP_FILES"
@@ -1115,7 +1119,7 @@ adopt_setup_pr() {
   body="$(printf 'This PR routes these jobs to the local HomeField runner. See [the adoption guide](%s).\n\n%s\n\nGenerated by `homefield adopt --repo %s --setup`:\n\n- Every routed job now carries the canonical `runs-on` expression for label %s (step 2).\n- The routing guard lists exactly these jobs (step 3).\n- Cache keys in the routed files that were built from `runner.os` gained `${{ runner.arch }}` (step 4).\n\nNothing is switched on by this PR: `CI_RUNNER` stays unset, so everything runs hosted. After merging, `%s` adds the repository to the runner group and routes (step 5); if the `--wait` run that opened this PR is still going, it does that for you.\n' \
     "$guide" "$(printf '%s\n' "$ADOPT_SETUP_ROUTED" | tr ',' '\n' | sed 's/^/- /')" "$repo" "$label" "$ADOPT_PLAIN_CMD")"
   ADOPT_SETUP_PR_PENDING=1
-  url="$(gh api -X POST "repos/${repo}/pulls" -f title="$SETUP_MSG" -f head="$SETUP_BRANCH" -f base="$ADOPT_BRANCH" -f body="$body" --jq .html_url 2>"$ADOPT_TMP/err")" || {
+  url="$(gh api --hostname "$ADOPT_GH_HOST" -X POST "repos/${repo}/pulls" -f title="$SETUP_MSG" -f head="$SETUP_BRANCH" -f base="$ADOPT_BRANCH" -f body="$body" --jq .html_url 2>"$ADOPT_TMP/err")" || {
     ADOPT_SETUP_PR_PENDING=0
     die "adopt: setup: could not open the pull request on ${repo}: $(head -1 "$ADOPT_TMP/err")"
   }
@@ -1192,7 +1196,7 @@ adopt_interrupted() {
   elif [ "$ADOPT_SETUP_PR_MADE" = 1 ]; then
     echo "homefield: ${lead} after opening ${ADOPT_SETUP_PR_URL}. It and its branch are untouched, and nothing was switched or added to the runner group. Once it is merged, run: ${ADOPT_PLAIN_CMD}" >&2
   elif [ "$ADOPT_SETUP_PR_PENDING" = 1 ]; then
-    echo "homefield: ${lead} while the pull request was being opened; it may exist: look at https://github.com/${ADOPT_SETUP_REPO}/pulls. If there is none, delete the branch (gh api -X DELETE repos/${ADOPT_SETUP_REPO}/git/refs/heads/${SETUP_BRANCH}) and run again. The branch was left in place. Nothing was switched or added to the runner group." >&2
+    echo "homefield: ${lead} while the pull request was being opened; it may exist: look at https://${ADOPT_GH_HOST}/${ADOPT_SETUP_REPO}/pulls. If there is none, delete the branch (gh api --hostname ${ADOPT_GH_HOST} -X DELETE repos/${ADOPT_SETUP_REPO}/git/refs/heads/${SETUP_BRANCH}) and run again. The branch was left in place. Nothing was switched or added to the runner group." >&2
   else
     echo "homefield: ${lead} before the pull request was opened. Nothing was switched or added to the runner group." >&2
   fi
@@ -1259,7 +1263,7 @@ adopt_wait_merged() {
     adopt_ensure_fresh_app_token
     polls=$((polls + 1))
     # An answer is a state of open or closed and a merged_at (or "-"), tab-separated.
-    if row="$(gh api "repos/${repo}/pulls/${number}" --jq '[.state, (.merged_at // "-")] | @tsv' 2>"$ADOPT_TMP/err" </dev/null)" &&
+    if row="$(gh api --hostname "$ADOPT_GH_HOST" "repos/${repo}/pulls/${number}" --jq '[.state, (.merged_at // "-")] | @tsv' 2>"$ADOPT_TMP/err" </dev/null)" &&
       state="${row%%$'\t'*}" && merged="${row#*$'\t'}" && [ "$merged" != "$row" ] &&
       { [ "$state" = open ] || [ "$state" = closed ]; }; then
       failures=0
@@ -1384,6 +1388,11 @@ cmd_adopt() {
   done
   command -v gh >/dev/null || die "adopt needs gh (https://cli.github.com)"
   command -v python3 >/dev/null || die "adopt needs python3"
+  # Every gh call below addresses ADOPT_GH_HOST: HOMEFIELD_GITHUB_HOST when
+  # set (a GitHub Enterprise Server or GHE.com host), github.com otherwise.
+  # The --repo argument is an owner/repo slug; the host comes from the
+  # environment, as it does for route.
+  ADOPT_GH_HOST="$(github_host "")"
   [ -z "$app_id" ] || command -v openssl >/dev/null || die "adopt --app-id needs openssl"
   # The same label and option rules as the guard, and a message from it when
   # they fail. The shape is resolved later — an existing guard's own mode wins

@@ -165,7 +165,7 @@ record "public repositories allowed: a warning" "0/yes/yes" "$rc/$(has "$out" 'w
 run_fn GH_GROUPS="$work/groups-none" -- ensure_group https://github.com/acme homefield-ci
 record "a missing group is created" "0/1/yes" "$rc/$(called POST)/$(has "$out" 'created runner group homefield-ci')"
 record "...as selected repositories, public off, by name" \
-  "gh api -X POST orgs/acme/actions/runner-groups -f name=homefield-ci -f visibility=selected -F allows_public_repositories=false" \
+  "gh api --hostname github.com -X POST orgs/acme/actions/runner-groups -f name=homefield-ci -f visibility=selected -F allows_public_repositories=false" \
   "$(grep POST "$calls")"
 record "...and says no repository can use it yet" "yes" "$(has "$out" 'docs/adopting.md, step 5')"
 
@@ -354,7 +354,7 @@ run_fn GH_RUNNERS_FAIL=1 -- check_name_free https://github.com/acme other 1
 record "--replace with an unreadable list stops, pointing at the runners page" "nonzero/yes" "$(nonzero "$rc")/$(has "$out" 'remove other at https://github.com/organizations/acme/settings/actions/runners')"
 
 run_fn -- eval 'REPLACE_ID=42; remove_taken_name https://github.com/acme lima-homefield'
-record "remove_taken_name deletes the runner by id" "0/gh api -X DELETE orgs/acme/actions/runners/42" "$rc/$(grep DELETE "$calls")"
+record "remove_taken_name deletes the runner by id" "0/gh api --hostname github.com -X DELETE orgs/acme/actions/runners/42" "$rc/$(grep DELETE "$calls")"
 run_fn -- remove_taken_name https://github.com/acme lima-homefield
 record "...and nothing without an id" "0/0" "$rc/$(called DELETE)"
 run_fn GH_DELETE_FAIL=1 -- eval 'REPLACE_ID=42; remove_taken_name https://github.com/acme/app lima-homefield'
