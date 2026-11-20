@@ -180,6 +180,33 @@ dg_collect_guest() {
   esac
 }
 
+# dg_collect_watcher: the sleep/wake watcher's facts for this VM — only
+# interesting when the automatic fallback is on (the watcher acts on this
+# VM's routing then). Mac-level facts, so this is file reads, no guest and
+# no GitHub: a missing agent is a problem (the fallback silently stops
+# covering sleep), a failed last run is a hint (it self-heals on the next
+# start or wake, but until then the repositories stay hosted).
+DG_WATCHER="" DG_WATCHER_RUN_AT="" DG_WATCHER_MODE="" DG_WATCHER_RESULT=""
+dg_collect_watcher() {
+  DG_WATCHER="off"; DG_WATCHER_RUN_AT=""; DG_WATCHER_MODE=""; DG_WATCHER_RESULT=""
+  [ "$(state_get auto_route)" = "1" ] || return 0
+  route_watcher_last_run
+  DG_WATCHER_RUN_AT="$RW_LAST_RUN_AT" DG_WATCHER_MODE="$RW_LAST_MODE" DG_WATCHER_RESULT="$RW_LAST_RESULT"
+  if [ ! -f "$(route_watcher_plist_path)" ]; then
+    DG_WATCHER="not-installed"
+    dg_problem watcher "the route watcher is not installed; the automatic fallback covers stop and start but not sleep and wake" "bin/homefield upgrade --auto-route"
+    return 0
+  fi
+  DG_WATCHER="installed"
+  if [ -z "$RW_LAST_RUN" ]; then
+    DG_WATCHER="no-run"
+  elif [ "$RW_LAST_RESULT" = "failed" ]; then
+    DG_WATCHER="failed"
+    dg_hint "the route watcher's last run (${RW_LAST_MODE} at ${RW_LAST_RUN_AT}) did not finish; the repositories it did not reach keep their routing until the next start or wake — see $(route_watcher_log_file)"
+  fi
+  return 0
+}
+
 # dg_collect_vm: whether the VM is there, and for a Running one the guest
 # checks. Anything else is reported and the guest is left alone.
 dg_collect_vm() {
@@ -400,6 +427,21 @@ dg_render_human() {
       echo "  - npm: skipped (${why})"
     fi
   fi
+  case "$DG_WATCHER" in
+    off) ;;
+    not-installed)
+      echo "  - Route watcher: $(color_wrap 3 "NOT installed") (the automatic fallback does not cover sleep and wake)"
+      ;;
+    no-run)
+      echo "  - Route watcher: installed (no run recorded yet)"
+      ;;
+    failed)
+      echo "  - Route watcher: installed (last ran ${DG_WATCHER_MODE} at ${DG_WATCHER_RUN_AT}: $(color_wrap 3 FAILED))"
+      ;;
+    installed)
+      echo "  - Route watcher: installed (last ran ${DG_WATCHER_MODE} at ${DG_WATCHER_RUN_AT}: ${DG_WATCHER_RESULT})"
+      ;;
+  esac
   echo ""
   echo "GitHub:"
   case "$DG_GROUP" in
@@ -499,6 +541,10 @@ dg_render_json() {
   if [ "$DG_GROUP_VIS" = selected ] && [ "$DG_GROUP" = checked ]; then json_lines "$DG_REPOS"; else printf null; fi
   printf ', "detail": %s}\n' "$(json_nstr "$DG_GROUP_WHY")"
   printf '  },\n'
+  if [ "$DG_WATCHER" != off ]; then
+    printf '  "route_watcher": {"state": %s, "last_run": %s, "last_mode": %s, "last_result": %s},\n' \
+      "$(json_str "$DG_WATCHER")" "$(json_nstr "$DG_WATCHER_RUN_AT")" "$(json_nstr "$DG_WATCHER_MODE")" "$(json_nstr "$DG_WATCHER_RESULT")"
+  fi
   if [ "${HOMEFIELD_DIAGNOSE_SKIP_PREREQS:-}" != 1 ]; then
     printf '  "prerequisites": '
     dg_json_prereqs
@@ -546,6 +592,7 @@ diagnose_single() {
   dg_reset
   dg_collect_prerequisites
   dg_collect_vm
+  dg_collect_watcher
   dg_collect_group
   if [ "$json" = 1 ]; then dg_render_json; else dg_render_human; fi
   [ "${#DG_P_MSG[@]}" -eq 0 ]

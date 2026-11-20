@@ -13,6 +13,7 @@
 #   bin/homefield uninstall [--keep-vm]
 #   bin/homefield reset [--keep-vm] [--keep-group] [--remove-tool]
 #   bin/homefield route <hosted|local> --repo <owner>/<repo> [--repo ...]
+#   bin/homefield route-watch <sleep|wake>
 #   bin/homefield adopt --repo <owner>/<repo> [--jobs "ci.yml:lint,..."] [--setup [--wait [--wait-timeout MIN]]] [--guards] [--events E] [--dependabot hosted|local] [--fallback IMAGE] [--no-switch] [--dry-run]
 #   bin/homefield memory [--days N]
 #   bin/homefield report --repo <owner>/<repo> [--repo ...] [--since DATE]
@@ -206,6 +207,19 @@ usage_cmd_route() {
              was routed.
 EOF
 }
+usage_cmd_route_watch() {
+  cat <<'EOF'
+  route-watch The sleep/wake half of the automatic fallback. install and
+              upgrade install a LaunchAgent (com.homefield.route-watcher)
+              with --auto-route that runs this when the Mac sleeps and when
+              it wakes up or logs in; it can also be run by hand. sleep
+              switches the routed repositories of every idle VM with
+              --auto-route to hosted (a VM with a job running, or one that
+              cannot be asked, is skipped and left as it is); wake starts the
+              VMs again and routes the flipped repositories back to local.
+              Each run is recorded; status and diagnose show the last one.
+EOF
+}
 usage_cmd_preflight() {
   cat <<'EOF'
   preflight  Check prerequisites for a fresh install: macOS, Apple Silicon,
@@ -274,6 +288,7 @@ usage_commands() {
   usage_cmd_uninstall
   usage_cmd_reset
   usage_cmd_route
+  usage_cmd_route_watch
   usage_cmd_preflight
   usage_cmd_adopt
   usage_cmd_memory
@@ -442,6 +457,28 @@ route <hosted|local>:
   --dry-run          show what would change, change nothing
   Needs gh with write access to the repositories' variables and runs. Does
   not need the VM.
+EOF
+}
+usage_sec_route_watch() {
+  cat <<'EOF'
+route-watch <sleep|wake>:
+  sleep             the Mac is about to sleep: switch the routed repositories
+                    of every idle, Running VM with the automatic fallback on
+                    to hosted, so jobs queued while the Mac is away run on
+                    GitHub's runners. A VM with a job running, or one that
+                    cannot be asked whether one is, is skipped and left as it
+                    is. The VMs are not stopped.
+  wake              the Mac woke up or logged in: start every VM with the
+                    automatic fallback on, wait for its runner to be listed
+                    online (up to HOMEFIELD_WATCH_WAKE_WAIT seconds, default
+                    120), and route the repositories a flip sent to hosted
+                    back to local
+  One run is recorded in the watcher's state file, in the route-watcher
+  subdirectory of the state directory; the log is the log file in the same
+  subdirectory. Needs Lima. install/upgrade --auto-route
+  installs the LaunchAgent that runs both at the right moments;
+  --no-auto-route, uninstall and reset take it back out when no VM on this
+  Mac wants it anymore.
 EOF
 }
 usage_sec_adopt() {
@@ -635,6 +672,7 @@ usage() {
     usage_sec_uninstall \
     usage_sec_reset \
     usage_sec_route \
+    usage_sec_route_watch \
     usage_sec_preflight \
     usage_sec_adopt \
     usage_sec_memory \
@@ -672,6 +710,8 @@ usage_for() {
       usage_join usage_header usage_cmd_reset usage_sec_reset usage_options usage_tokens ;;
     route)
       usage_join usage_header usage_cmd_route usage_sec_route usage_options ;;
+    route-watch)
+      usage_join usage_header usage_cmd_route_watch usage_sec_route_watch usage_options ;;
     preflight)
       usage_join usage_header usage_cmd_preflight usage_sec_preflight usage_options ;;
     adopt)
@@ -711,6 +751,7 @@ Commands:
   uninstall  Deregister the runner and delete one VM
   reset      Roll back an install, complete or half-finished
   route      Switch repositories' routed jobs to hosted or local
+  route-watch The sleep/wake half of the automatic fallback (LaunchAgent)
   preflight  Check prerequisites for a fresh install
   adopt      Prepare a repository to use the runner
   memory     Show every VM's memory use from its per-minute log
@@ -753,7 +794,7 @@ main() {
   color_init ${COLOR_ARG:+"$COLOR_ARG"} "$cmd"
   # Only the commands that act on the VM: preflight, route, adopt, report and
   # version never use it, so a stale HOMEFIELD_INSTANCE does not stop them.
-  case "$cmd" in setup | install | upgrade | re-register | update | status | start | stop | diagnose | uninstall | reset | memory | fleet) check_instance ;; esac
+  case "$cmd" in setup | install | upgrade | re-register | update | status | start | stop | diagnose | uninstall | reset | memory | fleet | route-watch) check_instance ;; esac
   set -- "${rest[@]+"${rest[@]}"}"
   # <command> --help (or -h) prints that command's help, before the command's
   # own parser sees the flag: no command takes -h for anything else. --help
@@ -776,6 +817,7 @@ main() {
     uninstall) cmd_uninstall "$@" ;;
     reset) cmd_reset "$@" ;;
     route) cmd_route "$@" ;;
+    route-watch) cmd_route_watch "$@" ;;
     adopt) cmd_adopt "$@" ;;
     memory) cmd_memory "$@" ;;
     report) cmd_report "$@" ;;

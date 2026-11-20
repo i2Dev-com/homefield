@@ -765,6 +765,12 @@ cmd_install() {
   if [ "$reset_vm" = 1 ] && [ "$ephemeral" != 1 ]; then
     die "${cmd}: --reset-vm needs --ephemeral (the reset runs from re-register --watch)"
   fi
+  # The sleep/wake watcher's power-event helper is Python: without python3
+  # the automatic fallback would cover stop and start but not sleep, so say
+  # so before anything is created.
+  if [ "$auto_route" = 1 ] && ! command -v python3 >/dev/null 2>&1; then
+    die "${cmd}: --auto-route needs python3 (the sleep/wake watcher's power-event helper): install it (xcode-select --install, or brew install python3) and run this again"
+  fi
   # The readiness report comes first, before anything is created, and install
   # then gates on its own subset of it — macOS, arm64, Lima — which check_host
   # is: gh, python3 and brew are what the tool needs elsewhere (adopt, report,
@@ -952,6 +958,15 @@ cmd_install() {
     # fallback existed; a failure only means they are not covered yet, and
     # seed_routing_records says exactly what to do about it.
     seed_routing_records "$url" "$name" "${label:-homefield-ci}" "${GROUP_ID:-}" || true
+    # The sleep/wake half (#290): the LaunchAgent that flips on sleep and
+    # restores on wake. A failure leaves the fallback covering stop and
+    # start only; the warning names the retry.
+    route_watcher_install ||
+      echo "homefield: the route watcher could not be installed; the automatic fallback covers stop and start but not sleep and wake (retry: bin/homefield upgrade --auto-route)" >&2
+  elif [ "$auto_route_set" = 1 ]; then
+    # An explicit --no-auto-route takes the agent back out when no other VM
+    # on this Mac wants it.
+    route_watcher_remove_if_unneeded || true
   fi
   if [ "$ephemeral" = 1 ]; then
     state_set ephemeral 1
@@ -1077,6 +1092,12 @@ upgrade_single() {
     state_set auto_route "$UP_AUTO_ROUTE"
     if [ "$UP_AUTO_ROUTE" = 1 ]; then
       seed_routing_records "$url" "$name" || true
+      # The sleep/wake half (#290); see install. A failure leaves the
+      # fallback covering stop and start only.
+      route_watcher_install ||
+        echo "homefield: the route watcher could not be installed; the automatic fallback covers stop and start but not sleep and wake (retry: bin/homefield upgrade --auto-route)" >&2
+    else
+      route_watcher_remove_if_unneeded || true
     fi
   fi
   runner_back
@@ -1121,6 +1142,11 @@ cmd_upgrade() {
   # preset, fails before any VM is stopped and does not repeat per instance
   # (#182). The values are parsed again per instance, by the same parser.
   parse_upgrade_args "$@"
+  # The watcher's helper is Python; without it --auto-route would cover stop
+  # and start but not sleep, so refuse before any VM is stopped.
+  if [ "${UP_AUTO_ROUTE:-}" = 1 ] && ! command -v python3 >/dev/null 2>&1; then
+    die "upgrade: --auto-route needs python3 (the sleep/wake watcher's power-event helper): install it (xcode-select --install, or brew install python3) and run this again"
+  fi
   local opts=("$@")
   [ ${#UP_PRESETS[@]} -eq 0 ] || load_presets "${UP_PRESETS[@]+"${UP_PRESETS[@]}"}"
   vm_dispatch upgrade upgrade_single "${opts[@]+"${opts[@]}"}"
@@ -1376,6 +1402,12 @@ st_render_human() {
     echo "service: NOT running (${ST_UNIT:-no service installed})"
   fi
   st_render_ephemeral
+  # The watcher is per-Mac, but it acts on this VM's routing only when the
+  # automatic fallback is on, so the line belongs in this VM's report then:
+  # whether the agent is installed and what the last run did.
+  if [ "$(state_get auto_route)" = "1" ]; then
+    route_watcher_status_line
+  fi
   case "$ST_JOB" in
     running) echo "job: running" ;;
     idle) echo "job: idle" ;;
@@ -1430,6 +1462,9 @@ st_render_json() {
     printf '  "extra_packages": %s,\n' "$(json_words "$ST_PKGS")"
   else
     printf '  "extra_packages": null,\n'
+  fi
+  if [ "$(state_get auto_route)" = "1" ]; then
+    printf '  "route_watcher": %s,\n' "$(route_watcher_json)"
   fi
   printf '  "loopback": {"state": %s, "detail": %s}\n' \
     "$(json_str "$ST_LB_STATE")" "$(json_nstr "$ST_LB_DETAIL")"

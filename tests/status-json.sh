@@ -260,4 +260,25 @@ record "loopback: stale in json when Lima upgraded" "stale" \
   "$(json_field "$out" 'd["loopback"]["state"]')"
 rm -rf "$home/.local/state/homefield"
 
+# The sleep/wake watcher's facts, for a VM with the automatic fallback on:
+# the agent's presence and the last run, and nothing when the fallback is off.
+mkdir -p "$home/.local/state/homefield" "$home/Library/LaunchAgents"
+printf 'auto_route=1\n' >"$home/.local/state/homefield/homefield.state"
+stat "${healthy[@]}" -- --json
+record "route_watcher: no agent is installed=false, no run yet" "False/None" \
+  "$(json_field "$out" 'd["route_watcher"]["installed"]')/$(json_field "$out" 'd["route_watcher"]["last_run"]')"
+
+mkdir -p "$home/.local/state/homefield/route-watcher"
+printf 'last_run=1\nlast_run_at=2026-11-20 08:00:00\nlast_mode=wake\nlast_result=ok\n' >"$home/.local/state/homefield/route-watcher/state"
+: >"$home/Library/LaunchAgents/com.homefield.route-watcher.plist"
+stat "${healthy[@]}" -- --json
+record "route_watcher: the agent and the last run's mode, result and time" "True/wake/ok/2026-11-20 08:00:00" \
+  "$(json_field "$out" 'd["route_watcher"]["installed"]')/$(json_field "$out" 'd["route_watcher"]["last_mode"]')/$(json_field "$out" 'd["route_watcher"]["last_result"]')/$(json_field "$out" 'd["route_watcher"]["last_run"]')"
+
+printf 'auto_route=0\n' >"$home/.local/state/homefield/homefield.state"
+stat "${healthy[@]}" -- --json
+record "route_watcher: no key when the automatic fallback is off" "False" \
+  "$(json_field "$out" '"route_watcher" in d')"
+rm -rf "$home/.local/state/homefield" "$home/Library/LaunchAgents"
+
 summary

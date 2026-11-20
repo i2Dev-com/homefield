@@ -45,6 +45,7 @@ agents that drive the tool without a human in the loop. The guides:
 | `uninstall` | Deregister the runner and delete one VM | Refuses to guess with more than one VM: `--instance` is required |
 | `reset` | Roll back an install, complete or half-finished | Asks first; `HOMEFIELD_YES=1` answers yes; a no-op when nothing to undo |
 | `route` | Switch repositories' routed jobs to hosted or local (`CI_RUNNER`) | `route hosted` also re-runs stuck runs; `--dry-run` |
+| `route-watch` | The sleep/wake half of the automatic fallback: a LaunchAgent (`com.homefield.route-watcher`, installed by `install`/`upgrade --auto-route`) runs `route-watch sleep` when the Mac sleeps and `route-watch wake` when it wakes up or logs in | `sleep` flips the routed repositories of every idle, Running VM with the automatic fallback on to hosted (a VM with a job running, or one that cannot be asked, is skipped and left as it is; the VMs are not stopped); `wake` starts those VMs, waits for each runner to be listed online (up to `HOMEFIELD_WATCH_WAKE_WAIT` seconds, default 120) and routes the flipped repositories back to local; if the Mac goes back to sleep while a wake recovery is running, the sleep notification kills it and runs the sleep-side flip first. One run is recorded in the watcher's state file, in the `route-watcher` subdirectory of the state directory; the log is the `log` file in the same subdirectory, and `status`/`diagnose` show the last run. `--no-auto-route`, `uninstall` and `reset` remove the agent when no VM on this Mac has the fallback on anymore |
 | `preflight` | Check prerequisites for a fresh install | `--prefetch` / `--no-prefetch` controls VM image caching (default: on for a terminal, off otherwise; failed fetch warns only); exits 0 when prerequisites pass, 1 otherwise |
 | `adopt` | Prepare a repository: check the routing, add it to the group, switch it on | `--setup` opens the routing pull request; `--wait` carries on after the merge; `--app-id` / `--app-key-file` for GitHub App auth; refuses a public repository |
 | `memory` | Every VM's memory use: average and peak per day, out-of-memory kills | `--days N` (default 7); fails for a VM it cannot ask |
@@ -68,6 +69,11 @@ agents that drive the tool without a human in the loop. The guides:
 | `HOMEFIELD_AUTO_UPDATE` | Periodic mode for `homefield update --auto`: `off` (default), `notify` (check only), or `patch` (auto-apply patch bumps while idle) |
 | `HOMEFIELD_UPDATE_INTERVAL` | Seconds between `homefield update --auto` checks and LaunchAgent runs (default `21600` = 6h; `0` disables) |
 | `HOMEFIELD_AUTO_UPDATE_MINOR` | Set `1` to allow minor/major bumps in `HOMEFIELD_AUTO_UPDATE=patch` mode (default `0`) |
+| `HOMEFIELD_WATCH_SLEEP_BUDGET` | Seconds the sleep-side flip may take before the watcher kills it (default 20, of the ~30 s macOS grants before it forces the sleep) |
+| `HOMEFIELD_WATCH_WAKE_WAIT` | Seconds `route-watch wake` waits per VM for its runner to be listed online (default 120) |
+| `HOMEFIELD_WATCH_WAKE_BUDGET` | Seconds the whole wake run may take before the watcher kills it (default 600) |
+
+The `HOMEFIELD_WATCH_*` variables set when `install`/`upgrade --auto-route` runs are baked into the LaunchAgent's plist environment, so the agent runs with the tuning the installer chose (launchd does not inherit a shell's environment).
 | `HOMEFIELD_SOURCE_ONLY=1` | Internal: source `bin/homefield` for its functions, run nothing |
 
 ## Machine-readable output (`--json`)
@@ -159,6 +165,10 @@ repository, day, queue wait, duration, minutes, local against hosted.
   1 when the fallback could not be proven — GitHub unreachable, the runner
   missing from GitHub's list, a flip or restore that failed — while the VM
   itself is still stopped or started.
+- `route-watch`: 1 when any VM's sleep or wake side failed (a flip that
+  could not be proven, a VM that could not be started or asked, a runner
+  that never came online); the other VMs still ran, and the run is recorded
+  as failed either way.
 
 ## Recipes
 

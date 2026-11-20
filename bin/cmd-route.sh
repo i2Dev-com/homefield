@@ -125,18 +125,21 @@ serves_jobs() {
   return 0
 }
 
-# route_stop_fallback <url> <name>: the stop-side of the automatic fallback
-# (#286). Every repository routed to one of this runner's labels goes to
-# hosted, unless another online runner still serves that label — the issue's
+# route_stop_fallback <url> <name> [exclude]: the stop-side of the automatic
+# fallback (#286). Every repository routed to one of this runner's labels goes
+# to hosted, unless another online runner still serves that label — the issue's
 # own "when no local runner is online" rule, with this runner (still listed
-# online, the stop has not happened yet) excluded by name. Flipped repos move
-# from `routing` to `autoflip`, so the next start knows what to bring back.
-# A GitHub failure reads as "could not prove nobody serves the label" and
-# flips nothing: leaving jobs routed local is the status quo, flipping them
-# off a runner that is actually there is a regression. Returns 1 when
-# anything was left undone, so stop can report it.
+# online, the stop has not happened yet) excluded by name. <exclude> (a
+# newline-separated list, optional) names more runners to treat as gone: the
+# sleep/wake watcher (#290) passes every HomeField runner on this Mac, because
+# they all stop answering when the Mac sleeps, while the stop of one VM leaves
+# the Mac's others up. Flipped repos move from `routing` to `autoflip`, so the
+# next start knows what to bring back. A GitHub failure reads as "could not
+# prove nobody serves the label" and flips nothing: leaving jobs routed local
+# is the status quo, flipping them off a runner that is actually there is a
+# regression. Returns 1 when anything was left undone, so stop can report it.
 route_stop_fallback() {
-  local url="$1" name="$2" rows rname rstatus rlabels label repo served flipped=0 rc=0 host
+  local url="$1" name="$2" exclude="${3:-}" rows rname rstatus rlabels label repo served flipped=0 rc=0 host
   host="$(github_host "$url")"
   # Nothing routed to any local runner: nothing to flip, and GitHub need not
   # be asked. (A missing file reads as empty: set -e turns a failed
@@ -196,6 +199,13 @@ route_stop_fallback() {
     served=0
     while IFS=$'\t' read -r rid rname rstatus rlabels; do
       [ "$rname" = "$name" ] && continue
+      # A runner in the exclusion list goes away with this Mac (the watcher's
+      # sleep side), so it does not keep the label served, however online
+      # GitHub still lists it. -F -x: a literal whole-line match — a runner
+      # name is data, not a pattern.
+      if [ -n "$exclude" ] && printf '%s\n' "$exclude" | grep -Fxq "$rname"; then
+        continue
+      fi
       [ "$rstatus" = online ] || continue
       # The custom label is not enough: the workflow's runs-on also needs
       # self-hosted, linux and arm64 (the canonical expression), and the
@@ -218,8 +228,14 @@ route_stop_fallback() {
     local landed=0
     # cmd_route reads its GitHub host from the environment (it takes no
     # --url), so lend it this instance's for the flip. The assignment is
-    # temporary: it does not outlive the function call.
-    if HOMEFIELD_GITHUB_HOST="$host" cmd_route hosted --repo "$repo" --label "$label"; then
+    # temporary: it does not outlive the function call. HOMEFIELD_ROUTE_AUTOFLIP
+    # says the caller is the automatic fallback, so cmd_route persists the
+    # restore intent (the autoflip entry) before its stuck-run recovery — the
+    # one part of the flip that can wait a minute, longer than the watcher's
+    # sleep budget: killed there, the repo would be CI_RUNNER=hosted with
+    # neither record left, and no start or wake could bring it back. Adding it
+    # again below is a no-op (one line per repo and host).
+    if HOMEFIELD_ROUTE_AUTOFLIP=1 HOMEFIELD_GITHUB_HOST="$host" cmd_route hosted --repo "$repo" --label "$label"; then
       landed=1
     else
       rc=1
@@ -530,7 +546,18 @@ cmd_route() {
         record_drop "$(autoflip_file)" "$repo" "$host" || { rc=1; log "${repo}: could not update $(autoflip_file)" >&2; }
       else
         record_drop "$(routing_file)" "$repo" "$host" || { rc=1; log "${repo}: could not update $(routing_file)" >&2; }
-        record_drop "$(autoflip_file)" "$repo" "$host" || { rc=1; log "${repo}: could not update $(autoflip_file)" >&2; }
+        if [ -n "${HOMEFIELD_ROUTE_AUTOFLIP:-}" ]; then
+          # The automatic fallback's caller (#286, route_stop_fallback) wants
+          # the restore intent on disk before the stuck-run recovery below:
+          # the recovery can wait a minute, longer than the watcher's sleep
+          # budget, and a kill there must leave the entry a start or wake can
+          # restore from. A direct `route hosted` has no restore intent — the
+          # operator decided for hosted — and keeps dropping the entry.
+          record_add "$(autoflip_file)" "$label" "$repo" "$host" ||
+            { rc=1; log "${repo}: flipped to hosted but could not record it for the next start; run bin/homefield route local --repo ${repo} --label ${label} by hand" >&2; }
+        else
+          record_drop "$(autoflip_file)" "$repo" "$host" || { rc=1; log "${repo}: could not update $(autoflip_file)" >&2; }
+        fi
       fi
       log "${repo}: CI_RUNNER ${current} -> ${target}"
     fi

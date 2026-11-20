@@ -108,6 +108,11 @@ cmd_uninstall() {
     return
   fi
   delete_vm
+  # The sleep/wake agent is per-Mac: with this VM gone (its state file
+  # outlives it — reset, not uninstall, removes that), take the agent out
+  # when no remaining VM wants it. This VM's own state does not count.
+  route_watcher_remove_if_unneeded "$INSTANCE" ||
+    echo "homefield: warning: could not remove the route watcher LaunchAgent; remove it by hand (launchctl unload -w $(route_watcher_plist_path))" >&2
 }
 
 # The runner as the VM says, set by reset_inspect: R_REG 1 when registered,
@@ -477,6 +482,13 @@ cmd_reset() {
     RG_KEEP=1
   fi
   reset_state_file
+  # The sleep/wake agent is per-Mac: with this VM's state gone (or kept, when
+  # a group record in it is still live), take the agent out when no remaining
+  # VM wants it.
+  if ! route_watcher_remove_if_unneeded; then
+    rep "route watcher: could not remove the LaunchAgent $(route_watcher_plist_path); remove it by hand"
+    RESET_RC=1
+  fi
   reset_tool
 
   if [ "${#REPORT[@]}" -eq 0 ]; then
