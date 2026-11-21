@@ -259,6 +259,27 @@ run FAIL_BASE_DELETE=1 --
 record "a base that cannot be deleted: the report says so, reset fails" "1/yes/1" \
   "$rc/$(has "$out" 'reset base VM resettest-base: could not be deleted')/$(lines 'limactl delete --force resettest-base')"
 
+echo "a base left behind with no runner VM (#297): a retry cleans it"
+fresh
+reset_base_at
+run VM=none --
+record "reset with no VM deletes the orphaned marked base" "0/0/1" \
+  "$rc/$(lines 'limactl delete --force resettest')/$(lines 'limactl delete --force resettest-base')"
+record "...the plan and the report say so" "yes/yes" \
+  "$(has "$out" 'delete the orphaned reset base VM resettest-base')/$(has "$out" 'reset base VM resettest-base: deleted')"
+
+fresh
+reset_base_at
+run VM=none -- --keep-vm
+record "...--keep-vm keeps the base too" "0/0/yes" \
+  "$rc/$(lines 'limactl delete')/$([ -e "$work/home/.lima/resettest-base/lima.yaml" ] && echo yes || echo no)"
+
+fresh
+reset_base_at
+run VM=none FAIL_BASE_DELETE=1 --
+record "...a base that cannot be deleted: the report says so, reset fails" "1/yes/1" \
+  "$rc/$(has "$out" 'reset base VM resettest-base: could not be deleted')/$(lines 'limactl delete --force resettest-base')"
+
 echo "a VM that never registered (a failed install):"
 fresh
 rm -f "$home/.runner"

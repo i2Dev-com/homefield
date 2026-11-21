@@ -429,7 +429,10 @@ the watch loop never touch the base VM (`vm_instances` skips it; use
 
 `uninstall` and `reset` delete a marked base with the VM, so removing a
 `--reset-vm` runner leaves nothing behind; a base that cannot be deleted is
-reported with the hand command (`limactl delete -f <instance>-base`). The base
+reported with the hand command (`limactl delete -f <instance>-base`). When the
+runner VM is already gone — a base a previous reset could not delete, or one a
+failed re-register clone left behind — `reset` removes the orphaned base on
+its own, so a retry cleans it up. The base
 is never upgraded, by decision ([#297]): clones get OS updates through the
 in-guest maintenance, but a change to the VM's own settings (CPU, memory, disk)
 or a provisioning change needs the base rebuilt, which means uninstall and

@@ -365,6 +365,8 @@ reset_plan() {
     if [ "$RESET_KEEP_VM" = 0 ] && is_reset_base "${INSTANCE}-base"; then
       plan+=("delete the reset base VM ${INSTANCE}-base, which install --reset-vm created (nothing clones from it once the VM is gone)")
     fi
+  elif [ "$RESET_KEEP_VM" = 0 ] && is_reset_base "${INSTANCE}-base"; then
+    plan+=("delete the orphaned reset base VM ${INSTANCE}-base (the runner VM is already gone)")
   fi
   if [ -n "$RG_ORG" ] && [ "$RESET_KEEP_GROUP" = 0 ]; then
     plan+=("delete the runner group ${RG_LABEL}, which install created, unless it holds other runners")
@@ -389,6 +391,22 @@ reset_plan() {
 # reset_group: it is set only for a runner that was registered here and is
 # now deregistered (or the command would have ended), the one runner that may
 # still show in the group for a moment.
+# reset_base_cleanup: the reset side of delete_reset_base — delete the
+# instance's marked base and report it, failing the run's cleanup when the
+# delete fails. A no-op when there is no marked base. Runs after the runner
+# VM is deleted, and also when it is already gone: a base left behind by a
+# failed delete (the report named the hand command) or by a re-register clone
+# that failed after the delete is what a retry cleans.
+reset_base_cleanup() {
+  is_reset_base "${INSTANCE}-base" || return 0
+  if delete_reset_base; then
+    rep "reset base VM ${INSTANCE}-base: deleted"
+  else
+    rep "reset base VM ${INSTANCE}-base: could not be deleted (limactl said why above); delete it by hand: limactl delete --force ${INSTANCE}-base"
+    RESET_RC=1
+  fi
+}
+
 reset_vm() {
   local vm="$1"
   if [ -n "$vm" ]; then
@@ -428,18 +446,17 @@ reset_vm() {
       # The reset base goes with the VM (see delete_reset_base): with the
       # runner VM gone nothing clones from it. A base that cannot be deleted
       # fails the reset's cleanup, like a VM that cannot be deleted.
-      if is_reset_base "${INSTANCE}-base"; then
-        if delete_reset_base; then
-          rep "reset base VM ${INSTANCE}-base: deleted"
-        else
-          rep "reset base VM ${INSTANCE}-base: could not be deleted (limactl said why above); delete it by hand: limactl delete --force ${INSTANCE}-base"
-          RESET_RC=1
-        fi
-      fi
+      reset_base_cleanup
     else
       rep "VM ${INSTANCE}: could not be deleted (limactl said why above); delete it by hand: limactl delete --force ${INSTANCE}"
       RESET_RC=1
     fi
+  elif [ "$RESET_KEEP_VM" = 0 ]; then
+    # No runner VM, but a marked base can still be there: a previous reset's
+    # base delete failed (its report named the hand command), or a re-register
+    # clone failed after deleting the VM. The base is what a retry cleans —
+    # and a reset --remove-tool must not report success around it.
+    reset_base_cleanup
   fi
 }
 
