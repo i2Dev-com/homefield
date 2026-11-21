@@ -73,6 +73,22 @@ delete_vm() {
   log "deleted VM ${INSTANCE}"
 }
 
+# delete_reset_base: delete the instance's reset base VM, when there is one.
+# A --reset-vm install leaves <instance>-base behind (stopped, unregistered)
+# as the source every later reset clones from; with the runner VM gone it is
+# orphaned (~2 GiB of Lima disk), so uninstall and reset take it with the VM.
+# Only a base that carries the HomeField reset-base marker is touched: an
+# ordinary runner that happens to be named <instance>-base is never deleted —
+# the same rule vm_instances' exclusion and install's base replacement follow.
+# Returns 0 when there was no marked base or the delete succeeded; a failed
+# delete returns 1 with limactl's own error on stderr, for the caller to report.
+delete_reset_base() {
+  local base="${INSTANCE}-base"
+  is_reset_base "$base" || return 0
+  limactl delete --force "$base" || return 1
+  log "deleted reset base VM ${base}"
+}
+
 cmd_uninstall() {
   local keep_vm=0
   while [ $# -gt 0 ]; do
@@ -108,6 +124,13 @@ cmd_uninstall() {
     return
   fi
   delete_vm
+  # The reset base goes with the VM (see delete_reset_base): a --reset-vm
+  # install leaves it behind as the clone source, and with the runner VM gone
+  # nothing clones from it. A base that cannot be deleted is a warning, not a
+  # failed uninstall: the runner is gone either way, and the hand command names
+  # what is left.
+  delete_reset_base ||
+    echo "homefield: warning: could not delete the reset base VM ${INSTANCE}-base; delete it by hand: limactl delete --force ${INSTANCE}-base" >&2
   # The sleep/wake agent is per-Mac: with this VM gone (its state file
   # outlives it — reset, not uninstall, removes that), take the agent out
   # when no remaining VM wants it. This VM's own state does not count.
@@ -339,6 +362,9 @@ reset_plan() {
       plan+=("deregister the runner from ${R_URL}")
     fi
     [ "$RESET_KEEP_VM" = 1 ] || plan+=("delete VM ${INSTANCE}")
+    if [ "$RESET_KEEP_VM" = 0 ] && is_reset_base "${INSTANCE}-base"; then
+      plan+=("delete the reset base VM ${INSTANCE}-base, which install --reset-vm created (nothing clones from it once the VM is gone)")
+    fi
   fi
   if [ -n "$RG_ORG" ] && [ "$RESET_KEEP_GROUP" = 0 ]; then
     plan+=("delete the runner group ${RG_LABEL}, which install created, unless it holds other runners")
@@ -399,6 +425,17 @@ reset_vm() {
       rep "VM ${INSTANCE}: kept (--keep-vm)"
     elif delete_vm; then
       rep "VM ${INSTANCE}: deleted"
+      # The reset base goes with the VM (see delete_reset_base): with the
+      # runner VM gone nothing clones from it. A base that cannot be deleted
+      # fails the reset's cleanup, like a VM that cannot be deleted.
+      if is_reset_base "${INSTANCE}-base"; then
+        if delete_reset_base; then
+          rep "reset base VM ${INSTANCE}-base: deleted"
+        else
+          rep "reset base VM ${INSTANCE}-base: could not be deleted (limactl said why above); delete it by hand: limactl delete --force ${INSTANCE}-base"
+          RESET_RC=1
+        fi
+      fi
     else
       rep "VM ${INSTANCE}: could not be deleted (limactl said why above); delete it by hand: limactl delete --force ${INSTANCE}"
       RESET_RC=1

@@ -427,11 +427,14 @@ never deleted. `start`/`stop`/`status`/`fleet` and
 the watch loop never touch the base VM (`vm_instances` skips it; use
 `--instance <name>-base` to act on it directly).
 
-Two known limitations: `uninstall` does not delete the base VM — remove it with
-`limactl delete -f <instance>-base` — and the base is never upgraded: clones
-get OS updates through the in-guest maintenance, but a change to the VM's own
-settings (CPU, memory, disk) or a provisioning change needs the base rebuilt,
-which means uninstall and install again with `--reset-vm`.
+`uninstall` and `reset` delete a marked base with the VM, so removing a
+`--reset-vm` runner leaves nothing behind; a base that cannot be deleted is
+reported with the hand command (`limactl delete -f <instance>-base`). The base
+is never upgraded, by decision ([#297]): clones get OS updates through the
+in-guest maintenance, but a change to the VM's own settings (CPU, memory, disk)
+or a provisioning change needs the base rebuilt, which means uninstall and
+install again with `--reset-vm` — one command each way, since the uninstall
+takes the base with it.
 
 ## What the VM has, compared with a hosted runner
 
