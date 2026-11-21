@@ -3,6 +3,12 @@ name: Tap release
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'The release tag to update the formula for, such as v0.5.5'
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -33,4 +39,4 @@ jobs:
           TAP_REPO: i2Dev-com/homebrew-homefield
         run: |
           set -euo pipefail
-          bash bin/cmd-tap-release.sh "$GITHUB_REF_NAME"
+          bash bin/cmd-tap-release.sh "${{ inputs.tag || github.ref_name }}"

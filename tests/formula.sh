@@ -20,7 +20,7 @@ mkdir -p "$stubs"
 
 # The system tools the release automation needs: the stubs are first on PATH,
 # whatever the machine has.
-for t in awk cat chmod cp cut dirname grep mkdir mktemp rm sed; do
+for t in awk cat chmod cmp cp cut dirname grep mkdir mv mktemp rm sed; do
   ln -s "$(command -v "$t")" "$stubs/$t"
 done
 
@@ -97,8 +97,21 @@ case "$*" in
       [ "$a" = -- ] && break
       dest="$a"
     done
+    # GH_TAP_EMPTY simulates a freshly created tap repository: the clone has
+    # no Formula/ at all, so the release has to create it.
+    if [ -n "${GH_TAP_EMPTY:-}" ]; then
+      mkdir -p "$dest"
+      exit 0
+    fi
     mkdir -p "$dest/Formula"
-    cp "$TAP_TEMPLATE" "$dest/Formula/homefield.rb"
+    # GH_TAP_UPTODATE simulates a tap that already carries this release's
+    # formula: the clone gets the filled formula at TAP_UPTODATE_FORMULA
+    # instead of the template, so the re-run finds nothing to change.
+    if [ -n "${GH_TAP_UPTODATE:-}" ]; then
+      cp "${TAP_UPTODATE_FORMULA:?}" "$dest/Formula/homefield.rb"
+    else
+      cp "$TAP_TEMPLATE" "$dest/Formula/homefield.rb"
+    fi
     ;;
   *repo\ view*)
     [ -n "${GH_TAP_FAIL:-}" ] && exit 1
@@ -199,6 +212,35 @@ record "the formula in the tap has the new values" "$new_version" "$(formula_val
 record "the formula in the tap has the new url" "$new_version" "$(formula_value "$work/release/tap/Formula/homefield.rb" url | sed 's|^.*tar\.gz/v\([^"]*\).*|\1|')"
 record "the formula in the tap has the new sha256" "$new_sha256" "$(formula_value "$work/release/tap/Formula/homefield.rb" sha256)"
 record "the release summary is printed" "yes" "$(has "$out" "the formula of $TAP_REPO is updated for v0.5.5")"
+
+# ── A re-run on an up-to-date tap is a no-op ─────────────────────────────────
+
+echo "a re-run on an up-to-date tap"
+# A fresh stub log: the release flow above already committed and pushed once,
+# and the counts below are about the re-run alone.
+calls="$work/calls-rerun"
+run_release GH_TAP_UPTODATE=1 TAP_UPTODATE_FORMULA="$work/updated/homefield.rb" \
+  v0.5.5 "$work/rerun"
+record "the re-run exits 0" "0" "$rc"
+record "the up-to-date note is printed" "yes" \
+  "$(has "$out" "the formula of $TAP_REPO is already up to date for v0.5.5")"
+record "nothing is committed" "0" "$(called '^git commit')"
+record "nothing is pushed" "0" "$(called '^git push')"
+record "the tap's formula still carries the release values" "$new_version" \
+  "$(formula_value "$work/rerun/tap/Formula/homefield.rb" version)"
+
+# ── A first run on a freshly created (empty) tap creates Formula/ ───────────
+
+echo "a first run on an empty tap"
+calls="$work/calls-empty"
+run_release GH_TAP_EMPTY=1 v0.5.5 "$work/empty"
+record "the first run on an empty tap exits 0" "0" "$rc"
+record "the Formula directory is created" "yes" \
+  "$([ -d "$work/empty/tap/Formula" ] && echo yes || echo no)"
+record "the formula carries the release values" "$new_version" \
+  "$(formula_value "$work/empty/tap/Formula/homefield.rb" version)"
+record "the formula is committed" "1" "$(called '^git -c .*commit')"
+record "the formula is pushed" "1" "$(called '^git push')"
 
 # ── The no-tap-repo warning ──────────────────────────────────────────────────
 
