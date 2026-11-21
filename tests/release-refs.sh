@@ -30,6 +30,11 @@ check_text "install.sh's default REF is ${release}" install.sh "REF=\"\${HOMEFIE
 check_text "install.sh's header one-liner names ${release}" install.sh "/homefield/${release}/install.sh"
 check_text "cmd-version.sh's update-check comparison is ${release}" bin/cmd-version.sh "[ \"\$ref\" = ${release} ]"
 check_text "tools/adopt.py RELEASE is ${release}" tools/adopt.py "RELEASE = \"${release}\""
+check_text "tests/formula.sh's new release version is ${release}" tests/formula.sh "new_version=\"${release#v}\""
+# The mode-release threshold is a release above this checkout's RELEASE, so the
+# refusal it reproduces stays reproducible after every release: the next one.
+next_release="${release%.*}.$(( ${release##*.} + 1 ))"
+check_text "tests/adopt.sh's mode-release threshold is the next release" tests/adopt.sh "HOMEFIELD_MODE_RELEASE=${next_release}"
 
 check_text "README.md pins the routing guard at ${release}" README.md "${action}"
 check_text "README.md's quick start names ${release}" README.md "/homefield/${release}/install.sh"

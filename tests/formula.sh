@@ -28,7 +28,7 @@ done
 # and the new release's values (the version and the tarball's sha256).
 old_version="0.5.3"
 old_sha256="0000000000000000000000000000000000000000000000000000000000000001"
-new_version="0.5.4"
+new_version="0.5.5"
 # The sha256 the sha256sum stub returns for the release tarball.
 new_sha256="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
@@ -187,10 +187,10 @@ record "the version and the url version are still the same" "$new_version" "$(fo
 # ── The release flow ─────────────────────────────────────────────────────────
 
 echo "the release flow"
-run_release v0.5.4 "$work/release"
+run_release v0.5.5 "$work/release"
 record "the release flow exits 0" "0" "$rc"
 record "the tap repository is cloned with gh" "1" "$(called '^gh repo clone')"
-record "the release tarball is downloaded from the codeload url" "1" "$(called '^curl .*https://codeload.github.com/i2Dev-com/homefield/tar.gz/v0.5.4$')"
+record "the release tarball is downloaded from the codeload url" "1" "$(called '^curl .*https://codeload.github.com/i2Dev-com/homefield/tar.gz/v0.5.5$')"
 record "the tarball's sha256 is computed" "1" "$(called '^sha256sum')"
 record "the formula is added" "1" "$(called '^git add')"
 record "the formula is committed" "1" "$(called '^git -c .*commit')"
@@ -198,12 +198,12 @@ record "the formula is pushed" "1" "$(called '^git push')"
 record "the formula in the tap has the new values" "$new_version" "$(formula_value "$work/release/tap/Formula/homefield.rb" version)"
 record "the formula in the tap has the new url" "$new_version" "$(formula_value "$work/release/tap/Formula/homefield.rb" url | sed 's|^.*tar\.gz/v\([^"]*\).*|\1|')"
 record "the formula in the tap has the new sha256" "$new_sha256" "$(formula_value "$work/release/tap/Formula/homefield.rb" sha256)"
-record "the release summary is printed" "yes" "$(has "$out" "the formula of $TAP_REPO is updated for v0.5.4")"
+record "the release summary is printed" "yes" "$(has "$out" "the formula of $TAP_REPO is updated for v0.5.5")"
 
 # ── The no-tap-repo warning ──────────────────────────────────────────────────
 
 echo "the no-tap-repo warning"
-run_release GH_TAP_FAIL=1 v0.5.4 "$work/warn"
+run_release GH_TAP_FAIL=1 v0.5.5 "$work/warn"
 record "the missing tap is not a failure" "0" "$rc"
 record "the warning is printed" "yes" "$(has "$out" "the tap repository $TAP_REPO does not exist yet")"
 record "the formula is not written" "no" "$([ -e "$work/warn/tap" ] && echo yes || echo no)"
@@ -212,7 +212,7 @@ record "no update is committed" "0" "$(called '^git commit')"
 # ── A real clone failure is a failure, not the missing-tap warning ──────────
 
 echo "a real clone failure"
-run_release GH_TAP_CLONE_FAIL=1 v0.5.4 "$work/clonfail"
+run_release GH_TAP_CLONE_FAIL=1 v0.5.5 "$work/clonfail"
 record "a clone failure of an existing tap fails the release" "1" "$rc"
 record "the missing-tap warning is not printed" "no" "$(has "$out" "does not exist yet")"
 record "the clone-failure message is printed" "yes" "$(has "$out" "cloning $TAP_REPO failed")"
