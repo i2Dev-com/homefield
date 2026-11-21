@@ -128,6 +128,10 @@ tap_release() {
     echo "homefield: the formula of $TAP_REPO is already up to date for $tag"
     return 0
   fi
+  # A freshly created tap repository has no Formula/ yet: create it before the
+  # move (update_formula used to create the destination's parent; the scratch
+  # file does not).
+  mkdir -p "$work/tap/Formula"
   mv "$updated" "$work/tap/Formula/homefield.rb"
 
   # Commit and push it to the tap repository.

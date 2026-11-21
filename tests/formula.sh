@@ -97,6 +97,12 @@ case "$*" in
       [ "$a" = -- ] && break
       dest="$a"
     done
+    # GH_TAP_EMPTY simulates a freshly created tap repository: the clone has
+    # no Formula/ at all, so the release has to create it.
+    if [ -n "${GH_TAP_EMPTY:-}" ]; then
+      mkdir -p "$dest"
+      exit 0
+    fi
     mkdir -p "$dest/Formula"
     # GH_TAP_UPTODATE simulates a tap that already carries this release's
     # formula: the clone gets the filled formula at TAP_UPTODATE_FORMULA
@@ -222,6 +228,19 @@ record "nothing is committed" "0" "$(called '^git commit')"
 record "nothing is pushed" "0" "$(called '^git push')"
 record "the tap's formula still carries the release values" "$new_version" \
   "$(formula_value "$work/rerun/tap/Formula/homefield.rb" version)"
+
+# ── A first run on a freshly created (empty) tap creates Formula/ ───────────
+
+echo "a first run on an empty tap"
+calls="$work/calls-empty"
+run_release GH_TAP_EMPTY=1 v0.5.5 "$work/empty"
+record "the first run on an empty tap exits 0" "0" "$rc"
+record "the Formula directory is created" "yes" \
+  "$([ -d "$work/empty/tap/Formula" ] && echo yes || echo no)"
+record "the formula carries the release values" "$new_version" \
+  "$(formula_value "$work/empty/tap/Formula/homefield.rb" version)"
+record "the formula is committed" "1" "$(called '^git -c .*commit')"
+record "the formula is pushed" "1" "$(called '^git push')"
 
 # ── The no-tap-repo warning ──────────────────────────────────────────────────
 
