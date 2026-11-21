@@ -15,6 +15,10 @@
 set -uo pipefail
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# The reset-base markers (#297): the fixture below writes the stored config
+# install --reset-vm leaves behind, with the markers as vm.sh defines them.
+# shellcheck source=bin/lib/vm.sh
+. "$ROOT/bin/lib/vm.sh"
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
@@ -34,7 +38,10 @@ exec "$@"'
 stub limactl 'echo "limactl $*" >>"$LOG"
 case "$1" in
   copy) [ "${FAIL_COPY:-}" != 1 ] ;;
-  delete) [ "${FAIL_DELETE:-}" != 1 ] ;;
+  delete) case "$3" in
+            *-base) [ "${FAIL_BASE_DELETE:-}" != 1 ] ;;
+            *) [ "${FAIL_DELETE:-}" != 1 ] ;;
+          esac ;;
 esac'
 stub chown 'exit 0'
 stub id 'case "$1" in -u) echo 0 ;; *) exec /usr/bin/id "$@" ;; esac'
@@ -81,7 +88,7 @@ printf 'Default\tall\tfalse\t1\nHomeField-CI\tselected\tfalse\t7\n' >"$work/grou
 # What a runner directory has: the scripts the runner ships, with the service
 # installed and the runner registered (as tests/uninstall.sh).
 fresh() {
-  rm -rf "${work:?}/runner" "$units" "$state" "$work/log" "$work/pgrep-n"
+  rm -rf "${work:?}/runner" "$units" "$state" "$work/log" "$work/pgrep-n" "$work/home/.lima"
   mkdir -p "$home" "$units" "$work/stage"
   # What the tool's copy places in the guest: provision.sh with its paths in
   # the scratch tree, at the staged path (HOMEFIELD_STAGE_DIR, #185).
@@ -216,6 +223,62 @@ fresh
 run GH_ON=1 --
 record "reset succeeds, removing the VM's copy only, with no token" "0/removed/0/1/1" "$rc/$(runner_state | cut -d/ -f1)/$(logged 'get_token')/$(logged 'config.sh remove --local token-in-env=no')/$(logged 'limactl delete --force')"
 record "...the report says so" "yes" "$(has "$out" 'removed from the VM only, GitHub no longer listed it')"
+
+echo "the reset base VM goes with the VM (#297):"
+reset_base_at() {  # a marked base, as install --reset-vm leaves it
+  mkdir -p "$work/home/.lima/resettest-base"
+  printf '%s\n%s\n' "$HF_VM_MARKER" "$HF_RESET_BASE_MARKER" >"$work/home/.lima/resettest-base/lima.yaml"
+}
+fresh
+reset_base_at
+rm -f "$home/.runner"
+run --
+record "reset deletes the marked reset base with the VM" "0/1/1" \
+  "$rc/$(lines 'limactl delete --force resettest')/$(lines 'limactl delete --force resettest-base')"
+record "...the plan and the report say so" "yes/yes" \
+  "$(has "$out" 'delete the reset base VM resettest-base')/$(has "$out" 'reset base VM resettest-base: deleted')"
+
+fresh
+mkdir -p "$work/home/.lima/resettest-base"
+printf '%s\n' "$HF_VM_MARKER" >"$work/home/.lima/resettest-base/lima.yaml"
+rm -f "$home/.runner"
+run --
+record "an unmarked <instance>-base is never touched (an ordinary runner may be named that)" "0/1/0" \
+  "$rc/$(lines 'limactl delete --force resettest')/$(lines 'limactl delete --force resettest-base')"
+
+fresh
+reset_base_at
+run GH_ON=1 -- --keep-vm
+record "--keep-vm keeps the base too: the VM stays, and it is what the base is for" "0/0/yes" \
+  "$rc/$(lines 'limactl delete')/$([ -e "$work/home/.lima/resettest-base/lima.yaml" ] && echo yes || echo no)"
+
+fresh
+reset_base_at
+rm -f "$home/.runner"
+run FAIL_BASE_DELETE=1 --
+record "a base that cannot be deleted: the report says so, reset fails" "1/yes/1" \
+  "$rc/$(has "$out" 'reset base VM resettest-base: could not be deleted')/$(lines 'limactl delete --force resettest-base')"
+
+echo "a base left behind with no runner VM (#297): a retry cleans it"
+fresh
+reset_base_at
+run VM=none --
+record "reset with no VM deletes the orphaned marked base" "0/0/1" \
+  "$rc/$(lines 'limactl delete --force resettest')/$(lines 'limactl delete --force resettest-base')"
+record "...the plan and the report say so" "yes/yes" \
+  "$(has "$out" 'delete the orphaned reset base VM resettest-base')/$(has "$out" 'reset base VM resettest-base: deleted')"
+
+fresh
+reset_base_at
+run VM=none -- --keep-vm
+record "...--keep-vm keeps the base too" "0/0/yes" \
+  "$rc/$(lines 'limactl delete')/$([ -e "$work/home/.lima/resettest-base/lima.yaml" ] && echo yes || echo no)"
+
+fresh
+reset_base_at
+run VM=none FAIL_BASE_DELETE=1 --
+record "...a base that cannot be deleted: the report says so, reset fails" "1/yes/1" \
+  "$rc/$(has "$out" 'reset base VM resettest-base: could not be deleted')/$(lines 'limactl delete --force resettest-base')"
 
 echo "a VM that never registered (a failed install):"
 fresh
