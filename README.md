@@ -64,12 +64,16 @@ SHA256, so the formula is a trustwin over the one-liner, and `brew upgrade` is
 the update path for the host tool (the VM upgrade stays `homefield upgrade`):
 
 ```bash
-brew tap i2Dev-com/homefield && brew install homefield
+brew tap i2Dev-com/homefield && brew install i2Dev-com/homefield/homefield
 ```
 
-(The tap is created when the next release is cut: it ships the formula from the
-release tarball, and the formula's url, version and sha256 are updated by the
-release automation for every release.)
+The fully qualified name is Homebrew's per-item trust: installing it trusts
+exactly this formula and nothing else. The short `brew install homefield` works
+too once the formula is trusted (after this install, or with
+`brew trust --formula i2Dev-com/homefield/homefield`). The tap is live at
+[i2Dev-com/homebrew-homefield](https://github.com/i2Dev-com/homebrew-homefield):
+it ships the formula from the release tarball, and the formula's url, version
+and sha256 are updated by the release automation for every release.
 
 For `install.sh` installs, `homefield update` automates updating the host tool
 and every idle VM in one step:

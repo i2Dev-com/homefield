@@ -13,6 +13,8 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ### Fixed
 
+- The documented Homebrew install command works on current Homebrew ([`README.md`](README.md), [`docs/tap.md`](docs/tap.md), [`formula/homefield.rb`](formula/homefield.rb)): Homebrew's tap trust refuses the short `brew install homefield` from a tap the machine has not trusted yet, so the docs now use the fully qualified `brew install i2Dev-com/homefield/homefield` — Homebrew's per-item trust, which trusts exactly this formula and needs no extra step — and note that the short form works once the formula is trusted. Verified end to end on a machine with the install.sh-managed tool already on `PATH`: tap, install, link, `homefield version` and the formula's own `brew test` all pass, and the existing install.sh launcher is left in place.
+
 - The tap release automation is idempotent on a re-run ([`bin/cmd-tap-release.sh`](bin/cmd-tap-release.sh), [`tests/formula.sh`](tests/formula.sh), [`docs/tap.md`](docs/tap.md)): re-running the release for a tag whose formula the tap already carries — a retry after a failed run, or a manual run — used to fail on an empty `git commit`. The run now recognizes the up-to-date formula, reports it, and exits 0. The workflow can also be run by hand (`workflow_dispatch`, with the release tag as the `tag` input) for a backfill when the tap repository was created after a release, or a retry, without cutting a new release.
 
 ## v0.5.5 (2026-11-21)

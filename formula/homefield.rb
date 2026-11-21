@@ -8,7 +8,7 @@
 # repository is the source of truth for the template, and the tap repository is
 # separate from it.
 #
-#   brew tap i2Dev-com/homefield && brew install homefield
+#   brew tap i2Dev-com/homefield && brew install i2Dev-com/homefield/homefield
 class Homefield < Formula
   desc "Run pull-request CI on your own Mac, in an isolated VM, with a hosted fallback"
   homepage "https://github.com/i2Dev-com/homefield"
