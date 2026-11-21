@@ -292,7 +292,7 @@ def run_scale_tick():
     wall time, so a Mac that sleeps mid-tick expires it right after the wake
     instead of resuming a half-finished create into the awake world.
     """
-    global scale_proc
+    global scale_proc, scale_generation
     with state_lock:
         scale_generation += 1
         gen = scale_generation

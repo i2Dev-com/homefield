@@ -1563,4 +1563,31 @@ hf -- fleet stop --interval 5
 record "fleet stop refuses the scaler's options" "1/yes" \
   "$rc/$(has "$err" "only supported with 'fleet watch'")"
 
+# The watcher's tick launcher declares its globals: before scale_generation
+# was declared, every agent-driven tick died on UnboundLocalError before
+# fleet watch ran, and the loop repeated the failure every interval. The
+# IOKit import confines this to macOS; the Linux suite job has no IOKit.
+if [ "$(uname -s)" = Darwin ]; then
+  tick_marker="$work/scale-tick-marker"
+  tick_stub="$work/tick-stub.sh"
+  cat >"$tick_stub" <<EOF
+#!/usr/bin/env bash
+: >"$tick_marker"
+EOF
+  chmod +x "$tick_stub"
+  wl_out="$(MARKER="$tick_marker" python3 - "$ROOT/bin/route-watcher.py" "$tick_stub" <<'PYEOF'
+import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location("rw", sys.argv[1])
+rw = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(rw)
+rw.HOMEFIELD = sys.argv[2]
+rw.SCALE_TICK_BUDGET = 10
+rw.run_scale_tick()
+print("tick-ok" if os.path.exists(os.environ["MARKER"]) else "tick-no-marker")
+PYEOF
+)"
+  record "the watcher's tick launcher declares its globals and runs the tick" \
+    "tick-ok" "$wl_out"
+fi
+
 summary

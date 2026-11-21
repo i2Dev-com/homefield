@@ -750,7 +750,7 @@ fleet_watch_status_line() {
 # lock stands down: the demand is still queued, and the next interval's
 # tick answers it.
 scale_tick_lock_acquire() {
-  local lock_dir pid attempts=0
+  local lock_dir pid attempts=0 dead=0
   lock_dir="$(route_watcher_dir)/scale.lock"
   mkdir -p "$(route_watcher_dir)" 2>/dev/null || return 1
   until mkdir "$lock_dir" 2>/dev/null; do
@@ -760,8 +760,17 @@ scale_tick_lock_acquire() {
     fi
     if [ -n "$pid" ]; then
       if ! kill -0 "$pid" 2>/dev/null; then
-        # The owner is gone: reclaim the lock.
-        rm -rf "$lock_dir" 2>/dev/null || return 1
+        # The owner is gone: steal the lock with a rename, not a delete.
+        # The rename is atomic, so a second contender that read the same
+        # dead pid cannot delete the replacement lock the first one has
+        # already taken — its rename fails and it re-tries the mkdir. A
+        # rename that keeps failing is not a lock we can take: stand down.
+        if mv "$lock_dir" "$lock_dir.stolen.$$" 2>/dev/null; then
+          rm -rf "$lock_dir.stolen.$$" 2>/dev/null
+        else
+          dead=$((dead + 1))
+          [ "$dead" -lt 50 ] || return 1
+        fi
         continue
       fi
       # A live owner: stand down rather than wait out its tick — the
@@ -772,8 +781,12 @@ scale_tick_lock_acquire() {
     # that never grows one is a crashed take-over candidate.
     attempts=$((attempts + 1))
     if [ "$attempts" -ge 50 ]; then
-      rm -rf "$lock_dir" 2>/dev/null || return 1
-      attempts=0
+      if mv "$lock_dir" "$lock_dir.stolen.$$" 2>/dev/null; then
+        rm -rf "$lock_dir.stolen.$$" 2>/dev/null
+        attempts=0
+      else
+        return 1
+      fi
       continue
     fi
     /bin/sleep 0.1 2>/dev/null || /bin/sleep 1
