@@ -781,7 +781,12 @@ again — never deleted — and the next demand spike boots it in seconds.
 The scaler is a tick, `homefield fleet watch`: it can be run by hand, but it
 is meant to be driven by the route-watcher LaunchAgent of the section above,
 whose helper runs one tick every `HOMEFIELD_SCALE_INTERVAL` seconds (default
-60) in a thread of its own. A tick:
+60) in a thread of its own. Ticks serialize on a per-Mac lock: a second
+`fleet watch` run — a hand-run one against the agent's loop, or two
+hand-runs — stands down while another tick holds it, so two ticks cannot
+interleave their read-modify-write of the scale record or provision the
+same spare name (a lock left behind by a killed tick is reclaimed from its
+dead pid). A tick:
 
 1. stands down while a sleep/wake run is in progress — one owner per VM at
    a time, the same rule the wake recovery's kill-on-sleep follows;

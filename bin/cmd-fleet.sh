@@ -738,6 +738,64 @@ fleet_watch_status_line() {
   return 0
 }
 
+# scale_tick_lock: the tick's per-Mac lock. Two overlapping `fleet watch`
+# runs — a hand-run one and the agent's loop, or two hand-runs — each read
+# the scale record into their own arrays and write the file back whole, and
+# each picks spare names from its own fleet snapshot: without mutual
+# exclusion a slower tick can erase the other's newly created spare from
+# idle-stop and reuse bookkeeping, and both can provision the same name.
+# mkdir is the atomic test-and-set; a lock left behind by a killed tick
+# (the watcher's sleep-side kill) is reclaimed from its dead pid, the way
+# preflight's image cache lock works. A contender that cannot take the
+# lock stands down: the demand is still queued, and the next interval's
+# tick answers it.
+scale_tick_lock_acquire() {
+  local lock_dir pid attempts=0
+  lock_dir="$(route_watcher_dir)/scale.lock"
+  mkdir -p "$(route_watcher_dir)" 2>/dev/null || return 1
+  until mkdir "$lock_dir" 2>/dev/null; do
+    pid=""
+    if [ -r "$lock_dir/pid" ]; then
+      IFS= read -r pid <"$lock_dir/pid" || pid=""
+    fi
+    if [ -n "$pid" ]; then
+      if ! kill -0 "$pid" 2>/dev/null; then
+        # The owner is gone: reclaim the lock.
+        rm -rf "$lock_dir" 2>/dev/null || return 1
+        continue
+      fi
+      # A live owner: stand down rather than wait out its tick — the
+      # demand is still queued, and the next interval's tick answers it.
+      return 1
+    fi
+    # No pid yet: the owner may be between mkdir and its pid write. A dir
+    # that never grows one is a crashed take-over candidate.
+    attempts=$((attempts + 1))
+    if [ "$attempts" -ge 50 ]; then
+      rm -rf "$lock_dir" 2>/dev/null || return 1
+      attempts=0
+      continue
+    fi
+    /bin/sleep 0.1 2>/dev/null || /bin/sleep 1
+  done
+  printf '%s\n' "$$" >"$lock_dir/pid" 2>/dev/null || true
+  return 0
+}
+
+# scale_tick_lock_release: drop the lock, but only if it is still ours — a
+# release after a reclaim must not remove another tick's lock.
+scale_tick_lock_release() {
+  local lock_dir pid
+  lock_dir="$(route_watcher_dir)/scale.lock"
+  [ -d "$lock_dir" ] || return 0
+  pid=""
+  if [ -r "$lock_dir/pid" ]; then
+    IFS= read -r pid <"$lock_dir/pid" || pid=""
+  fi
+  [ "$pid" = "$$" ] || return 0
+  rm -rf "$lock_dir"
+}
+
 # fleet_watch_tick: one evaluation. The order is the lifecycle: reconcile
 # the scale record with the Mac (a secondary deleted by hand leaves it),
 # then the stop side (the idle cooldown), then the demand side (the queued
@@ -938,7 +996,12 @@ cmd_fleet_watch() {
     die "fleet watch: --instance does not apply: the scaler covers every HomeField VM on this Mac"
   check_host
   while :; do
-    fleet_watch_tick || rc=1
+    if scale_tick_lock_acquire; then
+      fleet_watch_tick || rc=1
+      scale_tick_lock_release
+    else
+      log "fleet watch: another tick holds the scaler lock on this Mac; standing down"
+    fi
     ticks=$((ticks + 1))
     if [ "$max_ticks" -gt 0 ] && [ "$ticks" -ge "$max_ticks" ]; then
       break

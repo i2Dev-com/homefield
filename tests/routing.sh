@@ -1517,6 +1517,32 @@ hf -- fleet
 record "fleet status prints the scaler's last tick" "yes/yes" \
   "$(has "$out" 'No HomeField VMs found on this Mac.')/$(has "$out" 'scaler: last tick at ')"
 
+# Two overlapping fleet watch runs serialize on the per-Mac lock: a
+# contender stands down instead of interleaving its read-modify-write of
+# the scale record (a slower tick could otherwise erase the other's newly
+# created spare from the bookkeeping, and both could provision the same
+# spare name).
+tick_env
+reset_scale
+printf 'second|homefield-ci|github.com|https://github.com/acme|Default|%s\n' "$(( CLOCK_EPOCH - 1000 ))" >"$state/route-watcher/scale"
+lima_for second 6 5GiB
+mkdir -p "$state/route-watcher/scale.lock"
+printf '%s\n' "$$" >"$state/route-watcher/scale.lock/pid"
+hf LIMA_ROWS=$'homefield Running\nsecond Running\n' LIMA_HOME="$work/home/.lima" \
+  SETTINGS_DIR="$work/settings" JOBS_DIR="$work/jobs" \
+  -- fleet watch --max-ticks 1
+record "a live scaler lock: the contender stands down, the record untouched" \
+  "0/yes/no/$(( CLOCK_EPOCH - 1000 ))" \
+  "$rc/$(has "$out" 'standing down')/$(grep -qE '^limactl (list|stop|start)' "$calls" && echo yes || echo no)/$(awk -F'|' '$1 == "second" {print $6}' "$state/route-watcher/scale" 2>/dev/null)"
+printf '%s\n' 99999999 >"$state/route-watcher/scale.lock/pid"
+rm -f "$work/jobs/homefield" "$work/jobs/second"
+hf LIMA_ROWS=$'homefield Running\nsecond Running\n' LIMA_HOME="$work/home/.lima" \
+  SETTINGS_DIR="$work/settings" JOBS_DIR="$work/jobs" \
+  -- fleet watch --max-ticks 1
+record "...a dead lock owner is reclaimed, and the tick releases the lock" \
+  "0/yes/no" \
+  "$rc/$(grep -q '^limactl stop second' "$calls" && echo yes || echo no)/$([ -d "$state/route-watcher/scale.lock" ] && echo yes || echo no)"
+
 reset_scale
 tick_env
 printf 'second|homefield-ci|github.com|https://github.com/acme|Default|%s\n' "$(( CLOCK_EPOCH - 1000 ))" >"$state/route-watcher/scale"
