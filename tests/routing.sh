@@ -1060,6 +1060,10 @@ iharness cmd_install --url https://github.com/acme --org --auto-route
 plist_env="$work/home/Library/LaunchAgents/com.homefield.route-watcher.plist"
 record "...the watcher budgets the operator set at install time reach the agent" "yes/yes/yes" \
   "$(grep -q '<key>HOMEFIELD_WATCH_SLEEP_BUDGET</key>' "$plist_env" && grep -A1 '<key>HOMEFIELD_WATCH_SLEEP_BUDGET</key>' "$plist_env" | grep -q '<string>7</string>' && echo yes || echo no)/$(grep -A1 '<key>HOMEFIELD_WATCH_WAKE_WAIT</key>' "$plist_env" | grep -q '<string>9</string>' && echo yes || echo no)/$(grep -A1 '<key>HOMEFIELD_WATCH_WAKE_BUDGET</key>' "$plist_env" | grep -q '<string>300</string>' && echo yes || echo no)"
+iharness_env=(HOMEFIELD_SCALE_INTERVAL=90 HOMEFIELD_SCALE_WAIT=600 HOMEFIELD_SCALE_IDLE=1800 HOMEFIELD_SCALE_MAX=6 HOMEFIELD_SCALE_TICK_BUDGET=3600)
+iharness cmd_install --url https://github.com/acme --org --auto-route
+record "...the scaler's tuning reaches the agent the same way" "yes/yes/yes/yes/yes" \
+  "$(grep -A1 '<key>HOMEFIELD_SCALE_INTERVAL</key>' "$plist_env" | grep -q '<string>90</string>' && echo yes || echo no)/$(grep -A1 '<key>HOMEFIELD_SCALE_WAIT</key>' "$plist_env" | grep -q '<string>600</string>' && echo yes || echo no)/$(grep -A1 '<key>HOMEFIELD_SCALE_IDLE</key>' "$plist_env" | grep -q '<string>1800</string>' && echo yes || echo no)/$(grep -A1 '<key>HOMEFIELD_SCALE_MAX</key>' "$plist_env" | grep -q '<string>6</string>' && echo yes || echo no)/$(grep -A1 '<key>HOMEFIELD_SCALE_TICK_BUDGET</key>' "$plist_env" | grep -q '<string>3600</string>' && echo yes || echo no)"
 iharness_env=()
 
 rm -f "$state/routing"
