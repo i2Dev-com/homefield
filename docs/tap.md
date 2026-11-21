@@ -1,9 +1,11 @@
 # The Homebrew tap
 
-`brew tap i2Dev-com/homefield && brew install homefield` installs HomeField from
-the release tarball in the
+`brew tap i2Dev-com/homefield && brew install i2Dev-com/homefield/homefield`
+installs HomeField from the release tarball in the
 [Homebrew tap repository](https://github.com/i2Dev-com/homebrew-homefield),
-whose formula is updated by the release automation on every release.
+whose formula is updated by the release automation on every release. The fully
+qualified name is Homebrew's per-item trust — installing it trusts exactly this
+formula; the short `brew install homefield` works once the formula is trusted.
 
 ## The formula
 
@@ -37,7 +39,8 @@ and it stays out of the job log and of every process list.
    it.
 2. The workflow runs and updates the formula with the release's url, version and
    sha256.
-3. `brew install homefield` installs the tool from the release tarball;
+3. `brew install i2Dev-com/homefield/homefield` installs the tool from the
+   release tarball (the fully qualified name is Homebrew's per-item trust); 
    `brew upgrade homefield` is the update path for the host tool.
 
 The workflow can also be run by hand, from the Actions tab (**Tap release →
