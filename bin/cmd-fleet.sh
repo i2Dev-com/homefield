@@ -216,10 +216,12 @@ cmd_fleet() {
 # scales nothing and says so.
 #
 # The scaler's records live in the route-watcher subdirectory of the state
-# directory (the agent's files, per-Mac). `scale` holds one line per
-# secondary it created — `name label host url group last-busy-epoch` — and
-# `scale-state` holds the last tick's summary, the way the watcher's `state`
-# holds its last run; `fleet status` prints it.
+# directory (the agent's files, per-Mac). `scale` holds one `|`-separated
+# line per secondary it created — `name|label|host|url|group|last-busy-epoch`
+# (the group may be empty: a repository-scoped registration has none, and a
+# group name may contain spaces) — and `scale-state` holds the last tick's
+# summary, the way the watcher's `state` holds its last run; `fleet status`
+# prints it.
 
 scale_file() { printf '%s/scale' "$(route_watcher_dir)"; }
 scale_state_file() { printf '%s/scale-state' "$(route_watcher_dir)"; }
@@ -271,6 +273,16 @@ mem_to_bytes() {
     G | g | GiB | giB) printf '%s\n' $((num * 1024 * 1024 * 1024)) ;;
     *) return 1 ;;
   esac
+}
+
+# mem_to_gib <size>: Lima's memory form as the numeric GiB limactl create
+# --memory takes ("Memory in GiB", a number — "5GiB" is refused). Every unit
+# mem_to_bytes accepts is a binary multiple, so the division is exact; 5GiB
+# reads 5 and 512MiB reads 0.5. 1 for anything else.
+mem_to_gib() {
+  local b
+  b="$(mem_to_bytes "$1")" || return 1
+  awk -v b="$b" 'BEGIN { printf "%.6g\n", b / 1073741824 }'
 }
 
 # vm_size <name>: what the VM's stored Lima config asks for, as
@@ -328,9 +340,12 @@ scale_headroom() {
 }
 
 # scale_record_read: the scale record into SCALE_NAME/SCALE_LABEL/SCALE_HOST/
-# SCALE_URL/SCALE_GROUP/SCALE_BUSY (parallel arrays). A line with fewer than
-# six fields is not one the scaler wrote; it is skipped. A missing file reads
-# as none.
+# SCALE_URL/SCALE_GROUP/SCALE_BUSY (parallel arrays). The fields are
+# `|`-separated: a runner group can be empty (a repository-scoped
+# registration has none) or contain spaces, and both space- and tab-separated
+# records lose those fields (IFS whitespace collapses consecutive
+# delimiters, so an empty field vanishes). A line with fewer than six fields
+# is not one the scaler wrote; it is skipped. A missing file reads as none.
 SCALE_NAME=()
 SCALE_LABEL=()
 SCALE_HOST=()
@@ -348,9 +363,9 @@ scale_record_read() {
   local f sname slabel shost surl sgroup sbusy
   f="$(scale_file)"
   [ -f "$f" ] || return 0
-  while read -r sname slabel shost surl sgroup sbusy; do
+  while IFS='|' read -r sname slabel shost surl sgroup sbusy; do
     [ -n "$sname" ] && [ -n "$slabel" ] && [ -n "$shost" ] && [ -n "$surl" ] &&
-      [ -n "$sgroup" ] && [ -n "$sbusy" ] || continue
+      [ -n "$sbusy" ] || continue
     case "$sbusy" in
       '' | *[!0-9]*) continue ;;
     esac
@@ -375,7 +390,7 @@ scale_record_write() {
   tmp="$(mktemp "$dir/.scale.XXXXXX")" || return 1
   : >"$tmp" || { rm -f "$tmp"; return 1; }
   for ((i = 0; i < ${#SCALE_NAME[@]}; i++)); do
-    printf '%s %s %s %s %s %s\n' "${SCALE_NAME[i]}" "${SCALE_LABEL[i]}" "${SCALE_HOST[i]}" "${SCALE_URL[i]}" "${SCALE_GROUP[i]}" "${SCALE_BUSY[i]}" >>"$tmp" ||
+    printf '%s|%s|%s|%s|%s|%s\n' "${SCALE_NAME[i]}" "${SCALE_LABEL[i]}" "${SCALE_HOST[i]}" "${SCALE_URL[i]}" "${SCALE_GROUP[i]}" "${SCALE_BUSY[i]}" >>"$tmp" ||
       { rm -f "$tmp"; return 1; }
   done
   mv -f "$tmp" "$f" || { rm -f "$tmp"; return 1; }
@@ -480,7 +495,7 @@ scale_demand() {
 # What scale_find_primary found: the Running VM whose runner can take the
 # queued jobs, and everything the secondary's registration needs from it.
 PRIMARY_NAME="" PRIMARY_URL="" PRIMARY_GROUP=""
-PRIMARY_AUTO_ROUTE="" PRIMARY_CPUS="" PRIMARY_MEM="" PRIMARY_ROWS=""
+PRIMARY_AUTO_ROUTE="" PRIMARY_CPUS="" PRIMARY_MEM="" PRIMARY_MEM_GIB="" PRIMARY_ROWS=""
 PRIMARY_PKGS="" PRIMARY_HOOKS=""
 
 # scale_find_primary <label> <host> <repo>: 0 found, 1 no Running VM serves
@@ -491,7 +506,7 @@ PRIMARY_PKGS="" PRIMARY_HOOKS=""
 scale_find_primary() {
   local label="$1" host="$2" repo="$3" list name st rows labels rname rlabels
   PRIMARY_NAME="" PRIMARY_URL="" PRIMARY_GROUP=""
-  PRIMARY_AUTO_ROUTE="" PRIMARY_CPUS="" PRIMARY_MEM="" PRIMARY_ROWS=""
+  PRIMARY_AUTO_ROUTE="" PRIMARY_CPUS="" PRIMARY_MEM="" PRIMARY_MEM_GIB="" PRIMARY_ROWS=""
   PRIMARY_PKGS="" PRIMARY_HOOKS=""
   list="$(vm_instances)" || return 2
   while IFS= read -r name; do
@@ -526,6 +541,10 @@ scale_find_primary() {
     size="$(vm_size "$name")" || return 2
     PRIMARY_CPUS="${size%% *}"
     PRIMARY_MEM="${size##* }"
+    # The memory limactl create takes is a number of GiB, not Lima's size
+    # form ("5GiB" is refused at the flag): converted here, once, and an
+    # unreadable size is the same refusal as an unreadable config.
+    PRIMARY_MEM_GIB="$(mem_to_gib "$PRIMARY_MEM")" || return 2
     # What the secondary has to carry for the primary's workflows to keep
     # passing on it: the saved extra apt packages (preset packages included),
     # readable from the guest, and — a refusal, not a copy — the provisioning
@@ -649,7 +668,7 @@ scale_grow() {
   if [ -n "$PRIMARY_PKGS" ]; then
     argv+=(--packages "$PRIMARY_PKGS")
   fi
-  argv+=(--cpus "$PRIMARY_CPUS" --memory "$PRIMARY_MEM")
+  argv+=(--cpus "$PRIMARY_CPUS" --memory "$PRIMARY_MEM_GIB")
   if ! scale_exec ${argv[@]+"${argv[@]}"}; then
     echo "homefield: fleet watch: creating ${cand} failed; remove the half-made VM with bin/homefield reset --instance ${cand} (the next demand tries again)" >&2
     return 1

@@ -1159,6 +1159,15 @@ record "mem_to_bytes: plain bytes" "0/100" "$rc/$out"
 tharness mem_to_bytes 5TiB
 record "mem_to_bytes: an unknown unit is refused" "1/" "$rc/$out"
 
+tharness mem_to_gib 5GiB
+record "mem_to_gib: the template's unit is numeric GiB for limactl create" "0/5" "$rc/$out"
+tharness mem_to_gib 512MiB
+record "mem_to_gib: a half-GiB VM reads 0.5" "0/0.5" "$rc/$out"
+tharness mem_to_gib 1536MiB
+record "mem_to_gib: one and a half" "0/1.5" "$rc/$out"
+tharness mem_to_gib 100
+record "mem_to_gib: plain bytes are a fraction of a GiB" "0/9.31323e-08" "$rc/$out"
+
 reset_scale() {
   rm -f "$state/route-watcher/scale" "$state/route-watcher/scale-state" "$state/route-watcher/running"
 }
@@ -1193,10 +1202,10 @@ tick_env
 reset_scale
 tharness fleet_watch_tick
 record "a queued run older than the threshold: a secondary is created like the primary" \
-  "0/scale_exec install --instance homefield-scale --url https://github.com/acme --label homefield-ci --group Default --auto-route --cpus 6 --memory 5GiB" \
+  "0/scale_exec install --instance homefield-scale --url https://github.com/acme --label homefield-ci --group Default --auto-route --cpus 6 --memory 5" \
   "$rc/$(grep '^scale_exec install ' "$calls")"
 record "...the secondary is recorded as the spare" "homefield-scale homefield-ci github.com https://github.com/acme Default epoch" \
-  "$(awk '{print $1, $2, $3, $4, $5, ($6 ~ /^[0-9]+$/ ? "epoch" : "bad")}' "$state/route-watcher/scale" 2>/dev/null)"
+  "$(awk -F'|' '{print $1, $2, $3, $4, $5, ($6 ~ /^[0-9]+$/ ? "epoch" : "bad")}' "$state/route-watcher/scale" 2>/dev/null)"
 record "...the tick record says what it did" "ok/created homefield-scale" \
   "$(th_state last_result)/$(th_state last_action)"
 
@@ -1205,7 +1214,7 @@ reset_scale
 tharness_env+=(GH_RUNS='' GH_RUNS_IN_PROGRESS='9002\t2020-01-01T00:00:00Z\n')
 tharness fleet_watch_tick
 record "a matrix run in progress with jobs still queued counts as demand" \
-  "0/scale_exec install --instance homefield-scale --url https://github.com/acme --label homefield-ci --group Default --auto-route --cpus 6 --memory 5GiB" \
+  "0/scale_exec install --instance homefield-scale --url https://github.com/acme --label homefield-ci --group Default --auto-route --cpus 6 --memory 5" \
   "$rc/$(grep '^scale_exec install ' "$calls")"
 
 tick_env
@@ -1217,10 +1226,18 @@ record "a primary with provisioning hooks: no create, the runbook's manual path 
 
 tick_env
 reset_scale
+lima_for homefield 6 1536MiB
+tharness fleet_watch_tick
+record "a MiB-sized primary: the spare's --memory is numeric GiB (limactl refuses 5GiB)" \
+  "0/scale_exec install --instance homefield-scale --url https://github.com/acme --label homefield-ci --group Default --auto-route --cpus 6 --memory 1.5" \
+  "$rc/$(grep '^scale_exec install ' "$calls")"
+
+tick_env
+reset_scale
 tharness_env+=(EXTRA_PKGS='docker-buildx ghcli')
 tharness fleet_watch_tick
 record "the primary's saved extra packages go on the spare's install" \
-  "0/scale_exec install --instance homefield-scale --url https://github.com/acme --label homefield-ci --group Default --auto-route --packages docker-buildx ghcli --cpus 6 --memory 5GiB" \
+  "0/scale_exec install --instance homefield-scale --url https://github.com/acme --label homefield-ci --group Default --auto-route --packages docker-buildx ghcli --cpus 6 --memory 5" \
   "$rc/$(grep '^scale_exec install ' "$calls")"
 
 tick_env
@@ -1232,20 +1249,20 @@ record "the fleet is at its cap: no create, the tick still passes" "0/0/yes" \
 
 tick_env
 reset_scale
-printf 'second homefield-ci github.com https://github.com/acme Default %s\n' "$(( $(date +%s) - 1000 ))" >"$state/route-watcher/scale"
+printf 'second|homefield-ci|github.com|https://github.com/acme|Default|%s\n' "$(( $(date +%s) - 1000 ))" >"$state/route-watcher/scale"
 lima_for second 6 5GiB
 rm -f "$work/jobs/homefield"
 tharness_env+=(LIMA_ROWS=$'homefield Running\nsecond Running\n')
 tharness fleet_watch_tick
 record "a secondary idle past the cooldown: the real stop runs on it, and it stays recorded" \
   "0/scale_exec stop --instance second/second homefield-ci github.com https://github.com/acme Default epoch" \
-  "$rc/$(grep '^scale_exec stop ' "$calls")/$(awk '{print $1, $2, $3, $4, $5, ($6 ~ /^[0-9]+$/ ? "epoch" : "bad")}' "$state/route-watcher/scale" 2>/dev/null)"
+  "$rc/$(grep '^scale_exec stop ' "$calls")/$(awk -F'|' '{print $1, $2, $3, $4, $5, ($6 ~ /^[0-9]+$/ ? "epoch" : "bad")}' "$state/route-watcher/scale" 2>/dev/null)"
 record "...the primary is never a stop candidate" "0" "$(grep -c '^scale_exec stop --instance homefield$' "$calls" || true)"
 record "...the tick record says what it did" "ok/stopped second" "$(th_state last_result)/$(th_state last_action)"
 
 tick_env
 reset_scale
-printf 'second homefield-ci github.com https://github.com/acme Default %s\n' "$(( $(date +%s) - 1000 ))" >"$state/route-watcher/scale"
+printf 'second|homefield-ci|github.com|https://github.com/acme|Default|%s\n' "$(( $(date +%s) - 1000 ))" >"$state/route-watcher/scale"
 lima_for second 6 5GiB
 : >"$work/jobs/second"
 rm -f "$work/jobs/homefield"
@@ -1277,7 +1294,7 @@ record "...a dead marker pid does not stop the scaler" "0/1" \
 
 tick_env
 reset_scale
-printf 'second homefield-ci github.com https://github.com/acme Default %s\n' "$(date +%s)" >"$state/route-watcher/scale"
+printf 'second|homefield-ci|github.com|https://github.com/acme|Default|%s\n' "$(date +%s)" >"$state/route-watcher/scale"
 lima_for second 6 5GiB
 tharness_env+=(LIMA_ROWS=$'homefield Running\nsecond Stopped\n')
 tharness fleet_watch_tick
@@ -1285,11 +1302,11 @@ record "a recorded spare that matches the demand is booted, not re-created" \
   "0/scale_exec start --instance second/0" \
   "$rc/$(grep '^scale_exec start ' "$calls")/$(grep -c '^scale_exec install ' "$calls" || true)"
 record "...the boot refreshes its busy time" "second homefield-ci github.com https://github.com/acme Default epoch" \
-  "$(awk '{print $1, $2, $3, $4, $5, ($6 ~ /^[0-9]+$/ ? "epoch" : "bad")}' "$state/route-watcher/scale" 2>/dev/null)"
+  "$(awk -F'|' '{print $1, $2, $3, $4, $5, ($6 ~ /^[0-9]+$/ ? "epoch" : "bad")}' "$state/route-watcher/scale" 2>/dev/null)"
 
 tick_env
 reset_scale
-printf 'second homefield-ci github.com https://github.com/other Default %s\n' "$(date +%s)" >"$state/route-watcher/scale"
+printf 'second|homefield-ci|github.com|https://github.com/other|Default|%s\n' "$(date +%s)" >"$state/route-watcher/scale"
 lima_for second 6 5GiB
 tharness_env+=(LIMA_ROWS=$'homefield Running\nsecond Stopped\n')
 # A bigger host: homefield plus a new 6 vCPU / 5 GiB spare fit, so the create
@@ -1297,7 +1314,7 @@ tharness_env+=(LIMA_ROWS=$'homefield Running\nsecond Stopped\n')
 tharness_env+=(SYSCTL_CPUS=24 SYSCTL_MEM=68719476736)
 tharness fleet_watch_tick
 record "a stopped spare from another registration is not booted for this demand" \
-  "0/scale_exec install --instance homefield-scale --url https://github.com/acme --label homefield-ci --group Default --auto-route --cpus 6 --memory 5GiB/0" \
+  "0/scale_exec install --instance homefield-scale --url https://github.com/acme --label homefield-ci --group Default --auto-route --cpus 6 --memory 5/0" \
   "$rc/$(grep '^scale_exec install ' "$calls")/$(grep -c '^scale_exec start ' "$calls" || true)"
 
 tick_env
@@ -1306,6 +1323,38 @@ tharness_env+=(SYSCTL_CPUS=8 SYSCTL_MEM=17179869184)
 tharness fleet_watch_tick
 record "a create that would oversubscribe the Mac's CPU or RAM: refused, the tick passes" \
   "0/0/yes" "$rc/$(grep -c '^scale_exec install ' "$calls" || true)/$(has "$out" 'oversubscribe')"
+
+tick_env
+reset_scale
+# A repository-scoped registration has no runner group: the record's group
+# field is empty, and the tab-separated record must keep it (a space-separated
+# record would shift the busy time into the group field and drop the line).
+printf 'my-mac-homefield\nhttps://github.com/acme/api\n42\n' >"$work/settings/homefield"
+printf 'second|homefield-ci|github.com|https://github.com/acme/api||%s\n' "$(date +%s)" >"$state/route-watcher/scale"
+lima_for second 6 5GiB
+tharness_env+=(LIMA_ROWS=$'homefield Running\nsecond Stopped\n')
+# A bigger host: the boot is what is measured, not a headroom refusal.
+tharness_env+=(SYSCTL_CPUS=24 SYSCTL_MEM=68719476736)
+tharness fleet_watch_tick
+record "a record with an empty group (a repo-scoped registration) round-trips and boots" \
+  "0/scale_exec start --instance second/0" \
+  "$rc/$(grep '^scale_exec start ' "$calls")/$(grep -c '^scale_exec install ' "$calls" || true)"
+
+tick_env
+reset_scale
+# A group name with spaces survives the record: written by one tick, read by
+# the next, and still matching the demand's primary on the boot path.
+tharness_env+=(GH_GROUPS=$'CI Runners\tselected\tfalse\t7\n')
+tharness fleet_watch_tick
+record "a group with spaces is recorded whole" \
+  "homefield-scale homefield-ci github.com https://github.com/acme CI Runners epoch" \
+  "$(awk -F'|' '{print $1, $2, $3, $4, $5, ($6 ~ /^[0-9]+$/ ? "epoch" : "bad")}' "$state/route-watcher/scale" 2>/dev/null)"
+printf 'second|homefield-ci|github.com|https://github.com/acme|CI Runners|%s\n' "$(date +%s)" >"$state/route-watcher/scale"
+lima_for second 6 5GiB
+tharness_env+=(LIMA_ROWS=$'homefield Running\nsecond Stopped\n')
+tharness fleet_watch_tick
+record "...and a stopped spare of that group is still booted for the demand" \
+  "0/scale_exec start --instance second" "$rc/$(grep '^scale_exec start ' "$calls")"
 
 tick_env
 reset_scale
@@ -1320,17 +1369,17 @@ printf 'my-mac-homefield\nhttps://ghes.acme.example/acme\n42\n' >"$work/settings
 printf 'homefield-ci acme/api ghes.acme.example\n' >"$state/routing"
 tharness fleet_watch_tick
 record "a GHES record is scaled like a github.com one, on its own host" \
-  "0/scale_exec install --instance homefield-scale --url https://ghes.acme.example/acme --label homefield-ci --group Default --auto-route --cpus 6 --memory 5GiB" \
+  "0/scale_exec install --instance homefield-scale --url https://ghes.acme.example/acme --label homefield-ci --group Default --auto-route --cpus 6 --memory 5" \
   "$rc/$(grep '^scale_exec install ' "$calls")"
 
 tick_env
 reset_scale
-printf 'ghost homefield-ci github.com https://github.com/acme Default 123\nhomefield-scale homefield-ci github.com https://github.com/acme Default %s\n' "$(date +%s)" >"$state/route-watcher/scale"
+printf 'ghost|homefield-ci|github.com|https://github.com/acme|Default|123\nhomefield-scale|homefield-ci|github.com|https://github.com/acme|Default|%s\n' "$(date +%s)" >"$state/route-watcher/scale"
 lima_for homefield-scale 6 5GiB
 tharness_env+=(LIMA_ROWS=$'homefield Running\nhomefield-scale Running\n')
 tharness fleet_watch_tick
 record "a secondary deleted by hand leaves the scale record at the next tick" \
-  "homefield-scale homefield-ci github.com https://github.com/acme Default" "$(awk '{print $1, $2, $3, $4, $5}' "$state/route-watcher/scale" 2>/dev/null)"
+  "homefield-scale homefield-ci github.com https://github.com/acme Default" "$(awk -F'|' '{print $1, $2, $3, $4, $5}' "$state/route-watcher/scale" 2>/dev/null)"
 
 tick_env
 reset_scale
@@ -1352,7 +1401,7 @@ record "a queued run younger than the threshold: no action yet" "0/0/none" \
 reset_scale
 tick_env
 rm -f "$work/jobs/homefield"
-printf 'second homefield-ci github.com https://github.com/acme Default %s\n' "$(( $(date +%s) - 1000 ))" >"$state/route-watcher/scale"
+printf 'second|homefield-ci|github.com|https://github.com/acme|Default|%s\n' "$(( $(date +%s) - 1000 ))" >"$state/route-watcher/scale"
 lima_for second 6 5GiB
 tharness_env+=(LIMA_ROWS=$'homefield Running\nsecond Running\n')
 tharness fleet_watch_tick
@@ -1362,7 +1411,7 @@ record "fleet status prints the scaler's last tick" "yes/yes" \
 
 reset_scale
 tick_env
-printf 'second homefield-ci github.com https://github.com/acme Default %s\n' "$(( $(date +%s) - 1000 ))" >"$state/route-watcher/scale"
+printf 'second|homefield-ci|github.com|https://github.com/acme|Default|%s\n' "$(( $(date +%s) - 1000 ))" >"$state/route-watcher/scale"
 lima_for second 6 5GiB
 rm -f "$work/jobs/homefield" "$work/jobs/second"
 hf LIMA_ROWS=$'homefield Running\nsecond Running\n' LIMA_HOME="$work/home/.lima" \
