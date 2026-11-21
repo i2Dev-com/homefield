@@ -702,7 +702,13 @@ power events) runs `homefield route-watch sleep` when the Mac is about to
 sleep and `homefield route-watch wake` when it wakes up or logs in. The same
 agent also drives the demand scaler of the next section: a second loop runs
 one `homefield fleet watch` tick per interval, and a tick stands down while
-a sleep/wake run is in progress.
+a sleep/wake run is in progress. A sleep notification kills a running tick
+the same way it kills a wake recovery — including one that has just been
+launched, which is cancelled before it can run anything. The spare's
+install never reloads the agent: an unload would stop the very helper
+supervising the tick mid-install, so a spare's `--auto-route` leaves the
+installed agent as it is (a hand-run `upgrade --auto-route` is what
+refreshes it).
 
 The sleep side runs the stop-side flip of the section above, without
 stopping the VMs: every Running VM whose own `auto_route` is on has its

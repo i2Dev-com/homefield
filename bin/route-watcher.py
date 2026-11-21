@@ -261,13 +261,24 @@ def stop_wake():
 # recovery: a sleep notification kills a running tick (a half-created
 # secondary is the same state a killed install leaves, and the next tick
 # reconciles it), and the thread must never hold the run-loop thread.
+# scale_generation counts the ticks the way wake_generation counts the wake
+# runs: a tick publishes its process only if its generation is still the
+# newest, so a sleep notification arriving between the thread's Popen and
+# the publication invalidates the tick instead of racing it — the thread
+# sees the cancelled generation, kills its own fresh process, and runs
+# nothing (the sleep-side flip then re-flips whatever the half tick did).
 scale_proc = None
+scale_generation = 0
 
 
 def stop_scale():
     """Kill a running demand-scaler tick."""
-    global scale_proc
+    global scale_proc, scale_generation
     with state_lock:
+        # The generation bump also invalidates a tick whose thread has
+        # started but not published its process yet: it kills the fresh
+        # process at publication, so nothing of it races the sleep-side flip.
+        scale_generation += 1
         proc = scale_proc
         scale_proc = None
     if proc is not None and proc.poll() is None:
@@ -282,10 +293,19 @@ def run_scale_tick():
     instead of resuming a half-finished create into the awake world.
     """
     global scale_proc
+    with state_lock:
+        scale_generation += 1
+        gen = scale_generation
     proc = subprocess.Popen(
         [HOMEFIELD, "fleet", "watch", "--max-ticks", "1"], start_new_session=True
     )
     with state_lock:
+        if gen != scale_generation:
+            # Superseded between our start and this publication: a sleep
+            # notification cancelled the tick outright. The fresh process
+            # must not run.
+            kill_tree(proc)
+            return
         scale_proc = proc
     deadline = time.time() + SCALE_TICK_BUDGET
     while True:

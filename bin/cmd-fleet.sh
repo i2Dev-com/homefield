@@ -413,7 +413,11 @@ fleet_index() {
 # inside install cannot end the tick, the way vm_dispatch keeps one VM's
 # failure from the next.
 scale_exec() {
-  "${BASH:-bash}" "$HF_SELF" "$@" </dev/null
+  # HOMEFIELD_SCALE_INSTALL: this run is the scaler's own subprocess — a
+  # spare's install with --auto-route must not reload the route-watcher
+  # LaunchAgent, because the unload would stop the very helper supervising
+  # this tick (route_watcher_install preserves an installed agent for it).
+  HOMEFIELD_SCALE_INSTALL=1 "${BASH:-bash}" "$HF_SELF" "$@" </dev/null
 }
 
 # queued_wait_since <repo> <label> <host>: the earliest created_at of the

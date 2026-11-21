@@ -1092,6 +1092,18 @@ record "...the scaler's tuning reaches the agent the same way" "yes/yes/yes/yes/
   "$(grep -A1 '<key>HOMEFIELD_SCALE_INTERVAL</key>' "$plist_env" | grep -q '<string>90</string>' && echo yes || echo no)/$(grep -A1 '<key>HOMEFIELD_SCALE_WAIT</key>' "$plist_env" | grep -q '<string>600</string>' && echo yes || echo no)/$(grep -A1 '<key>HOMEFIELD_SCALE_IDLE</key>' "$plist_env" | grep -q '<string>1800</string>' && echo yes || echo no)/$(grep -A1 '<key>HOMEFIELD_SCALE_MAX</key>' "$plist_env" | grep -q '<string>6</string>' && echo yes || echo no)/$(grep -A1 '<key>HOMEFIELD_SCALE_TICK_BUDGET</key>' "$plist_env" | grep -q '<string>3600</string>' && echo yes || echo no)"
 iharness_env=()
 
+# The scaler's own subprocess installs a spare with --auto-route: the agent
+# supervising the tick is already installed, and reloading it would stop the
+# helper mid-install (launchctl unload stops the job). It is left as it is.
+plist_env="$work/home/Library/LaunchAgents/com.homefield.route-watcher.plist"
+cp "$plist_env" "$work/plist-before"
+iharness_env=(HOMEFIELD_SCALE_INSTALL=1)
+iharness cmd_install --url https://github.com/acme --org --auto-route
+record "the scaler's spare install leaves the running agent as it is" \
+  "0/0/yes" \
+  "$(grep -c '^launchctl unload' "$calls" || true)/$(grep -c '^launchctl load' "$calls" || true)/$(cmp -s "$plist_env" "$work/plist-before" && echo yes || echo no)"
+iharness_env=()
+
 rm -f "$state/routing"
 printf 'acme/api local\n' >"$work/byrepo-install"
 iharness_env=(STUB_GROUP_ID= GH_GROUP_REPOS=$'acme/api\n' GH_CI_RUNNER_BY_REPO="$work/byrepo-install" GH_RUNNERS_NAMED='46\ttest-mac-homefield\tonline\tself-hosted,linux,arm64,homefield-ci\n')

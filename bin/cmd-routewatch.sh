@@ -170,6 +170,16 @@ route_watcher_install() {
   dir="$(dirname "$plist")"
   state_dir="$(dirname "$(route_watcher_state_file)")"
   log="$(route_watcher_log_file)"
+  # The demand scaler's spare installs arrive here with --auto-route from a
+  # subprocess of the tick (HOMEFIELD_SCALE_INSTALL): the agent that runs
+  # the tick is already installed and loaded, and an unload would stop the
+  # very helper supervising the tick mid-install. Leave it as it is — the
+  # plist on disk is the one it loaded, and a hand-run `upgrade --auto-route`
+  # is the path that refreshes it.
+  if [ -n "${HOMEFIELD_SCALE_INSTALL:-}" ] && [ -f "$plist" ]; then
+    log "the route watcher is already installed; the spare's install leaves it running as it is"
+    return 0
+  fi
   mkdir -p "$dir" "$state_dir" || {
     echo "homefield: could not create ${dir} or ${state_dir}; the route watcher was not installed" >&2
     return 1
