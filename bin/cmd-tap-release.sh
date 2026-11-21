@@ -118,8 +118,17 @@ tap_release() {
 
   # Update the formula with the release's url/version/sha256: the url carries
   # the tag, the version the bare version (derived from it), the sha256 the
-  # tarball's.
-  update_formula "$TEMPLATE" "$tag" "$sha256" "$work/tap/Formula/homefield.rb"
+  # tarball's. The rewrite lands in a scratch file first, so a tap that already
+  # carries this release's formula is recognized and left alone: a re-run (a
+  # retry, or the manual run for a backfill) must not fail on an empty commit.
+  updated="$work/formula.homefield.rb"
+  update_formula "$TEMPLATE" "$tag" "$sha256" "$updated"
+  if [ -f "$work/tap/Formula/homefield.rb" ] \
+    && cmp -s "$updated" "$work/tap/Formula/homefield.rb"; then
+    echo "homefield: the formula of $TAP_REPO is already up to date for $tag"
+    return 0
+  fi
+  mv "$updated" "$work/tap/Formula/homefield.rb"
 
   # Commit and push it to the tap repository.
   cd "$work/tap" || return 1
