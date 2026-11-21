@@ -31,6 +31,13 @@ At load — login, or launchd restarting the agent — the wake path runs once:
 the agent's RunAtLoad makes a login a wake for this purpose, and a crashed
 and restarted agent re-checks what is pending.
 
+The agent also runs the demand scaler (#291, part 3 of the #286 fallback):
+a thread of its own wakes every HOMEFIELD_SCALE_INTERVAL seconds (default
+60) and runs one `homefield fleet watch --max-ticks 1` tick, bounded by
+HOMEFIELD_SCALE_TICK_BUDGET (default 30 min; creating a VM takes minutes,
+and a hung tick must not stop the ones after it). A sleep notification
+kills a running tick, the same way it kills a wake recovery.
+
 Everything the helper itself does wrong goes to stderr, which launchd appends
 to the watcher log (StandardErrorPath in the plist).
 """
@@ -65,6 +72,11 @@ def _positive_float(name, default):
 
 SLEEP_BUDGET = _positive_float("HOMEFIELD_WATCH_SLEEP_BUDGET", 20)
 WAKE_BUDGET = _positive_float("HOMEFIELD_WATCH_WAKE_BUDGET", 600)
+# The demand scaler's (#291) loop: one `fleet watch --max-ticks 1` tick every
+# SCALE_INTERVAL seconds, each tick bounded by SCALE_TICK_BUDGET (creating a
+# VM takes minutes; a tick that hangs must not stop the ones after it).
+SCALE_INTERVAL = _positive_float("HOMEFIELD_SCALE_INTERVAL", 60)
+SCALE_TICK_BUDGET = _positive_float("HOMEFIELD_SCALE_TICK_BUDGET", 1800)
 
 # The helper lives next to homefield in the installed tree.
 HOMEFIELD = os.path.join(os.path.dirname(os.path.abspath(__file__)), "homefield")
@@ -245,6 +257,89 @@ def stop_wake():
         thread.join(timeout=10)
 
 
+# The demand scaler's tick (#291), guarded by the same lock as the wake
+# recovery: a sleep notification kills a running tick (a half-created
+# secondary is the same state a killed install leaves, and the next tick
+# reconciles it), and the thread must never hold the run-loop thread.
+# scale_generation counts the ticks the way wake_generation counts the wake
+# runs: a tick publishes its process only if its generation is still the
+# newest, so a sleep notification arriving between the thread's Popen and
+# the publication invalidates the tick instead of racing it — the thread
+# sees the cancelled generation, kills its own fresh process, and runs
+# nothing (the sleep-side flip then re-flips whatever the half tick did).
+scale_proc = None
+scale_generation = 0
+
+
+def stop_scale():
+    """Kill a running demand-scaler tick."""
+    global scale_proc, scale_generation
+    with state_lock:
+        # The generation bump also invalidates a tick whose thread has
+        # started but not published its process yet: it kills the fresh
+        # process at publication, so nothing of it races the sleep-side flip.
+        scale_generation += 1
+        proc = scale_proc
+        scale_proc = None
+    if proc is not None and proc.poll() is None:
+        kill_tree(proc)
+
+
+def run_scale_tick():
+    """Run one fleet-watch tick synchronously, bounded by wall time.
+
+    The same wait-in-small-slices shape as run_route_watch: the budget is
+    wall time, so a Mac that sleeps mid-tick expires it right after the wake
+    instead of resuming a half-finished create into the awake world.
+    """
+    global scale_proc, scale_generation
+    with state_lock:
+        scale_generation += 1
+        gen = scale_generation
+    proc = subprocess.Popen(
+        [HOMEFIELD, "fleet", "watch", "--max-ticks", "1"], start_new_session=True
+    )
+    with state_lock:
+        if gen != scale_generation:
+            # Superseded between our start and this publication: a sleep
+            # notification cancelled the tick outright. The fresh process
+            # must not run.
+            kill_tree(proc)
+            return
+        scale_proc = proc
+    deadline = time.time() + SCALE_TICK_BUDGET
+    while True:
+        try:
+            proc.wait(timeout=0.5)
+            with state_lock:
+                scale_proc = None
+            return
+        except subprocess.TimeoutExpired:
+            pass
+        if time.time() >= deadline:
+            kill_tree(proc)
+            with state_lock:
+                scale_proc = None
+            log(
+                "fleet watch tick did not finish within %ds; killed. A "
+                "secondary it was half-creating stays behind; the next tick "
+                "reconciles it, or `bin/homefield reset --instance <name>` "
+                "removes it by hand." % int(SCALE_TICK_BUDGET)
+            )
+            return
+
+
+def _scale_loop():
+    """The scaler's thread: sleep, tick, repeat, surviving anything one tick
+    does — the loop must outlive a tick's failure for the ones after it."""
+    while True:
+        time.sleep(SCALE_INTERVAL)
+        try:
+            run_scale_tick()
+        except Exception as exc:  # noqa: BLE001 - the loop must survive
+            log("fleet watch tick failed: %r" % (exc,))
+
+
 def acknowledge(root_port, message_argument):
     # The notification id arrives as the pointer-sized value of
     # messageArgument, not as a pointer to it.
@@ -260,7 +355,10 @@ def on_power_event(_refcon, _service, message_type, message_argument):
     elif message_type == kIOMessageSystemWillSleep:
         # A wake recovery still running from the previous wake is obsolete —
         # the Mac is going back to sleep — and this thread must stay free to
-        # answer this notification: kill it before the flip.
+        # answer this notification: kill it before the flip. The demand
+        # scaler's tick goes the same way: a create frozen mid-flight would
+        # resume into the awake world, and the next tick starts over.
+        stop_scale()
         stop_wake()
         run_route_watch("sleep", SLEEP_BUDGET)
         acknowledge(root_port, message_argument)
@@ -303,6 +401,10 @@ def main():
     # pending, in its own thread so the run loop below stays free for the
     # sleep notification if the Mac goes back under immediately.
     start_wake()
+    # The demand scaler's loop (#291): one tick per interval, in a thread of
+    # its own (a tick can take minutes and must never keep the run loop from
+    # the next power event).
+    threading.Thread(target=_scale_loop, daemon=True).start()
     CF.CFRunLoopRun()
     return 0
 

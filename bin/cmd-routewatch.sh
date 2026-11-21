@@ -45,6 +45,47 @@ route_watcher_dir() { printf '%s/route-watcher' "${HOMEFIELD_STATE_DIR:-$HOME/.l
 route_watcher_state_file() { printf '%s/state' "$(route_watcher_dir)"; }
 route_watcher_log_file() { printf '%s/log' "$(route_watcher_dir)"; }
 route_watcher_plist_path() { printf '%s/com.homefield.route-watcher.plist' "${HOMEFIELD_LAUNCH_AGENTS_DIR:-$HOME/Library/LaunchAgents}"; }
+# The watcher's run marker: written around every cmd_route_watch run, read
+# by the demand scaler (#291) — one owner per VM at a time, so a tick that
+# overlaps a watcher run stands down. It carries the run's pid and start
+# time: a run killed by a budget (or a crash) leaves the marker behind, and
+# a dead pid — or one alive but from a run started too long ago to still be
+# working, which is a pid reuse or a leaked marker — does not stop the
+# scaler.
+route_watcher_running_file() { printf '%s/running' "$(route_watcher_dir)"; }
+
+route_watcher_running_write() {
+  local f dir tmp
+  f="$(route_watcher_running_file)"
+  dir="$(dirname "$f")"
+  mkdir -p "$dir" || return 1
+  tmp="$(mktemp "$dir/.running.XXXXXX")" || return 1
+  {
+    printf 'pid=%s\n' "$$"
+    printf 'started=%s\n' "$(date +%s)"
+  } >"$tmp" || { rm -f "$tmp"; return 1; }
+  mv -f "$tmp" "$f" || { rm -f "$tmp"; return 1; }
+}
+
+route_watcher_running_clear() { rm -f "$(route_watcher_running_file)"; }
+
+# route_watcher_is_running: whether a watcher run is live — the marker
+# exists, its pid is alive, and the run started within the last half hour
+# (a watcher run is bounded by the sleep and wake budgets, so anything that
+# old is a leftover, not a run). The scaler stands down only while this
+# answers yes.
+route_watcher_is_running() {
+  local f pid started age
+  f="$(route_watcher_running_file)"
+  [ -f "$f" ] || return 1
+  pid="$(awk -F= '$1 == "pid" {print $2}' "$f" 2>/dev/null)"
+  started="$(awk -F= '$1 == "started" {print $2}' "$f" 2>/dev/null)"
+  case "$pid" in '' | *[!0-9]*) return 1 ;; esac
+  case "$started" in '' | *[!0-9]*) return 1 ;; esac
+  kill -0 "$pid" 2>/dev/null || return 1
+  age="$(($(date +%s) - started))"
+  [ "$age" -ge 0 ] && [ "$age" -lt 1800 ]
+}
 
 # route_watcher_record <mode> <rc>: the run's summary, written whole (a temp
 # file moved over the target, the way state_set and the record readers do).
@@ -129,6 +170,16 @@ route_watcher_install() {
   dir="$(dirname "$plist")"
   state_dir="$(dirname "$(route_watcher_state_file)")"
   log="$(route_watcher_log_file)"
+  # The demand scaler's spare installs arrive here with --auto-route from a
+  # subprocess of the tick (HOMEFIELD_SCALE_INSTALL): the agent that runs
+  # the tick is already installed and loaded, and an unload would stop the
+  # very helper supervising the tick mid-install. Leave it as it is — the
+  # plist on disk is the one it loaded, and a hand-run `upgrade --auto-route`
+  # is the path that refreshes it.
+  if [ -n "${HOMEFIELD_SCALE_INSTALL:-}" ] && [ -f "$plist" ]; then
+    log "the route watcher is already installed; the spare's install leaves it running as it is"
+    return 0
+  fi
   mkdir -p "$dir" "$state_dir" || {
     echo "homefield: could not create ${dir} or ${state_dir}; the route watcher was not installed" >&2
     return 1
@@ -148,6 +199,25 @@ route_watcher_install() {
   fi
   if [ -n "${HOMEFIELD_WATCH_WAKE_BUDGET:-}" ]; then
     env_xml="${env_xml}    <key>HOMEFIELD_WATCH_WAKE_BUDGET</key>"$'\n'"    <string>$(route_watcher_xml_escape "$HOMEFIELD_WATCH_WAKE_BUDGET")</string>"$'\n'
+  fi
+  # The demand scaler's (#291) tuning reaches the agent the same way: the
+  # tick is a child of the helper, and launchd does not inherit a shell's
+  # environment, so every HOMEFIELD_SCALE_* the docs document must be baked
+  # into the plist's own environment block.
+  if [ -n "${HOMEFIELD_SCALE_INTERVAL:-}" ]; then
+    env_xml="${env_xml}    <key>HOMEFIELD_SCALE_INTERVAL</key>"$'\n'"    <string>$(route_watcher_xml_escape "$HOMEFIELD_SCALE_INTERVAL")</string>"$'\n'
+  fi
+  if [ -n "${HOMEFIELD_SCALE_TICK_BUDGET:-}" ]; then
+    env_xml="${env_xml}    <key>HOMEFIELD_SCALE_TICK_BUDGET</key>"$'\n'"    <string>$(route_watcher_xml_escape "$HOMEFIELD_SCALE_TICK_BUDGET")</string>"$'\n'
+  fi
+  if [ -n "${HOMEFIELD_SCALE_WAIT:-}" ]; then
+    env_xml="${env_xml}    <key>HOMEFIELD_SCALE_WAIT</key>"$'\n'"    <string>$(route_watcher_xml_escape "$HOMEFIELD_SCALE_WAIT")</string>"$'\n'
+  fi
+  if [ -n "${HOMEFIELD_SCALE_IDLE:-}" ]; then
+    env_xml="${env_xml}    <key>HOMEFIELD_SCALE_IDLE</key>"$'\n'"    <string>$(route_watcher_xml_escape "$HOMEFIELD_SCALE_IDLE")</string>"$'\n'
+  fi
+  if [ -n "${HOMEFIELD_SCALE_MAX:-}" ]; then
+    env_xml="${env_xml}    <key>HOMEFIELD_SCALE_MAX</key>"$'\n'"    <string>$(route_watcher_xml_escape "$HOMEFIELD_SCALE_MAX")</string>"$'\n'
   fi
   cat >"$plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -373,18 +443,34 @@ cmd_route_watch() {
     die "route-watch: unknown option $2 (see bin/homefield help)"
   fi
   check_host
-  if [ "$mode" = sleep ] && [ "$EXPLICIT_INSTANCE" = 0 ]; then
-    if ! route_watch_collect_runners; then
-      route_watcher_record sleep 1 || true
-      return 1
-    fi
-    export ROUTE_EXCLUDE_RUNNERS
+  # The run marker goes up before any work and comes down after it, on every
+  # path: the demand scaler stands down while it is up (one owner per VM at
+  # a time, #291). Only the parent run writes it — a multi-VM dispatch's
+  # children re-run this command with --instance, and each would otherwise
+  # overwrite the marker with its own pid and clear it while the others are
+  # still working. A run killed by a budget leaves the marker behind; the
+  # marker's pid and age tell the scaler that run is gone.
+  if [ "${HOMEFIELD_ONE_OF_MANY:-0}" != 1 ]; then
+    route_watcher_running_write || true
   fi
   local rc=0
   # The mode goes with the dispatch: a multi-VM run's per-VM children re-run
   # the command with --instance, and the mode must survive that.
+  if [ "$mode" = sleep ] && [ "$EXPLICIT_INSTANCE" = 0 ]; then
+    if ! route_watch_collect_runners; then
+      route_watcher_record sleep 1 || true
+      if [ "${HOMEFIELD_ONE_OF_MANY:-0}" != 1 ]; then
+        route_watcher_running_clear
+      fi
+      return 1
+    fi
+    export ROUTE_EXCLUDE_RUNNERS
+  fi
   vm_dispatch "route-watch" "route_watch_${mode}_single" "$mode" || rc=1
   route_watcher_record "$mode" "$rc" || rc=1
+  if [ "${HOMEFIELD_ONE_OF_MANY:-0}" != 1 ]; then
+    route_watcher_running_clear
+  fi
   return "$rc"
 }
 

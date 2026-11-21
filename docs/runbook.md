@@ -699,7 +699,16 @@ stop flipped). `install --auto-route` and `upgrade --auto-route` therefore
 also install a LaunchAgent, `com.homefield.route-watcher`, whose helper
 (part of the installed tool, a small Python program that receives macOS's
 power events) runs `homefield route-watch sleep` when the Mac is about to
-sleep and `homefield route-watch wake` when it wakes up or logs in.
+sleep and `homefield route-watch wake` when it wakes up or logs in. The same
+agent also drives the demand scaler of the next section: a second loop runs
+one `homefield fleet watch` tick per interval, and a tick stands down while
+a sleep/wake run is in progress. A sleep notification kills a running tick
+the same way it kills a wake recovery — including one that has just been
+launched, which is cancelled before it can run anything. The spare's
+install never reloads the agent: an unload would stop the very helper
+supervising the tick mid-install, so a spare's `--auto-route` leaves the
+installed agent as it is (a hand-run `upgrade --auto-route` is what
+refreshes it).
 
 The sleep side runs the stop-side flip of the section above, without
 stopping the VMs: every Running VM whose own `auto_route` is on has its
@@ -755,6 +764,77 @@ remaining VM on this Mac has the fallback on; while any VM wants it, the
 agent stays, because it is per-Mac and the switch is per-VM. A Mac where
 some VM has the fallback off still gets the agent — it covers every VM that
 has it on.
+
+## The demand scaler (queued jobs behind a busy fleet)
+
+The fallback's first two parts move work *off* the fleet when a VM stops or
+the Mac sleeps. Neither scales capacity *up*: a fleet of one busy VM queues
+every other routed job behind it even though the Mac has headroom for
+another VM. Part three is the demand scaler: when queued jobs have waited
+longer than a threshold while every Running VM on the Mac is busy, it boots
+— or creates — one spare VM registered like the runner that serves the
+queued label. The label is the load balancer: the spare joins the same
+runner group with the same label, so GitHub hands it the queued jobs with no
+routing change at all. After an idle cooldown with no job it is stopped
+again — never deleted — and the next demand spike boots it in seconds.
+
+The scaler is a tick, `homefield fleet watch`: it can be run by hand, but it
+is meant to be driven by the route-watcher LaunchAgent of the section above,
+whose helper runs one tick every `HOMEFIELD_SCALE_INTERVAL` seconds (default
+60) in a thread of its own. Ticks serialize on a per-Mac lock: a second
+`fleet watch` run — a hand-run one against the agent's loop, or two
+hand-runs — stands down while another tick holds it, so two ticks cannot
+interleave their read-modify-write of the scale record or provision the
+same spare name (a lock left behind by a killed tick is reclaimed from its
+dead pid). A tick:
+
+1. stands down while a sleep/wake run is in progress — one owner per VM at
+   a time, the same rule the wake recovery's kill-on-sleep follows;
+2. asks every VM whether a job is running (a VM that cannot be asked is
+   fail-safe: nothing scales, and the tick says so);
+3. stops each secondary it created that has had no job for
+   `HOMEFIELD_SCALE_IDLE` seconds (default 900) — through the real `stop`,
+   which refuses under a live job the same way `fleet stop` does, so the
+   cooldown is proven idle, not assumed; a VM with the automatic fallback on
+   has its still-served repositories flipped to hosted first, exactly as a
+   hand-run `stop` would;
+4. and, only when at least one VM is running and every one of them is busy,
+   asks GitHub for queued and in-progress runs whose jobs still wait for a
+   routing label (a matrix or parallel run goes in_progress as soon as one
+   of its jobs starts, while the rest of its jobs are still queued) — the
+   same lookup the stuck-run recovery uses, and host-agnostic since #287,
+   so a GHES registration is scaled like a github.com one. When the oldest
+   wait is past `HOMEFIELD_SCALE_WAIT` seconds (default 300), one spare is
+   booted or created per tick.
+
+Creating a spare passes the guards the situation demands: the fleet-size cap
+(`HOMEFIELD_SCALE_MAX` VMs, default 4), and the headroom budget of
+"Scaling on one Mac" — the sizes of every VM on the Mac, stopped ones
+included, plus the new one, must leave 2 host cores and 8 GiB unallocated,
+or the create is refused. The spare is named after the fleet's first VM
+(`<instance>-scale`, `-scale2`, …), is persistent rather than `--ephemeral`
+(it is started and stopped on demand, so its registration has to survive a
+stop), and is installed like the runner that serves the queued label: same
+url, label and group, same CPU and RAM as the primary, the primary's saved
+extra apt packages (`--packages`), and `--auto-route` when the primary has
+the fallback on. A primary that carries provisioning hooks
+(`/etc/homefield/provision.d`, user hooks and preset hooks alike) is not
+auto-created at all — install has no flag that stages another VM's hooks,
+and a spare without them would take jobs whose tools it does not have — so
+the tick names the runbook's manual path ("More runners") instead. The
+spare's record matches on url and group too, so a stopped spare from
+another registration on the same host is not booted for this demand.
+Everything it did is recorded in the route-watcher subdirectory of the
+state directory (`scale` holds one line per secondary, `scale-state` the
+last tick's summary), and `fleet status` prints the last tick's result.
+
+The scaler is fail-safe in the same direction as the rest of the fallback:
+a queued-run lookup that cannot be asked reads as "nothing is proven", not
+as "nothing waits", and a tick that runs past `HOMEFIELD_SCALE_TICK_BUDGET`
+(default 30 minutes — creating a VM takes minutes, and a hung tick must not
+stop the ones after it) is killed and logged loudly; a secondary it was
+half-creating stays behind for the next tick to reconcile, or for
+`bin/homefield reset --instance <name>` to remove by hand.
 
 ## Failure modes
 
@@ -942,7 +1022,11 @@ A runner runs one job at a time. When jobs wait for each other (`bin/homefield
 report` shows the queue wait), add a runner: another VM on the same Mac, or
 another Mac. Each is a VM with its own registration, under the same label and
 runner group as the first, and GitHub gives each queued job to whichever
-runner is idle. Repositories and their routing don't change.
+runner is idle. Repositories and their routing don't change. On one Mac this
+can also be automatic: the demand scaler ([The demand
+scaler](#the-demand-scaler-queued-jobs-behind-a-busy-fleet)) boots a spare VM
+when queued jobs wait behind a busy fleet and stops it again after an idle
+cooldown — the rest of this section is the manual equivalent.
 
 **On the same Mac**, a second instance:
 
@@ -1094,6 +1178,12 @@ When creating an additional VM on a Mac that already has one or more HomeField V
 - Leave at least **2 host cores** and **8 GiB RAM** unallocated for macOS, Lima/VZ overhead, and Spotlight/WindowServer.
 - Never oversubscribe total vCPUs or RAM across concurrent VMs (for example, on a 10-core / 24 GiB Mac, two 4-vCPU / 8 GiB VMs fit comfortably; three would contend for CPU and swap).
 - Use `homefield memory` to verify each VM's peak RSS before adding another runner.
+
+The demand scaler (the section above, [The demand
+scaler](#the-demand-scaler-queued-jobs-behind-a-busy-fleet)) applies the
+same budget on its own creates: the sizes of every VM on the Mac, stopped
+ones included, plus the new one must keep the 2 cores and 8 GiB free, or the
+create is refused and the tick says so.
 
 ## Moving a registration
 

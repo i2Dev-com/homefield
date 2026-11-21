@@ -262,8 +262,8 @@ EOF
 }
 usage_cmd_fleet() {
   cat <<'EOF'
-  fleet      Fleet-wide status (with --json) and start/stop across every
-             HomeField VM on this Mac.
+  fleet      Fleet-wide status (with --json), start/stop across every
+             HomeField VM on this Mac, and the demand scaler (watch).
 EOF
 }
 usage_cmd_version() {
@@ -637,13 +637,23 @@ EOF
 
 usage_sec_fleet() {
   cat <<'EOF'
-Fleet options (`fleet [status|start|stop] [--json]`):
+Fleet options (`fleet [status|start|stop|watch] [--json]`):
   status     Show one row per HomeField VM and fleet totals (default)
   start      Boot every HomeField VM and print the fleet status summary
   stop       Stop every HomeField VM (refused while a job is running)
+  watch      The demand scaler: on an interval, boot a spare VM when queued
+             jobs wait longer than a threshold behind a busy fleet, and stop
+             it again after an idle cooldown. The route-watcher agent runs
+             it (`--max-ticks 1` is one evaluation); it can also be run by
+             hand. Creating is capped by HOMEFIELD_SCALE_MAX (default 4 VMs)
+             and the runbook's CPU/RAM budget, and a tick stands down while
+             the sleep/wake watcher runs.
   --json     Print fleet status and totals as JSON (with `fleet` or `fleet status`)
   --route-local / --route-hosted   the start/stop fallback flags, applied to
                                    every VM (with `fleet start` / `fleet stop`)
+  --interval SEC     seconds between fleet watch ticks (default 60, or
+                     $HOMEFIELD_SCALE_INTERVAL)
+  --max-ticks N      stop fleet watch after N ticks (default 0 = unlimited)
 EOF
 }
 
@@ -756,7 +766,8 @@ Commands:
   adopt      Prepare a repository to use the runner
   memory     Show every VM's memory use from its per-minute log
   report     Queue wait, duration and minutes of jobs, local against hosted
-  fleet      Fleet-wide status (with --json) and start/stop across all VMs
+  fleet      Fleet-wide status (with --json), start/stop across all VMs, and
+             the demand scaler (`fleet watch`)
   version    Show the installed version, and whether a newer one exists
 
 Run `bin/homefield help <command>` for a command's options, `bin/homefield

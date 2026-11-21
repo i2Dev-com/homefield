@@ -31,9 +31,25 @@ printf '# Lima VM.\n' >"$work/home/.lima/homefield/lima.yaml"
 # resolve that without bash on it (the same rule tests/fakes.sh's sh default
 # follows), so bash — and everything the route code and the records call —
 # is on the stubs' PATH from the start. python3 is the route watcher's
-# power-event helper (its --auto-route check refuses without it); date writes
-# the watcher's run record.
-for t in awk bash cat date dirname grep mktemp mkdir mv rm sed sleep tr python3; do ln -s "$(command -v "$t")" "$stubs/$t"; done
+# power-event helper (its --auto-route check refuses without it).
+for t in awk bash cat dirname grep mktemp mkdir mv rm sed sleep tr python3; do ln -s "$(command -v "$t")" "$stubs/$t"; done
+
+# CLOCK_EPOCH: the suite's clock. The scaler and the route watcher read the
+# time through `date`, and so do the fixtures that must be fresh or overdue
+# relative to it — a suspended or delayed test process would otherwise turn
+# a fresh fixture into an overdue one (tests never observe ambient host
+# time). Every date call in the code under test reads CLOCK_EPOCH, and the
+# fixtures below are written relative to the same constant.
+CLOCK_EPOCH=1700000000
+cat >"$stubs/date" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in
+  "+%s") printf '%s\n' "${CLOCK_EPOCH:?CLOCK_EPOCH not set}" ;;
+  "+%Y-%m-%d %H:%M:%S") printf '2023-11-14 22:13:20\n' ;;
+  *) echo "date stub: unsupported format: $*" >&2; exit 1 ;;
+esac
+EOF
+chmod +x "$stubs/date"
 
 # launchctl: the route watcher agent's load and unload, recorded.
 cat >"$stubs/launchctl" <<'EOF'
@@ -620,6 +636,15 @@ case "$1" in
             if [ -n "${JOBS_DIR:-}" ]; then [ -f "$JOBS_DIR/$vm" ] && echo yes || echo no
             else [ "${JOB:-no}" = yes ] && echo yes || echo no
             fi ;;
+          # the demand scaler's reads of the primary's guest (#291): the
+          # saved extra packages, and the provisioning hooks it carries
+          # (per-VM: one VM carries hooks, another does not)
+          *extra-packages*) [ -n "${EXTRA_PKGS:-}" ] && printf '%s\n' "$EXTRA_PKGS" || : ;;
+          *provision.d*)
+            case "$vm" in
+              second) printf '%b' "${HOOKS_LIST_SECOND-}" ;;
+              *) printf '%b' "${HOOKS_LIST-}" ;;
+            esac ;;
         esac
         ;;
       python3)
@@ -670,11 +695,38 @@ case "$*" in
     if [ -n "${GH_CI_RUNNER:-}" ]; then echo "$GH_CI_RUNNER"; else echo "variable not found" >&2; exit 1; fi
     ;;
   "variable set"*) ;;
+  # the demand scaler's group-admission check (#299): a per-group override,
+  # so a fixture can put runner 42 in a group that excludes the queued repo
+  # and runner 43 in one that admits it
+  *"runner-groups/7/runners"*) printf '%b' "${GH_GROUP_RUNNERS_7:-${GH_GROUP_RUNNERS-}}" ;;
+  *"runner-groups/8/runners"*) printf '%b' "${GH_GROUP_RUNNERS_8:-${GH_GROUP_RUNNERS-}}" ;;
+  *"runner-groups/7/repositories"*) printf '%b' "${GH_GROUP_REPOS_7:-${GH_GROUP_REPOS-}}" ;;
+  *"runner-groups/8/repositories"*) printf '%b' "${GH_GROUP_REPOS_8:-${GH_GROUP_REPOS-}}" ;;
   *"actions/runner-groups/"*"repositories"*)
     printf '%b' "${GH_GROUP_REPOS-}" ;;
-  *"actions/runs?status=queued"*) ;;
-  *"actions/runs?status=in_progress"*) ;;
-  *"/actions/runs/"*"/jobs"*) ;;
+  *"actions/runner-groups/"*"runners"*)
+    printf '%b' "${GH_GROUP_RUNNERS-}" ;;
+  *"actions/runner-groups?per_page="*)
+    # orgs/<repo>/... is not a valid endpoint: a repository-scoped
+    # registration's owner is "owner/repo", and only the scaler's group
+    # check could reach it (route's checks are scope-aware). Fail the way
+    # GitHub does so a fixture cannot hide that mistake.
+    case "$*" in
+      *"orgs/"*"/"*/"actions/runner-groups"*) echo "gh: HTTP 404" >&2; exit 1 ;;
+    esac
+    [ -z "${GH_GROUPS_FAIL:-}" ] || { echo "gh: HTTP 502" >&2; exit 1; }
+    printf '%b' "${GH_GROUPS-}" ;;
+  *"actions/runs?status=queued"*)
+    # [id, created_at] rows: the demand scaler's wait lookup (#291); the
+    # stuck-run lookup reads .workflow_runs[].id from the same fixture shape.
+    [ -z "${GH_RUNS_FAIL:-}" ] || { echo "gh: HTTP 500" >&2; exit 1; }
+    printf '%b' "${GH_RUNS-}" ;;
+  *"actions/runs?status=in_progress"*)
+    [ -z "${GH_RUNS_FAIL:-}" ] || { echo "gh: HTTP 500" >&2; exit 1; }
+    printf '%b' "${GH_RUNS_IN_PROGRESS-}" ;;
+  *"/actions/runs/"*"/jobs"*)
+    [ -z "${GH_JOBS_FAIL:-}" ] || { echo "gh: HTTP 502" >&2; exit 1; }
+    printf '%b' "${GH_JOBS-}" ;;
   "run view"*) echo "${GH_RUN_STATUS:-completed}" ;;
   "run cancel"*) ;;
   "run rerun"*) ;;
@@ -692,11 +744,92 @@ hf() {
   shift
   : >"$calls"
   out="$(env -i HOME="$work/home" PATH="$stubs" CALLS="$calls" \
-    HOMEFIELD_STATE_DIR="$state" HOMEFIELD_GH_TIMEOUT=5 ROUTE_TRIES=1 ROUTE_INTERVAL=0 \
+    HOMEFIELD_STATE_DIR="$state" HOMEFIELD_GH_TIMEOUT=5 ROUTE_TRIES=1 ROUTE_INTERVAL=0 CLOCK_EPOCH="$CLOCK_EPOCH" \
     ${envs[@]+"${envs[@]}"} "$BASH_BIN" "$ROOT/bin/homefield" "$@" 2>"$work/err" </dev/null)"
   rc=$?
   err="$(cat "$work/err")"
 }
+
+# sysctl: the host's cores and memory, for the scaler's headroom budget —
+# driven from the test the same way every outside effect is.
+cat >"$stubs/sysctl" <<'EOF'
+#!/usr/bin/env bash
+# A 16-core, 32 GiB Mac by default: room for the tests' 6 vCPU / 5 GiB primary
+# plus one more of the same, with the runbook's 2 cores and 8 GiB to spare.
+case "$2" in
+  hw.ncpu) echo "${SYSCTL_CPUS:-16}" ;;
+  hw.memsize) echo "${SYSCTL_MEM:-34359738368}" ;;
+  *) echo "sysctl stub: unexpected: $*" >&2; exit 99 ;;
+esac
+EOF
+chmod +x "$stubs/sysctl"
+
+# ── the scaler's tick harness: the real modules, scale_exec recorded ────────
+# The tick runs the real bin/homefield's functions, but not its subprocesses:
+# scale_exec (the scaler's only way to create, start or stop a VM) is replaced
+# by a recorder, so a test can assert the exact command the scaler would run
+# without building a VM. The integration test below runs the real one.
+THARNESS="$work/tharness.sh"
+cat >"$THARNESS" <<'EOF'
+#!/usr/bin/env bash
+set -uo pipefail
+HOMEFIELD_SOURCE_ONLY=1
+HOMEFIELD_STATE_DIR="$STATE_DIR"
+INSTANCE="homefield"
+. "$ROOT/bin/homefield"
+adopt_nap() { :; }
+scale_exec() {
+  echo "scale_exec $*" >>"$CALLS"
+  [ -z "${SCALE_RC:-}" ] || return "$SCALE_RC"
+  return 0
+}
+"$@"
+EOF
+tharness() {
+  : >"$calls"
+  out="$(env -i HOME="$work/home" PATH="$stubs" CALLS="$calls" ROOT="$ROOT" STATE_DIR="$state" \
+    HOMEFIELD_STATE_DIR="$state" HOMEFIELD_GH_TIMEOUT=5 CLOCK_EPOCH="$CLOCK_EPOCH" \
+    ${tharness_env[@]+"${tharness_env[@]}"} "$BASH_BIN" "$THARNESS" "$@" 2>"$work/err" </dev/null)"
+  rc=$?
+  err="$(cat "$work/err")"
+}
+tharness_env=()
+# lima_for <name> <status>: a VM Lima lists and a stored config for: the
+# marker line first (vm_instances' HomeField check), then the size the
+# scaler's budget and secondary installs read.
+# lima_for <name> [cpus] [memory]: a VM Lima lists and a stored config for:
+# the marker line first (vm_instances' HomeField check), then the size the
+# scaler's budget and secondary installs read.
+lima_for() {
+  mkdir -p "$work/home/.lima/$1"
+  printf '# Lima VM for the local GitHub Actions runner.\ncpus: %s\nmemory: %s\n' \
+    "${2:-6}" "${3:-5GiB}" >"$work/home/.lima/$1/lima.yaml"
+}
+# tick_env: the common fixture set: one Running VM whose runner serves
+# homefield-ci on github.com, one queued run that has waited long enough (a
+# created_at of 2020 is older than any threshold the tests set).
+tick_env() {
+  lima_for homefield 6 5GiB
+  mkdir -p "$work/settings"
+  printf 'my-mac-homefield\nhttps://github.com/acme\n42\n' >"$work/settings/homefield"
+  printf 'homefield-ci acme/api github.com\n' >"$state/routing"
+  printf 'auto_route=1\n' >"$state/homefield.state"
+  tharness_env=(
+    LIMA_ROWS='homefield Running\n'
+    LIMA_HOME="$work/home/.lima"
+    SETTINGS_DIR="$work/settings"
+    JOBS_DIR="$work/jobs"
+    GH_RUNNERS=$'42\tmy-mac-homefield\tonline\tself-hosted,linux,arm64,homefield-ci\n'
+    GH_GROUPS=$'Default\tselected\tfalse\t1\n'
+    GH_GROUP_RUNNERS='42\n'
+    GH_GROUP_REPOS='acme/api\n'
+    GH_RUNS='9001\t2020-01-01T00:00:00Z\n'
+    GH_JOBS='5\n'
+    HOMEFIELD_SCALE_WAIT=10 HOMEFIELD_SCALE_IDLE=100
+  )
+}
+# th_state <key>: the tick record's value for the key.
+th_state() { awk -v k="$1" 'index($0, k "=") == 1 { print substr($0, length(k) + 2); exit }' "$state/route-watcher/scale-state" 2>/dev/null; }
 
 printf 'homefield-ci acme/api\n' >"$state/routing"
 hf "${stop_env[@]}" GH_RUNNERS="$runner_rows" -- stop --route-hosted
@@ -943,7 +1076,7 @@ EOF
 iharness() {
   : >"$calls"
   out="$(env -i HOME="$work/home" PATH="$stubs" CALLS="$calls" ROOT="$ROOT" \
-    HOMEFIELD_STATE_DIR="$state" LIMA_STATUS=Running GH_RUNNERS='41\tonline\tfalse\n' \
+    HOMEFIELD_STATE_DIR="$state" LIMA_STATUS=Running CLOCK_EPOCH="$CLOCK_EPOCH" GH_RUNNERS='41\tonline\tfalse\n' \
     ${iharness_env[@]+"${iharness_env[@]}"} "$BASH_BIN" "$IHARNESS" "$@" 2>&1 </dev/null)"
   rc=$?
 }
@@ -969,6 +1102,22 @@ iharness cmd_install --url https://github.com/acme --org --auto-route
 plist_env="$work/home/Library/LaunchAgents/com.homefield.route-watcher.plist"
 record "...the watcher budgets the operator set at install time reach the agent" "yes/yes/yes" \
   "$(grep -q '<key>HOMEFIELD_WATCH_SLEEP_BUDGET</key>' "$plist_env" && grep -A1 '<key>HOMEFIELD_WATCH_SLEEP_BUDGET</key>' "$plist_env" | grep -q '<string>7</string>' && echo yes || echo no)/$(grep -A1 '<key>HOMEFIELD_WATCH_WAKE_WAIT</key>' "$plist_env" | grep -q '<string>9</string>' && echo yes || echo no)/$(grep -A1 '<key>HOMEFIELD_WATCH_WAKE_BUDGET</key>' "$plist_env" | grep -q '<string>300</string>' && echo yes || echo no)"
+iharness_env=(HOMEFIELD_SCALE_INTERVAL=90 HOMEFIELD_SCALE_WAIT=600 HOMEFIELD_SCALE_IDLE=1800 HOMEFIELD_SCALE_MAX=6 HOMEFIELD_SCALE_TICK_BUDGET=3600)
+iharness cmd_install --url https://github.com/acme --org --auto-route
+record "...the scaler's tuning reaches the agent the same way" "yes/yes/yes/yes/yes" \
+  "$(grep -A1 '<key>HOMEFIELD_SCALE_INTERVAL</key>' "$plist_env" | grep -q '<string>90</string>' && echo yes || echo no)/$(grep -A1 '<key>HOMEFIELD_SCALE_WAIT</key>' "$plist_env" | grep -q '<string>600</string>' && echo yes || echo no)/$(grep -A1 '<key>HOMEFIELD_SCALE_IDLE</key>' "$plist_env" | grep -q '<string>1800</string>' && echo yes || echo no)/$(grep -A1 '<key>HOMEFIELD_SCALE_MAX</key>' "$plist_env" | grep -q '<string>6</string>' && echo yes || echo no)/$(grep -A1 '<key>HOMEFIELD_SCALE_TICK_BUDGET</key>' "$plist_env" | grep -q '<string>3600</string>' && echo yes || echo no)"
+iharness_env=()
+
+# The scaler's own subprocess installs a spare with --auto-route: the agent
+# supervising the tick is already installed, and reloading it would stop the
+# helper mid-install (launchctl unload stops the job). It is left as it is.
+plist_env="$work/home/Library/LaunchAgents/com.homefield.route-watcher.plist"
+cp "$plist_env" "$work/plist-before"
+iharness_env=(HOMEFIELD_SCALE_INSTALL=1)
+iharness cmd_install --url https://github.com/acme --org --auto-route
+record "the scaler's spare install leaves the running agent as it is" \
+  "0/0/yes" \
+  "$(grep -c '^launchctl unload' "$calls" || true)/$(grep -c '^launchctl load' "$calls" || true)/$(cmp -s "$plist_env" "$work/plist-before" && echo yes || echo no)"
 iharness_env=()
 
 rm -f "$state/routing"
@@ -1024,5 +1173,421 @@ record "upgrade --auto-route: the switch is saved on" "0/1" \
 iharness cmd_upgrade --bogus-flag
 iharness_env=()
 record "an unknown upgrade option: refused" "1/yes" "$rc/$(has "$out" 'unknown option')"
+
+echo
+echo "the demand scaler (#291)"
+# The tick runs the real modules through THARNESS, with scale_exec replaced
+# by a recorder: the tests below assert the exact command the scaler would
+# run (create, start, stop) without building a VM. The last two tests run the
+# real command, subprocess seam included.
+
+tharness_env=()
+tharness iso_to_epoch 2026-11-20T10:00:00Z
+record "iso_to_epoch: a UTC timestamp is seconds since the epoch" \
+  "0/$(python3 -c 'import calendar; print(calendar.timegm((2026,11,20,10,0,0,0,0,0)))')" "$rc/$out"
+tharness iso_to_epoch 2020-02-29T12:34:56Z
+record "iso_to_epoch: a leap day" \
+  "0/$(python3 -c 'import calendar; print(calendar.timegm((2020,2,29,12,34,56,0,0,0)))')" "$rc/$out"
+tharness iso_to_epoch 1970-01-01T00:00:00Z
+record "iso_to_epoch: the epoch itself" "0/0" "$rc/$out"
+tharness iso_to_epoch 2026-11-21T08:09:00Z
+record "iso_to_epoch: zero-padded components are base 10, not octal" \
+  "0/$(python3 -c 'import calendar; print(calendar.timegm((2026,11,21,8,9,0,0,0,0)))')" "$rc/$out"
+tharness iso_to_epoch not-a-date
+record "iso_to_epoch: garbage is refused" "1/" "$rc/$out"
+
+tharness mem_to_bytes 5GiB
+record "mem_to_bytes: Lima's template unit" "0/5368709120" "$rc/$out"
+tharness mem_to_bytes 512MiB
+record "mem_to_bytes: MiB" "0/536870912" "$rc/$out"
+tharness mem_to_bytes 4G
+record "mem_to_bytes: a bare G reads as its binary cousin" "0/4294967296" "$rc/$out"
+tharness mem_to_bytes 100
+record "mem_to_bytes: plain bytes" "0/100" "$rc/$out"
+tharness mem_to_bytes 5TiB
+record "mem_to_bytes: an unknown unit is refused" "1/" "$rc/$out"
+
+tharness mem_to_gib 5GiB
+record "mem_to_gib: the template's unit is numeric GiB for limactl create" "0/5" "$rc/$out"
+tharness mem_to_gib 512MiB
+record "mem_to_gib: a half-GiB VM reads 0.5" "0/0.5" "$rc/$out"
+tharness mem_to_gib 1536MiB
+record "mem_to_gib: one and a half" "0/1.5" "$rc/$out"
+tharness mem_to_gib 100
+record "mem_to_gib: plain bytes are a fraction of a GiB" "0/9.31323e-08" "$rc/$out"
+
+reset_scale() {
+  rm -f "$state/route-watcher/scale" "$state/route-watcher/scale-state" "$state/route-watcher/running"
+}
+
+# The common fixtures: one busy primary (a queued run behind it), one queued
+# run that has waited since 2020, the group and runner rows the secondary's
+# registration is copied from.
+tick_env() {
+  lima_for homefield 6 5GiB
+  mkdir -p "$work/settings" "$work/jobs"
+  printf 'my-mac-homefield\nhttps://github.com/acme\n42\n' >"$work/settings/homefield"
+  : >"$work/jobs/homefield"
+  printf 'homefield-ci acme/api github.com\n' >"$state/routing"
+  printf 'auto_route=1\n' >"$state/homefield.state"
+  tharness_env=(
+    LIMA_ROWS='homefield Running\n'
+    LIMA_HOME="$work/home/.lima"
+    SETTINGS_DIR="$work/settings"
+    JOBS_DIR="$work/jobs"
+    GH_RUNNERS=$'42\tmy-mac-homefield\tonline\tself-hosted,linux,arm64,homefield-ci\n'
+    GH_GROUPS=$'Default\tselected\tfalse\t1\n'
+    GH_GROUP_RUNNERS=$'42\n43\n'
+    GH_GROUP_REPOS=$'acme/api\nacme/web\n'
+    GH_RUNS='9001\t2020-01-01T00:00:00Z\n'
+    GH_JOBS='5\n'
+    HOMEFIELD_SCALE_WAIT=10 HOMEFIELD_SCALE_IDLE=100
+  )
+}
+# th_state <key>: the tick record's value for the key.
+th_state() { awk -v k="$1" 'index($0, k "=") == 1 { print substr($0, length(k) + 2); exit }' "$state/route-watcher/scale-state" 2>/dev/null; }
+
+tick_env
+reset_scale
+tharness fleet_watch_tick
+record "a queued run older than the threshold: a secondary is created like the primary" \
+  "0/scale_exec install --instance homefield-scale --url https://github.com/acme --label homefield-ci --group Default --auto-route --cpus 6 --memory 5" \
+  "$rc/$(grep '^scale_exec install ' "$calls")"
+record "...the secondary is recorded as the spare" "homefield-scale homefield-ci github.com https://github.com/acme Default epoch" \
+  "$(awk -F'|' '{print $1, $2, $3, $4, $5, ($6 ~ /^[0-9]+$/ ? "epoch" : "bad")}' "$state/route-watcher/scale" 2>/dev/null)"
+record "...the tick record says what it did" "ok/created homefield-scale" \
+  "$(th_state last_result)/$(th_state last_action)"
+
+tick_env
+reset_scale
+tharness_env+=(GH_RUNS='' GH_RUNS_IN_PROGRESS='9002\t2020-01-01T00:00:00Z\n')
+tharness fleet_watch_tick
+record "a matrix run in progress with jobs still queued counts as demand" \
+  "0/scale_exec install --instance homefield-scale --url https://github.com/acme --label homefield-ci --group Default --auto-route --cpus 6 --memory 5" \
+  "$rc/$(grep '^scale_exec install ' "$calls")"
+
+tick_env
+reset_scale
+tharness_env+=(HOOKS_LIST=$'50-buildx-rosetta.sh\n')
+tharness fleet_watch_tick
+record "a primary with provisioning hooks: no create, the runbook's manual path is named" \
+  "0/0/yes" "$rc/$(grep -c '^scale_exec install ' "$calls" || true)/$(has "$out" 'cannot copy')"
+
+tick_env
+reset_scale
+lima_for homefield 6 1536MiB
+tharness fleet_watch_tick
+record "a MiB-sized primary: the spare's --memory is numeric GiB (limactl refuses 5GiB)" \
+  "0/scale_exec install --instance homefield-scale --url https://github.com/acme --label homefield-ci --group Default --auto-route --cpus 6 --memory 1.5" \
+  "$rc/$(grep '^scale_exec install ' "$calls")"
+
+tick_env
+reset_scale
+tharness_env+=(EXTRA_PKGS='docker-buildx ghcli')
+tharness fleet_watch_tick
+record "the primary's saved extra packages go on the spare's install" \
+  "0/scale_exec install --instance homefield-scale --url https://github.com/acme --label homefield-ci --group Default --auto-route --packages docker-buildx ghcli --cpus 6 --memory 5" \
+  "$rc/$(grep '^scale_exec install ' "$calls")"
+
+tick_env
+reset_scale
+# Two runners share the label in different selected-repository groups: the
+# first VM's group excludes the queued repository, so the primary is the one
+# whose group admits it — a spare in the excluding group could not take the
+# queued jobs (route's own permission check, runner_serves_repo).
+printf 'second-mac\nhttps://github.com/acme\n43\n' >"$work/settings/second"
+lima_for second 6 5GiB
+: >"$work/jobs/second"
+printf 'auto_route=1\n' >"$state/second.state"
+tharness_env+=(
+  LIMA_ROWS=$'homefield Running\nsecond Running\n'
+  GH_RUNNERS=$'42\tmy-mac-homefield\tonline\tself-hosted,linux,arm64,homefield-ci\n43\tsecond-mac\tonline\tself-hosted,linux,arm64,homefield-ci\n'
+  GH_GROUPS=$'Excludes\tselected\tfalse\t7\nAdmits\tselected\tfalse\t8\n'
+  GH_GROUP_RUNNERS_7=$'42\n' GH_GROUP_RUNNERS_8=$'43\n'
+  GH_GROUP_REPOS_7=$'acme/other\n' GH_GROUP_REPOS_8=$'acme/api\n'
+  SYSCTL_CPUS=24 SYSCTL_MEM=68719476736
+)
+tharness fleet_watch_tick
+record "a primary whose group excludes the queued repo is skipped for one that admits it" \
+  "0/scale_exec install --instance homefield-scale --url https://github.com/acme --label homefield-ci --group Admits --auto-route --cpus 6 --memory 5" \
+  "$rc/$(grep '^scale_exec install ' "$calls")"
+
+tick_env
+reset_scale
+# Two overdue demands in one tick: the first cannot be answered (the only
+# runner serving its label carries hooks the scaler cannot copy), and the
+# tick must go on to the second instead of letting the first starve it.
+printf 'second-mac\nhttps://github.com/acme\n43\n' >"$work/settings/second"
+lima_for second 6 5GiB
+: >"$work/jobs/second"
+printf 'auto_route=1\n' >"$state/second.state"
+printf 'homefield-ci acme/api github.com\nbeta-ci acme/web github.com\n' >"$state/routing"
+tharness_env+=(
+  LIMA_ROWS=$'homefield Running\nsecond Running\n'
+  GH_RUNNERS=$'42\tmy-mac-homefield\tonline\tself-hosted,linux,arm64,homefield-ci\n43\tsecond-mac\tonline\tself-hosted,linux,arm64,beta-ci\n'
+  HOOKS_LIST=$'50-buildx-rosetta.sh\n'
+  SYSCTL_CPUS=24 SYSCTL_MEM=68719476736
+)
+tharness fleet_watch_tick
+record "an unserviceable demand does not starve the next one in the same tick" \
+  "0/scale_exec install --instance homefield-scale --url https://github.com/acme --label beta-ci --group Default --auto-route --cpus 6 --memory 5" \
+  "$rc/$(grep '^scale_exec install ' "$calls")"
+rm -f "$work/jobs/second" "$work/settings/second" "$state/second.state"
+
+tick_env
+reset_scale
+# Two routed repositories share the label and host while their eligible
+# runners differ: remote's runner is elsewhere (its group excludes the
+# repo), local's is this VM. The demand entries stay separate — merging
+# them into the oldest run's repository would let remote starve local.
+printf 'homefield-ci acme/remote github.com\nhomefield-ci acme/api github.com\n' >"$state/routing"
+tharness fleet_watch_tick
+record "a demand this Mac cannot serve does not swallow the next one with the same label" \
+  "0/scale_exec install --instance homefield-scale --url https://github.com/acme --label homefield-ci --group Default --auto-route --cpus 6 --memory 5" \
+  "$rc/$(grep '^scale_exec install ' "$calls")"
+
+tick_env
+reset_scale
+tharness_env+=(HOMEFIELD_SCALE_MAX=1)
+tharness fleet_watch_tick
+record "the fleet is at its cap: no create, the tick still passes" "0/0/yes" \
+  "$rc/$(grep -c '^scale_exec install ' "$calls" || true)/$(has "$out" 'at its cap')"
+
+tick_env
+reset_scale
+printf 'second|homefield-ci|github.com|https://github.com/acme|Default|%s\n' "$(( CLOCK_EPOCH - 1000 ))" >"$state/route-watcher/scale"
+lima_for second 6 5GiB
+rm -f "$work/jobs/homefield"
+tharness_env+=(LIMA_ROWS=$'homefield Running\nsecond Running\n')
+tharness fleet_watch_tick
+record "a secondary idle past the cooldown: the real stop runs on it, and it stays recorded" \
+  "0/scale_exec stop --instance second/second homefield-ci github.com https://github.com/acme Default epoch" \
+  "$rc/$(grep '^scale_exec stop ' "$calls")/$(awk -F'|' '{print $1, $2, $3, $4, $5, ($6 ~ /^[0-9]+$/ ? "epoch" : "bad")}' "$state/route-watcher/scale" 2>/dev/null)"
+record "...the primary is never a stop candidate" "0" "$(grep -c '^scale_exec stop --instance homefield$' "$calls" || true)"
+record "...the tick record says what it did" "ok/stopped second" "$(th_state last_result)/$(th_state last_action)"
+
+tick_env
+reset_scale
+printf 'second|homefield-ci|github.com|https://github.com/acme|Default|%s\n' "$(( CLOCK_EPOCH - 1000 ))" >"$state/route-watcher/scale"
+lima_for second 6 5GiB
+: >"$work/jobs/second"
+rm -f "$work/jobs/homefield"
+tharness_env+=(LIMA_ROWS=$'homefield Running\nsecond Running\n')
+tharness fleet_watch_tick
+record "a secondary with a live job: not stopped, its busy time is fresh" "0/0" \
+  "$rc/$(grep -c '^scale_exec stop ' "$calls" || true)"
+record "...and the queue behind a partly busy fleet is not scaled" "0" \
+  "$(grep -c '^scale_exec install ' "$calls" || true)"
+
+tick_env
+reset_scale
+rm -f "$work/jobs/homefield"
+tharness_env+=(PGREP_FAIL=1)
+tharness fleet_watch_tick
+record "a VM that cannot be asked about jobs: fail safe, nothing scales" "1/0/failed" \
+  "$rc/$(grep -c '^scale_exec ' "$calls" || true)/$(th_state last_result)"
+
+tick_env
+reset_scale
+printf 'pid=%s\nstarted=%s\n' "$$" "$CLOCK_EPOCH" >"$state/route-watcher/running"
+tharness fleet_watch_tick
+record "the sleep/wake watcher is running: the tick stands down" "0/0/yielded to the watcher" \
+  "$rc/$(grep -c '^scale_exec ' "$calls" || true)/$(th_state last_action)"
+printf 'pid=99999999\nstarted=%s\n' "$CLOCK_EPOCH" >"$state/route-watcher/running"
+tharness fleet_watch_tick
+record "...a dead marker pid does not stop the scaler" "0/1" \
+  "$rc/$(grep -c '^scale_exec ' "$calls" || true)"
+
+tick_env
+reset_scale
+printf 'second|homefield-ci|github.com|https://github.com/acme|Default|%s\n' "$CLOCK_EPOCH" >"$state/route-watcher/scale"
+lima_for second 6 5GiB
+tharness_env+=(LIMA_ROWS=$'homefield Running\nsecond Stopped\n')
+tharness fleet_watch_tick
+record "a recorded spare that matches the demand is booted, not re-created" \
+  "0/scale_exec start --instance second/0" \
+  "$rc/$(grep '^scale_exec start ' "$calls")/$(grep -c '^scale_exec install ' "$calls" || true)"
+record "...the boot refreshes its busy time" "second homefield-ci github.com https://github.com/acme Default epoch" \
+  "$(awk -F'|' '{print $1, $2, $3, $4, $5, ($6 ~ /^[0-9]+$/ ? "epoch" : "bad")}' "$state/route-watcher/scale" 2>/dev/null)"
+
+tick_env
+reset_scale
+printf 'second|homefield-ci|github.com|https://github.com/other|Default|%s\n' "$CLOCK_EPOCH" >"$state/route-watcher/scale"
+lima_for second 6 5GiB
+tharness_env+=(LIMA_ROWS=$'homefield Running\nsecond Stopped\n')
+# A bigger host: homefield plus a new 6 vCPU / 5 GiB spare fit, so the create
+# that replaces the unreachable boot is what the tick is measured on.
+tharness_env+=(SYSCTL_CPUS=24 SYSCTL_MEM=68719476736)
+tharness fleet_watch_tick
+record "a stopped spare from another registration is not booted for this demand" \
+  "0/scale_exec install --instance homefield-scale --url https://github.com/acme --label homefield-ci --group Default --auto-route --cpus 6 --memory 5/0" \
+  "$rc/$(grep '^scale_exec install ' "$calls")/$(grep -c '^scale_exec start ' "$calls" || true)"
+
+tick_env
+reset_scale
+tharness_env+=(SYSCTL_CPUS=8 SYSCTL_MEM=17179869184)
+tharness fleet_watch_tick
+record "a create that would oversubscribe the Mac's CPU or RAM: refused, the tick passes" \
+  "0/0/yes" "$rc/$(grep -c '^scale_exec install ' "$calls" || true)/$(has "$out" 'oversubscribe')"
+
+tick_env
+reset_scale
+# A repository-scoped registration has no runner group: the record's group
+# field is empty, and the tab-separated record must keep it (a space-separated
+# record would shift the busy time into the group field and drop the line).
+printf 'my-mac-homefield\nhttps://github.com/acme/api\n42\n' >"$work/settings/homefield"
+printf 'second|homefield-ci|github.com|https://github.com/acme/api||%s\n' "$CLOCK_EPOCH" >"$state/route-watcher/scale"
+lima_for second 6 5GiB
+tharness_env+=(LIMA_ROWS=$'homefield Running\nsecond Stopped\n')
+# A bigger host: the boot is what is measured, not a headroom refusal.
+tharness_env+=(SYSCTL_CPUS=24 SYSCTL_MEM=68719476736)
+tharness fleet_watch_tick
+record "a record with an empty group (a repo-scoped registration) round-trips and boots" \
+  "0/scale_exec start --instance second/0" \
+  "$rc/$(grep '^scale_exec start ' "$calls")/$(grep -c '^scale_exec install ' "$calls" || true)"
+
+tick_env
+reset_scale
+# A group name with spaces survives the record: written by one tick, read by
+# the next, and still matching the demand's primary on the boot path.
+tharness_env+=(GH_GROUPS=$'CI Runners\tselected\tfalse\t7\n')
+tharness fleet_watch_tick
+record "a group with spaces is recorded whole" \
+  "homefield-scale homefield-ci github.com https://github.com/acme CI Runners epoch" \
+  "$(awk -F'|' '{print $1, $2, $3, $4, $5, ($6 ~ /^[0-9]+$/ ? "epoch" : "bad")}' "$state/route-watcher/scale" 2>/dev/null)"
+printf 'second|homefield-ci|github.com|https://github.com/acme|CI Runners|%s\n' "$CLOCK_EPOCH" >"$state/route-watcher/scale"
+lima_for second 6 5GiB
+tharness_env+=(LIMA_ROWS=$'homefield Running\nsecond Stopped\n')
+tharness fleet_watch_tick
+record "...and a stopped spare of that group is still booted for the demand" \
+  "0/scale_exec start --instance second" "$rc/$(grep '^scale_exec start ' "$calls")"
+
+tick_env
+reset_scale
+tharness_env+=(GH_RUNNERS=$'42\tmy-mac-homefield\tonline\tself-hosted,linux,arm64,other-label\n')
+tharness fleet_watch_tick
+record "no running runner serves the queued label: not this Mac's to scale" "0/0" \
+  "$rc/$(grep -c '^scale_exec ' "$calls" || true)"
+
+tick_env
+reset_scale
+printf 'my-mac-homefield\nhttps://ghes.acme.example/acme\n42\n' >"$work/settings/homefield"
+printf 'homefield-ci acme/api ghes.acme.example\n' >"$state/routing"
+tharness fleet_watch_tick
+record "a GHES record is scaled like a github.com one, on its own host" \
+  "0/scale_exec install --instance homefield-scale --url https://ghes.acme.example/acme --label homefield-ci --group Default --auto-route --cpus 6 --memory 5" \
+  "$rc/$(grep '^scale_exec install ' "$calls")"
+
+tick_env
+reset_scale
+printf 'ghost|homefield-ci|github.com|https://github.com/acme|Default|123\nhomefield-scale|homefield-ci|github.com|https://github.com/acme|Default|%s\n' "$CLOCK_EPOCH" >"$state/route-watcher/scale"
+lima_for homefield-scale 6 5GiB
+tharness_env+=(LIMA_ROWS=$'homefield Running\nhomefield-scale Running\n')
+tharness fleet_watch_tick
+record "a secondary deleted by hand leaves the scale record at the next tick" \
+  "homefield-scale homefield-ci github.com https://github.com/acme Default" "$(awk -F'|' '{print $1, $2, $3, $4, $5}' "$state/route-watcher/scale" 2>/dev/null)"
+
+tick_env
+reset_scale
+tharness_env+=(GH_RUNS_FAIL=1)
+tharness fleet_watch_tick
+record "GitHub cannot be asked about queued runs: fail safe, nothing scales" "1/0/failed" \
+  "$rc/$(grep -c '^scale_exec ' "$calls" || true)/$(th_state last_result)"
+
+tick_env
+reset_scale
+# created_at is CLOCK_EPOCH - 5: younger than HOMEFIELD_SCALE_WAIT=10, so
+# the run is queued but has not waited long enough.
+tharness_env+=(GH_RUNS='9001\t2023-11-14T22:13:15Z\n')
+tharness fleet_watch_tick
+record "a queued run younger than the threshold: no action yet" "0/0/none" \
+  "$rc/$(grep -c '^scale_exec ' "$calls" || true)/$(th_state last_action)"
+
+# The real command, subprocess seam included: the tick's stop of the idle
+# secondary goes through the real stop, and `fleet status` prints the
+# scaler's last tick.
+reset_scale
+tick_env
+rm -f "$work/jobs/homefield"
+printf 'second|homefield-ci|github.com|https://github.com/acme|Default|%s\n' "$(( CLOCK_EPOCH - 1000 ))" >"$state/route-watcher/scale"
+lima_for second 6 5GiB
+tharness_env+=(LIMA_ROWS=$'homefield Running\nsecond Running\n')
+tharness fleet_watch_tick
+hf -- fleet
+record "fleet status prints the scaler's last tick" "yes/yes" \
+  "$(has "$out" 'No HomeField VMs found on this Mac.')/$(has "$out" 'scaler: last tick at ')"
+
+# Two overlapping fleet watch runs serialize on the per-Mac lock: a
+# contender stands down instead of interleaving its read-modify-write of
+# the scale record (a slower tick could otherwise erase the other's newly
+# created spare from the bookkeeping, and both could provision the same
+# spare name).
+tick_env
+reset_scale
+printf 'second|homefield-ci|github.com|https://github.com/acme|Default|%s\n' "$(( CLOCK_EPOCH - 1000 ))" >"$state/route-watcher/scale"
+lima_for second 6 5GiB
+mkdir -p "$state/route-watcher/scale.lock"
+printf '%s\n' "$$" >"$state/route-watcher/scale.lock/pid"
+hf LIMA_ROWS=$'homefield Running\nsecond Running\n' LIMA_HOME="$work/home/.lima" \
+  SETTINGS_DIR="$work/settings" JOBS_DIR="$work/jobs" \
+  -- fleet watch --max-ticks 1
+record "a live scaler lock: the contender stands down, the record untouched" \
+  "0/yes/no/$(( CLOCK_EPOCH - 1000 ))" \
+  "$rc/$(has "$out" 'standing down')/$(grep -qE '^limactl (list|stop|start)' "$calls" && echo yes || echo no)/$(awk -F'|' '$1 == "second" {print $6}' "$state/route-watcher/scale" 2>/dev/null)"
+printf '%s\n' 99999999 >"$state/route-watcher/scale.lock/pid"
+rm -f "$work/jobs/homefield" "$work/jobs/second"
+hf LIMA_ROWS=$'homefield Running\nsecond Running\n' LIMA_HOME="$work/home/.lima" \
+  SETTINGS_DIR="$work/settings" JOBS_DIR="$work/jobs" \
+  -- fleet watch --max-ticks 1
+record "...a dead lock owner is reclaimed, and the tick releases the lock" \
+  "0/yes/no" \
+  "$rc/$(grep -q '^limactl stop second' "$calls" && echo yes || echo no)/$([ -d "$state/route-watcher/scale.lock" ] && echo yes || echo no)"
+
+reset_scale
+tick_env
+printf 'second|homefield-ci|github.com|https://github.com/acme|Default|%s\n' "$(( CLOCK_EPOCH - 1000 ))" >"$state/route-watcher/scale"
+lima_for second 6 5GiB
+rm -f "$work/jobs/homefield" "$work/jobs/second"
+hf LIMA_ROWS=$'homefield Running\nsecond Running\n' LIMA_HOME="$work/home/.lima" \
+  SETTINGS_DIR="$work/settings" JOBS_DIR="$work/jobs" REG=0 \
+  SETTING_OUT='second-mac\nhttps://github.com/acme\n43\n' SVC_NAME='actions.runner.acme.second.service' \
+  GH_RUNNERS=$'42\tmy-mac-homefield\tonline\tself-hosted,linux,arm64,homefield-ci\n43\tsecond-mac\tonline\tself-hosted,linux,arm64,homefield-ci\n' \
+  -- fleet watch --max-ticks 1
+record "fleet watch through the real command: the idle secondary is stopped" "0/yes" \
+  "$rc/$(grep -q '^limactl stop second' "$calls" && echo yes || echo no)"
+
+hf -- fleet watch --instance homefield
+record "fleet watch refuses --instance: the scaler covers every VM" "1/yes" \
+  "$rc/$(has "$err" 'does not apply')"
+hf -- fleet stop --interval 5
+record "fleet stop refuses the scaler's options" "1/yes" \
+  "$rc/$(has "$err" "only supported with 'fleet watch'")"
+
+# The watcher's tick launcher declares its globals: before scale_generation
+# was declared, every agent-driven tick died on UnboundLocalError before
+# fleet watch ran, and the loop repeated the failure every interval. The
+# IOKit import confines this to macOS; the Linux suite job has no IOKit.
+if [ "$(uname -s)" = Darwin ]; then
+  tick_marker="$work/scale-tick-marker"
+  tick_stub="$work/tick-stub.sh"
+  cat >"$tick_stub" <<EOF
+#!/usr/bin/env bash
+: >"$tick_marker"
+EOF
+  chmod +x "$tick_stub"
+  wl_out="$(MARKER="$tick_marker" python3 - "$ROOT/bin/route-watcher.py" "$tick_stub" <<'PYEOF'
+import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location("rw", sys.argv[1])
+rw = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(rw)
+rw.HOMEFIELD = sys.argv[2]
+rw.SCALE_TICK_BUDGET = 10
+rw.run_scale_tick()
+print("tick-ok" if os.path.exists(os.environ["MARKER"]) else "tick-no-marker")
+PYEOF
+)"
+  record "the watcher's tick launcher declares its globals and runs the tick" \
+    "tick-ok" "$wl_out"
+fi
 
 summary
