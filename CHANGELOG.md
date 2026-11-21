@@ -9,7 +9,23 @@ fail, such as a new guard in the routing expression, bumps the minor version
 (0.1 to 0.2). Compatible changes bump the patch. Merged changes wait on
 `main`, under *Unreleased*, until a release is cut.
 
-## Unreleased
+## v0.5.5 (2026-11-21)
+
+Bumps the patch from v0.5.4, and it is compatible for consumers: the routing
+expression, guards, defaults, and options are unchanged, so workflows passing
+`routing-guard@v0.5.4` pass `@v0.5.5` as well. Highlights include GitHub
+Enterprise Server and custom GitHub hostname support, the automatic hosted
+fallback around VM stop/start and Mac sleep/wake (the `route-watcher`
+LaunchAgent), the fleet demand scaler (`homefield fleet watch`), the per-job
+cleanup hook (`--job-cleanup`), opt-in ephemeral runner VM resets
+(`--reset-vm`), removal of the reset base VM with `uninstall`/`reset`, a
+self-hosted runner comparison matrix in the README, a docs-only CI fast path,
+a bounded test-suite worker pool, and a no-retest gate for already-tested
+squash merges on `main`. To upgrade, run `homefield update` (for `install.sh`
+installs) or re-run the README one-liner to update the host tool, and run
+`homefield upgrade` on existing VMs to pick up the updated guest
+provisioning. Consumers of the routing guard can bump `routing-guard@v0.5.4`
+pins to `@v0.5.5` at their leisure.
 
 ### Added
 
@@ -27,8 +43,6 @@ fail, such as a new guard in the routing expression, bumps the minor version
 ### CI
 
 - Self-hosted runner comparison matrix in [`README.md`](README.md#alternatives): compares HomeField against stock macOS runners and local runner apps (`Codemany`), bare-metal/SSH CLIs (`gh-runnerctl`), Docker runner wrappers, macOS VM runners (`Tart` / `Cirrus`), and cloud/Kubernetes autoscalers (`ARC`, `runs-on`, `garm`) using scannable `✅`/`❌` cells across isolation, explicit hosted-switch fallback, workflow routing guard (`--guards` vs simple mode), token hygiene, daily cleanup/ephemeral mode, Rosetta `amd64` support, and areas where other tools do more or HomeField roadmap items ([#231](https://github.com/i2Dev-com/homefield/issues/231), [#14](https://github.com/i2Dev-com/homefield/issues/14), [#285](https://github.com/i2Dev-com/homefield/issues/285), [#286](https://github.com/i2Dev-com/homefield/issues/286), [#287](https://github.com/i2Dev-com/homefield/issues/287)) apply.
-
-### CI
 
 - Docs-only fast path in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) and `tests/release-refs.sh`: when a pull request or push modifies only Markdown or `docs/assets/*` files, CI skips `shellcheck`, `ruff`, and the non-doc shell suites and runs `actionlint` plus `tests/release-refs.sh` (which now also pins the canonical `runs-on` expressions in `README.md` and `docs/adopting.md`).
 
