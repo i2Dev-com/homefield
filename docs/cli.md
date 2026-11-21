@@ -50,7 +50,7 @@ agents that drive the tool without a human in the loop. The guides:
 | `adopt` | Prepare a repository: check the routing, add it to the group, switch it on | `--setup` opens the routing pull request; `--wait` carries on after the merge; `--app-id` / `--app-key-file` for GitHub App auth; refuses a public repository |
 | `memory` | Every VM's memory use: average and peak per day, out-of-memory kills | `--days N` (default 7); fails for a VM it cannot ask |
 | `report` | Queue wait, duration and minutes of jobs, local against hosted | `--json`; one API call per run, so allow a few minutes a month |
-| `fleet` | Fleet-wide status (`status`, default), `start`, and `stop` across every HomeField VM on this Mac | `fleet [status] [--json]` prints per-VM rows and `total`/`online`/`idle`/`busy`/`offline` counts; `fleet start` boots all VMs and prints the fleet summary; `fleet start`/`fleet stop` take `--route-local`/`--route-hosted` for every VM |
+| `fleet` | Fleet-wide status (`status`, default), `start`, `stop`, and the demand scaler (`watch`) across every HomeField VM on this Mac | `fleet [status] [--json]` prints per-VM rows and `total`/`online`/`idle`/`busy`/`offline` counts; `fleet start` boots all VMs and prints the fleet summary; `fleet start`/`fleet stop` take `--route-local`/`--route-hosted` for every VM; `fleet watch [--interval SEC] [--max-ticks N]` runs the demand scaler's ticks (see the runbook, "The demand scaler") |
 | `update` | Update the installed tool and every idle VM to the latest patch release (or branch head), then verify with `diagnose` | `--check` checks without applying; `--allow-minor` opts into minor/major bumps; `--auto` runs periodic check/apply per `HOMEFIELD_AUTO_UPDATE`; `--schedule install\|remove\|status` manages the macOS LaunchAgent; rolls back on failure |
 | `version` | The installed version, and whether a newer release exists (read from GitHub's public API; a private fork set with `HOMEFIELD_REPO` is not checked) | |
 
@@ -72,8 +72,13 @@ agents that drive the tool without a human in the loop. The guides:
 | `HOMEFIELD_WATCH_SLEEP_BUDGET` | Seconds the sleep-side flip may take before the watcher kills it (default 20, of the ~30 s macOS grants before it forces the sleep) |
 | `HOMEFIELD_WATCH_WAKE_WAIT` | Seconds `route-watch wake` waits per VM for its runner to be listed online (default 120) |
 | `HOMEFIELD_WATCH_WAKE_BUDGET` | Seconds the whole wake run may take before the watcher kills it (default 600) |
+| `HOMEFIELD_SCALE_INTERVAL` | Seconds between the demand scaler's ticks (default 60) |
+| `HOMEFIELD_SCALE_WAIT` | Seconds a queued job must have waited before the scaler boots a spare VM (default 300) |
+| `HOMEFIELD_SCALE_IDLE` | Seconds a secondary must have had no job before the scaler stops it again (default 900) |
+| `HOMEFIELD_SCALE_MAX` | Fleet-size cap: the most HomeField VMs on the Mac the scaler will create for (default 4) |
+| `HOMEFIELD_SCALE_TICK_BUDGET` | Seconds one `fleet watch` tick may take before the agent kills it (default 1800) |
 
-The `HOMEFIELD_WATCH_*` variables set when `install`/`upgrade --auto-route` runs are baked into the LaunchAgent's plist environment, so the agent runs with the tuning the installer chose (launchd does not inherit a shell's environment).
+The `HOMEFIELD_WATCH_*` and `HOMEFIELD_SCALE_*` variables set when `install`/`upgrade --auto-route` runs are baked into the LaunchAgent's plist environment, so the agent runs with the tuning the installer chose (launchd does not inherit a shell's environment).
 | `HOMEFIELD_SOURCE_ONLY=1` | Internal: source `bin/homefield` for its functions, run nothing |
 
 ## Machine-readable output (`--json`)
