@@ -1738,7 +1738,7 @@ rm -f "$work/branch-homefield_route-to-local"
 # predates it refuses to write simple mode: the guard step it writes pins
 # the release, whose checker would fail the workflows on their first pull
 # request. A threshold above this checkout's RELEASE reproduces that here.
-run_fn HOMEFIELD_MODE_RELEASE=v0.5.5 GH_GROUPS="$work/groups-selected" GH_MEMBERS="$work/members-other" GH_WF="$work/wf-simple" -- cmd_adopt --repo acme/app --setup
+run_fn HOMEFIELD_MODE_RELEASE=v0.5.6 GH_GROUPS="$work/groups-selected" GH_MEMBERS="$work/members-other" GH_WF="$work/wf-simple" -- cmd_adopt --repo acme/app --setup
 record "--setup simple before the mode release exists: refused, --guards named" "nonzero/yes/0" \
   "$(nonzero "$rc")/$(has "$out" 'is not cut yet; pass --guards')/$(called 'X POST')"
 

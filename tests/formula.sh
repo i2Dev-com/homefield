@@ -28,7 +28,7 @@ done
 # and the new release's values (the version and the tarball's sha256).
 old_version="0.5.3"
 old_sha256="0000000000000000000000000000000000000000000000000000000000000001"
-new_version="0.5.4"
+new_version="0.5.5"
 # The sha256 the sha256sum stub returns for the release tarball.
 new_sha256="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
