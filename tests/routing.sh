@@ -31,9 +31,25 @@ printf '# Lima VM.\n' >"$work/home/.lima/homefield/lima.yaml"
 # resolve that without bash on it (the same rule tests/fakes.sh's sh default
 # follows), so bash — and everything the route code and the records call —
 # is on the stubs' PATH from the start. python3 is the route watcher's
-# power-event helper (its --auto-route check refuses without it); date writes
-# the watcher's run record.
-for t in awk bash cat date dirname grep mktemp mkdir mv rm sed sleep tr python3; do ln -s "$(command -v "$t")" "$stubs/$t"; done
+# power-event helper (its --auto-route check refuses without it).
+for t in awk bash cat dirname grep mktemp mkdir mv rm sed sleep tr python3; do ln -s "$(command -v "$t")" "$stubs/$t"; done
+
+# CLOCK_EPOCH: the suite's clock. The scaler and the route watcher read the
+# time through `date`, and so do the fixtures that must be fresh or overdue
+# relative to it — a suspended or delayed test process would otherwise turn
+# a fresh fixture into an overdue one (tests never observe ambient host
+# time). Every date call in the code under test reads CLOCK_EPOCH, and the
+# fixtures below are written relative to the same constant.
+CLOCK_EPOCH=1700000000
+cat >"$stubs/date" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in
+  "+%s") printf '%s\n' "${CLOCK_EPOCH:?CLOCK_EPOCH not set}" ;;
+  "+%Y-%m-%d %H:%M:%S") printf '2023-11-14 22:13:20\n' ;;
+  *) echo "date stub: unsupported format: $*" >&2; exit 1 ;;
+esac
+EOF
+chmod +x "$stubs/date"
 
 # launchctl: the route watcher agent's load and unload, recorded.
 cat >"$stubs/launchctl" <<'EOF'
@@ -728,7 +744,7 @@ hf() {
   shift
   : >"$calls"
   out="$(env -i HOME="$work/home" PATH="$stubs" CALLS="$calls" \
-    HOMEFIELD_STATE_DIR="$state" HOMEFIELD_GH_TIMEOUT=5 ROUTE_TRIES=1 ROUTE_INTERVAL=0 \
+    HOMEFIELD_STATE_DIR="$state" HOMEFIELD_GH_TIMEOUT=5 ROUTE_TRIES=1 ROUTE_INTERVAL=0 CLOCK_EPOCH="$CLOCK_EPOCH" \
     ${envs[@]+"${envs[@]}"} "$BASH_BIN" "$ROOT/bin/homefield" "$@" 2>"$work/err" </dev/null)"
   rc=$?
   err="$(cat "$work/err")"
@@ -772,7 +788,7 @@ EOF
 tharness() {
   : >"$calls"
   out="$(env -i HOME="$work/home" PATH="$stubs" CALLS="$calls" ROOT="$ROOT" STATE_DIR="$state" \
-    HOMEFIELD_STATE_DIR="$state" HOMEFIELD_GH_TIMEOUT=5 \
+    HOMEFIELD_STATE_DIR="$state" HOMEFIELD_GH_TIMEOUT=5 CLOCK_EPOCH="$CLOCK_EPOCH" \
     ${tharness_env[@]+"${tharness_env[@]}"} "$BASH_BIN" "$THARNESS" "$@" 2>"$work/err" </dev/null)"
   rc=$?
   err="$(cat "$work/err")"
@@ -1060,7 +1076,7 @@ EOF
 iharness() {
   : >"$calls"
   out="$(env -i HOME="$work/home" PATH="$stubs" CALLS="$calls" ROOT="$ROOT" \
-    HOMEFIELD_STATE_DIR="$state" LIMA_STATUS=Running GH_RUNNERS='41\tonline\tfalse\n' \
+    HOMEFIELD_STATE_DIR="$state" LIMA_STATUS=Running CLOCK_EPOCH="$CLOCK_EPOCH" GH_RUNNERS='41\tonline\tfalse\n' \
     ${iharness_env[@]+"${iharness_env[@]}"} "$BASH_BIN" "$IHARNESS" "$@" 2>&1 </dev/null)"
   rc=$?
 }
@@ -1339,7 +1355,7 @@ record "the fleet is at its cap: no create, the tick still passes" "0/0/yes" \
 
 tick_env
 reset_scale
-printf 'second|homefield-ci|github.com|https://github.com/acme|Default|%s\n' "$(( $(date +%s) - 1000 ))" >"$state/route-watcher/scale"
+printf 'second|homefield-ci|github.com|https://github.com/acme|Default|%s\n' "$(( CLOCK_EPOCH - 1000 ))" >"$state/route-watcher/scale"
 lima_for second 6 5GiB
 rm -f "$work/jobs/homefield"
 tharness_env+=(LIMA_ROWS=$'homefield Running\nsecond Running\n')
@@ -1352,7 +1368,7 @@ record "...the tick record says what it did" "ok/stopped second" "$(th_state las
 
 tick_env
 reset_scale
-printf 'second|homefield-ci|github.com|https://github.com/acme|Default|%s\n' "$(( $(date +%s) - 1000 ))" >"$state/route-watcher/scale"
+printf 'second|homefield-ci|github.com|https://github.com/acme|Default|%s\n' "$(( CLOCK_EPOCH - 1000 ))" >"$state/route-watcher/scale"
 lima_for second 6 5GiB
 : >"$work/jobs/second"
 rm -f "$work/jobs/homefield"
@@ -1373,18 +1389,18 @@ record "a VM that cannot be asked about jobs: fail safe, nothing scales" "1/0/fa
 
 tick_env
 reset_scale
-printf 'pid=%s\nstarted=%s\n' "$$" "$(date +%s)" >"$state/route-watcher/running"
+printf 'pid=%s\nstarted=%s\n' "$$" "$CLOCK_EPOCH" >"$state/route-watcher/running"
 tharness fleet_watch_tick
 record "the sleep/wake watcher is running: the tick stands down" "0/0/yielded to the watcher" \
   "$rc/$(grep -c '^scale_exec ' "$calls" || true)/$(th_state last_action)"
-printf 'pid=99999999\nstarted=%s\n' "$(date +%s)" >"$state/route-watcher/running"
+printf 'pid=99999999\nstarted=%s\n' "$CLOCK_EPOCH" >"$state/route-watcher/running"
 tharness fleet_watch_tick
 record "...a dead marker pid does not stop the scaler" "0/1" \
   "$rc/$(grep -c '^scale_exec ' "$calls" || true)"
 
 tick_env
 reset_scale
-printf 'second|homefield-ci|github.com|https://github.com/acme|Default|%s\n' "$(date +%s)" >"$state/route-watcher/scale"
+printf 'second|homefield-ci|github.com|https://github.com/acme|Default|%s\n' "$CLOCK_EPOCH" >"$state/route-watcher/scale"
 lima_for second 6 5GiB
 tharness_env+=(LIMA_ROWS=$'homefield Running\nsecond Stopped\n')
 tharness fleet_watch_tick
@@ -1396,7 +1412,7 @@ record "...the boot refreshes its busy time" "second homefield-ci github.com htt
 
 tick_env
 reset_scale
-printf 'second|homefield-ci|github.com|https://github.com/other|Default|%s\n' "$(date +%s)" >"$state/route-watcher/scale"
+printf 'second|homefield-ci|github.com|https://github.com/other|Default|%s\n' "$CLOCK_EPOCH" >"$state/route-watcher/scale"
 lima_for second 6 5GiB
 tharness_env+=(LIMA_ROWS=$'homefield Running\nsecond Stopped\n')
 # A bigger host: homefield plus a new 6 vCPU / 5 GiB spare fit, so the create
@@ -1420,7 +1436,7 @@ reset_scale
 # field is empty, and the tab-separated record must keep it (a space-separated
 # record would shift the busy time into the group field and drop the line).
 printf 'my-mac-homefield\nhttps://github.com/acme/api\n42\n' >"$work/settings/homefield"
-printf 'second|homefield-ci|github.com|https://github.com/acme/api||%s\n' "$(date +%s)" >"$state/route-watcher/scale"
+printf 'second|homefield-ci|github.com|https://github.com/acme/api||%s\n' "$CLOCK_EPOCH" >"$state/route-watcher/scale"
 lima_for second 6 5GiB
 tharness_env+=(LIMA_ROWS=$'homefield Running\nsecond Stopped\n')
 # A bigger host: the boot is what is measured, not a headroom refusal.
@@ -1439,7 +1455,7 @@ tharness fleet_watch_tick
 record "a group with spaces is recorded whole" \
   "homefield-scale homefield-ci github.com https://github.com/acme CI Runners epoch" \
   "$(awk -F'|' '{print $1, $2, $3, $4, $5, ($6 ~ /^[0-9]+$/ ? "epoch" : "bad")}' "$state/route-watcher/scale" 2>/dev/null)"
-printf 'second|homefield-ci|github.com|https://github.com/acme|CI Runners|%s\n' "$(date +%s)" >"$state/route-watcher/scale"
+printf 'second|homefield-ci|github.com|https://github.com/acme|CI Runners|%s\n' "$CLOCK_EPOCH" >"$state/route-watcher/scale"
 lima_for second 6 5GiB
 tharness_env+=(LIMA_ROWS=$'homefield Running\nsecond Stopped\n')
 tharness fleet_watch_tick
@@ -1464,7 +1480,7 @@ record "a GHES record is scaled like a github.com one, on its own host" \
 
 tick_env
 reset_scale
-printf 'ghost|homefield-ci|github.com|https://github.com/acme|Default|123\nhomefield-scale|homefield-ci|github.com|https://github.com/acme|Default|%s\n' "$(date +%s)" >"$state/route-watcher/scale"
+printf 'ghost|homefield-ci|github.com|https://github.com/acme|Default|123\nhomefield-scale|homefield-ci|github.com|https://github.com/acme|Default|%s\n' "$CLOCK_EPOCH" >"$state/route-watcher/scale"
 lima_for homefield-scale 6 5GiB
 tharness_env+=(LIMA_ROWS=$'homefield Running\nhomefield-scale Running\n')
 tharness fleet_watch_tick
@@ -1480,7 +1496,9 @@ record "GitHub cannot be asked about queued runs: fail safe, nothing scales" "1/
 
 tick_env
 reset_scale
-tharness_env+=(GH_RUNS="9001\t$(date -u '+%Y-%m-%dT%H:%M:%SZ')\n")
+# created_at is CLOCK_EPOCH - 5: younger than HOMEFIELD_SCALE_WAIT=10, so
+# the run is queued but has not waited long enough.
+tharness_env+=(GH_RUNS='9001\t2023-11-14T22:13:15Z\n')
 tharness fleet_watch_tick
 record "a queued run younger than the threshold: no action yet" "0/0/none" \
   "$rc/$(grep -c '^scale_exec ' "$calls" || true)/$(th_state last_action)"
@@ -1491,7 +1509,7 @@ record "a queued run younger than the threshold: no action yet" "0/0/none" \
 reset_scale
 tick_env
 rm -f "$work/jobs/homefield"
-printf 'second|homefield-ci|github.com|https://github.com/acme|Default|%s\n' "$(( $(date +%s) - 1000 ))" >"$state/route-watcher/scale"
+printf 'second|homefield-ci|github.com|https://github.com/acme|Default|%s\n' "$(( CLOCK_EPOCH - 1000 ))" >"$state/route-watcher/scale"
 lima_for second 6 5GiB
 tharness_env+=(LIMA_ROWS=$'homefield Running\nsecond Running\n')
 tharness fleet_watch_tick
@@ -1501,7 +1519,7 @@ record "fleet status prints the scaler's last tick" "yes/yes" \
 
 reset_scale
 tick_env
-printf 'second|homefield-ci|github.com|https://github.com/acme|Default|%s\n' "$(( $(date +%s) - 1000 ))" >"$state/route-watcher/scale"
+printf 'second|homefield-ci|github.com|https://github.com/acme|Default|%s\n' "$(( CLOCK_EPOCH - 1000 ))" >"$state/route-watcher/scale"
 lima_for second 6 5GiB
 rm -f "$work/jobs/homefield" "$work/jobs/second"
 hf LIMA_ROWS=$'homefield Running\nsecond Running\n' LIMA_HOME="$work/home/.lima" \
