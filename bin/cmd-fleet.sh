@@ -217,7 +217,7 @@ cmd_fleet() {
 #
 # The scaler's records live in the route-watcher subdirectory of the state
 # directory (the agent's files, per-Mac). `scale` holds one line per
-# secondary it created — `name label host last-busy-epoch` — and
+# secondary it created — `name label host url group last-busy-epoch` — and
 # `scale-state` holds the last tick's summary, the way the watcher's `state`
 # holds its last run; `fleet status` prints it.
 
@@ -231,8 +231,10 @@ scale_state_file() { printf '%s/scale-state' "$(route_watcher_dir)"; }
 iso_to_epoch() {
   local s="$1" y m d hh mm ss
   [[ "$s" =~ ^([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})Z$ ]] || return 1
-  y=${BASH_REMATCH[1]} m=${BASH_REMATCH[2]} d=${BASH_REMATCH[3]}
-  hh=${BASH_REMATCH[4]} mm=${BASH_REMATCH[5]} ss=${BASH_REMATCH[6]}
+  # 10#: GitHub's timestamps are zero-padded, and bash would read 08 and 09
+  # as octal (an error, or worse a wrong value) without the base.
+  y=$((10#${BASH_REMATCH[1]})) m=$((10#${BASH_REMATCH[2]})) d=$((10#${BASH_REMATCH[3]}))
+  hh=$((10#${BASH_REMATCH[4]})) mm=$((10#${BASH_REMATCH[5]})) ss=$((10#${BASH_REMATCH[6]}))
   [ "$m" -ge 1 ] && [ "$m" -le 12 ] || return 1
   [ "$d" -ge 1 ] && [ "$d" -le 31 ] || return 1
   [ "$hh" -le 23 ] && [ "$mm" -le 59 ] && [ "$ss" -le 60 ] || return 1
@@ -326,29 +328,37 @@ scale_headroom() {
 }
 
 # scale_record_read: the scale record into SCALE_NAME/SCALE_LABEL/SCALE_HOST/
-# SCALE_BUSY (parallel arrays). A line with fewer than four fields is not
-# one the scaler wrote; it is skipped. A missing file reads as none.
+# SCALE_URL/SCALE_GROUP/SCALE_BUSY (parallel arrays). A line with fewer than
+# six fields is not one the scaler wrote; it is skipped. A missing file reads
+# as none.
 SCALE_NAME=()
 SCALE_LABEL=()
 SCALE_HOST=()
+SCALE_URL=()
+SCALE_GROUP=()
 SCALE_BUSY=()
 
 scale_record_read() {
   SCALE_NAME=()
   SCALE_LABEL=()
   SCALE_HOST=()
+  SCALE_URL=()
+  SCALE_GROUP=()
   SCALE_BUSY=()
-  local f sname slabel shost sbusy
+  local f sname slabel shost surl sgroup sbusy
   f="$(scale_file)"
   [ -f "$f" ] || return 0
-  while read -r sname slabel shost sbusy; do
-    [ -n "$sname" ] && [ -n "$slabel" ] && [ -n "$shost" ] && [ -n "$sbusy" ] || continue
+  while read -r sname slabel shost surl sgroup sbusy; do
+    [ -n "$sname" ] && [ -n "$slabel" ] && [ -n "$shost" ] && [ -n "$surl" ] &&
+      [ -n "$sgroup" ] && [ -n "$sbusy" ] || continue
     case "$sbusy" in
       '' | *[!0-9]*) continue ;;
     esac
     SCALE_NAME+=("$sname")
     SCALE_LABEL+=("$slabel")
     SCALE_HOST+=("$shost")
+    SCALE_URL+=("$surl")
+    SCALE_GROUP+=("$sgroup")
     SCALE_BUSY+=("$sbusy")
   done <"$f"
   return 0
@@ -365,7 +375,7 @@ scale_record_write() {
   tmp="$(mktemp "$dir/.scale.XXXXXX")" || return 1
   : >"$tmp" || { rm -f "$tmp"; return 1; }
   for ((i = 0; i < ${#SCALE_NAME[@]}; i++)); do
-    printf '%s %s %s %s\n' "${SCALE_NAME[i]}" "${SCALE_LABEL[i]}" "${SCALE_HOST[i]}" "${SCALE_BUSY[i]}" >>"$tmp" ||
+    printf '%s %s %s %s %s %s\n' "${SCALE_NAME[i]}" "${SCALE_LABEL[i]}" "${SCALE_HOST[i]}" "${SCALE_URL[i]}" "${SCALE_GROUP[i]}" "${SCALE_BUSY[i]}" >>"$tmp" ||
       { rm -f "$tmp"; return 1; }
   done
   mv -f "$tmp" "$f" || { rm -f "$tmp"; return 1; }
@@ -392,29 +402,33 @@ scale_exec() {
 }
 
 # queued_wait_since <repo> <label> <host>: the earliest created_at of the
-# repository's queued runs that still have a job queued for <label> — the
-# jobs waiting for a local runner behind a busy fleet — as an epoch. Empty
-# when nothing waits; 1 when GitHub could not be asked (the caller fails
-# safe and scales nothing). The lookup is the same shape as route's
-# stuck-run one (one paginated runs call per repo, then the run's jobs), and
-# it is host-agnostic: a GHES host's API answers it like github.com's, so
-# demand scaling needs no hosted runners (#287).
+# repository's runs that still have a job queued for <label> — the jobs
+# waiting for a local runner behind a busy fleet — as an epoch. Empty when
+# nothing waits; 1 when GitHub could not be asked (the caller fails safe and
+# scales nothing). The lookup is the same shape as route's stuck-run one —
+# one paginated runs call per status, then the run's jobs — and it is
+# host-agnostic: a GHES host's API answers it like github.com's, so demand
+# scaling needs no hosted runners (#287). In-progress runs count too: a
+# matrix or parallel run goes in_progress as soon as one of its jobs starts,
+# while the rest of its jobs are still queued behind the busy fleet.
 queued_wait_since() {
-  local repo="$1" label="$2" host="$3" ids id created waiting best="" epoch
+  local repo="$1" label="$2" host="$3" status ids id created waiting best="" epoch
   label="$(printf '%s' "$label" | tr '[:upper:]' '[:lower:]')"
-  ids="$(gh api --hostname "$host" --paginate "repos/${repo}/actions/runs?status=queued&per_page=100" \
-    --jq '.workflow_runs[] | [.id, .created_at] | @tsv' </dev/null 2>/dev/null)" || return 1
-  while IFS=$'\t' read -r id created; do
-    [ -n "$id" ] || continue
-    waiting="$(gh api --hostname "$host" --paginate "repos/${repo}/actions/runs/${id}/jobs?per_page=100" \
-      --jq ".jobs[] | select(.status == \"queued\" and ((.labels | map(ascii_downcase)) | index(\"${label}\"))) | .id" \
-      </dev/null 2>/dev/null)" || return 1
-    [ -n "$waiting" ] || continue
-    epoch="$(iso_to_epoch "$created")" || continue
-    if [ -z "$best" ] || [ "$epoch" -lt "$best" ]; then
-      best="$epoch"
-    fi
-  done <<<"$ids"
+  for status in queued in_progress; do
+    ids="$(gh api --hostname "$host" --paginate "repos/${repo}/actions/runs?status=${status}&per_page=100" \
+      --jq '.workflow_runs[] | [.id, .created_at] | @tsv' </dev/null 2>/dev/null)" || return 1
+    while IFS=$'\t' read -r id created; do
+      [ -n "$id" ] || continue
+      waiting="$(gh api --hostname "$host" --paginate "repos/${repo}/actions/runs/${id}/jobs?per_page=100" \
+        --jq ".jobs[] | select(.status == \"queued\" and ((.labels | map(ascii_downcase)) | index(\"${label}\"))) | .id" \
+        </dev/null 2>/dev/null)" || return 1
+      [ -n "$waiting" ] || continue
+      epoch="$(iso_to_epoch "$created")" || continue
+      if [ -z "$best" ] || [ "$epoch" -lt "$best" ]; then
+        best="$epoch"
+      fi
+    done <<<"$ids"
+  done
   if [ -n "$best" ]; then
     printf '%s\n' "$best"
   fi
@@ -467,6 +481,7 @@ scale_demand() {
 # queued jobs, and everything the secondary's registration needs from it.
 PRIMARY_NAME="" PRIMARY_URL="" PRIMARY_GROUP=""
 PRIMARY_AUTO_ROUTE="" PRIMARY_CPUS="" PRIMARY_MEM="" PRIMARY_ROWS=""
+PRIMARY_PKGS="" PRIMARY_HOOKS=""
 
 # scale_find_primary <label> <host> <repo>: 0 found, 1 no Running VM serves
 # the demand (the label's runner is on another Mac, or its VM is stopped:
@@ -477,6 +492,7 @@ scale_find_primary() {
   local label="$1" host="$2" repo="$3" list name st rows labels rname rlabels
   PRIMARY_NAME="" PRIMARY_URL="" PRIMARY_GROUP=""
   PRIMARY_AUTO_ROUTE="" PRIMARY_CPUS="" PRIMARY_MEM="" PRIMARY_ROWS=""
+  PRIMARY_PKGS="" PRIMARY_HOOKS=""
   list="$(vm_instances)" || return 2
   while IFS= read -r name; do
     [ -n "$name" ] || continue
@@ -510,6 +526,14 @@ scale_find_primary() {
     size="$(vm_size "$name")" || return 2
     PRIMARY_CPUS="${size%% *}"
     PRIMARY_MEM="${size##* }"
+    # What the secondary has to carry for the primary's workflows to keep
+    # passing on it: the saved extra apt packages (preset packages included),
+    # readable from the guest, and — a refusal, not a copy — the provisioning
+    # hooks in the guest's provision.d (user hooks and preset hooks alike):
+    # install has no flag that stages another VM's hooks, and a spare without
+    # them takes jobs whose tools it does not have (runbook, "Adding tools").
+    PRIMARY_PKGS="$(runner_extra_packages)" || return 2
+    PRIMARY_HOOKS="$(guest sudo sh -c 'ls /etc/homefield/provision.d 2>/dev/null')" || return 2
     return 0
   done <<<"$list"
   return 1
@@ -546,10 +570,16 @@ scale_grow() {
 
   # A spare that matches the demand and is stopped comes back first: booting
   # it adds no VM and no allocation, so the create-only guards below do not
-  # apply to it.
+  # apply to it. The match is by label, host, registration url and runner
+  # group — the same label can be used by another registration on the same
+  # host, and a spare from that one cannot serve this demand (its runner is
+  # scoped elsewhere, and a group change since the spare was recorded is the
+  # same mismatch).
   local i idx
   for ((i = 0; i < ${#SCALE_NAME[@]}; i++)); do
     [ "${SCALE_LABEL[i]}" = "$label" ] && [ "${SCALE_HOST[i]}" = "$host" ] || continue
+    [ "${SCALE_URL[i]}" = "$PRIMARY_URL" ] || continue
+    [ "${SCALE_GROUP[i]}" = "$PRIMARY_GROUP" ] || continue
     idx="$(fleet_index "${SCALE_NAME[i]}")"
     [ "$idx" != -1 ] && [ "${FLEET_STATUS[idx]}" = Stopped ] || continue
     if scale_exec start --instance "${SCALE_NAME[i]}"; then
@@ -564,8 +594,12 @@ scale_grow() {
     return 1
   done
 
-  # Creating one is where the issue's guards sit: the fleet-size cap, then
-  # the headroom budget.
+  # Creating one is where the issue's guards sit: what the spare must carry,
+# the fleet-size cap, then the headroom budget.
+  if [ -n "$PRIMARY_HOOKS" ]; then
+    log "fleet watch: the primary ${PRIMARY_NAME} carries provisioning hooks the scaler cannot copy; add the spare by hand (runbook, \"More runners\")"
+    return 0
+  fi
   local cap="${HOMEFIELD_SCALE_MAX:-4}"
   case "$cap" in
     '' | *[!0-9]*) cap=4 ;;
@@ -612,6 +646,9 @@ scale_grow() {
   if [ "$PRIMARY_AUTO_ROUTE" = 1 ]; then
     argv+=(--auto-route)
   fi
+  if [ -n "$PRIMARY_PKGS" ]; then
+    argv+=(--packages "$PRIMARY_PKGS")
+  fi
   argv+=(--cpus "$PRIMARY_CPUS" --memory "$PRIMARY_MEM")
   if ! scale_exec ${argv[@]+"${argv[@]}"}; then
     echo "homefield: fleet watch: creating ${cand} failed; remove the half-made VM with bin/homefield reset --instance ${cand} (the next demand tries again)" >&2
@@ -620,6 +657,8 @@ scale_grow() {
   SCALE_NAME+=("$cand")
   SCALE_LABEL+=("$label")
   SCALE_HOST+=("$host")
+  SCALE_URL+=("$PRIMARY_URL")
+  SCALE_GROUP+=("$PRIMARY_GROUP")
   SCALE_BUSY+=("$now")
   scale_record_write ||
     echo "homefield: fleet watch: created ${cand} but could not record it; delete it by hand or the next demand creates another ($(scale_file))" >&2
@@ -750,7 +789,7 @@ fleet_watch_tick() {
   case "$idle_max" in
     '' | *[!0-9]*) idle_max=900 ;;
   esac
-  local -a keep_name=() keep_label=() keep_host=() keep_busy=()
+  local -a keep_name=() keep_label=() keep_host=() keep_url=() keep_group=() keep_busy=()
   for ((i = 0; i < ${#SCALE_NAME[@]}; i++)); do
     idx="$(fleet_index "${SCALE_NAME[i]}")"
     if [ "$idx" = -1 ]; then
@@ -783,11 +822,15 @@ fleet_watch_tick() {
     keep_name+=("${SCALE_NAME[i]}")
     keep_label+=("${SCALE_LABEL[i]}")
     keep_host+=("${SCALE_HOST[i]}")
+    keep_url+=("${SCALE_URL[i]}")
+    keep_group+=("${SCALE_GROUP[i]}")
     keep_busy+=("${SCALE_BUSY[i]}")
   done
   SCALE_NAME=("${keep_name[@]+"${keep_name[@]}"}")
   SCALE_LABEL=("${keep_label[@]+"${keep_label[@]}"}")
   SCALE_HOST=("${keep_host[@]+"${keep_host[@]}"}")
+  SCALE_URL=("${keep_url[@]+"${keep_url[@]}"}")
+  SCALE_GROUP=("${keep_group[@]+"${keep_group[@]}"}")
   SCALE_BUSY=("${keep_busy[@]+"${keep_busy[@]}"}")
   scale_record_write || { echo "homefield: fleet watch: could not update $(scale_file)" >&2; rc=1; }
 

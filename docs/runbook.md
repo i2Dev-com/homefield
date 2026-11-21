@@ -788,11 +788,13 @@ whose helper runs one tick every `HOMEFIELD_SCALE_INTERVAL` seconds (default
    has its still-served repositories flipped to hosted first, exactly as a
    hand-run `stop` would;
 4. and, only when at least one VM is running and every one of them is busy,
-   asks GitHub for queued runs whose jobs still wait for a routing label —
-   the same lookup the stuck-run recovery uses, and host-agnostic since
-   #287, so a GHES registration is scaled like a github.com one. When the
-   oldest wait is past `HOMEFIELD_SCALE_WAIT` seconds (default 300), one
-   spare is booted or created per tick.
+   asks GitHub for queued and in-progress runs whose jobs still wait for a
+   routing label (a matrix or parallel run goes in_progress as soon as one
+   of its jobs starts, while the rest of its jobs are still queued) — the
+   same lookup the stuck-run recovery uses, and host-agnostic since #287,
+   so a GHES registration is scaled like a github.com one. When the oldest
+   wait is past `HOMEFIELD_SCALE_WAIT` seconds (default 300), one spare is
+   booted or created per tick.
 
 Creating a spare passes the guards the situation demands: the fleet-size cap
 (`HOMEFIELD_SCALE_MAX` VMs, default 4), and the headroom budget of
@@ -802,11 +804,18 @@ or the create is refused. The spare is named after the fleet's first VM
 (`<instance>-scale`, `-scale2`, …), is persistent rather than `--ephemeral`
 (it is started and stopped on demand, so its registration has to survive a
 stop), and is installed like the runner that serves the queued label: same
-url, label and group, same CPU and RAM as the primary, and `--auto-route`
-when the primary has the fallback on. Everything it did is recorded in the
-route-watcher subdirectory of the state directory (`scale` holds one line
-per secondary, `scale-state` the last tick's summary), and `fleet status`
-prints the last tick's result.
+url, label and group, same CPU and RAM as the primary, the primary's saved
+extra apt packages (`--packages`), and `--auto-route` when the primary has
+the fallback on. A primary that carries provisioning hooks
+(`/etc/homefield/provision.d`, user hooks and preset hooks alike) is not
+auto-created at all — install has no flag that stages another VM's hooks,
+and a spare without them would take jobs whose tools it does not have — so
+the tick names the runbook's manual path ("More runners") instead. The
+spare's record matches on url and group too, so a stopped spare from
+another registration on the same host is not booted for this demand.
+Everything it did is recorded in the route-watcher subdirectory of the
+state directory (`scale` holds one line per secondary, `scale-state` the
+last tick's summary), and `fleet status` prints the last tick's result.
 
 The scaler is fail-safe in the same direction as the rest of the fallback:
 a queued-run lookup that cannot be asked reads as "nothing is proven", not
