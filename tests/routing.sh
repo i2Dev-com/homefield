@@ -622,8 +622,13 @@ case "$1" in
             fi ;;
           # the demand scaler's reads of the primary's guest (#291): the
           # saved extra packages, and the provisioning hooks it carries
+          # (per-VM: one VM carries hooks, another does not)
           *extra-packages*) [ -n "${EXTRA_PKGS:-}" ] && printf '%s\n' "$EXTRA_PKGS" || : ;;
-          *provision.d*) printf '%b' "${HOOKS_LIST-}" ;;
+          *provision.d*)
+            case "$vm" in
+              second) printf '%b' "${HOOKS_LIST_SECOND-}" ;;
+              *) printf '%b' "${HOOKS_LIST-}" ;;
+            esac ;;
         esac
         ;;
       python3)
@@ -674,6 +679,13 @@ case "$*" in
     if [ -n "${GH_CI_RUNNER:-}" ]; then echo "$GH_CI_RUNNER"; else echo "variable not found" >&2; exit 1; fi
     ;;
   "variable set"*) ;;
+  # the demand scaler's group-admission check (#299): a per-group override,
+  # so a fixture can put runner 42 in a group that excludes the queued repo
+  # and runner 43 in one that admits it
+  *"runner-groups/7/runners"*) printf '%b' "${GH_GROUP_RUNNERS_7:-${GH_GROUP_RUNNERS-}}" ;;
+  *"runner-groups/8/runners"*) printf '%b' "${GH_GROUP_RUNNERS_8:-${GH_GROUP_RUNNERS-}}" ;;
+  *"runner-groups/7/repositories"*) printf '%b' "${GH_GROUP_REPOS_7:-${GH_GROUP_REPOS-}}" ;;
+  *"runner-groups/8/repositories"*) printf '%b' "${GH_GROUP_REPOS_8:-${GH_GROUP_REPOS-}}" ;;
   *"actions/runner-groups/"*"repositories"*)
     printf '%b' "${GH_GROUP_REPOS-}" ;;
   *"actions/runner-groups/"*"runners"*)
@@ -787,6 +799,7 @@ tick_env() {
     GH_RUNNERS=$'42\tmy-mac-homefield\tonline\tself-hosted,linux,arm64,homefield-ci\n'
     GH_GROUPS=$'Default\tselected\tfalse\t1\n'
     GH_GROUP_RUNNERS='42\n'
+    GH_GROUP_REPOS='acme/api\n'
     GH_RUNS='9001\t2020-01-01T00:00:00Z\n'
     GH_JOBS='5\n'
     HOMEFIELD_SCALE_WAIT=10 HOMEFIELD_SCALE_IDLE=100
@@ -1189,7 +1202,8 @@ tick_env() {
     JOBS_DIR="$work/jobs"
     GH_RUNNERS=$'42\tmy-mac-homefield\tonline\tself-hosted,linux,arm64,homefield-ci\n'
     GH_GROUPS=$'Default\tselected\tfalse\t1\n'
-    GH_GROUP_RUNNERS='42\n'
+    GH_GROUP_RUNNERS=$'42\n43\n'
+    GH_GROUP_REPOS=$'acme/api\nacme/web\n'
     GH_RUNS='9001\t2020-01-01T00:00:00Z\n'
     GH_JOBS='5\n'
     HOMEFIELD_SCALE_WAIT=10 HOMEFIELD_SCALE_IDLE=100
@@ -1239,6 +1253,51 @@ tharness fleet_watch_tick
 record "the primary's saved extra packages go on the spare's install" \
   "0/scale_exec install --instance homefield-scale --url https://github.com/acme --label homefield-ci --group Default --auto-route --packages docker-buildx ghcli --cpus 6 --memory 5" \
   "$rc/$(grep '^scale_exec install ' "$calls")"
+
+tick_env
+reset_scale
+# Two runners share the label in different selected-repository groups: the
+# first VM's group excludes the queued repository, so the primary is the one
+# whose group admits it — a spare in the excluding group could not take the
+# queued jobs (route's own permission check, runner_serves_repo).
+printf 'second-mac\nhttps://github.com/acme\n43\n' >"$work/settings/second"
+lima_for second 6 5GiB
+: >"$work/jobs/second"
+printf 'auto_route=1\n' >"$state/second.state"
+tharness_env+=(
+  LIMA_ROWS=$'homefield Running\nsecond Running\n'
+  GH_RUNNERS=$'42\tmy-mac-homefield\tonline\tself-hosted,linux,arm64,homefield-ci\n43\tsecond-mac\tonline\tself-hosted,linux,arm64,homefield-ci\n'
+  GH_GROUPS=$'Excludes\tselected\tfalse\t7\nAdmits\tselected\tfalse\t8\n'
+  GH_GROUP_RUNNERS_7=$'42\n' GH_GROUP_RUNNERS_8=$'43\n'
+  GH_GROUP_REPOS_7=$'acme/other\n' GH_GROUP_REPOS_8=$'acme/api\n'
+  SYSCTL_CPUS=24 SYSCTL_MEM=68719476736
+)
+tharness fleet_watch_tick
+record "a primary whose group excludes the queued repo is skipped for one that admits it" \
+  "0/scale_exec install --instance homefield-scale --url https://github.com/acme --label homefield-ci --group Admits --auto-route --cpus 6 --memory 5" \
+  "$rc/$(grep '^scale_exec install ' "$calls")"
+
+tick_env
+reset_scale
+# Two overdue demands in one tick: the first cannot be answered (the only
+# runner serving its label carries hooks the scaler cannot copy), and the
+# tick must go on to the second instead of letting the first starve it.
+printf 'second-mac\nhttps://github.com/acme\n43\n' >"$work/settings/second"
+lima_for second 6 5GiB
+: >"$work/jobs/second"
+printf 'auto_route=1\n' >"$state/second.state"
+printf 'homefield-ci acme/api github.com\nbeta-ci acme/web github.com\n' >"$state/routing"
+tharness_env+=(
+  LIMA_ROWS=$'homefield Running\nsecond Running\n'
+  GH_RUNNERS=$'42\tmy-mac-homefield\tonline\tself-hosted,linux,arm64,homefield-ci\n43\tsecond-mac\tonline\tself-hosted,linux,arm64,beta-ci\n'
+  HOOKS_LIST=$'50-buildx-rosetta.sh\n'
+  SYSCTL_CPUS=24 SYSCTL_MEM=68719476736
+)
+tharness fleet_watch_tick
+record "an unserviceable demand does not starve the next one in the same tick" \
+  "0/scale_exec install --instance homefield-scale --url https://github.com/acme --label beta-ci --group Default --auto-route --cpus 6 --memory 5" \
+  "$rc/$(grep '^scale_exec install ' "$calls")"
+rm -f "$work/jobs/second" "$work/settings/second" "$state/second.state"
 
 tick_env
 reset_scale

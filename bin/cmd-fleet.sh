@@ -527,6 +527,19 @@ scale_find_primary() {
       *",$(lower "$label"),"* ) ;; *) continue ;;
     esac
     in_scope "$repo" "$(scope_owner "$RS_URL")" || continue
+    # The runner's group must admit the queued repository too: two VMs can
+    # share a label in different selected-repository groups, and a spare
+    # created in a group that excludes the repo cannot take the queued jobs
+    # no matter what label it carries (route's own permission check,
+    # runner_serves_repo). A group that cannot be asked is the same
+    # fail-safe as a runner list that cannot.
+    local serves=0
+    runner_serves_repo "$(scope_owner "$RS_URL")" "$RS_ID" "$repo" "$host" || serves=$?
+    case "$serves" in
+      0) ;;
+      1) continue ;;
+      *) return 2 ;;
+    esac
     PRIMARY_NAME="$name"
     PRIMARY_URL="$RS_URL"
     PRIMARY_ROWS="$rows"
@@ -872,14 +885,17 @@ fleet_watch_tick() {
       for ((i = 0; i < ${#SCALE_DEMAND_LABEL[@]}; i++)); do
         idle=$((now - SCALE_DEMAND_SINCE[i]))
         if [ "$idle" -ge "$wait_max" ]; then
-          # One VM per tick: the next tick re-evaluates what is left queued.
+          # One VM per tick — but only one that actually added capacity: an
+          # entry the scaler cannot serve (a label served on another Mac, a
+          # primary with hooks it cannot copy) must not win every tick and
+          # starve a later local label it could answer.
+          local action_before="$SCALE_ACTION"
           if scale_grow "${SCALE_DEMAND_LABEL[i]}" "${SCALE_DEMAND_HOST[i]}" \
             "${SCALE_DEMAND_REPO[i]}" "$idle" "$now"; then
-            :
+            [ "$SCALE_ACTION" = "$action_before" ] || break
           else
             rc=1
           fi
-          break
         fi
       done
     else
