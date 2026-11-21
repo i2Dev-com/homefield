@@ -23,6 +23,10 @@
 set -uo pipefail
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# The reset-base markers (#297): the fixture below writes the stored config
+# install --reset-vm leaves behind, with the markers as vm.sh defines them.
+# shellcheck source=bin/lib/vm.sh
+. "$ROOT/bin/lib/vm.sh"
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
@@ -37,7 +41,13 @@ stub() { printf '#!/usr/bin/env bash\n%s\n' "$2" >"$stubs/$1"; chmod +x "$stubs/
 stub sudo 'while [ $# -gt 0 ]; do case "$1" in -u) shift 2 ;; -n|--preserve-env=*) shift ;; *) break ;; esac; done
 exec "$@"'
 stub limactl 'echo "limactl $*" >>"$LOG"
-[ "$1" != copy ] || [ "${FAIL_COPY:-}" != 1 ]'
+case "$1" in
+  copy) [ "${FAIL_COPY:-}" != 1 ] ;;
+  delete) case "$3" in
+            *-base) [ "${FAIL_BASE_DELETE:-}" != 1 ] ;;
+            *) [ "${FAIL_DELETE:-}" != 1 ] ;;
+          esac ;;
+esac'
 stub chown 'exit 0'
 stub id 'case "$1" in -u) echo 0 ;; *) exec /usr/bin/id "$@" ;; esac'
 stub pgrep 'case "$*" in *"[R]unner.Worker"*) ;; *) exit 0 ;; esac
@@ -59,7 +69,7 @@ esac'
 # one FAIL_UNINSTALL names: a disable that fails has disabled the unit, the
 # other steps fail without doing their part.
 fresh() {
-  rm -rf "${work:?}/runner" "$units" "$work/log"
+  rm -rf "${work:?}/runner" "$units" "$work/log" "$work/lima"
   mkdir -p "$home" "$units" "$work/stage"
   # What the tool's copy places in the guest: provision.sh with its paths in
   # the scratch tree, at the staged path (HOMEFIELD_STAGE_DIR, #185).
@@ -135,7 +145,8 @@ guest_stdin() { "\$@"; }
 cmd_uninstall \${UNINSTALL_ARGS---keep-vm}
 EOF
 run() {
-  out="$(PATH="$stubs:$PATH" LOG="$work/log" HOME_DIR="$home" UNITS="$units" "$@" bash "$work/harness.sh" 2>&1 </dev/null)"
+  out="$(PATH="$stubs:$PATH" LOG="$work/log" HOME_DIR="$home" UNITS="$units" \
+    LIMA_HOME="$work/lima" "$@" bash "$work/harness.sh" 2>&1 </dev/null)"
   rc=$?
 }
 state() {
@@ -228,6 +239,33 @@ fresh
 run env UNINSTALL_ARGS=
 record "uninstall succeeds" "0" "$rc"
 record "...deregistered, then the VM was deleted once" "removed/1" "$(state | cut -d/ -f1)/$(logged 'limactl delete --force')"
+
+echo "the reset base VM goes with the VM (#297):"
+reset_base_at() {  # $1: the LIMA_HOME; a marked base, as install --reset-vm leaves it
+  mkdir -p "$1/homefield-base"
+  printf '%s\n%s\n' "$HF_VM_MARKER" "$HF_RESET_BASE_MARKER" >"$1/homefield-base/lima.yaml"
+}
+logged_x() { grep -c -x -e "$1" "$work/log" || true; }
+fresh
+reset_base_at "$work/lima"
+run env UNINSTALL_ARGS=
+record "uninstall deletes the marked reset base with the VM" "0/1/1" \
+  "$rc/$(logged_x 'limactl delete --force homefield')/$(logged_x 'limactl delete --force homefield-base')"
+record "...the base was not asked to stop first (install leaves it stopped)" "0" \
+  "$(logged 'limactl stop --force homefield-base')"
+
+fresh
+mkdir -p "$work/lima/homefield-base"
+printf '%s\n' "$HF_VM_MARKER" >"$work/lima/homefield-base/lima.yaml"
+run env UNINSTALL_ARGS=
+record "an unmarked <instance>-base is never touched (an ordinary runner may be named that)" "0/1/0" \
+  "$rc/$(logged_x 'limactl delete --force homefield')/$(logged_x 'limactl delete --force homefield-base')"
+
+fresh
+reset_base_at "$work/lima"
+run env UNINSTALL_ARGS= FAIL_BASE_DELETE=1
+record "a base that cannot be deleted: a warning, and uninstall still finishes" "0/yes/1" \
+  "$rc/$(has "$out" 'could not delete the reset base VM homefield-base')/$(logged_x 'limactl delete --force homefield-base')"
 
 echo "not registered, as the guest says:"
 fresh
