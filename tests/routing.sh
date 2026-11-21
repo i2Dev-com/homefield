@@ -691,6 +691,13 @@ case "$*" in
   *"actions/runner-groups/"*"runners"*)
     printf '%b' "${GH_GROUP_RUNNERS-}" ;;
   *"actions/runner-groups?per_page="*)
+    # orgs/<repo>/... is not a valid endpoint: a repository-scoped
+    # registration's owner is "owner/repo", and only the scaler's group
+    # check could reach it (route's checks are scope-aware). Fail the way
+    # GitHub does so a fixture cannot hide that mistake.
+    case "$*" in
+      *"orgs/"*"/"*/"actions/runner-groups"*) echo "gh: HTTP 404" >&2; exit 1 ;;
+    esac
     [ -z "${GH_GROUPS_FAIL:-}" ] || { echo "gh: HTTP 502" >&2; exit 1; }
     printf '%b' "${GH_GROUPS-}" ;;
   *"actions/runs?status=queued"*)
@@ -1298,6 +1305,18 @@ record "an unserviceable demand does not starve the next one in the same tick" \
   "0/scale_exec install --instance homefield-scale --url https://github.com/acme --label beta-ci --group Default --auto-route --cpus 6 --memory 5" \
   "$rc/$(grep '^scale_exec install ' "$calls")"
 rm -f "$work/jobs/second" "$work/settings/second" "$state/second.state"
+
+tick_env
+reset_scale
+# Two routed repositories share the label and host while their eligible
+# runners differ: remote's runner is elsewhere (its group excludes the
+# repo), local's is this VM. The demand entries stay separate — merging
+# them into the oldest run's repository would let remote starve local.
+printf 'homefield-ci acme/remote github.com\nhomefield-ci acme/api github.com\n' >"$state/routing"
+tharness fleet_watch_tick
+record "a demand this Mac cannot serve does not swallow the next one with the same label" \
+  "0/scale_exec install --instance homefield-scale --url https://github.com/acme --label homefield-ci --group Default --auto-route --cpus 6 --memory 5" \
+  "$rc/$(grep '^scale_exec install ' "$calls")"
 
 tick_env
 reset_scale

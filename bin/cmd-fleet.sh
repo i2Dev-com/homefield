@@ -465,29 +465,22 @@ scale_demand() {
   SCALE_DEMAND_HOST=()
   SCALE_DEMAND_REPO=()
   SCALE_DEMAND_SINCE=()
-  local label repo host since i found
+  local label repo host since
   [ -f "$(routing_file)" ] || return 0
+  # One entry per routing record, not per label: two repositories can share
+  # a label and host while their eligible runners differ (one served on
+  # another Mac, one here), and merging them into the oldest run's
+  # repository would let the unreachable one starve the reachable one. The
+  # demand loop answers the first entry that actually adds capacity.
   while read -r label repo host; do
     [ -n "$repo" ] || continue
     host="${host:-github.com}"
     since="$(queued_wait_since "$repo" "$label" "$host")" || return 1
     [ -n "$since" ] || continue
-    found=0
-    for ((i = 0; i < ${#SCALE_DEMAND_LABEL[@]}; i++)); do
-      if [ "${SCALE_DEMAND_LABEL[i]}" = "$label" ] && [ "${SCALE_DEMAND_HOST[i]}" = "$host" ]; then
-        found=1
-        if [ "$since" -lt "${SCALE_DEMAND_SINCE[i]}" ]; then
-          SCALE_DEMAND_SINCE[i]="$since"
-          SCALE_DEMAND_REPO[i]="$repo"
-        fi
-      fi
-    done
-    if [ "$found" = 0 ]; then
-      SCALE_DEMAND_LABEL+=("$label")
-      SCALE_DEMAND_HOST+=("$host")
-      SCALE_DEMAND_REPO+=("$repo")
-      SCALE_DEMAND_SINCE+=("$since")
-    fi
+    SCALE_DEMAND_LABEL+=("$label")
+    SCALE_DEMAND_HOST+=("$host")
+    SCALE_DEMAND_REPO+=("$repo")
+    SCALE_DEMAND_SINCE+=("$since")
   done <"$(routing_file)"
   return 0
 }
@@ -527,19 +520,23 @@ scale_find_primary() {
       *",$(lower "$label"),"* ) ;; *) continue ;;
     esac
     in_scope "$repo" "$(scope_owner "$RS_URL")" || continue
-    # The runner's group must admit the queued repository too: two VMs can
-    # share a label in different selected-repository groups, and a spare
-    # created in a group that excludes the repo cannot take the queued jobs
-    # no matter what label it carries (route's own permission check,
-    # runner_serves_repo). A group that cannot be asked is the same
-    # fail-safe as a runner list that cannot.
-    local serves=0
-    runner_serves_repo "$(scope_owner "$RS_URL")" "$RS_ID" "$repo" "$host" || serves=$?
-    case "$serves" in
-      0) ;;
-      1) continue ;;
-      *) return 2 ;;
-    esac
+    # An organization runner's group must admit the queued repository too:
+    # two VMs can share a label in different selected-repository groups, and
+    # a spare created in a group that excludes the repo cannot take the
+    # queued jobs no matter what label it carries (route's own permission
+    # check, runner_serves_repo). A group that cannot be asked is the same
+    # fail-safe as a runner list that cannot. A repository-scoped runner
+    # needs no check: in_scope already confined it to its registration
+    # repository, whose jobs are the only ones it can take.
+    if [[ "$(api_scope "$RS_URL" 2>/dev/null)" == orgs/* ]]; then
+      local serves=0
+      runner_serves_repo "$(scope_owner "$RS_URL")" "$RS_ID" "$repo" "$host" || serves=$?
+      case "$serves" in
+        0) ;;
+        1) continue ;;
+        *) return 2 ;;
+      esac
+    fi
     PRIMARY_NAME="$name"
     PRIMARY_URL="$RS_URL"
     PRIMARY_ROWS="$rows"
