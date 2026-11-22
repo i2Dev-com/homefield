@@ -885,15 +885,16 @@ scale_grow() {
 # threshold the up-scale side uses — a queued job behind nothing still has
 # to prove it is not a blip — while the hosted source does not: the money
 # is being spent now. One VM per tick, the scaler's rule: a stopped primary
-# whose recorded label matches the demand starts first; a demand no line
-# matches starts the fleet's first VM rather than leave jobs stranded on a
-# map that lost their line. The started VM's restore is the watcher's wake
+# whose recorded label, host and registration scope match the demand starts
+# first; a demand no recorded line serves is left alone and logged —
+# starting an unrelated VM would clear the wake flag and strand the jobs
+# anyway. The started VM's restore is the watcher's wake
 # pattern (a bounded online wait, then the autoflipped repositories back to
 # local). A fleet without the flag was stopped by hand: it stays down — the
 # owner's explicit choice, and the fallback flip already moved its routed
 # repositories to hosted.
 scale_wake() {
-  local now label repo host since idle i j idx pname pidx wait_max rc=0
+  local now label repo host since idle i j idx pname pidx owner wait_max rc=0
   # Only a fleet the scaler's own scale-to-zero stops put dark wakes on
   # demand: the flag says so, and it is cleared the moment anything is
   # seen Running. A fleet the user stopped by hand never gets the flag and
@@ -947,21 +948,31 @@ scale_wake() {
     pidx=-1
     for ((j = 0; j < ${#PRIM_NAME[@]}; j++)); do
       [ "$(lower "${PRIM_LABEL[j]}")" = "$(lower "${WAKE_LABEL[i]}")" ] || continue
+      # The label is not enough: two repository-scoped VMs can share the
+      # default label, and a runner that cannot take the demand's
+      # repository would start, idle out, and leave the queued jobs
+      # stranded with the wake flag already cleared. The demand's host
+      # and registration scope must match the recorded url — the same
+      # match the stop and restore sides apply.
+      [ -n "${PRIM_URL[j]}" ] || continue
+      [ "$(github_host "${PRIM_URL[j]}")" = "${WAKE_HOST[i]}" ] || continue
+      owner="$(scope_owner "${PRIM_URL[j]}")"
+      in_scope "${WAKE_REPO[i]}" "$owner" || continue
       idx="$(fleet_index "${PRIM_NAME[j]}")"
       [ "$idx" != -1 ] && [ "${FLEET_STATUS[idx]}" = Stopped ] || continue
       pidx=$j
       break
     done
     if [ "$pidx" = -1 ]; then
-      # No recorded line matches: the map is missing this demand's label (a
-      # runner with no custom label, or a line the reconcile dropped). The
-      # fleet's first VM is the fallback start — waking something beats
-      # leaving the jobs queued on a label no record claims.
-      [ "${FLEET_STATUS[0]}" = Stopped ] || continue
-      pname="${FLEET_NAME[0]}"
-    else
-      pname="${PRIM_NAME[pidx]}"
+      # No stopped VM on this Mac serves this demand. Starting the fleet's
+      # first VM anyway would clear the wake flag for a runner that cannot
+      # take the jobs — the one outcome worse than staying dark. Say so
+      # and leave the fleet dark; the log is the signal, the way the
+      # up-scale side reports a label it cannot serve.
+      log "fleet watch: the fleet is dark (scaled to zero) but no stopped VM here serves ${WAKE_REPO[i]} (${WAKE_LABEL[i]}); not waking"
+      continue
     fi
+    pname="${PRIM_NAME[pidx]}"
     if [ "${WAKE_URGENT[i]}" = 1 ]; then
       log "fleet watch: the fleet is dark (scaled to zero) and ${WAKE_REPO[i]} is running on hosted runners; starting ${pname}"
     else
@@ -1373,7 +1384,7 @@ fleet_watch_tick() {
   # scaler's own spares only ever stop while a primary is up, so a dark
   # fleet after a spare stop means the user stopped the primary).
   if [ "$zero_on" = 1 ]; then
-    local zero_stopped=0 pbusy="" st_now="" any_running=0
+    local pbusy="" st_now="" any_running=0 went_dark=0
     for ((i = 0; i < ${#FLEET_NAME[@]}; i++)); do
       [ "${FLEET_STATUS[i]}" = Running ] || continue
       recorded=0
@@ -1410,30 +1421,49 @@ fleet_watch_tick() {
       if scale_exec stop --instance "${FLEET_NAME[i]}"; then
         log "fleet watch: stopped ${FLEET_NAME[i]} (idle ${idle}s) — scaled to zero"
         SCALE_ACTION="stopped ${FLEET_NAME[i]} (scaled to zero)"
-        zero_stopped=1
       else
-        echo "homefield: fleet watch: could not stop ${FLEET_NAME[i]} (log above); it stays up" >&2
-        rc=1
+        # The real stop can stop the VM and still exit nonzero: the
+        # automatic fallback's flip could not be proven (GitHub
+        # unanswerable) and stop reports that after the stop. Ask Lima
+        # before calling it a failure — a VM that is actually down must
+        # not be left out of the dark fleet's wake eligibility, and the
+        # repositories its unproven flip left routed local are exactly
+        # the queued demand the wake side answers.
+        st_now="$(vm_status_of "${FLEET_NAME[i]}")" || st_now=""
+        if [ "$st_now" = Stopped ]; then
+          log "fleet watch: stopped ${FLEET_NAME[i]} (idle ${idle}s) — scaled to zero (its fallback could not be proven; what it still serves routed local is the wake side's queued demand)"
+          SCALE_ACTION="stopped ${FLEET_NAME[i]} (scaled to zero)"
+        else
+          echo "homefield: fleet watch: could not stop ${FLEET_NAME[i]} (log above); it stays up" >&2
+          rc=1
+        fi
       fi
     done
-    if [ "$zero_stopped" = 1 ]; then
-      # The flag only lands when the tick's stops took the whole fleet
-      # down: anything still Running — a spare stop that failed, a VM the
-      # probe could not ask about — leaves it dark-by-half, and the wake
-      # side is for a fleet that is properly dark. The statuses are asked
-      # again (the FLEET_* ones predate this pass's stops).
-      for ((i = 0; i < ${#FLEET_NAME[@]}; i++)); do
-        [ "${FLEET_STATUS[i]}" = Running ] || continue
-        st_now="$(vm_status_of "${FLEET_NAME[i]}")" || st_now=""
-        if [ "$st_now" = Running ]; then
-          any_running=1
-          break
-        fi
-      done
-      if [ "$any_running" = 0 ]; then
-        printf '%s\n' "$now" >"$(scale_zero_file)" ||
-          echo "homefield: fleet watch: could not write $(scale_zero_file); the dark fleet will not wake on demand" >&2
+    # The flag only lands when the tick's stops took the whole fleet
+    # down: anything still Running leaves it dark-by-half, and the wake
+    # side is for a fleet that is properly dark. What matters is not
+    # which pass stopped the last VM — the secondary pass and this one
+    # are both the scaler's — but that a VM the tick found Running is
+    # down now and nothing is: a primary that went first and a secondary
+    # that idled out on a later tick arms the flag on that later tick,
+    # the same as the reverse order. A fleet that was already dark when
+    # the tick started — the user stopped it — arms nothing. The
+    # statuses are asked again (the FLEET_* ones predate this pass's
+    # stops).
+    local went_dark=0
+    any_running=0
+    for ((i = 0; i < ${#FLEET_NAME[@]}; i++)); do
+      [ "${FLEET_STATUS[i]}" = Running ] || continue
+      st_now="$(vm_status_of "${FLEET_NAME[i]}")" || st_now=""
+      if [ "$st_now" = Running ]; then
+        any_running=1
+      else
+        went_dark=1
       fi
+    done
+    if [ "$went_dark" = 1 ] && [ "$any_running" = 0 ]; then
+      printf '%s\n' "$now" >"$(scale_zero_file)" ||
+        echo "homefield: fleet watch: could not write $(scale_zero_file); the dark fleet will not wake on demand" >&2
     fi
   fi
 
