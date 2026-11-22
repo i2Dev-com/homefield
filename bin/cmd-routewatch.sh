@@ -136,10 +136,11 @@ route_watcher_needed() {
   local dir f exclude="${1:-}"
   dir="${HOMEFIELD_STATE_DIR:-$HOME/.local/state/homefield}"
   [ -d "$dir" ] || return 1
-  # The demand scaler's scale-to-zero (#305): a fleet the scaler put dark
-  # still needs the agent — its ticks are what wake it on demand. The flag
-  # is the same `scale-zero` file the tick writes and clears.
-  [ -f "$dir/route-watcher/scale-zero" ] && return 0
+  # The demand scaler's scale-to-zero (#305): a VM the scaler put dark
+  # still needs the agent — its ticks are what wake it on demand. The dark
+  # record is the same `scale-dark` file the tick writes and clears; a
+  # line the VM left by coming back up is dropped by the tick's reconcile.
+  [ -s "$dir/route-watcher/scale-dark" ] && return 0
   for f in "$dir"/*.state; do
     [ -f "$f" ] || continue
     if [ -n "$exclude" ] && [ "${f##*/}" = "${exclude}.state" ]; then

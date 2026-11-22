@@ -857,35 +857,42 @@ cooldown the secondaries use, through the real `stop`: the automatic
 fallback flips the VM's routed repositories to hosted first, so the dark
 Mac's jobs still run. A VM without the automatic fallback stops too —
 its queued jobs wait for the label, and the wake side below is what
-answers them. When the tick's stops take the whole fleet down — the
-primary, a secondary that idled out on the same or a later tick — it
-writes a `scale-zero` flag: the fleet is dark by the scaler's hand. The
-flag keeps the route-watcher agent installed (its ticks are what can
-wake the fleet), and it is cleared the moment any VM is seen Running
-again — by the wake, the user, or anything else. A fleet the user
-stopped by hand never gets the flag and never wakes: the flag arms only
-when a VM the tick itself found Running is down by the end of the
-tick's stops, so a fleet that was already dark when the tick started
-arms nothing.
+answers them. Every VM the tick's stops put down — the primary, a
+secondary that idled out on the same or a later tick — gets a line in
+the `scale-dark` record: that VM is dark by the scaler's hand, and the
+wake side may bring it back on demand. The record keeps the
+route-watcher agent installed (its ticks are what can wake the fleet),
+and a line is dropped the moment its VM is seen Running again — by the
+wake, the user, or anything else. A VM the user stopped by hand never
+gets a line and never wakes: a line is written only when the tick's own
+stop put the VM down, so a fleet that was already dark when the tick
+started writes nothing.
 
-**Wake on demand** — only a flagged fleet wakes. The tick reads the same
-demand the up-scale side does (queued jobs waiting for a routing label:
-the stop's flip did not land, or a workflow that never went through the
-`CI_RUNNER` switch) plus one more source: the runs an automatic flip
-moved to hosted, which are demand burning hosted minutes and wake at
-once. The queued source waits out `HOMEFIELD_SCALE_WAIT` like the
-up-scale side; the hosted source does not. One VM per tick, the scaler's
-rule: a stopped primary whose recorded label, host and registration
-scope match the demand starts first (the primaries record,
+**Wake on demand** — only a VM with a dark line wakes. The tick reads
+the same demand the up-scale side does (queued jobs waiting for a
+routing label: the stop's flip did not land, or a workflow that never
+went through the `CI_RUNNER` switch) plus one more source: the runs an
+automatic flip moved to hosted, which are demand burning hosted minutes
+and wake at once. The queued source waits out `HOMEFIELD_SCALE_WAIT`
+like the up-scale side; the hosted source does not. One VM per tick,
+the scaler's rule: a dark VM whose recorded label, host and
+registration scope match the demand starts first (the primaries record,
 `scale-primaries`, is maintained while the VMs run precisely because a
-stopped one cannot be asked — and the scope match matters, since two
-repository-scoped VMs can share the default label). A demand no
-recorded line serves is left alone and logged — starting an unrelated
-VM would clear the wake flag and strand the jobs anyway — and the
-started VM's flipped repositories come back the watcher's wake way — a
-bounded online wait, then the restore. A VM whose status could not be
-read keeps the scaler from starting anything, because one may already
-be running.
+stopped one cannot be asked — the scope match matters, since two
+repository-scoped VMs can share the default label, and an organization
+runner's group must admit the repository too, the same check the
+up-scale side makes). A demand no dark line serves is left alone and
+logged — starting an unrelated VM would drop its dark line and strand
+the jobs anyway — and the started VM's flipped repositories come back
+the watcher's wake way — a bounded online wait, then the restore. A VM
+whose status could not be read keeps the scaler from starting anything,
+because one may already be running.
+
+Because the dark record is per VM, one scope's wake does not strand
+another's: with two repository-scoped VMs dark, waking the first leaves
+the second's line — and its demand — answerable on a later tick, even
+while the first stays up. A fleet-wide flag could not do that; that is
+why the record is a record and not a flag.
 
 The webhook receiver a cloud autoscaler would use stays out on purpose:
 the Mac sits behind NAT, and the always-on watcher's tick needs no

@@ -224,10 +224,26 @@ job_running() {
 # shellcheck disable=SC2034  # read by the scaler through load_runner_settings
 load_runner_settings() {
   RS_NAME="mac-1"
-  RS_URL="https://github.com/org/repo"
-  RS_ID="1"
+  case "$INSTANCE" in
+    homefield-2)
+      RS_ID="2"
+      RS_URL="${RS_URL_2:-https://github.com/org/repo}"
+      ;;
+    *)
+      RS_ID="1"
+      RS_URL="${RS_URL_1:-https://github.com/org/repo}"
+      ;;
+  esac
 }
 runners_on_github() { printf '1\tmac-1\tonline\tself-hosted,linux,arm64,homefield-ci\n'; }
+# runner_serves_repo stub: SERVES_RC answers for every runner; SERVES_ID
+# narrows the answer to that runner id (SERVES_RC_OTHER for the rest).
+runner_serves_repo() {
+  if [ -n "${SERVES_ID:-}" ] && [ "$2" != "$SERVES_ID" ]; then
+    return "${SERVES_RC_OTHER:-0}"
+  fi
+  return "${SERVES_RC:-0}"
+}
 # shellcheck disable=SC2034  # read by the scaler through runner_on_github
 runner_on_github() { RUNNER_GH_STATUS="online"; return 0; }
 route_start_restore() { printf 'restore:%s:%s\n' "$1" "$2" >>"$calls"; return 0; }
@@ -277,26 +293,27 @@ FLEET_LIST="homefield-1"
 # shellcheck disable=SC2034  # read by the stubs above
 HOMEFIELD_SCALE_ZERO=""
 
-# 7. Scale-to-zero: the opt-in stops the fleet's own idle VM and arms the wake
+# 7. Scale-to-zero: the opt-in stops the fleet's own idle VM and writes its
+# dark line
 # shellcheck disable=SC2034  # read by the tick
 HOMEFIELD_SCALE_ZERO=1
 printf '%s|https://github.com/org/repo|homefield-ci||%s|1\n' \
   "homefield-1" "$(( $(date +%s) - 1000 ))" >"$RECORDS/scale-primaries"
-rm -f "$RECORDS/scale-zero" "$RECORDS/scale" "$HOMEFIELD_STATE_DIR/routing" \
+rm -f "$RECORDS/scale-dark" "$RECORDS/scale" "$HOMEFIELD_STATE_DIR/routing" \
   "$HOMEFIELD_STATE_DIR/autoflip"
 : >"$calls"
 rc=0; out="$(fleet_watch_tick 2>&1)" || rc=$?
 record "scale-to-zero: stops the idle own VM through the real stop" "1/yes" \
   "$(called '^scale:stop --instance homefield-1$')/$(has "$out" 'scaled to zero')"
-flag_gone="no"; [ -f "$RECORDS/scale-zero" ] && flag_gone="yes"
-record "scale-to-zero: arms the wake flag when the fleet goes dark" "yes" "$flag_gone"
+record "scale-to-zero: the stopped VM's dark line is written" "yes" \
+  "$(grep -q '^homefield-1|https://github.com/org/repo|homefield-ci|1$' "$RECORDS/scale-dark" && echo yes || echo no)"
 
 # 8. Scale-to-zero is opt-in: off by default the idle VM stays up
 # shellcheck disable=SC2034  # read by the tick
 HOMEFIELD_SCALE_ZERO=""
 printf '%s|https://github.com/org/repo|homefield-ci||%s|1\n' \
   "homefield-1" "$(( $(date +%s) - 1000 ))" >"$RECORDS/scale-primaries"
-rm -f "$RECORDS/scale-zero"
+rm -f "$RECORDS/scale-dark"
 : >"$calls"
 rc=0; fleet_watch_tick >/dev/null 2>&1 || rc=$?
 record "scale-to-zero: off by default, the idle VM stays up" "0/0/0" \
@@ -308,62 +325,60 @@ record "scale-to-zero: off by default, the idle VM stays up" "0/0/0" \
 HOMEFIELD_SCALE_ZERO=1
 printf '%s|https://github.com/org/repo|homefield-ci||%s|1\n' \
   "homefield-1" "$(date +%s)" >"$RECORDS/scale-primaries"
-rm -f "$RECORDS/scale-zero"
+rm -f "$RECORDS/scale-dark"
 : >"$calls"
 rc=0; fleet_watch_tick >/dev/null 2>&1 || rc=$?
 record "scale-to-zero: a fresh idle clock, the cooldown is not proven" "0/0/0" \
   "$rc/$(called '^scale:stop')/$(called 'scaled to zero')"
 
-# 10. Wake-from-zero: queued demand starts the recorded primary
+# 10. Wake-from-zero: queued demand starts the dark VM
 # shellcheck disable=SC2034  # read by the tick
 HOMEFIELD_SCALE_ZERO=""
 VM1_STATUS="Stopped"
 QUEUED_SINCE="$(( $(date +%s) - 1000 ))"
 printf 'homefield-ci org/repo github.com\n' >"$HOMEFIELD_STATE_DIR/routing"
-printf '%s|https://github.com/org/repo|homefield-ci|1|%s|0\n' \
-  "homefield-1" "$(( $(date +%s) - 10 ))" >"$RECORDS/scale-primaries"
-printf 'armed\n' >"$RECORDS/scale-zero"
+printf 'homefield-1|https://github.com/org/repo|homefield-ci|1\n' >"$RECORDS/scale-dark"
 : >"$calls"
 rc=0; out="$(fleet_watch_tick 2>&1)" || rc=$?
-record "wake-from-zero: queued demand starts the recorded primary" "1/yes" \
+record "wake-from-zero: queued demand starts the dark VM" "1/yes" \
   "$(called '^scale:start --instance homefield-1$')/$(has "$out" 'from zero')"
 record "wake-from-zero: the runner comes online before the restore is asked" "1" \
   "$(called '^restore:https://github.com/org/repo:mac-1$')"
-flag_present="no"; [ -f "$RECORDS/scale-zero" ] && flag_present="yes"
-record "wake-from-zero: the flag is cleared once the VM is up" "no" "$flag_present"
+record "wake-from-zero: the dark line is dropped once the VM is up" "no" \
+  "$(grep -q '^homefield-1|' "$RECORDS/scale-dark" 2>/dev/null && echo yes || echo no)"
 
 # 11. Wake-from-zero: hosted activity on a flipped repo wakes at once
 rm -f "$HOMEFIELD_STATE_DIR/routing"
 printf 'homefield-ci org/repo github.com\n' >"$HOMEFIELD_STATE_DIR/autoflip"
 HOSTED_SINCE="$(( $(date +%s) - 5 ))"
 QUEUED_SINCE=""
-printf 'armed\n' >"$RECORDS/scale-zero"
+printf 'homefield-1|https://github.com/org/repo|homefield-ci|1\n' >"$RECORDS/scale-dark"
 : >"$calls"
 rc=0; out="$(fleet_watch_tick 2>&1)" || rc=$?
 record "wake-from-zero: hosted activity wakes at once, no wait" "1/yes" \
   "$(called '^scale:start --instance homefield-1$')/$(has "$out" 'hosted runners')"
 
-# 12. A hand-stopped fleet stays down: no flag, no wake
-rm -f "$RECORDS/scale-zero" "$HOMEFIELD_STATE_DIR/autoflip"
+# 12. A hand-stopped VM stays down: no dark line, no wake
+rm -f "$RECORDS/scale-dark" "$HOMEFIELD_STATE_DIR/autoflip"
 printf 'homefield-ci org/repo github.com\n' >"$HOMEFIELD_STATE_DIR/routing"
 QUEUED_SINCE="$(( $(date +%s) - 1000 ))"
 : >"$calls"
-rc=0; fleet_watch_tick >/dev/null 2>&1 || rc=$?
-record "wake-from-zero: a hand-stopped fleet stays down (no flag)" "0/0" \
-  "$rc/$(called '^scale:start')"
+rc=0; out="$(fleet_watch_tick 2>&1)" || rc=$?
+record "wake-from-zero: a hand-stopped VM stays down (no dark line)" "0/0/yes" \
+  "$rc/$(called '^scale:start')/$(has "$out" 'no VM the scaler stopped is dark')"
 
-# 13. The flag clears the moment any VM is seen Running
+# 13. A dark line is dropped the moment its VM is seen Running
 VM1_STATUS="Running"
 QUEUED_SINCE=""
-printf 'armed\n' >"$RECORDS/scale-zero"
+printf 'homefield-1|https://github.com/org/repo|homefield-ci|1\n' >"$RECORDS/scale-dark"
 fleet_watch_tick >/dev/null 2>&1 || true
-flag_present="no"; [ -f "$RECORDS/scale-zero" ] && flag_present="yes"
-record "the wake flag clears the moment any VM is Running" "no" "$flag_present"
+record "the dark line drops the moment its VM is Running" "no" \
+  "$(grep -q '^homefield-1|' "$RECORDS/scale-dark" 2>/dev/null && echo yes || echo no)"
 
 # 14. An unreadable VM status blocks the wake (fail safe)
 VM1_STATUS=""
 QUEUED_SINCE="$(( $(date +%s) - 1000 ))"
-printf 'armed\n' >"$RECORDS/scale-zero"
+printf 'homefield-1|https://github.com/org/repo|homefield-ci|1\n' >"$RECORDS/scale-dark"
 printf '%s|https://github.com/org/repo|homefield-ci|1|%s|0\n' \
   "homefield-1" "$(( $(date +%s) - 10 ))" >"$RECORDS/scale-primaries"
 : >"$calls"
@@ -375,7 +390,7 @@ record "wake-from-zero: an unreadable status blocks the wake (fail safe)" "0/non
 VM1_STATUS="Running"
 QUEUED_SINCE=""
 AUTO_ROUTE=1
-rm -f "$RECORDS/scale-zero" "$HOMEFIELD_STATE_DIR/routing"
+rm -f "$RECORDS/scale-dark" "$HOMEFIELD_STATE_DIR/routing"
 printf 'homefield-ci org/repo github.com\n' >"$HOMEFIELD_STATE_DIR/autoflip"
 : >"$calls"
 rc=0; fleet_watch_tick >/dev/null 2>&1 || rc=$?
@@ -383,42 +398,43 @@ record "the restore retry: a Running online auto_route VM restores flipped repos
   "$(called '^restore:https://github.com/org/repo:mac-1$')/$(nonzero "$rc")"
 
 # 16. A stop that exits nonzero but stopped the VM anyway (the fallback's
-# flip could not be proven) still counts as dark: the wake flag arms
+# flip could not be proven) still counts as dark: the dark line is written
 HOMEFIELD_SCALE_ZERO=1
 SCALE_STOP_RC=1
 VM1_STATUS="Running"
 printf '%s|https://github.com/org/repo|homefield-ci||%s|1\n' \
   "homefield-1" "$(( $(date +%s) - 1000 ))" >"$RECORDS/scale-primaries"
-rm -f "$RECORDS/scale-zero" "$RECORDS/scale" "$HOMEFIELD_STATE_DIR/routing" \
+rm -f "$RECORDS/scale-dark" "$RECORDS/scale" "$HOMEFIELD_STATE_DIR/routing" \
   "$HOMEFIELD_STATE_DIR/autoflip"
 : >"$calls"
 rc=0; out="$(fleet_watch_tick 2>&1)" || rc=$?
-flag_present="no"; [ -f "$RECORDS/scale-zero" ] && flag_present="yes"
-record "scale-to-zero: a stop that landed despite its fallback failing arms the wake" "yes/no/yes" \
-  "$(has "$out" 'scaled to zero')/$(has "$out" 'it stays up')/$flag_present"
+dark_landed="no"; grep -q '^homefield-1|' "$RECORDS/scale-dark" && dark_landed="yes"
+record "scale-to-zero: a stop that landed despite its fallback failing is dark" "yes/no/yes" \
+  "$(has "$out" 'scaled to zero')/$(has "$out" 'it stays up')/$dark_landed"
 SCALE_STOP_RC=0
 
-# 17. The wake flag survives a cross-tick dark: the primary goes first, the
-# secondary idles out on a later tick, and that later tick arms the flag
+# 17. The dark record survives a cross-tick dark: the primary goes first,
+# the secondary idles out on a later tick, and both stay wake-eligible
 HOMEFIELD_SCALE_ZERO=1
 FLEET_LIST="homefield-1 homefield-2"
 VM1_STATUS="Running"
 VM2_STATUS="Running"
+ZERO_STOPPED=""
 printf '%s|https://github.com/org/repo|homefield-ci||%s|1\n' \
   "homefield-1" "$(( $(date +%s) - 1000 ))" >"$RECORDS/scale-primaries"
 printf 'homefield-2|homefield-ci|github.com|https://github.com/org/repo||%s\n' \
   "$(date +%s)" >"$RECORDS/scale"
-rm -f "$RECORDS/scale-zero" "$HOMEFIELD_STATE_DIR/routing" "$HOMEFIELD_STATE_DIR/autoflip"
+rm -f "$RECORDS/scale-dark" "$HOMEFIELD_STATE_DIR/routing" "$HOMEFIELD_STATE_DIR/autoflip"
 : >"$calls"
 fleet_watch_tick >/dev/null 2>&1 || true
-flag_present="no"; [ -f "$RECORDS/scale-zero" ] && flag_present="yes"
-record "scale-to-zero: the primary stops while a secondary runs, no flag yet" "no" "$flag_present"
+record "scale-to-zero: the primary stops while a secondary runs, its dark line lands" "yes/no" \
+  "$(grep -q '^homefield-1|' "$RECORDS/scale-dark" && echo yes || echo no)/$(grep -q '^homefield-2|' "$RECORDS/scale-dark" && echo yes || echo no)"
 printf 'homefield-2|homefield-ci|github.com|https://github.com/org/repo||%s\n' \
   "$(( $(date +%s) - 1000 ))" >"$RECORDS/scale"
 : >"$calls"
 fleet_watch_tick >/dev/null 2>&1 || true
-flag_present="no"; [ -f "$RECORDS/scale-zero" ] && flag_present="yes"
-record "scale-to-zero: the secondary's later stop arms the flag (the scaler's dark)" "yes" "$flag_present"
+record "scale-to-zero: the secondary's later stop lands its dark line too" "yes/yes" \
+  "$(grep -q '^homefield-1|' "$RECORDS/scale-dark" && echo yes || echo no)/$(grep -q '^homefield-2|' "$RECORDS/scale-dark" && echo yes || echo no)"
 
 # 18. The wake matches the demand's registration scope, not just the label:
 # two repo-scoped VMs share the default label, and only the one whose scope
@@ -430,25 +446,98 @@ VM1_STATUS="Stopped"
 VM2_STATUS="Stopped"
 QUEUED_SINCE="$(( $(date +%s) - 1000 ))"
 printf 'homefield-ci org/repo github.com\n' >"$HOMEFIELD_STATE_DIR/routing"
-printf '%s|https://github.com/org/other|homefield-ci|1|%s|0\n' \
-  "homefield-1" "$(( $(date +%s) - 10 ))" >"$RECORDS/scale-primaries"
-printf '%s|https://github.com/org/repo|homefield-ci|1|%s|0\n' \
-  "homefield-2" "$(( $(date +%s) - 10 ))" >>"$RECORDS/scale-primaries"
-printf 'armed\n' >"$RECORDS/scale-zero"
+printf 'homefield-1|https://github.com/org/other|homefield-ci|1\n' >"$RECORDS/scale-dark"
+printf 'homefield-2|https://github.com/org/repo|homefield-ci|2\n' >>"$RECORDS/scale-dark"
 : >"$calls"
 fleet_watch_tick >/dev/null 2>&1 || true
 record "wake-from-zero: the scope-matching VM starts, the same-label other does not" "0/1" \
   "$(called '^scale:start --instance homefield-1$')/$(called '^scale:start --instance homefield-2$')"
 
-# 19. No stopped VM serves the demand: the fleet stays dark and says so,
-# instead of starting an unrelated VM and clearing the flag
-rm -f "$RECORDS/scale-primaries"
-printf '%s|https://github.com/org/other|homefield-ci|1|%s|0\n' \
-  "homefield-1" "$(( $(date +%s) - 10 ))" >"$RECORDS/scale-primaries"
-printf 'armed\n' >"$RECORDS/scale-zero"
+# 19. No dark VM serves the demand: the fleet stays dark and says so,
+# instead of starting an unrelated VM and dropping its dark line
+rm -f "$RECORDS/scale-dark"
+printf 'homefield-1|https://github.com/org/other|homefield-ci|1\n' >"$RECORDS/scale-dark"
 : >"$calls"
 rc=0; out="$(fleet_watch_tick 2>&1)" || rc=$?
 record "wake-from-zero: no VM serves the demand, the fleet stays dark (fail safe)" "0/0/yes" \
-  "$rc/$(called '^scale:start')/$(has "$out" 'no stopped VM here serves')"
+  "$rc/$(called '^scale:start')/$(has "$out" 'no dark VM here serves')"
+
+# 20. A dark VM wakes while another scope's VM runs (#305's own repro):
+# homefield-1 (org/other) runs busy, homefield-2 (org/repo) is dark; the
+# queued demand for org/repo wakes homefield-2 — the grow side cannot
+# serve it (no running VM covers the repo) and must not strand it
+FLEET_LIST="homefield-1 homefield-2"
+VM1_STATUS="Running"
+VM2_STATUS="Stopped"
+JOB_RC=0
+ZERO_STOPPED=""
+RS_URL_1="https://github.com/org/other"
+printf 'homefield-2|https://github.com/org/repo|homefield-ci|2\n' >"$RECORDS/scale-dark"
+printf '%s|https://github.com/org/other|homefield-ci||%s|1\n' \
+  "homefield-1" "$(date +%s)" >"$RECORDS/scale-primaries"
+: >"$calls"
+rc=0; out="$(fleet_watch_tick 2>&1)" || rc=$?
+record "wake-from-zero: a dark VM wakes while another scope's VM runs" "1/yes" \
+  "$(called '^scale:start --instance homefield-2$')/$(has "$out" 'from zero')"
+record "wake-from-zero: the running other-scope VM is left alone" "0" \
+  "$(called '^scale:start --instance homefield-1$')"
+
+# 21. An organization runner's group must admit the demand's repository:
+# two org-scoped dark VMs share the label, and only the one whose group
+# covers the repo may start
+RS_URL_1="https://github.com/org"
+VM1_STATUS="Stopped"
+JOB_RC=1
+printf 'homefield-1|https://github.com/org|homefield-ci|1\n' >"$RECORDS/scale-dark"
+printf 'homefield-2|https://github.com/org|homefield-ci|2\n' >>"$RECORDS/scale-dark"
+SERVES_ID=1
+SERVES_RC=1
+SERVES_RC_OTHER=0
+: >"$calls"
+fleet_watch_tick >/dev/null 2>&1 || true
+record "wake-from-zero: the group-matching VM starts, the excluded one does not" "0/1" \
+  "$(called '^scale:start --instance homefield-1$')/$(called '^scale:start --instance homefield-2$')"
+
+# 22. A group that cannot be asked blocks the wake (fail safe): neither
+# org-scoped VM may start on an unanswerable group lookup
+SERVES_RC=2
+: >"$calls"
+rc=0; out="$(fleet_watch_tick 2>&1)" || rc=$?
+record "wake-from-zero: an unanswerable group lookup blocks the wake" "0/0/yes" \
+  "$rc/$(called '^scale:start')/$(has "$out" 'no dark VM here serves')"
+SERVES_ID=""
+SERVES_RC=""
+SERVES_RC_OTHER=""
+
+# 23. A secondary the scaler stopped (the spare pass) is dark by its hand
+# and wakes on its demand, the same as a primary
+# shellcheck disable=SC2034  # read by the tick
+HOMEFIELD_SCALE_ZERO=1
+FLEET_LIST="homefield-2"
+VM2_STATUS="Running"
+JOB2_RC=1
+ZERO_STOPPED=""
+printf 'homefield-2|homefield-ci|github.com|https://github.com/org/repo||%s\n' \
+  "$(( $(date +%s) - 1000 ))" >"$RECORDS/scale"
+rm -f "$RECORDS/scale-dark" "$RECORDS/scale-primaries" "$HOMEFIELD_STATE_DIR/routing" \
+  "$HOMEFIELD_STATE_DIR/autoflip"
+: >"$calls"
+fleet_watch_tick >/dev/null 2>&1 || true
+record "scale-to-zero: a stopped secondary lands its dark line" "yes" \
+  "$(grep -q '^homefield-2|https://github.com/org/repo|homefield-ci|2$' "$RECORDS/scale-dark" && echo yes || echo no)"
+QUEUED_SINCE="$(( $(date +%s) - 1000 ))"
+printf 'homefield-ci org/repo github.com\n' >"$HOMEFIELD_STATE_DIR/routing"
+: >"$calls"
+rc=0; fleet_watch_tick >/dev/null 2>&1 || rc=$?
+record "wake-from-zero: the dark secondary wakes on its demand" "1/0" \
+  "$(called '^scale:start --instance homefield-2$')/$(nonzero "$rc")"
+
+# 24. A secondary the user stopped by hand has no dark line and stays down
+VM2_STATUS="Stopped"
+rm -f "$RECORDS/scale-dark"
+: >"$calls"
+rc=0; fleet_watch_tick >/dev/null 2>&1 || rc=$?
+record "wake-from-zero: a hand-stopped secondary stays down" "0/0" \
+  "$rc/$(called '^scale:start')"
 
 summary
