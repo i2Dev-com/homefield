@@ -896,6 +896,11 @@ up-scale side makes). A demand no dark line serves is left alone and
 logged — starting an unrelated VM would drop its dark line and strand
 the jobs anyway — and the started VM's flipped repositories come back
 the watcher's wake way — a bounded online wait, then the restore. A
+start that lands but does not prove out — the bounded wait expires, or
+the restore fails — still ends the pass: the VM is up and eligible all
+the same, and a second start could not serve the next demand any
+better than the runner that is already online, so the pass ends with
+the failure surfaced rather than reaching for another dark VM. A
 woken secondary also gets a fresh idle clock, the same reset the
 up-scale side's secondary start does: its stamp already exceeded the
 cooldown when it was stopped, and without the reset the next tick

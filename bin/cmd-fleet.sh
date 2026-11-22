@@ -1140,6 +1140,12 @@ scale_wake() {
         SCALE_ACTION="started ${pname} (from zero)"
         return 0
       fi
+      # The start landed without the wake proving out: the VM is up and
+      # eligible all the same, so the pass ends here — one VM per tick,
+      # and a second start could not serve the demand any better than
+      # the runner that is already online. The nonzero return keeps the
+      # restore failure visible.
+      return 1
     fi
     rc=1
   done

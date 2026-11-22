@@ -268,7 +268,7 @@ runner_serves_repo() {
 }
 # shellcheck disable=SC2034  # read by the scaler through runner_on_github
 runner_on_github() { RUNNER_GH_STATUS="online"; return 0; }
-route_start_restore() { printf 'restore:%s:%s\n' "$1" "$2" >>"$calls"; return 0; }
+route_start_restore() { printf 'restore:%s:%s\n' "$1" "$2" >>"$calls"; return "${RESTORE_RC:-0}"; }
 queued_wait_since() { [ -n "$QUEUED_SINCE" ] && printf '%s\n' "$QUEUED_SINCE"; return 0; }
 hosted_activity_since() { [ -n "$HOSTED_SINCE" ] && printf '%s\n' "$HOSTED_SINCE"; return 0; }
 vm_instances() {
@@ -279,6 +279,14 @@ vm_instances() {
   done
 }
 vm_status_of() {
+  # A VM the tick started earlier in this test reads Running, the way
+  # Lima answers after a start: the wake's partial-failure path asks
+  # Lima whether the start landed. ($calls is per test, so a start from
+  # an earlier test does not leak into this one.)
+  if grep -q "^scale:start --instance $1\$" "$calls" 2>/dev/null; then
+    echo "Running"
+    return 0
+  fi
   # ZERO_STOPPED is a space-separated set: a VM the scaler stopped this or
   # an earlier tick reads Stopped, the way Lima would answer.
   case " $ZERO_STOPPED " in
@@ -667,5 +675,30 @@ rc=0; fleet_watch_tick >/dev/null 2>&1 || rc=$?
 busy_now="$(cut -d'|' -f6 "$RECORDS/scale" 2>/dev/null || printf '0')"
 record "wake-from-zero: the woken secondary's idle clock resets" "1/yes" \
   "$(called '^scale:start --instance homefield-2$')/$( [ "${busy_now:-0}" -ge "$(( $(date +%s) - 60 ))" ] && echo yes || echo no)"
+
+# 30. A start that landed but did not prove out (the restore failed)
+# still ends the wake pass: the VM is up and eligible, one VM per tick,
+# and a second start could not serve the next demand any better than
+# the runner that is already online — while the nonzero return keeps
+# the restore failure visible
+FLEET_LIST="homefield-1 homefield-2"
+VM1_STATUS="Stopped"
+VM2_STATUS="Stopped"
+ZERO_STOPPED=""
+QUEUED_SINCE="$(( $(date +%s) - 1000 ))"
+printf 'homefield-ci org/repo github.com\nhomefield-ci org/other github.com\n' \
+  >"$HOMEFIELD_STATE_DIR/routing"
+printf 'homefield-1|https://github.com/org/repo|homefield-ci|1\n' >"$RECORDS/scale-dark"
+printf 'homefield-2|https://github.com/org/other|homefield-ci|2\n' >>"$RECORDS/scale-dark"
+RESTORE_RC=1
+: >"$calls"
+rc=0; fleet_watch_tick >/dev/null 2>&1 || rc=$?
+RESTORE_RC=""
+line1_gone="yes"; grep -q '^homefield-1|' "$RECORDS/scale-dark" 2>/dev/null && line1_gone="no"
+line2_kept="no"; grep -q '^homefield-2|' "$RECORDS/scale-dark" 2>/dev/null && line2_kept="yes"
+started2="$(called '^scale:start --instance homefield-2$')"
+record "wake-from-zero: a start that landed but did not prove out ends the pass" \
+  "1/0/nonzero/yes/yes" \
+  "$(called '^scale:start --instance homefield-1$')/$started2/$(nonzero "$rc")/$line1_gone/$line2_kept"
 
 summary
