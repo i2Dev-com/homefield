@@ -926,7 +926,7 @@ why the record is a record and not a flag.
 
 The webhook receiver a cloud autoscaler would use stays out on purpose:
 the Mac sits behind NAT, and the always-on watcher's tick needs no
-inbound configuration. #305 keeps it as the tracked remainder.
+inbound configuration. #309 keeps it as the tracked remainder.
 
 ## Failure modes
 
