@@ -859,14 +859,20 @@ Mac's jobs still run. A VM without the automatic fallback stops too —
 its queued jobs wait for the label, and the wake side below is what
 answers them. Every VM the tick's stops put down — the primary, a
 secondary that idled out on the same or a later tick — gets a line in
-the `scale-dark` record: that VM is dark by the scaler's hand, and the
-wake side may bring it back on demand. The record keeps the
-route-watcher agent installed (its ticks are what can wake the fleet),
-and a line is dropped the moment its VM is seen Running again — by the
-wake, the user, or anything else. A VM the user stopped by hand never
-gets a line and never wakes: a line is written only when the tick's own
-stop put the VM down, so a fleet that was already dark when the tick
-started writes nothing.
+the `scale-dark` record, provided the tick could capture the identity
+the wake side matches against (the registration url, the routing
+label, the runner id) while the VM still runs: the identity is read
+through the guest, and a stopped guest cannot be asked, so a stop the
+tick cannot pair with a usable identity is deferred to a later tick —
+a dark line that cannot be matched would leave the VM down with its
+demand unanswered. With its identity recorded, the VM is dark by the
+scaler's hand and the wake side may bring it back on demand. The record
+keeps the route-watcher agent installed (its ticks are what can wake
+the fleet), and a line is dropped the moment its VM is seen Running
+again — by the wake, the user, or anything else. A VM the user stopped
+by hand never gets a line and never wakes: a line is written only when
+the tick's own stop put the VM down, so a fleet that was already dark
+when the tick started writes nothing.
 
 **Wake on demand** — only a VM with a dark line wakes. The tick reads
 the same demand the up-scale side does (queued jobs waiting for a

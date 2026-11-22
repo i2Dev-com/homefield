@@ -569,12 +569,18 @@ scale_primaries_refresh() {
 # and that are down. A line is written when the tick's stop side puts a VM
 # down — the scale-to-zero pass for the fleet's own VMs, the spare pass for
 # a secondary — carrying the identity the wake side matches against (the
-# registration url, the routing label, the runner id). It is dropped when
-# the VM is seen Running again (by the wake, the user, or anything else) or
-# gone from the Mac. A VM the user stopped by hand never gets a line: the
-# wake side is for a dark fleet the scaler made, and a hand-stopped VM
-# stays down. One VM per line is what keeps a multi-VM fleet's wake
-# eligibility intact — waking one scope's VM must not strand another's.
+# registration url, the routing label, the runner id). The identity must be
+# in hand before the stop: it is read through the guest while the VM still
+# runs (or taken from the primaries record, which captured it the same
+# way), because a stopped guest cannot be asked. A stop the tick cannot
+# pair with a usable identity is deferred to a later tick — a line the
+# wake side cannot match would leave the VM down with its demand
+# unanswered. A line is dropped when the VM is seen Running again (by the
+# wake, the user, or anything else) or gone from the Mac. A VM the user
+# stopped by hand never gets a line: the wake side is for a dark fleet the
+# scaler made, and a hand-stopped VM stays down. One VM per line is what
+# keeps a multi-VM fleet's wake eligibility intact — waking one scope's VM
+# must not strand another's.
 DARK_NAME=() DARK_URL=() DARK_LABEL=() DARK_ID=()
 
 scale_dark_read() {
@@ -1491,37 +1497,57 @@ fleet_watch_tick() {
         no)
           idle=$((now - SCALE_BUSY[i]))
           if [ "$idle" -ge "$idle_max" ]; then
-            stopped_ok=0
-            if scale_exec stop --instance "${SCALE_NAME[i]}"; then
-              stopped_ok=1
-            else
-              # The real stop can stop the VM and still exit nonzero (the
-              # automatic fallback's flip could not be proven): ask Lima
-              # before calling it a failure, the way the zero pass does.
-              st_now="$(vm_status_of "${SCALE_NAME[i]}")" || st_now=""
-              [ "$st_now" = Stopped ] && stopped_ok=1
-            fi
-            if [ "$stopped_ok" = 1 ]; then
-              log "fleet watch: stopped secondary ${SCALE_NAME[i]} (idle ${idle}s); it stays recorded as the spare"
-              SCALE_ACTION="stopped ${SCALE_NAME[i]}"
-              # A VM the scaler stopped is dark by its hand: with the
-              # scale-to-zero opt-in on, the VM stays wake-eligible —
-              # the identity read is the price of matching demand after
-              # the VM is down (scale_dark_add_vm says why a failed read
-              # writes no line).
-              if [ "$zero_on" = 1 ]; then
+            # With the scale-to-zero opt-in on, the identity is read
+            # while the VM still runs: it comes from the guest's
+            # .runner, which is gone once the VM is down — a read after
+            # the stop returns nothing and the VM could never be matched
+            # again. A read that fails (or a record without a label)
+            # defers the stop to a later tick: a dark line that cannot
+            # match demand is a stranded VM, not a wake-eligible one
+            # (scale_dark_add_vm says why no line means no wake).
+            local dark_url="" dark_id="" dark_ok=1
+            if [ "$zero_on" = 1 ]; then
+              if [ -z "${SCALE_LABEL[i]:-}" ]; then
+                dark_ok=0
+              else
                 INSTANCE="${SCALE_NAME[i]}"
                 load_runner_settings
-                if [ -n "$RS_URL" ]; then
-                  scale_dark_add_vm "${SCALE_NAME[i]}" "$RS_URL" "${SCALE_LABEL[i]}" "${RS_ID:-}"
-                else
-                  echo "homefield: fleet watch: could not read ${SCALE_NAME[i]}'s runner identity; it will not wake on demand (fail safe)" >&2
-                fi
                 INSTANCE="$saved_instance"
+                if [ -n "$RS_URL" ]; then
+                  dark_url="$RS_URL"
+                  dark_id="${RS_ID:-}"
+                else
+                  dark_ok=0
+                fi
               fi
-            else
-              echo "homefield: fleet watch: could not stop secondary ${SCALE_NAME[i]} (log above); it stays up" >&2
-              rc=1
+              if [ "$dark_ok" != 1 ]; then
+                echo "homefield: fleet watch: could not read ${SCALE_NAME[i]}'s wake identity; not stopping it (fail safe)" >&2
+                rc=1
+              fi
+            fi
+            if [ "$dark_ok" = 1 ]; then
+              stopped_ok=0
+              if scale_exec stop --instance "${SCALE_NAME[i]}"; then
+                stopped_ok=1
+              else
+                # The real stop can stop the VM and still exit nonzero (the
+                # automatic fallback's flip could not be proven): ask Lima
+                # before calling it a failure, the way the zero pass does.
+                st_now="$(vm_status_of "${SCALE_NAME[i]}")" || st_now=""
+                [ "$st_now" = Stopped ] && stopped_ok=1
+              fi
+              if [ "$stopped_ok" = 1 ]; then
+                log "fleet watch: stopped secondary ${SCALE_NAME[i]} (idle ${idle}s); it stays recorded as the spare"
+                SCALE_ACTION="stopped ${SCALE_NAME[i]}"
+                # A VM the scaler stopped is dark by its hand: with the
+                # scale-to-zero opt-in on, the VM stays wake-eligible.
+                [ "$zero_on" = 1 ] &&
+                  scale_dark_add_vm "${SCALE_NAME[i]}" "$dark_url" \
+                    "${SCALE_LABEL[i]}" "$dark_id"
+              else
+                echo "homefield: fleet watch: could not stop secondary ${SCALE_NAME[i]} (log above); it stays up" >&2
+                rc=1
+              fi
             fi
           fi
           ;;
@@ -1555,7 +1581,8 @@ fleet_watch_tick() {
   # gets a line in the dark record: the VM is dark by the scaler's hand,
   # and the wake side may bring it back on demand. A VM the user stopped
   # by hand never gets a line and never wakes; nor does one whose stop the
-  # tick could not prove.
+  # tick could not prove, nor one whose wake identity the record lacks —
+  # a line the wake side cannot match is a stranded VM, not a wake.
   if [ "$zero_on" = 1 ]; then
     local pbusy="" st_now="" pidx=-1
     for ((i = 0; i < ${#FLEET_NAME[@]}; i++)); do
@@ -1595,6 +1622,17 @@ fleet_watch_tick() {
       fi
       idle=$((now - pbusy))
       [ "$idle" -ge "$idle_max" ] || continue
+      # The wake identity must be in the record before the stop: the
+      # identity cannot be read through a stopped guest, so a VM stopped
+      # without it could never match demand again — and GitHub's listing
+      # failing at refresh time is exactly when the record goes without
+      # it. Defer the stop to a tick whose refresh captured the identity.
+      if [ -z "${PRIM_URL[pidx]:-}" ] || [ -z "${PRIM_LABEL[pidx]:-}" ] ||
+        [ -z "${PRIM_ID[pidx]:-}" ]; then
+        echo "homefield: fleet watch: no wake identity recorded for ${FLEET_NAME[i]}; not stopping it (fail safe)" >&2
+        rc=1
+        continue
+      fi
       stopped_ok=0
       if scale_exec stop --instance "${FLEET_NAME[i]}"; then
         stopped_ok=1

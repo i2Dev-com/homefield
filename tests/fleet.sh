@@ -224,6 +224,25 @@ job_running() {
 # shellcheck disable=SC2034  # read by the scaler through load_runner_settings
 load_runner_settings() {
   RS_NAME="mac-1"
+  # A real read goes through the guest's .runner: a VM that is neither
+  # Running nor just started by this tick has nothing to read, so the
+  # read returns nothing — the spare pass must read the identity before
+  # it stops the VM, and the wake reads it only after its start.
+  if [ -n "${RS_READ_FAIL:-}" ]; then
+    RS_NAME=""
+    RS_URL=""
+    RS_ID=""
+    return 0
+  fi
+  local st
+  st="$(vm_status_of "${INSTANCE:-}")" || st=""
+  if [ "$st" != "Running" ] &&
+    ! grep -q "^scale:start --instance ${INSTANCE:-}\$" "$calls" 2>/dev/null; then
+    RS_NAME=""
+    RS_URL=""
+    RS_ID=""
+    return 0
+  fi
   case "$INSTANCE" in
     homefield-2)
       RS_ID="2"
@@ -235,7 +254,10 @@ load_runner_settings() {
       ;;
   esac
 }
-runners_on_github() { printf '1\tmac-1\tonline\tself-hosted,linux,arm64,homefield-ci\n'; }
+runners_on_github() {
+  if [ -n "${GH_ROWS_FAIL:-}" ]; then return 1; fi
+  printf '1\tmac-1\tonline\tself-hosted,linux,arm64,homefield-ci\n';
+}
 # runner_serves_repo stub: SERVES_RC answers for every runner; SERVES_ID
 # narrows the answer to that runner id (SERVES_RC_OTHER for the rest).
 runner_serves_repo() {
@@ -539,5 +561,50 @@ rm -f "$RECORDS/scale-dark"
 rc=0; fleet_watch_tick >/dev/null 2>&1 || rc=$?
 record "wake-from-zero: a hand-stopped secondary stays down" "0/0" \
   "$rc/$(called '^scale:start')"
+
+# 25. A stop needs a usable wake identity in the record: the identity
+# cannot be read through a stopped guest, so a VM stopped without one
+# could never match demand again — and GitHub's listing failing at
+# refresh time is exactly when the record goes without it. The tick
+# defers the stop to a tick whose refresh captured the identity.
+HOMEFIELD_SCALE_ZERO=1
+FLEET_LIST="homefield-1"
+VM1_STATUS="Running"
+JOB_RC=1
+ZERO_STOPPED=""
+GH_ROWS_FAIL=1
+printf '%s|https://github.com/org/repo|||%s|1|\n' \
+  "homefield-1" "$(( $(date +%s) - 1000 ))" >"$RECORDS/scale-primaries"
+rm -f "$RECORDS/scale-dark" "$RECORDS/scale" "$HOMEFIELD_STATE_DIR/routing" \
+  "$HOMEFIELD_STATE_DIR/autoflip"
+: >"$calls"
+rc=0; out="$(fleet_watch_tick 2>&1)" || rc=$?
+dark_landed="no"; grep -q '^homefield-1|' "$RECORDS/scale-dark" 2>/dev/null && dark_landed="yes"
+record "scale-to-zero: a stop without a recorded wake identity is deferred" \
+  "0/yes/no/nonzero" \
+  "$(called '^scale:stop')/$(has "$out" 'no wake identity recorded')/$dark_landed/$(nonzero "$rc")"
+GH_ROWS_FAIL=""
+
+# 26. The spare pass reads the secondary's identity before it stops it, so
+# a read that fails while the VM runs defers the stop — the VM keeps
+# running until its identity can be read, instead of going down
+# unmatched
+# shellcheck disable=SC2034  # read by the tick
+HOMEFIELD_SCALE_ZERO=1
+FLEET_LIST="homefield-2"
+VM2_STATUS="Running"
+ZERO_STOPPED=""
+RS_READ_FAIL=1
+printf 'homefield-2|homefield-ci|github.com|https://github.com/org/repo||%s\n' \
+  "$(( $(date +%s) - 1000 ))" >"$RECORDS/scale"
+rm -f "$RECORDS/scale-dark" "$RECORDS/scale-primaries" \
+  "$HOMEFIELD_STATE_DIR/routing" "$HOMEFIELD_STATE_DIR/autoflip"
+: >"$calls"
+rc=0; out="$(fleet_watch_tick 2>&1)" || rc=$?
+dark_landed="no"; grep -q '^homefield-2|' "$RECORDS/scale-dark" 2>/dev/null && dark_landed="yes"
+record "scale-to-zero: a secondary whose identity read fails keeps running" \
+  "0/yes/no/nonzero" \
+  "$(called '^scale:stop')/$(has "$out" 'wake identity')/$dark_landed/$(nonzero "$rc")"
+RS_READ_FAIL=""
 
 summary
