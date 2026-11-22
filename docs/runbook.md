@@ -865,8 +865,13 @@ label, the runner id) while the VM still runs: the identity is read
 through the guest, and a stopped guest cannot be asked, so a stop the
 tick cannot pair with a usable identity is deferred to a later tick —
 a dark line that cannot be matched would leave the VM down with its
-demand unanswered. With its identity recorded, the VM is dark by the
-scaler's hand and the wake side may bring it back on demand. The record
+demand unanswered. The line is also written before the stop: the
+record is the only proof the VM is dark by the scaler's hand, and a
+write that failed after the stop would leave it down with no wake
+eligibility — the next tick would read the stale file and treat the VM
+as hand-stopped — so a failed write defers the stop the same way. With
+its line durably recorded, the VM is dark by the scaler's hand and the
+wake side may bring it back on demand. The record
 keeps the route-watcher agent installed (its ticks are what can wake
 the fleet), and a line is dropped the moment its VM is seen Running
 again — by the wake, the user, or anything else. A VM the user stopped
@@ -890,7 +895,13 @@ runner's group must admit the repository too, the same check the
 up-scale side makes). A demand no dark line serves is left alone and
 logged — starting an unrelated VM would drop its dark line and strand
 the jobs anyway — and the started VM's flipped repositories come back
-the watcher's wake way — a bounded online wait, then the restore. A VM
+the watcher's wake way — a bounded online wait, then the restore. A
+woken secondary also gets a fresh idle clock, the same reset the
+up-scale side's secondary start does: its stamp already exceeded the
+cooldown when it was stopped, and without the reset the next tick
+would stop it again before it can pick up a job. (A woken primary's
+clock heals itself: its line's up flag is cleared while the VM is
+down, and the next refresh starts a fresh cooldown from it.) A VM
 whose status could not be read keeps the scaler from starting anything,
 because one may already be running.
 

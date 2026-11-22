@@ -607,4 +607,65 @@ record "scale-to-zero: a secondary whose identity read fails keeps running" \
   "$(called '^scale:stop')/$(has "$out" 'wake identity')/$dark_landed/$(nonzero "$rc")"
 RS_READ_FAIL=""
 
+# 27. A dark record the tick cannot write must not become a stop: the
+# record is the only proof the VM is dark by the scaler's hand, and a
+# write that failed after the stop would leave the VM down with no wake
+# eligibility — the next tick reads the stale file and treats the VM as
+# hand-stopped. The write happens before the stop, and a failed write
+# defers it. (The read-only state dir makes the real write fail.)
+# shellcheck disable=SC2034  # read by the tick
+HOMEFIELD_SCALE_ZERO=1
+FLEET_LIST="homefield-1"
+VM1_STATUS="Running"
+JOB_RC=1
+ZERO_STOPPED=""
+printf '%s|https://github.com/org/repo|homefield-ci||%s|1|101\n' \
+  "homefield-1" "$(( $(date +%s) - 1000 ))" >"$RECORDS/scale-primaries"
+rm -f "$RECORDS/scale-dark" "$RECORDS/scale" "$HOMEFIELD_STATE_DIR/routing" \
+  "$HOMEFIELD_STATE_DIR/autoflip"
+chmod 555 "$RECORDS"
+: >"$calls"
+rc=0; out="$(fleet_watch_tick 2>&1)" || rc=$?
+chmod 755 "$RECORDS"
+dark_landed="no"; grep -q '^homefield-1|' "$RECORDS/scale-dark" 2>/dev/null && dark_landed="yes"
+record "scale-to-zero: a dark record the tick cannot write stops nothing" \
+  "0/yes/no/nonzero" \
+  "$(called '^scale:stop')/$(has "$out" 'could not write')/$dark_landed/$(nonzero "$rc")"
+
+# 28. The same for the spare pass: a secondary whose dark line cannot be
+# persisted keeps running until the write lands
+FLEET_LIST="homefield-2"
+VM2_STATUS="Running"
+ZERO_STOPPED=""
+printf 'homefield-2|homefield-ci|github.com|https://github.com/org/repo||%s\n' \
+  "$(( $(date +%s) - 1000 ))" >"$RECORDS/scale"
+rm -f "$RECORDS/scale-dark" "$RECORDS/scale-primaries"
+chmod 555 "$RECORDS"
+: >"$calls"
+rc=0; out="$(fleet_watch_tick 2>&1)" || rc=$?
+chmod 755 "$RECORDS"
+dark_landed="no"; grep -q '^homefield-2|' "$RECORDS/scale-dark" 2>/dev/null && dark_landed="yes"
+record "scale-to-zero: a secondary whose dark record cannot be written keeps running" \
+  "0/yes/no/nonzero" \
+  "$(called '^scale:stop')/$(has "$out" 'could not write')/$dark_landed/$(nonzero "$rc")"
+
+# 29. A woken secondary gets a fresh idle clock: its stamp already
+# exceeded the cooldown when it was stopped, and without the reset the
+# next tick would stop it again before it can pick up a job — the same
+# reset the grow side's secondary start does
+# shellcheck disable=SC2034  # read by the tick
+HOMEFIELD_SCALE_ZERO=""
+FLEET_LIST="homefield-2"
+VM2_STATUS="Stopped"
+QUEUED_SINCE="$(( $(date +%s) - 1000 ))"
+printf 'homefield-2|homefield-ci|github.com|https://github.com/org/repo||%s\n' \
+  "$(( $(date +%s) - 1000 ))" >"$RECORDS/scale"
+printf 'homefield-2|https://github.com/org/repo|homefield-ci|2\n' >"$RECORDS/scale-dark"
+printf 'homefield-ci org/repo github.com\n' >"$HOMEFIELD_STATE_DIR/routing"
+: >"$calls"
+rc=0; fleet_watch_tick >/dev/null 2>&1 || rc=$?
+busy_now="$(cut -d'|' -f6 "$RECORDS/scale" 2>/dev/null || printf '0')"
+record "wake-from-zero: the woken secondary's idle clock resets" "1/yes" \
+  "$(called '^scale:start --instance homefield-2$')/$( [ "${busy_now:-0}" -ge "$(( $(date +%s) - 60 ))" ] && echo yes || echo no)"
+
 summary

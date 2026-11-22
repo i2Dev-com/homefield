@@ -620,32 +620,38 @@ scale_dark_write() {
 
 # scale_dark_add_prim <i>: one dark line copied from the primaries record
 # (the zero pass's stop; the line exists — the idle clock came from it).
+# Returns 1 when the line already existed (nothing was added), so the
+# caller can roll back exactly what it added when the write fails.
 scale_dark_add_prim() {
   local i="$1"
   local j
   for ((j = 0; j < ${#DARK_NAME[@]}; j++)); do
-    [ "${DARK_NAME[j]}" = "${PRIM_NAME[i]}" ] && return 0
+    [ "${DARK_NAME[j]}" = "${PRIM_NAME[i]}" ] && return 1
   done
   DARK_NAME+=("${PRIM_NAME[i]}")
   DARK_URL+=("${PRIM_URL[i]}")
   DARK_LABEL+=("${PRIM_LABEL[i]}")
   DARK_ID+=("${PRIM_ID[i]}")
+  return 0
 }
 
 # scale_dark_add_vm <name> <url> <label> <id>: one dark line for a VM whose
 # identity was read while it ran (the spare pass's secondary, which the
 # primaries record does not book). A line the tick could not read the
 # identity for is not written: the wake side matches on it, and a line it
-# cannot match is the stranded-jobs kind, not the wake kind.
+# cannot match is the stranded-jobs kind, not the wake kind. Returns 1
+# when the line already existed (nothing was added), so the caller can
+# roll back exactly what it added when the write fails.
 scale_dark_add_vm() {
   local j
   for ((j = 0; j < ${#DARK_NAME[@]}; j++)); do
-    [ "${DARK_NAME[j]}" = "$1" ] && return 0
+    [ "${DARK_NAME[j]}" = "$1" ] && return 1
   done
   DARK_NAME+=("$1")
   DARK_URL+=("${2:-}")
   DARK_LABEL+=("${3:-}")
   DARK_ID+=("${4:-}")
+  return 0
 }
 
 # scale_dark_drop <name>: the VM is up or gone; its dark line goes with it.
@@ -1007,7 +1013,7 @@ scale_grow() {
 # too: a VM another scope woke must not strand this one's dark line, so
 # the tick calls it whenever the grow side added nothing this tick.
 scale_wake() {
-  local now label repo host since idle i j idx pname pidx wait_max rc=0 serves
+  local now label repo host since idle i j idx pname pidx wait_max rc=0 serves wi up_now wrc
   scale_dark_read
   if [ "${#DARK_NAME[@]}" -eq 0 ]; then
     log "fleet watch: no VM the scaler stopped is dark; nothing wakes on demand"
@@ -1101,13 +1107,39 @@ scale_wake() {
     else
       log "fleet watch: jobs have waited ${idle}s for ${WAKE_LABEL[i]}; starting ${pname} (scaled to zero)"
     fi
-    if scale_wake_start "$pname"; then
-      # The VM is up: its dark line goes now, not on the next tick's
-      # reconcile — the record is what the next demand reads.
+    wrc=0
+    scale_wake_start "$pname" || wrc=1
+    # The VM is up: its dark line goes now, not on the next tick's
+    # reconcile — the record is what the next demand reads. A recorded
+    # secondary also gets a fresh idle clock: its stamp already
+    # exceeded the cooldown when it was stopped, and without the reset
+    # the next tick would stop it again before it can pick up a job —
+    # the same reset the grow side's secondary start does. (A primary's
+    # clock heals itself: its line's up flag is cleared while the VM is
+    # down, and the next refresh starts a fresh cooldown from it.) The
+    # start can also land without the wake proving out — the guest's
+    # identity unreadable in time, the runner not online within the
+    # wait — and a VM Lima says is Running is up all the same, so the
+    # bookkeeping runs for it too; a stopped-again-on-sight cycle is
+    # the one outcome worse than the wait.
+    up_now=""
+    if [ "$wrc" = 1 ]; then
+      up_now="$(vm_status_of "$pname")" || up_now=""
+    fi
+    if [ "$wrc" = 0 ] || [ "$up_now" = Running ]; then
       scale_dark_drop "$pname" && scale_dark_write ||
         echo "homefield: fleet watch: started ${pname} but could not update $(scale_dark_file); the next tick's reconcile drops the stale line" >&2
-      SCALE_ACTION="started ${pname} (from zero)"
-      return 0
+      for ((wi = 0; wi < ${#SCALE_NAME[@]}; wi++)); do
+        [ "${SCALE_NAME[wi]}" = "$pname" ] || continue
+        SCALE_BUSY[wi]="$now"
+        scale_record_write ||
+          echo "homefield: fleet watch: started ${pname} but could not record it; it will be recorded again on the next demand ($(scale_file))" >&2
+        break
+      done
+      if [ "$wrc" = 0 ]; then
+        SCALE_ACTION="started ${pname} (from zero)"
+        return 0
+      fi
     fi
     rc=1
   done
@@ -1282,7 +1314,7 @@ scale_tick_lock_release() {
 # answer, and the tick says so.
 fleet_watch_tick() {
   SCALE_ACTION="none"
-  local rc=0 now list name st jrc saw_running=0 saw_unknown=0 all_busy=1 unaskable=0 i idx idle j recorded zero_on
+  local rc=0 now list name st jrc saw_running=0 saw_unknown=0 all_busy=1 unaskable=0 i idx idle j recorded zero_on added write_ok
   if route_watcher_is_running; then
     log "fleet watch: the sleep/wake watcher is running; standing down until it is done"
     SCALE_ACTION="yielded to the watcher"
@@ -1526,27 +1558,43 @@ fleet_watch_tick() {
               fi
             fi
             if [ "$dark_ok" = 1 ]; then
-              stopped_ok=0
-              if scale_exec stop --instance "${SCALE_NAME[i]}"; then
-                stopped_ok=1
-              else
-                # The real stop can stop the VM and still exit nonzero (the
-                # automatic fallback's flip could not be proven): ask Lima
-                # before calling it a failure, the way the zero pass does.
-                st_now="$(vm_status_of "${SCALE_NAME[i]}")" || st_now=""
-                [ "$st_now" = Stopped ] && stopped_ok=1
+              # The dark line is durable before the stop — the same
+              # reasoning as the zero pass's: a write that failed after
+              # the stop would leave the VM down with no wake
+              # eligibility, and the next tick would treat it as
+              # hand-stopped.
+              write_ok=1
+              if [ "$zero_on" = 1 ]; then
+                added=0
+                scale_dark_add_vm "${SCALE_NAME[i]}" "$dark_url" \
+                  "${SCALE_LABEL[i]}" "$dark_id" && added=1
+                if ! scale_dark_write; then
+                  write_ok=0
+                  if [ "$added" = 1 ]; then
+                    scale_dark_drop "${SCALE_NAME[i]}" || rc=1
+                  fi
+                  echo "homefield: fleet watch: could not write $(scale_dark_file); not stopping ${SCALE_NAME[i]} (fail safe)" >&2
+                  rc=1
+                fi
               fi
-              if [ "$stopped_ok" = 1 ]; then
-                log "fleet watch: stopped secondary ${SCALE_NAME[i]} (idle ${idle}s); it stays recorded as the spare"
-                SCALE_ACTION="stopped ${SCALE_NAME[i]}"
-                # A VM the scaler stopped is dark by its hand: with the
-                # scale-to-zero opt-in on, the VM stays wake-eligible.
-                [ "$zero_on" = 1 ] &&
-                  scale_dark_add_vm "${SCALE_NAME[i]}" "$dark_url" \
-                    "${SCALE_LABEL[i]}" "$dark_id"
-              else
-                echo "homefield: fleet watch: could not stop secondary ${SCALE_NAME[i]} (log above); it stays up" >&2
-                rc=1
+              if [ "$write_ok" = 1 ]; then
+                stopped_ok=0
+                if scale_exec stop --instance "${SCALE_NAME[i]}"; then
+                  stopped_ok=1
+                else
+                  # The real stop can stop the VM and still exit nonzero (the
+                  # automatic fallback's flip could not be proven): ask Lima
+                  # before calling it a failure, the way the zero pass does.
+                  st_now="$(vm_status_of "${SCALE_NAME[i]}")" || st_now=""
+                  [ "$st_now" = Stopped ] && stopped_ok=1
+                fi
+                if [ "$stopped_ok" = 1 ]; then
+                  log "fleet watch: stopped secondary ${SCALE_NAME[i]} (idle ${idle}s); it stays recorded as the spare"
+                  SCALE_ACTION="stopped ${SCALE_NAME[i]}"
+                else
+                  echo "homefield: fleet watch: could not stop secondary ${SCALE_NAME[i]} (log above); it stays up" >&2
+                  rc=1
+                fi
               fi
             fi
           fi
@@ -1633,6 +1681,23 @@ fleet_watch_tick() {
         rc=1
         continue
       fi
+      # The dark line is durable before the stop: the record is the
+      # only proof the VM is dark by the scaler's hand, and a write
+      # that failed after the stop would leave it down with no wake
+      # eligibility — the next tick reads the stale file and treats
+      # the VM as hand-stopped, its queued jobs unanswered. A line
+      # written for a stop that then fails is harmless: the reconcile
+      # drops a line whose VM is seen Running.
+      added=0
+      scale_dark_add_prim "$pidx" && added=1
+      if ! scale_dark_write; then
+        if [ "$added" = 1 ]; then
+          scale_dark_drop "${FLEET_NAME[i]}" || rc=1
+        fi
+        echo "homefield: fleet watch: could not write $(scale_dark_file); not stopping ${FLEET_NAME[i]} (fail safe)" >&2
+        rc=1
+        continue
+      fi
       stopped_ok=0
       if scale_exec stop --instance "${FLEET_NAME[i]}"; then
         stopped_ok=1
@@ -1650,7 +1715,6 @@ fleet_watch_tick() {
       if [ "$stopped_ok" = 1 ]; then
         log "fleet watch: stopped ${FLEET_NAME[i]} (idle ${idle}s) — scaled to zero"
         SCALE_ACTION="stopped ${FLEET_NAME[i]} (scaled to zero)"
-        scale_dark_add_prim "$pidx"
       else
         echo "homefield: fleet watch: could not stop ${FLEET_NAME[i]} (log above); it stays up" >&2
         rc=1
@@ -1658,11 +1722,15 @@ fleet_watch_tick() {
     done
   fi
 
-  # The dark record, written: the reconcile above dropped the lines whose
-  # VMs are gone or Running, and the stop passes added this tick's. What
-  # is left is what the wake side reads. A record the tick could not write
-  # is the wake side's blindness, not a wrong wake: the next tick writes
-  # it again.
+  # The dark record, written: the stop passes wrote their lines before
+  # their stops (the record is the proof of scaler-owned shutdown, and a
+  # write that failed there skipped the stop), so this write persists
+  # what else changed — the reconcile's drops, a VM seen Running or gone
+  # — and rewrites the same content when the passes already wrote. A
+  # record the tick could not write here is the wake side's blindness
+  # about drops only: a stale line for a Running VM cannot trigger a
+  # start (the wake matches Stopped VMs), and the next tick's reconcile
+  # drops it when the write lands.
   if [ "${#DARK_NAME[@]}" -gt 0 ] || [ -f "$(scale_dark_file)" ]; then
     scale_dark_write ||
       echo "homefield: fleet watch: could not update $(scale_dark_file); the wake side reads the stale record this tick" >&2
