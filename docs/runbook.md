@@ -842,6 +842,92 @@ stop the ones after it) is killed and logged loudly; a secondary it was
 half-creating stays behind for the next tick to reconcile, or for
 `bin/homefield reset --instance <name>` to remove by hand.
 
+### Scale to zero, and wake on demand (#305)
+
+The scaler above only ever adds capacity while a VM is running: a fleet
+that is entirely stopped scales nothing, because a stopped VM cannot be
+asked for its runner identity and the tick refuses to guess. #305
+completes the column with two sides, one of them opt-in.
+
+**Scale to zero** — off until `HOMEFIELD_SCALE_ZERO=1` is baked into the
+agent's plist (set it when you run `install`/`upgrade --auto-route`, the
+way the other `HOMEFIELD_SCALE_*` reach the agent) — lets the tick stop
+the fleet's own VMs (the ones it did not create) after the same idle
+cooldown the secondaries use, through the real `stop`: the automatic
+fallback flips the VM's routed repositories to hosted first, so the dark
+Mac's jobs still run. A VM without the automatic fallback stops too —
+its queued jobs wait for the label, and the wake side below is what
+answers them. Every VM the tick's stops put down — the primary, a
+secondary that idled out on the same or a later tick — gets a line in
+the `scale-dark` record, provided the tick could capture the identity
+the wake side matches against (the registration url, the routing
+label, the runner id) while the VM still runs: the identity is read
+through the guest, and a stopped guest cannot be asked, so a stop the
+tick cannot pair with a usable identity is deferred to a later tick —
+a dark line that cannot be matched would leave the VM down with its
+demand unanswered. The line is also written before the stop: the
+record is the only proof the VM is dark by the scaler's hand, and a
+write that failed after the stop would leave it down with no wake
+eligibility — the next tick would read the stale file and treat the VM
+as hand-stopped — so a failed write defers the stop the same way. With
+its line durably recorded, the VM is dark by the scaler's hand and the
+wake side may bring it back on demand. The record
+keeps the route-watcher agent installed (its ticks are what can wake
+the fleet), and a line is dropped the moment its VM is seen Running
+again — by the wake, the user, or anything else. A VM the user stopped
+by hand never gets a line and never wakes: a line is written only when
+the tick's own stop put the VM down, so a fleet that was already dark
+when the tick started writes nothing.
+
+**Wake on demand** — only a VM with a dark line wakes. The tick reads
+the same demand the up-scale side does (queued jobs waiting for a
+routing label: the stop's flip did not land, or a workflow that never
+went through the `CI_RUNNER` switch) plus one more source: the runs an
+automatic flip moved to hosted, which are demand burning hosted minutes
+and wake at once. The queued source waits out `HOMEFIELD_SCALE_WAIT`
+like the up-scale side; the hosted source does not. One VM per tick,
+the scaler's rule: a dark VM whose recorded label, host and
+registration scope match the demand starts first (the primaries record,
+`scale-primaries`, is maintained while the VMs run precisely because a
+stopped one cannot be asked — the scope match matters, since two
+repository-scoped VMs can share the default label, and an organization
+runner's group must admit the repository too, the same check the
+up-scale side makes). A demand no dark line serves is left alone and
+logged — starting an unrelated VM would drop its dark line and strand
+the jobs anyway — and the started VM's flipped repositories come back
+the watcher's wake way — a bounded online wait, then the restore. A
+start that lands but does not prove out — the bounded wait expires, or
+the restore fails — still ends the pass: the VM is up and eligible all
+the same, and a second start could not serve the next demand any
+better than the runner that is already online, so the pass ends with
+the failure surfaced rather than reaching for another dark VM. A
+queued demand that an idle running runner on this Mac already serves
+wakes nothing either: the run is waiting on workflow dependencies no
+runner can help, or on a runner the idle cooldown is about to retire,
+and a dark VM started for the same scope would idle out behind the
+same wait — demands for other scopes still wake, and the hosted
+source always wakes, since its runs are on hosted now and the restore
+that brings the routing back rides on a start. A woken secondary also
+gets a fresh idle clock, the same reset the
+up-scale side's secondary start does: its stamp already exceeded the
+cooldown when it was stopped, and without the reset the next tick
+would stop it again before it can pick up a job. (A woken primary's
+clock heals itself: its line's up flag is cleared while the VM is
+down, and the next refresh starts a fresh cooldown from it.) A VM
+whose status could not be read keeps the scaler from starting
+anything, whether the fleet is fully dark or partly running, because
+one may already be running and serving the demand.
+
+Because the dark record is per VM, one scope's wake does not strand
+another's: with two repository-scoped VMs dark, waking the first leaves
+the second's line — and its demand — answerable on a later tick, even
+while the first stays up. A fleet-wide flag could not do that; that is
+why the record is a record and not a flag.
+
+The webhook receiver a cloud autoscaler would use stays out on purpose:
+the Mac sits behind NAT, and the always-on watcher's tick needs no
+inbound configuration. #305 keeps it as the tracked remainder.
+
 ## Failure modes
 
 Not sure which row applies? `bin/homefield diagnose` checks the VM, the runner
@@ -1190,6 +1276,13 @@ scaler](#the-demand-scaler-queued-jobs-behind-a-busy-fleet)) applies the
 same budget on its own creates: the sizes of every VM on the Mac, stopped
 ones included, plus the new one must keep the 2 cores and 8 GiB free, or the
 create is refused and the tick says so.
+
+Scale-to-zero ([#305](https://github.com/i2Dev-com/homefield/issues/305),
+the section above) trades hosted minutes for an idle Mac: with
+`HOMEFIELD_SCALE_ZERO=1` the tick stops the fleet's own idle VMs after the
+cooldown and wakes them on demand. It starts existing VMs — no new
+allocation — so the budget here is about how many VMs you create, not how
+many the scaler wakes.
 
 ## Moving a registration
 
