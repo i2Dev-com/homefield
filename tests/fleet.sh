@@ -298,6 +298,7 @@ vm_status_of() {
   case "$1" in
     homefield-1) echo "${VM1_STATUS-Running}" ;;
     homefield-2) echo "${VM2_STATUS-Running}" ;;
+    homefield-3) echo "${VM3_STATUS-Stopped}" ;;
     *) echo "Stopped" ;;
   esac
 }
@@ -700,5 +701,53 @@ started2="$(called '^scale:start --instance homefield-2$')"
 record "wake-from-zero: a start that landed but did not prove out ends the pass" \
   "1/0/nonzero/yes/yes" \
   "$(called '^scale:start --instance homefield-1$')/$started2/$(nonzero "$rc")/$line1_gone/$line2_kept"
+
+# 31. A queued demand an idle running runner already serves wakes no dark
+# VM for the same scope: the run is waiting on workflow dependencies no
+# runner can help, or on a runner the idle cooldown is about to retire,
+# and a dark VM started for it would idle out behind the same wait. An
+# unrelated scope's dark VM still wakes, and the idle runner itself is
+# left alone
+# shellcheck disable=SC2034  # read by the tick
+HOMEFIELD_SCALE_ZERO=""
+FLEET_LIST="homefield-1 homefield-2 homefield-3"
+VM1_STATUS="Running"
+VM2_STATUS="Stopped"
+VM3_STATUS="Stopped"
+ZERO_STOPPED=""
+QUEUED_SINCE="$(( $(date +%s) - 1000 ))"
+printf 'homefield-ci org/repo github.com\nhomefield-ci2 org/other github.com\n' \
+  >"$HOMEFIELD_STATE_DIR/routing"
+printf 'homefield-1|https://github.com/org/repo|homefield-ci||%s|1|1\n' \
+  "$(date +%s)" >"$RECORDS/scale-primaries"
+printf 'homefield-2|https://github.com/org/repo|homefield-ci|2\n' >"$RECORDS/scale-dark"
+printf 'homefield-3|https://github.com/org/other|homefield-ci2|3\n' >>"$RECORDS/scale-dark"
+: >"$calls"
+rc=0; out="$(fleet_watch_tick 2>&1)" || rc=$?
+line2_kept="no"; grep -q '^homefield-2|' "$RECORDS/scale-dark" 2>/dev/null && line2_kept="yes"
+line3_gone="yes"; grep -q '^homefield-3|' "$RECORDS/scale-dark" 2>/dev/null && line3_gone="no"
+started3="$(called '^scale:start --instance homefield-3$')"
+record "wake-from-zero: an idle running runner already serving the demand wakes no dark VM for it" \
+  "0/1/yes/yes/yes/0" \
+  "$(called '^scale:start --instance homefield-2$')/$started3/$line2_kept/$line3_gone/$(has "$out" 'already serves')/$(nonzero "$rc")"
+
+# 32. A partly-running fleet whose third VM's status could not be read
+# wakes nothing: that VM may already be running and serving the demand —
+# the same guard the fully-dark fleet applies, which the partly-running
+# call used to bypass
+FLEET_LIST="homefield-1 homefield-2 homefield-3"
+VM1_STATUS="Running"
+VM2_STATUS="Stopped"
+VM3_STATUS=""
+ZERO_STOPPED=""
+rm -f "$RECORDS/scale-primaries"
+printf 'homefield-ci org/repo github.com\n' >"$HOMEFIELD_STATE_DIR/routing"
+printf 'homefield-2|https://github.com/org/repo|homefield-ci|2\n' >"$RECORDS/scale-dark"
+: >"$calls"
+rc=0; out="$(fleet_watch_tick 2>&1)" || rc=$?
+line2_kept="no"; grep -q '^homefield-2|' "$RECORDS/scale-dark" 2>/dev/null && line2_kept="yes"
+record "wake-from-zero: an unreadable status blocks the partly-running wake too" \
+  "0/yes/yes/nonzero" \
+  "$(called '^scale:start')/$line2_kept/$(has "$out" 'could not ask Lima')/$(nonzero "$rc")"
 
 summary

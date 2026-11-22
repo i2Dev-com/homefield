@@ -901,14 +901,22 @@ the restore fails — still ends the pass: the VM is up and eligible all
 the same, and a second start could not serve the next demand any
 better than the runner that is already online, so the pass ends with
 the failure surfaced rather than reaching for another dark VM. A
-woken secondary also gets a fresh idle clock, the same reset the
+queued demand that an idle running runner on this Mac already serves
+wakes nothing either: the run is waiting on workflow dependencies no
+runner can help, or on a runner the idle cooldown is about to retire,
+and a dark VM started for the same scope would idle out behind the
+same wait — demands for other scopes still wake, and the hosted
+source always wakes, since its runs are on hosted now and the restore
+that brings the routing back rides on a start. A woken secondary also
+gets a fresh idle clock, the same reset the
 up-scale side's secondary start does: its stamp already exceeded the
 cooldown when it was stopped, and without the reset the next tick
 would stop it again before it can pick up a job. (A woken primary's
 clock heals itself: its line's up flag is cleared while the VM is
 down, and the next refresh starts a fresh cooldown from it.) A VM
-whose status could not be read keeps the scaler from starting anything,
-because one may already be running.
+whose status could not be read keeps the scaler from starting
+anything, whether the fleet is fully dark or partly running, because
+one may already be running and serving the demand.
 
 Because the dark record is per VM, one scope's wake does not strand
 another's: with two repository-scoped VMs dark, waking the first leaves

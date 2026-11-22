@@ -1013,7 +1013,8 @@ scale_grow() {
 # too: a VM another scope woke must not strand this one's dark line, so
 # the tick calls it whenever the grow side added nothing this tick.
 scale_wake() {
-  local now label repo host since idle i j idx pname pidx wait_max rc=0 serves wi up_now wrc
+  local now label repo host since idle i j k m idx pname pidx wait_max rc=0
+  local rurl rlabel rid served serves wi up_now wrc
   scale_dark_read
   if [ "${#DARK_NAME[@]}" -eq 0 ]; then
     log "fleet watch: no VM the scaler stopped is dark; nothing wakes on demand"
@@ -1060,6 +1061,60 @@ scale_wake() {
   for ((i = 0; i < ${#WAKE_LABEL[@]}; i++)); do
     idle=$((now - WAKE_SINCE[i]))
     [ "${WAKE_URGENT[i]}" = 1 ] || [ "$idle" -ge "$wait_max" ] || continue
+    # A queued demand an idle Running VM already serves needs no new
+    # capacity: the run is waiting on workflow dependencies no runner
+    # can help, or on a runner the idle cooldown is about to retire,
+    # and a dark VM started for the same scope would idle out behind
+    # the same wait. The identities come from the records the tick
+    # maintains while the VMs run — the primaries' for the fleet's own
+    # VMs, the scale record for the secondaries — matched the way the
+    # dark side matches below; only an idle VM counts, because a busy
+    # one is the capacity gap this pass exists for. An org-scoped
+    # registration needs its recorded runner id for the group check,
+    # the same rule the dark side applies, so a secondary whose scale
+    # record carries no id never counts as serving. The hosted source
+    # keeps waking: its runs are on hosted now, and the restore that
+    # brings the routing back rides on a start.
+    if [ "${WAKE_URGENT[i]}" = 0 ]; then
+      served=0
+      for ((k = 0; k < ${#FLEET_NAME[@]}; k++)); do
+        [ "${FLEET_STATUS[k]}" = Running ] || continue
+        [ "${FLEET_JOB[k]}" = no ] || continue
+        rurl=""; rlabel=""; rid=""
+        for ((m = 0; m < ${#PRIM_NAME[@]}; m++)); do
+          [ "${PRIM_NAME[m]}" = "${FLEET_NAME[k]}" ] || continue
+          rurl="${PRIM_URL[m]}"
+          rlabel="${PRIM_LABEL[m]}"
+          rid="${PRIM_ID[m]}"
+          break
+        done
+        if [ -z "$rurl" ]; then
+          for ((m = 0; m < ${#SCALE_NAME[@]}; m++)); do
+            [ "${SCALE_NAME[m]}" = "${FLEET_NAME[k]}" ] || continue
+            rurl="${SCALE_URL[m]}"
+            rlabel="${SCALE_LABEL[m]}"
+            break
+          done
+        fi
+        [ -n "$rurl" ] && [ -n "$rlabel" ] || continue
+        [ "$(lower "$rlabel")" = "$(lower "${WAKE_LABEL[i]}")" ] || continue
+        [ "$(github_host "$rurl")" = "${WAKE_HOST[i]}" ] || continue
+        in_scope "${WAKE_REPO[i]}" "$(scope_owner "$rurl")" || continue
+        if [[ "$rurl" =~ ^https://[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+          [ -n "$rid" ] || continue
+          serves=0
+          runner_serves_repo "$(scope_owner "$rurl")" "$rid" \
+            "${WAKE_REPO[i]}" "${WAKE_HOST[i]}" || serves=$?
+          [ "$serves" = 0 ] || continue
+        fi
+        served=1
+        break
+      done
+      if [ "$served" = 1 ]; then
+        log "fleet watch: an idle runner on this Mac already serves ${WAKE_REPO[i]} (${WAKE_LABEL[i]}); not waking a dark VM for it"
+        continue
+      fi
+    fi
     pidx=-1
     for ((j = 0; j < ${#DARK_NAME[@]}; j++)); do
       [ "$(lower "${DARK_LABEL[j]}")" = "$(lower "${WAKE_LABEL[i]}")" ] || continue
@@ -1798,12 +1853,19 @@ fleet_watch_tick() {
   # grow side answers only demands a Running VM serves, and one it started
   # this tick already took the tick's one VM. Skipped when the tick could
   # not ask about every running VM's job: the demand may be answered
-  # already, and the wake would start a second VM for it. Nothing to wake
-  # (no dark line) is the common fleet: the call, and its log, are for the
-  # scale-to-zero opt-in only.
+  # already, and the wake would start a second VM for it. Also skipped
+  # when a VM's status itself could not be read: one may already be
+  # running and serving the demand, the same guard the fully-dark branch
+  # applies above. Nothing to wake (no dark line) is the common fleet:
+  # the call, and its log, are for the scale-to-zero opt-in only.
   if [ "$saw_running" -gt 0 ] && [ "$unaskable" = 0 ] && [ "$grow_started" = 0 ] \
     && [ "${#DARK_NAME[@]}" -gt 0 ]; then
-    scale_wake || rc=1
+    if [ "$saw_unknown" = 1 ]; then
+      echo "homefield: fleet watch: could not ask Lima about every VM; not waking a dark fleet (fail safe)" >&2
+      rc=1
+    else
+      scale_wake || rc=1
+    fi
   fi
 
   fleet_watch_record "$rc" || rc=1
