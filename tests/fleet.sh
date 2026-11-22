@@ -191,4 +191,170 @@ out="$(cmd_install --url https://github.com/org/repo 2>&1)" || rc=$?
 record "cmd_install with existing VM: logs CPU/RAM budget warning" "yes/yes" \
   "$(has "$out" '1 other HomeField VM(s) already exist')/$(has "$out" 'Scaling on one Mac')"
 
+# ── The demand scaler's tick: scale-to-zero and wake-from-zero (#291, #305) ──
+# The tick is driven through fleet_watch_tick with every boundary stubbed —
+# Lima (vm_instances, vm_status_of, job_running), GitHub (the demand
+# lookups, the runner list, the runner's online status), the scaler
+# subprocess (scale_exec) and the watcher's wake helpers — while the
+# records are real files under a temp HOMEFIELD_STATE_DIR, so the wake
+# flag and the primaries record are asserted as files. The tick is the
+# only entry point: cmd_fleet watch's loop wrapper is argument handling.
+
+export HOMEFIELD_STATE_DIR="$TMP/state"
+mkdir -p "$HOMEFIELD_STATE_DIR/route-watcher"
+
+scale_exec() {
+  printf '%s\n' "scale:$*" >>"$calls"
+  case "$1 $2" in
+    "stop --instance") ZERO_STOPPED="${3:-}" ;;
+  esac
+  return 0
+}
+route_watcher_is_running() { return 1; }
+adopt_nap() { return 0; }
+job_running() { return "$JOB_RC"; }
+# shellcheck disable=SC2034  # read by the scaler through load_runner_settings
+load_runner_settings() {
+  RS_NAME="mac-1"
+  RS_URL="https://github.com/org/repo"
+  RS_ID="1"
+}
+runners_on_github() { printf '1\tmac-1\tonline\tself-hosted,linux,arm64,homefield-ci\n'; }
+# shellcheck disable=SC2034  # read by the scaler through runner_on_github
+runner_on_github() { RUNNER_GH_STATUS="online"; return 0; }
+route_start_restore() { printf 'restore:%s:%s\n' "$1" "$2" >>"$calls"; return 0; }
+queued_wait_since() { [ -n "$QUEUED_SINCE" ] && printf '%s\n' "$QUEUED_SINCE"; return 0; }
+hosted_activity_since() { [ -n "$HOSTED_SINCE" ] && printf '%s\n' "$HOSTED_SINCE"; return 0; }
+vm_instances() { printf '%s\n' "$FLEET_LIST"; }
+vm_status_of() {
+  case "$1" in
+    "$ZERO_STOPPED") echo "Stopped" ;;
+    homefield-1) echo "${VM1_STATUS-Running}" ;;
+    *) echo "Stopped" ;;
+  esac
+}
+state_get() {
+  if [ "$1" = "ephemeral" ] && [ "$INSTANCE" = "homefield-2" ]; then
+    echo "1"
+  elif [ "$1" = "auto_route" ] && [ "${AUTO_ROUTE:-}" = "1" ]; then
+    echo "1"
+  fi
+}
+
+RECORDS="$HOMEFIELD_STATE_DIR/route-watcher"
+VM1_STATUS="Running"
+JOB_RC=1
+QUEUED_SINCE=""
+HOSTED_SINCE=""
+AUTO_ROUTE=""
+ZERO_STOPPED=""
+FLEET_LIST="homefield-1"
+# shellcheck disable=SC2034  # read by the stubs above
+HOMEFIELD_SCALE_ZERO=""
+
+# 7. Scale-to-zero: the opt-in stops the fleet's own idle VM and arms the wake
+# shellcheck disable=SC2034  # read by the tick
+HOMEFIELD_SCALE_ZERO=1
+printf '%s|https://github.com/org/repo|homefield-ci||%s|1\n' \
+  "homefield-1" "$(( $(date +%s) - 1000 ))" >"$RECORDS/scale-primaries"
+rm -f "$RECORDS/scale-zero" "$RECORDS/scale" "$HOMEFIELD_STATE_DIR/routing" \
+  "$HOMEFIELD_STATE_DIR/autoflip"
+: >"$calls"
+rc=0; out="$(fleet_watch_tick 2>&1)" || rc=$?
+record "scale-to-zero: stops the idle own VM through the real stop" "1/yes" \
+  "$(called '^scale:stop --instance homefield-1$')/$(has "$out" 'scaled to zero')"
+flag_gone="no"; [ -f "$RECORDS/scale-zero" ] && flag_gone="yes"
+record "scale-to-zero: arms the wake flag when the fleet goes dark" "yes" "$flag_gone"
+
+# 8. Scale-to-zero is opt-in: off by default the idle VM stays up
+# shellcheck disable=SC2034  # read by the tick
+HOMEFIELD_SCALE_ZERO=""
+printf '%s|https://github.com/org/repo|homefield-ci||%s|1\n' \
+  "homefield-1" "$(( $(date +%s) - 1000 ))" >"$RECORDS/scale-primaries"
+rm -f "$RECORDS/scale-zero"
+: >"$calls"
+rc=0; fleet_watch_tick >/dev/null 2>&1 || rc=$?
+record "scale-to-zero: off by default, the idle VM stays up" "0/0/0" \
+  "$rc/$(called '^scale:stop')/$(called 'scaled to zero')"
+
+# 9. Scale-to-zero needs the idle clock to prove the cooldown: a VM seen
+# Running again starts a fresh stamp, so a fresh line means no stop
+# shellcheck disable=SC2034  # read by the tick
+HOMEFIELD_SCALE_ZERO=1
+printf '%s|https://github.com/org/repo|homefield-ci||%s|1\n' \
+  "homefield-1" "$(date +%s)" >"$RECORDS/scale-primaries"
+rm -f "$RECORDS/scale-zero"
+: >"$calls"
+rc=0; fleet_watch_tick >/dev/null 2>&1 || rc=$?
+record "scale-to-zero: a fresh idle clock, the cooldown is not proven" "0/0/0" \
+  "$rc/$(called '^scale:stop')/$(called 'scaled to zero')"
+
+# 10. Wake-from-zero: queued demand starts the recorded primary
+# shellcheck disable=SC2034  # read by the tick
+HOMEFIELD_SCALE_ZERO=""
+VM1_STATUS="Stopped"
+QUEUED_SINCE="$(( $(date +%s) - 1000 ))"
+printf 'homefield-ci org/repo github.com\n' >"$HOMEFIELD_STATE_DIR/routing"
+printf '%s|https://github.com/org/repo|homefield-ci|1|%s|0\n' \
+  "homefield-1" "$(( $(date +%s) - 10 ))" >"$RECORDS/scale-primaries"
+printf 'armed\n' >"$RECORDS/scale-zero"
+: >"$calls"
+rc=0; out="$(fleet_watch_tick 2>&1)" || rc=$?
+record "wake-from-zero: queued demand starts the recorded primary" "1/yes" \
+  "$(called '^scale:start --instance homefield-1$')/$(has "$out" 'from zero')"
+record "wake-from-zero: the runner comes online before the restore is asked" "1" \
+  "$(called '^restore:https://github.com/org/repo:mac-1$')"
+flag_present="no"; [ -f "$RECORDS/scale-zero" ] && flag_present="yes"
+record "wake-from-zero: the flag is cleared once the VM is up" "no" "$flag_present"
+
+# 11. Wake-from-zero: hosted activity on a flipped repo wakes at once
+rm -f "$HOMEFIELD_STATE_DIR/routing"
+printf 'homefield-ci org/repo github.com\n' >"$HOMEFIELD_STATE_DIR/autoflip"
+HOSTED_SINCE="$(( $(date +%s) - 5 ))"
+QUEUED_SINCE=""
+printf 'armed\n' >"$RECORDS/scale-zero"
+: >"$calls"
+rc=0; out="$(fleet_watch_tick 2>&1)" || rc=$?
+record "wake-from-zero: hosted activity wakes at once, no wait" "1/yes" \
+  "$(called '^scale:start --instance homefield-1$')/$(has "$out" 'hosted runners')"
+
+# 12. A hand-stopped fleet stays down: no flag, no wake
+rm -f "$RECORDS/scale-zero" "$HOMEFIELD_STATE_DIR/autoflip"
+printf 'homefield-ci org/repo github.com\n' >"$HOMEFIELD_STATE_DIR/routing"
+QUEUED_SINCE="$(( $(date +%s) - 1000 ))"
+: >"$calls"
+rc=0; fleet_watch_tick >/dev/null 2>&1 || rc=$?
+record "wake-from-zero: a hand-stopped fleet stays down (no flag)" "0/0" \
+  "$rc/$(called '^scale:start')"
+
+# 13. The flag clears the moment any VM is seen Running
+VM1_STATUS="Running"
+QUEUED_SINCE=""
+printf 'armed\n' >"$RECORDS/scale-zero"
+fleet_watch_tick >/dev/null 2>&1 || true
+flag_present="no"; [ -f "$RECORDS/scale-zero" ] && flag_present="yes"
+record "the wake flag clears the moment any VM is Running" "no" "$flag_present"
+
+# 14. An unreadable VM status blocks the wake (fail safe)
+VM1_STATUS=""
+QUEUED_SINCE="$(( $(date +%s) - 1000 ))"
+printf 'armed\n' >"$RECORDS/scale-zero"
+printf '%s|https://github.com/org/repo|homefield-ci|1|%s|0\n' \
+  "homefield-1" "$(( $(date +%s) - 10 ))" >"$RECORDS/scale-primaries"
+: >"$calls"
+rc=0; out="$(fleet_watch_tick 2>&1)" || rc=$?
+record "wake-from-zero: an unreadable status blocks the wake (fail safe)" "0/nonzero/yes" \
+  "$(called '^scale:start')/$(nonzero "$rc")/$(has "$out" 'not waking a dark fleet')"
+
+# 15. The restore retry: a Running online auto_route VM restores flipped repos
+VM1_STATUS="Running"
+QUEUED_SINCE=""
+AUTO_ROUTE=1
+rm -f "$RECORDS/scale-zero" "$HOMEFIELD_STATE_DIR/routing"
+printf 'homefield-ci org/repo github.com\n' >"$HOMEFIELD_STATE_DIR/autoflip"
+: >"$calls"
+rc=0; fleet_watch_tick >/dev/null 2>&1 || rc=$?
+record "the restore retry: a Running online auto_route VM restores flipped repos" "1/0" \
+  "$(called '^restore:https://github.com/org/repo:mac-1$')/$(nonzero "$rc")"
+
 summary

@@ -207,6 +207,17 @@ cmd_fleet() {
 # the queued jobs with no routing change at all. After an idle cooldown it
 # is stopped (never deleted), and the next demand spike boots it again.
 #
+# Scale-from-zero (#305) completes the column: the tick also wakes a fleet
+# that is entirely stopped. The wake is armed by the `scale-zero` flag —
+# written only when the scaler's own scale-to-zero stops put the fleet
+# dark, so a fleet the user stopped by hand stays down — and fired by the
+# same demand the up-scale side reads, plus one more source: the runs an
+# automatic flip moved to hosted, which are demand burning hosted minutes
+# and wake at once. The started VM's flipped repositories come back the
+# watcher's wake way (online wait, then restore). The webhook receiver a
+# cloud autoscaler would use stays out on purpose: the Mac sits behind NAT,
+# and the always-on watcher's tick needs no inbound configuration.
+#
 # The route-watcher LaunchAgent (#290) drives the ticks: its helper runs
 # `fleet watch --max-ticks 1` every HOMEFIELD_SCALE_INTERVAL seconds, one
 # more loop in the same agent. A tick yields to a watcher run in progress —
@@ -222,9 +233,21 @@ cmd_fleet() {
 # group name may contain spaces) — and `scale-state` holds the last tick's
 # summary, the way the watcher's `state` holds its last run; `fleet status`
 # prints it.
+#
+# Scale-from-zero (#305) adds two records of its own. `scale-primaries`
+# holds one `|`-separated line per fleet VM the scaler did not create —
+# `name|url|label|auto_route|last-busy-epoch` — refreshed every tick while
+# the VM is Running, because a stopped VM cannot be asked for its runner
+# identity and the wake side needs the map when everything is down.
+# `scale-zero` is the flag that says the fleet is dark by the scaler's own
+# hand (the scale-to-zero stops below): only a flagged dark fleet wakes on
+# demand, so a fleet the user stopped stays down. The flag is cleared the
+# moment any VM is seen Running again.
 
 scale_file() { printf '%s/scale' "$(route_watcher_dir)"; }
 scale_state_file() { printf '%s/scale-state' "$(route_watcher_dir)"; }
+scale_primaries_file() { printf '%s/scale-primaries' "$(route_watcher_dir)"; }
+scale_zero_file() { printf '%s/scale-zero' "$(route_watcher_dir)"; }
 
 # iso_to_epoch <iso8601-utc>: seconds since the epoch, in pure bash
 # arithmetic. macOS's date and GNU date cannot parse the same input, and the
@@ -406,6 +429,159 @@ fleet_index() {
     fi
   done
   printf '%s\n' -1
+}
+
+# ── The scale-from-zero records (#305) ──────────────────────────────────────
+# PRIM_NAME/PRIM_URL/PRIM_LABEL/PRIM_AUTO/PRIM_BUSY/PRIM_UP: the primaries
+# record, the scale-to-zero opt-in's map of the fleet's own VMs — the ones
+# the scaler did not create. It exists because a stopped VM cannot be asked
+# for its runner identity (load_runner_settings reads through the guest),
+# while both sides of 0 → N need the map after the VMs are down: the zero
+# stops need each VM's idle clock, and the wake side needs which VM serves
+# which label. The tick refreshes a line while the VM is Running (the
+# identity, the automatic-fallback flag from its state file, and the
+# routing label from GitHub's runner row) and drops lines for VMs gone from
+# the Mac, the way the scale record does. `up` says the line was written
+# for a Running VM; the reconcile clears it when the VM is not, so a VM
+# seen Running again after being down starts a fresh idle cooldown instead
+# of inheriting its pre-stop stamp.
+PRIM_NAME=() PRIM_URL=() PRIM_LABEL=() PRIM_AUTO=() PRIM_BUSY=() PRIM_UP=()
+
+scale_primaries_read() {
+  PRIM_NAME=()
+  PRIM_URL=()
+  PRIM_LABEL=()
+  PRIM_AUTO=()
+  PRIM_BUSY=()
+  PRIM_UP=()
+  local f pname purl plabel pauto pbusy pup
+  f="$(scale_primaries_file)"
+  [ -f "$f" ] || return 0
+  while IFS='|' read -r pname purl plabel pauto pbusy pup; do
+    [ -n "$pname" ] || continue
+    case "$pbusy" in '' | *[!0-9]*) continue ;; esac
+    PRIM_NAME+=("$pname")
+    PRIM_URL+=("${purl:-}")
+    PRIM_LABEL+=("${plabel:-}")
+    PRIM_AUTO+=("${pauto:-}")
+    PRIM_BUSY+=("$pbusy")
+    PRIM_UP+=("${pup:-}")
+  done <"$f"
+  return 0
+}
+
+# scale_primaries_write: the arrays back to the primaries record, whole,
+# through a temp file moved over the target (the records' rule: a reader
+# never sees half a file). The tick is the only writer.
+scale_primaries_write() {
+  local f dir tmp i
+  f="$(scale_primaries_file)"
+  dir="$(dirname "$f")"
+  mkdir -p "$dir" || return 1
+  tmp="$(mktemp "$dir/.scale-primaries.XXXXXX")" || return 1
+  : >"$tmp" || { rm -f "$tmp"; return 1; }
+  for ((i = 0; i < ${#PRIM_NAME[@]}; i++)); do
+    printf '%s|%s|%s|%s|%s|%s\n' "${PRIM_NAME[i]}" "${PRIM_URL[i]}" \
+      "${PRIM_LABEL[i]}" "${PRIM_AUTO[i]}" "${PRIM_BUSY[i]}" "${PRIM_UP[i]}" >>"$tmp" ||
+      { rm -f "$tmp"; return 1; }
+  done
+  mv -f "$tmp" "$f" || { rm -f "$tmp"; return 1; }
+}
+
+# scale_primaries_refresh <name> <job>: one Running, non-recorded VM's line,
+# from what the state pass already asked the VM (it holds INSTANCE). The
+# label is the runner's routing label from GitHub's row — empty when the
+# runner advertises no custom label, in which case nothing routes to it and
+# the wake side's match skips it (the fallback start of the fleet's first
+# VM covers demand no line matches). A VM that cannot be asked for its
+# identity keeps its old line (fail safe): the wake side re-reads the
+# identity from the VM after it starts it, so the record only has to carry
+# the match. The busy stamp tracks the last job the VM ran; a VM seen
+# Running again after being down (its line's up was cleared) starts a fresh
+# cooldown instead of inheriting its pre-stop stamp.
+scale_primaries_refresh() {
+  local name="$1" job="$2" i idx=-1 url="" label="" auto="" busy="" up=""
+  local rows rn rlabels
+  for ((i = 0; i < ${#PRIM_NAME[@]}; i++)); do
+    [ "${PRIM_NAME[i]}" = "$name" ] && idx=$i && break
+  done
+  if [ "$idx" != -1 ]; then
+    url="${PRIM_URL[idx]}"
+    label="${PRIM_LABEL[idx]}"
+    auto="${PRIM_AUTO[idx]}"
+    busy="${PRIM_BUSY[idx]}"
+    up="${PRIM_UP[idx]}"
+  fi
+  load_runner_settings
+  if [ -n "$RS_NAME" ] && [ -n "$RS_URL" ]; then
+    url="$RS_URL"
+    auto="$(state_get auto_route)"
+    rows="$(runners_on_github "$RS_URL")" || rows=""
+    if [ -n "$rows" ]; then
+      while IFS=$'\t' read -r _rid rn _rst rlabels; do
+        [ "$rn" = "$RS_NAME" ] && label="$(routing_label "$rlabels")"
+      done <<<"$rows"
+    fi
+  fi
+  case "$job" in
+    yes)
+      busy="$(date +%s)"
+      up=1
+      ;;
+    no)
+      [ "$up" = 1 ] || busy="$(date +%s)"
+      up=1
+      ;;
+    *)
+      # The job probe could not be answered: the zero stop skips this VM
+      # (fail safe), and the stamp says nothing new.
+      up=1
+      ;;
+  esac
+  if [ "$idx" = -1 ]; then
+    PRIM_NAME+=("$name")
+    PRIM_URL+=("$url")
+    PRIM_LABEL+=("$label")
+    PRIM_AUTO+=("$auto")
+    PRIM_BUSY+=("$busy")
+    PRIM_UP+=("$up")
+  else
+    PRIM_URL[idx]="$url"
+    PRIM_LABEL[idx]="$label"
+    PRIM_AUTO[idx]="$auto"
+    PRIM_BUSY[idx]="$busy"
+    PRIM_UP[idx]="$up"
+  fi
+  return 0
+}
+
+# hosted_activity_since <repo> <host>: the earliest created_at of the
+# repository's queued or in-progress runs — the demand a dark fleet's
+# flipped repositories generate. The automatic flip moved them to hosted
+# (their entries live in `autoflip` until a start restores them), so every
+# run they start burns hosted minutes until the fleet comes back. Unlike
+# the queued lookup there is no label to match — the flip changed the
+# workflow's runs-on out of the local label — and no wait: a queued job
+# behind a busy fleet proves itself over the threshold, but a run already
+# spending money is demand now. Empty when nothing runs; 1 when GitHub
+# could not be asked (the caller fails safe and wakes nothing).
+hosted_activity_since() {
+  local repo="$1" host="$2" status ids id created best="" epoch
+  for status in queued in_progress; do
+    ids="$(gh api --hostname "$host" --paginate "repos/${repo}/actions/runs?status=${status}&per_page=100" \
+      --jq '.workflow_runs[] | [.id, .created_at] | @tsv' </dev/null 2>/dev/null)" || return 1
+    while IFS=$'\t' read -r id created; do
+      [ -n "$id" ] || continue
+      epoch="$(iso_to_epoch "$created")" || continue
+      if [ -z "$best" ] || [ "$epoch" -lt "$best" ]; then
+        best="$epoch"
+      fi
+    done <<<"$ids"
+  done
+  if [ -n "$best" ]; then
+    printf '%s\n' "$best"
+  fi
+  return 0
 }
 
 # scale_exec <args...>: run this tool for one VM — the scaler's only way to
@@ -699,6 +875,159 @@ scale_grow() {
   return 0
 }
 
+# ── The scale-from-zero side (#305) ─────────────────────────────────────────
+# scale_wake: the fleet is dark and the scale-zero flag says the scaler put
+# it there. Demand wakes it, from two sources: the queued jobs the demand
+# lookup already finds (a label nothing serves — the stop's flip did not
+# land, or a workflow that never went through the CI_RUNNER switch) and the
+# runs an automatic flip moved to hosted, which are demand burning hosted
+# minutes now and wake at once. The queued source waits out the same
+# threshold the up-scale side uses — a queued job behind nothing still has
+# to prove it is not a blip — while the hosted source does not: the money
+# is being spent now. One VM per tick, the scaler's rule: a stopped primary
+# whose recorded label matches the demand starts first; a demand no line
+# matches starts the fleet's first VM rather than leave jobs stranded on a
+# map that lost their line. The started VM's restore is the watcher's wake
+# pattern (a bounded online wait, then the autoflipped repositories back to
+# local). A fleet without the flag was stopped by hand: it stays down — the
+# owner's explicit choice, and the fallback flip already moved its routed
+# repositories to hosted.
+scale_wake() {
+  local now label repo host since idle i j idx pname pidx wait_max rc=0
+  # Only a fleet the scaler's own scale-to-zero stops put dark wakes on
+  # demand: the flag says so, and it is cleared the moment anything is
+  # seen Running. A fleet the user stopped by hand never gets the flag and
+  # stays down — the owner's explicit choice — and the fallback flip
+  # already moved its routed repositories to hosted.
+  if [ ! -f "$(scale_zero_file)" ]; then
+    log "fleet watch: no VM is running; the fleet was stopped by hand, so nothing wakes it"
+    return 0
+  fi
+  now="$(date +%s)"
+  wait_max="${HOMEFIELD_SCALE_WAIT:-300}"
+  case "$wait_max" in
+    '' | *[!0-9]*) wait_max=300 ;;
+  esac
+  local -a WAKE_LABEL=() WAKE_REPO=() WAKE_HOST=() WAKE_SINCE=() WAKE_URGENT=()
+  if scale_demand; then
+    for ((i = 0; i < ${#SCALE_DEMAND_LABEL[@]}; i++)); do
+      WAKE_LABEL+=("${SCALE_DEMAND_LABEL[i]}")
+      WAKE_REPO+=("${SCALE_DEMAND_REPO[i]}")
+      WAKE_HOST+=("${SCALE_DEMAND_HOST[i]}")
+      WAKE_SINCE+=("${SCALE_DEMAND_SINCE[i]}")
+      WAKE_URGENT+=(0)
+    done
+  else
+    echo "homefield: fleet watch: could not read the queued runs from GitHub; not waking a dark fleet (fail safe)" >&2
+    return 1
+  fi
+  if [ -f "$(autoflip_file)" ]; then
+    while read -r label repo host; do
+      [ -n "$repo" ] || continue
+      host="${host:-github.com}"
+      since="$(hosted_activity_since "$repo" "$host")" || {
+        echo "homefield: fleet watch: could not read the runs of ${repo}; not waking a dark fleet (fail safe)" >&2
+        return 1
+      }
+      [ -n "$since" ] || continue
+      WAKE_LABEL+=("$label")
+      WAKE_REPO+=("$repo")
+      WAKE_HOST+=("$host")
+      WAKE_SINCE+=("$since")
+      WAKE_URGENT+=(1)
+    done <"$(autoflip_file)"
+  fi
+  if [ "${#WAKE_LABEL[@]}" -eq 0 ]; then
+    log "fleet watch: the fleet is dark (scaled to zero); nothing waits"
+    return 0
+  fi
+  for ((i = 0; i < ${#WAKE_LABEL[@]}; i++)); do
+    idle=$((now - WAKE_SINCE[i]))
+    [ "${WAKE_URGENT[i]}" = 1 ] || [ "$idle" -ge "$wait_max" ] || continue
+    pidx=-1
+    for ((j = 0; j < ${#PRIM_NAME[@]}; j++)); do
+      [ "$(lower "${PRIM_LABEL[j]}")" = "$(lower "${WAKE_LABEL[i]}")" ] || continue
+      idx="$(fleet_index "${PRIM_NAME[j]}")"
+      [ "$idx" != -1 ] && [ "${FLEET_STATUS[idx]}" = Stopped ] || continue
+      pidx=$j
+      break
+    done
+    if [ "$pidx" = -1 ]; then
+      # No recorded line matches: the map is missing this demand's label (a
+      # runner with no custom label, or a line the reconcile dropped). The
+      # fleet's first VM is the fallback start — waking something beats
+      # leaving the jobs queued on a label no record claims.
+      [ "${FLEET_STATUS[0]}" = Stopped ] || continue
+      pname="${FLEET_NAME[0]}"
+    else
+      pname="${PRIM_NAME[pidx]}"
+    fi
+    if [ "${WAKE_URGENT[i]}" = 1 ]; then
+      log "fleet watch: the fleet is dark (scaled to zero) and ${WAKE_REPO[i]} is running on hosted runners; starting ${pname}"
+    else
+      log "fleet watch: the fleet is dark (scaled to zero) and jobs have waited ${idle}s for ${WAKE_LABEL[i]}; starting ${pname}"
+    fi
+    if scale_wake_start "$pname"; then
+      rm -f "$(scale_zero_file)"
+      SCALE_ACTION="started ${pname} (from zero)"
+      return 0
+    fi
+    rc=1
+  done
+  return "$rc"
+}
+
+# scale_wake_start <name>: start one dark fleet's VM and bring its flipped
+# repositories back. The start is the scaler subprocess; the restore is the
+# watcher's wake pattern — wait for the runner to be listed online (a
+# restore to an offline runner would point jobs at nothing), bounded by
+# HOMEFIELD_WATCH_WAKE_WAIT — then route the autoflipped repositories back
+# to local. A restore that does not land keeps its entries for the next
+# start and fails the tick: the VM is up and taking jobs, and the run says
+# so loudly.
+scale_wake_start() {
+  local name="$1" identity_ok=0 tries=0 waited=0 total online=0
+  if ! scale_exec start --instance "$name"; then
+    echo "homefield: fleet watch: could not start ${name} (log above); the fleet stays dark" >&2
+    return 1
+  fi
+  INSTANCE="$name"
+  # The guest answers only once it is up; a boot that is still settling
+  # reads as "could not ask", so the identity read retries before it gives
+  # up (30 s in total, on top of the start that already waited).
+  while [ "$tries" -lt 6 ]; do
+    load_runner_settings
+    if [ -n "$RS_NAME" ] && [ -n "$RS_URL" ] && [ -n "$RS_ID" ]; then
+      identity_ok=1
+      break
+    fi
+    adopt_nap 5
+    tries=$((tries + 1))
+  done
+  if [ "$identity_ok" != 1 ]; then
+    echo "homefield: fleet watch: started ${name} but could not read its runner identity; its flipped repositories stay hosted until the next start" >&2
+    return 1
+  fi
+  total="${HOMEFIELD_WATCH_WAKE_WAIT:-120}"
+  case "$total" in
+    '' | *[!0-9]*) total=120 ;;
+  esac
+  while [ "$waited" -lt "$total" ]; do
+    if runner_on_github "$RS_URL" "$RS_ID" && [ "$RUNNER_GH_STATUS" = online ]; then
+      online=1
+      break
+    fi
+    adopt_nap 5
+    waited=$((waited + 5))
+  done
+  if [ "$online" != 1 ]; then
+    echo "homefield: fleet watch: ${name}'s runner is not online after ${total}s; its flipped repositories stay hosted until the next start" >&2
+    return 1
+  fi
+  log "fleet watch: started ${name} from zero; routing its flipped repositories back to local"
+  route_start_restore "$RS_URL" "$RS_NAME"
+}
+
 # What the tick did, for the run record.
 SCALE_ACTION="none"
 
@@ -816,7 +1145,7 @@ scale_tick_lock_release() {
 # answer, and the tick says so.
 fleet_watch_tick() {
   SCALE_ACTION="none"
-  local rc=0 now list name st jrc saw_running=0 all_busy=1 unaskable=0 i idx idle
+  local rc=0 now list name st jrc saw_running=0 saw_unknown=0 all_busy=1 unaskable=0 i idx idle j recorded zero_on
   if route_watcher_is_running; then
     log "fleet watch: the sleep/wake watcher is running; standing down until it is done"
     SCALE_ACTION="yielded to the watcher"
@@ -837,6 +1166,10 @@ fleet_watch_tick() {
   fi
   if [ -z "$list" ]; then
     log "fleet watch: no HomeField VMs on this Mac; nothing to scale"
+    # A fleet deleted by hand leaves the wake flag behind: with no VMs there
+    # is nothing to wake, and a stale flag would arm the wake side for a
+    # fleet that no longer exists.
+    rm -f "$(scale_zero_file)"
     fleet_watch_record 0 || true
     return 0
   fi
@@ -845,7 +1178,23 @@ fleet_watch_tick() {
   # plus whether every Running VM is busy and whether any could not be
   # asked. A job probe that fails is not "idle": the demand side needs
   # "every VM busy" proven, and the stop side needs each secondary's own
-  # answer, so an unaskable VM blocks both.
+  # answer, so an unaskable VM blocks both. A VM whose status itself could
+  # not be read (saw_unknown) blocks the wake side the same way: starting
+  # VMs while one may already be running is not the scaler's call.
+  # The scale-to-zero opt-in (#305): off until the owner turns it on (the
+  # plist bakes HOMEFIELD_SCALE_ZERO into the agent's environment, the way
+  # the other HOMEFIELD_SCALE_* reach it). When on, the tick maintains the
+  # primaries record below and may stop the fleet's own idle VMs after the
+  # demand side.
+  zero_on=0
+  [ "${HOMEFIELD_SCALE_ZERO:-}" = 1 ] && zero_on=1
+  # The records come up before the state pass: the pass refreshes the
+  # primaries' lines for the VMs it finds Running, and a line for a VM the
+  # scale record claims must not be written (secondaries are that record's
+  # book). A recorded secondary that is gone from the Mac (deleted by hand)
+  # leaves its record here; the stop side's pass below drops it.
+  scale_record_read
+  scale_primaries_read
   FLEET_NAME=()
   FLEET_STATUS=()
   FLEET_JOB=()
@@ -858,8 +1207,12 @@ fleet_watch_tick() {
     idx=$((${#FLEET_NAME[@]} - 1))
     FLEET_STATUS+=("${st:-unknown}")
     FLEET_JOB+=("-")
-    [ -n "$st" ] || continue
-    [ "$st" = Running ] || continue
+    if [ -n "$st" ]; then
+      [ "$st" = Running ] || continue
+    else
+      saw_unknown=1
+      continue
+    fi
     saw_running=1
     INSTANCE="$name"
     jrc=0
@@ -873,12 +1226,81 @@ fleet_watch_tick() {
         all_busy=0
         ;;
     esac
+    # The primaries record (#305), only while the opt-in is on: this VM's
+    # line, unless the scale record claims it (a secondary is that record's
+    # book). The identity read and the GitHub row are the price of the map
+    # the wake side reads once the VM is down and cannot be asked.
+    if [ "$zero_on" = 1 ]; then
+      recorded=0
+      for ((j = 0; j < ${#SCALE_NAME[@]}; j++)); do
+        [ "${SCALE_NAME[j]}" = "$name" ] && recorded=1 && break
+      done
+      if [ "$recorded" = 0 ]; then
+        scale_primaries_refresh "$name" "${FLEET_JOB[idx]}"
+      fi
+    fi
   done <<<"$list"
   INSTANCE="$saved_instance"
 
-  # A recorded secondary that is gone from the Mac (deleted by hand) leaves
-  # the record here; the next write drops it.
-  scale_record_read
+  # Anything Running ends the dark period: the wake side's flag covers only
+  # a fleet the scaler itself put dark, and a VM back up — by the wake, the
+  # user, or anything else — ends that.
+  if [ "$saw_running" -gt 0 ]; then
+    rm -f "$(scale_zero_file)"
+  fi
+
+  # The primaries record: drop lines for VMs gone from the Mac (the scale
+  # record's own reconcile is the stop side's pass below) and clear the up
+  # mark of any line whose VM is not Running, so its next start begins a
+  # fresh idle cooldown instead of inheriting its pre-stop stamp.
+  local -a pkeep_name=() pkeep_url=() pkeep_label=() pkeep_auto=() pkeep_busy=() pkeep_up=()
+  for ((i = 0; i < ${#PRIM_NAME[@]}; i++)); do
+    idx="$(fleet_index "${PRIM_NAME[i]}")"
+    if [ "$idx" = -1 ]; then
+      log "fleet watch: primary ${PRIM_NAME[i]} is gone from the Mac; dropping it from the primaries record"
+      continue
+    fi
+    pkeep_name+=("${PRIM_NAME[i]}")
+    pkeep_url+=("${PRIM_URL[i]}")
+    pkeep_label+=("${PRIM_LABEL[i]}")
+    pkeep_auto+=("${PRIM_AUTO[i]}")
+    pkeep_busy+=("${PRIM_BUSY[i]}")
+    if [ "${FLEET_STATUS[idx]}" = Running ]; then
+      pkeep_up+=("${PRIM_UP[i]}")
+    else
+      pkeep_up+=("")
+    fi
+  done
+  PRIM_NAME=("${pkeep_name[@]+"${pkeep_name[@]}"}")
+  PRIM_URL=("${pkeep_url[@]+"${pkeep_url[@]}"}")
+  PRIM_LABEL=("${pkeep_label[@]+"${pkeep_label[@]}"}")
+  PRIM_AUTO=("${pkeep_auto[@]+"${pkeep_auto[@]}"}")
+  PRIM_BUSY=("${pkeep_busy[@]+"${pkeep_busy[@]}"}")
+  PRIM_UP=("${pkeep_up[@]+"${pkeep_up[@]}"}")
+  scale_primaries_write ||
+    { echo "homefield: fleet watch: could not update $(scale_primaries_file)" >&2; rc=1; }
+
+  # The restore retry: a Running VM whose runner is online and whose
+  # automatic flip has pending entries gets them restored, the way its
+  # start would have — a wake or a start whose restore did not land does
+  # not leave the repositories hosted until the next start. Only the
+  # automatic flip's entries are touched (a manual `route hosted` writes
+  # none), and a runner that is not online is left alone: restoring to it
+  # would point jobs at nothing.
+  if [ -f "$(autoflip_file)" ] && [ "$saw_running" -gt 0 ]; then
+    for ((i = 0; i < ${#FLEET_NAME[@]}; i++)); do
+      [ "${FLEET_STATUS[i]}" = Running ] || continue
+      INSTANCE="${FLEET_NAME[i]}"
+      [ "$(state_get auto_route)" = "1" ] || continue
+      load_runner_settings
+      if [ -n "$RS_NAME" ] && [ -n "$RS_URL" ]; then
+        if runner_on_github "$RS_URL" "$RS_ID" && [ "$RUNNER_GH_STATUS" = online ]; then
+          route_start_restore "$RS_URL" "$RS_NAME" || rc=1
+        fi
+      fi
+    done
+    INSTANCE="$saved_instance"
+  fi
 
   # ── the stop side: the idle cooldown ──
   # A secondary with no job for HOMEFIELD_SCALE_IDLE seconds is stopped by
@@ -938,13 +1360,101 @@ fleet_watch_tick() {
   SCALE_BUSY=("${keep_busy[@]+"${keep_busy[@]}"}")
   scale_record_write || { echo "homefield: fleet watch: could not update $(scale_file)" >&2; rc=1; }
 
+  # ── the scale-to-zero side (#305, opt-in) ──
+  # HOMEFIELD_SCALE_ZERO=1 lets the scaler stop the fleet's own VMs — the
+  # ones it did not create — after the same idle cooldown the secondaries
+  # use, through the real `stop`: it refuses under a live job, and with the
+  # automatic fallback on it flips the VM's routed repositories to hosted
+  # before it stops, so the dark Mac's jobs still run. When the last
+  # Running VM stops this way the tick writes the scale-zero flag: the
+  # fleet is dark by the scaler's hand, and the wake side may bring it back
+  # on demand. A fleet the user stopped by hand never gets the flag and
+  # never wakes; nor does one whose last stop was a secondary's (the
+  # scaler's own spares only ever stop while a primary is up, so a dark
+  # fleet after a spare stop means the user stopped the primary).
+  if [ "$zero_on" = 1 ]; then
+    local zero_stopped=0 pbusy="" st_now="" any_running=0
+    for ((i = 0; i < ${#FLEET_NAME[@]}; i++)); do
+      [ "${FLEET_STATUS[i]}" = Running ] || continue
+      recorded=0
+      for ((j = 0; j < ${#SCALE_NAME[@]}; j++)); do
+        [ "${SCALE_NAME[j]}" = "${FLEET_NAME[i]}" ] && recorded=1 && break
+      done
+      [ "$recorded" = 0 ] || continue
+      case "${FLEET_JOB[i]}" in
+        no) ;;
+        yes) continue ;;
+        *)
+          echo "homefield: fleet watch: could not ask whether a job is running on ${FLEET_NAME[i]}; not stopping it (fail safe)" >&2
+          rc=1
+          continue
+          ;;
+      esac
+      # The idle clock is the primaries record's: the last job this VM ran,
+      # reset to now whenever it is seen back up after being down. No line,
+      # no stop — the stamp is the proof the cooldown is real.
+      pbusy=""
+      for ((j = 0; j < ${#PRIM_NAME[@]}; j++)); do
+        [ "${PRIM_NAME[j]}" = "${FLEET_NAME[i]}" ] && pbusy="${PRIM_BUSY[j]}" && break
+      done
+      case "$pbusy" in
+        '' | *[!0-9]*) pbusy="" ;;
+      esac
+      if [ -z "$pbusy" ]; then
+        echo "homefield: fleet watch: no idle clock for ${FLEET_NAME[i]}; not stopping it (fail safe)" >&2
+        rc=1
+        continue
+      fi
+      idle=$((now - pbusy))
+      [ "$idle" -ge "$idle_max" ] || continue
+      if scale_exec stop --instance "${FLEET_NAME[i]}"; then
+        log "fleet watch: stopped ${FLEET_NAME[i]} (idle ${idle}s) — scaled to zero"
+        SCALE_ACTION="stopped ${FLEET_NAME[i]} (scaled to zero)"
+        zero_stopped=1
+      else
+        echo "homefield: fleet watch: could not stop ${FLEET_NAME[i]} (log above); it stays up" >&2
+        rc=1
+      fi
+    done
+    if [ "$zero_stopped" = 1 ]; then
+      # The flag only lands when the tick's stops took the whole fleet
+      # down: anything still Running — a spare stop that failed, a VM the
+      # probe could not ask about — leaves it dark-by-half, and the wake
+      # side is for a fleet that is properly dark. The statuses are asked
+      # again (the FLEET_* ones predate this pass's stops).
+      for ((i = 0; i < ${#FLEET_NAME[@]}; i++)); do
+        [ "${FLEET_STATUS[i]}" = Running ] || continue
+        st_now="$(vm_status_of "${FLEET_NAME[i]}")" || st_now=""
+        if [ "$st_now" = Running ]; then
+          any_running=1
+          break
+        fi
+      done
+      if [ "$any_running" = 0 ]; then
+        printf '%s\n' "$now" >"$(scale_zero_file)" ||
+          echo "homefield: fleet watch: could not write $(scale_zero_file); the dark fleet will not wake on demand" >&2
+      fi
+    fi
+  fi
+
   # ── the demand side ──
   # Only when the queue is real: at least one VM running, every one of them
   # busy (an idle runner is taking jobs; nothing waits behind anything), and
   # every job probe answered. The lookup itself is the expensive part, so it
   # never runs for a fleet that is not fully busy.
   if [ "$saw_running" = 0 ]; then
-    log "fleet watch: no VM is running; nothing to scale"
+    # The fleet is dark. Only a fleet the scaler's own scale-to-zero stops
+    # put here wakes on demand (#305): the flag says so, and the flag is
+    # cleared the moment anything is seen Running. A fleet the user stopped
+    # by hand stays down — the owner's explicit choice — and a VM whose
+    # status could not be read keeps the scaler from starting anything,
+    # because one may already be running.
+    if [ "$saw_unknown" = 1 ]; then
+      echo "homefield: fleet watch: could not ask Lima about every VM; not waking a dark fleet (fail safe)" >&2
+      rc=1
+    else
+      scale_wake || rc=1
+    fi
   elif [ "$unaskable" = 1 ]; then
     echo "homefield: fleet watch: could not ask whether a job is running on every VM; not scaling (fail safe)" >&2
     rc=1

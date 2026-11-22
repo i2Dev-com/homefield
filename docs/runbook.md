@@ -842,6 +842,50 @@ stop the ones after it) is killed and logged loudly; a secondary it was
 half-creating stays behind for the next tick to reconcile, or for
 `bin/homefield reset --instance <name>` to remove by hand.
 
+### Scale to zero, and wake on demand (#305)
+
+The scaler above only ever adds capacity while a VM is running: a fleet
+that is entirely stopped scales nothing, because a stopped VM cannot be
+asked for its runner identity and the tick refuses to guess. #305
+completes the column with two sides, one of them opt-in.
+
+**Scale to zero** — off until `HOMEFIELD_SCALE_ZERO=1` is baked into the
+agent's plist (set it when you run `install`/`upgrade --auto-route`, the
+way the other `HOMEFIELD_SCALE_*` reach the agent) — lets the tick stop
+the fleet's own VMs (the ones it did not create) after the same idle
+cooldown the secondaries use, through the real `stop`: the automatic
+fallback flips the VM's routed repositories to hosted first, so the dark
+Mac's jobs still run. A VM without the automatic fallback stops too —
+its queued jobs wait for the label, and the wake side below is what
+answers them. When the last Running VM stops this way the tick writes a
+`scale-zero` flag in the route-watcher subdirectory: the fleet is dark by
+the scaler's hand. The flag keeps the route-watcher agent installed (its
+ticks are what can wake the fleet), and it is cleared the moment any VM
+is seen Running again — by the wake, the user, or anything else. A fleet
+the user stopped by hand never gets the flag and never wakes; nor does
+one whose last stop was a secondary's, since the scaler's own spares only
+ever stop while a primary is up.
+
+**Wake on demand** — only a flagged fleet wakes. The tick reads the same
+demand the up-scale side does (queued jobs waiting for a routing label:
+the stop's flip did not land, or a workflow that never went through the
+`CI_RUNNER` switch) plus one more source: the runs an automatic flip
+moved to hosted, which are demand burning hosted minutes and wake at
+once. The queued source waits out `HOMEFIELD_SCALE_WAIT` like the
+up-scale side; the hosted source does not. One VM per tick, the scaler's
+rule: a stopped primary whose recorded label matches the demand starts
+first (the primaries record, `scale-primaries`, is maintained while the
+VMs run precisely because a stopped one cannot be asked), a demand no
+line matches starts the fleet's first VM rather than leave jobs stranded
+on a map that lost their line, and the started VM's flipped repositories
+come back the watcher's wake way — a bounded online wait, then the
+restore. A VM whose status could not be read keeps the scaler from
+starting anything, because one may already be running.
+
+The webhook receiver a cloud autoscaler would use stays out on purpose:
+the Mac sits behind NAT, and the always-on watcher's tick needs no
+inbound configuration. #305 keeps it as the tracked remainder.
+
 ## Failure modes
 
 Not sure which row applies? `bin/homefield diagnose` checks the VM, the runner
@@ -1190,6 +1234,13 @@ scaler](#the-demand-scaler-queued-jobs-behind-a-busy-fleet)) applies the
 same budget on its own creates: the sizes of every VM on the Mac, stopped
 ones included, plus the new one must keep the 2 cores and 8 GiB free, or the
 create is refused and the tick says so.
+
+Scale-to-zero ([#305](https://github.com/i2Dev-com/homefield/issues/305),
+the section above) trades hosted minutes for an idle Mac: with
+`HOMEFIELD_SCALE_ZERO=1` the tick stops the fleet's own idle VMs after the
+cooldown and wakes them on demand. It starts existing VMs — no new
+allocation — so the budget here is about how many VMs you create, not how
+many the scaler wakes.
 
 ## Moving a registration
 

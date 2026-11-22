@@ -136,6 +136,10 @@ route_watcher_needed() {
   local dir f exclude="${1:-}"
   dir="${HOMEFIELD_STATE_DIR:-$HOME/.local/state/homefield}"
   [ -d "$dir" ] || return 1
+  # The demand scaler's scale-to-zero (#305): a fleet the scaler put dark
+  # still needs the agent — its ticks are what wake it on demand. The flag
+  # is the same `scale-zero` file the tick writes and clears.
+  [ -f "$dir/route-watcher/scale-zero" ] && return 0
   for f in "$dir"/*.state; do
     [ -f "$f" ] || continue
     if [ -n "$exclude" ] && [ "${f##*/}" = "${exclude}.state" ]; then
@@ -218,6 +222,9 @@ route_watcher_install() {
   fi
   if [ -n "${HOMEFIELD_SCALE_MAX:-}" ]; then
     env_xml="${env_xml}    <key>HOMEFIELD_SCALE_MAX</key>"$'\n'"    <string>$(route_watcher_xml_escape "$HOMEFIELD_SCALE_MAX")</string>"$'\n'
+  fi
+  if [ -n "${HOMEFIELD_SCALE_ZERO:-}" ]; then
+    env_xml="${env_xml}    <key>HOMEFIELD_SCALE_ZERO</key>"$'\n'"    <string>$(route_watcher_xml_escape "$HOMEFIELD_SCALE_ZERO")</string>"$'\n'
   fi
   cat >"$plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
