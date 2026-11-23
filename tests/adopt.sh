@@ -777,8 +777,14 @@ record "...--events that differs: refused with the reason, nothing switched" "no
 adopt GH_WF="$work/wf-combo" -- --events 'schedule push' --dependabot local --fallback ubuntu-24.04-arm
 record "all three options, in another order and separator: agree with a block-scalar guard" "0/yes/1" \
   "$rc/$(has "$out" 'routing: ready')/$(called 'variable set CI_RUNNER --repo github.com/acme/app --body local')"
+record "...the record carries the guard's options for the demand scaler (#315)" \
+  "homefield-ci acme/app github.com push,schedule local guards" \
+  "$(cat "$work/.local/state/homefield/routing" 2>/dev/null)"
 adopt GH_WF="$work/wf-combo" --
 record "...without flags the guard's options are used" "0/1" "$rc/$(called 'variable set CI_RUNNER --repo github.com/acme/app --body local')"
+record "...and the record reads the same" \
+  "homefield-ci acme/app github.com push,schedule local guards" \
+  "$(cat "$work/.local/state/homefield/routing" 2>/dev/null)"
 record "...and a standard fallback is not warned about" "yes/no" \
   "$(has "$out" 'fallback image: ubuntu-24.04-arm is a standard')/$(has "$out" 'warning: fallback')"
 adopt GH_WF="$work/wf-typo" --

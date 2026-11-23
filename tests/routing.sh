@@ -177,6 +177,10 @@ harness_env=(GH_CI_RUNNER=hosted)
 harness cmd_route local --repo acme/api --label homefield-ci --events push,pull_request --dependabot local
 record "route local: the flags land in the record" "0/homefield-ci acme/api github.com push,pull_request local guards" \
   "$rc/$(cat "$state/routing" 2>/dev/null)"
+harness cmd_route local --repo acme/api --label homefield-ci --events 'push schedule'
+record "route local: a space-separated list canonicalizes to one comma field" \
+  "0/homefield-ci acme/api github.com push,schedule hosted guards" \
+  "$rc/$(cat "$state/routing" 2>/dev/null)"
 harness cmd_route local --repo acme/api --label homefield-ci --mode simple
 record "route local: --mode simple records the mode" "0/homefield-ci acme/api github.com pull_request hosted simple" \
   "$rc/$(cat "$state/routing" 2>/dev/null)"
@@ -485,6 +489,8 @@ harness_env=(GH_CI_RUNNER=hosted GH_RUNNERS='42\tmy-mac-homefield\tonline\tself-
 harness route_start_restore https://github.com/acme my-mac-homefield
 record "a six-field entry: the restore lands and the entry leaves autoflip" "0/yes/0" \
   "$rc/$(grep -q 'variable set CI_RUNNER --repo github.com/acme/api --body local' "$calls" && echo yes || echo no)/$([ -f "$state/autoflip" ] && wc -l <"$state/autoflip" | tr -d ' ' || echo 0)"
+record "...and the options survive the restore into the routing record" \
+  "homefield-ci acme/api github.com push local guards" "$(cat "$state/routing" 2>/dev/null)"
 
 # A pending entry for another host is not this start's to restore: the same
 # owner/repo may have been flipped by that host's runner's stop, and

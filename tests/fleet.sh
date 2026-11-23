@@ -860,6 +860,35 @@ since="$(hosted_activity_since org/repo github.com push,pull_request)"
 record "hosted-activity: a record naming push counts the push run too" \
   "$(iso_to_epoch '2026-11-11T18:00:00Z')" "$since"
 
+# The guards apply to every named event, not just the last: `and` binds
+# tighter than `or` in jq, so an unparenthesized disjunction would count a
+# Dependabot or fork pull request when the record names two events. 1003
+# (fork) and 1001 (Dependabot) must stay out of a push,pull_request record
+# — and they sit earlier than the push run, so a filter that counts either
+# answers an earlier timestamp than the right one.
+cat > "$TMP/gh-runs-queued.json" <<'EOF'
+{"total_count":3,"workflow_runs":[
+  {"id":1001,"created_at":"2026-11-11T17:30:00Z","event":"pull_request","actor":{"login":"dependabot[bot]"},"head_branch":"dependabot/npm_and_yarn/jest-dom","head_repository":{"full_name":"org/repo"},"repository":{"full_name":"org/repo"}},
+  {"id":1003,"created_at":"2026-11-11T17:00:00Z","event":"pull_request","actor":{"login":"bob"},"head_branch":"patch","head_repository":{"full_name":"fork/other"},"repository":{"full_name":"org/repo"}},
+  {"id":1006,"created_at":"2026-11-11T18:00:00Z","event":"push","actor":{"login":"alice"},"head_branch":"main","head_repository":{"full_name":"org/repo"},"repository":{"full_name":"org/repo"}}
+]}
+EOF
+since="$(hosted_activity_since org/repo github.com push,pull_request)"
+record "hosted-activity: the guards hold across a multi-event record" \
+  "$(iso_to_epoch '2026-11-11T18:00:00Z')" "$since"
+
+# The full fixture again for the remaining profiles.
+cat > "$TMP/gh-runs-queued.json" <<'EOF'
+{"total_count":6,"workflow_runs":[
+  {"id":1001,"created_at":"2026-11-11T19:30:00Z","event":"pull_request","actor":{"login":"dependabot[bot]"},"head_branch":"dependabot/npm_and_yarn/jest-dom","head_repository":{"full_name":"org/repo"},"repository":{"full_name":"org/repo"}},
+  {"id":1002,"created_at":"2026-11-11T21:00:00Z","event":"schedule","actor":{"login":"tom-bot-for-rana[bot]"},"head_branch":"main","head_repository":{"full_name":"org/repo"},"repository":{"full_name":"org/repo"}},
+  {"id":1003,"created_at":"2026-11-11T19:00:00Z","event":"pull_request","actor":{"login":"bob"},"head_branch":"patch","head_repository":{"full_name":"fork/other"},"repository":{"full_name":"org/repo"}},
+  {"id":1004,"created_at":"2026-11-11T20:30:50Z","event":"pull_request","actor":{"login":"alice"},"head_branch":"feature/x","head_repository":{"full_name":"org/repo"},"repository":{"full_name":"org/repo"}},
+  {"id":1005,"created_at":"2026-11-10T10:00:00Z","event":"pull_request","actor":{"login":"alice"},"head_branch":"feature/zombie","head_repository":{"full_name":"org/repo"},"repository":{"full_name":"org/repo"}},
+  {"id":1006,"created_at":"2026-11-11T18:00:00Z","event":"push","actor":{"login":"alice"},"head_branch":"main","head_repository":{"full_name":"org/repo"},"repository":{"full_name":"org/repo"}}
+]}
+EOF
+
 since="$(hosted_activity_since org/repo github.com pull_request local)"
 record "hosted-activity: a dependabot=local record counts the Dependabot run" \
   "$(iso_to_epoch '2026-11-11T19:30:00Z')" "$since"

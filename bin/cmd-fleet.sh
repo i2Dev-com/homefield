@@ -695,16 +695,22 @@ scale_dark_drop() {
 # a select() in the jq the lookup already runs — no extra API calls.
 hosted_activity_since() {
   local repo="$1" host="$2" events="${3:-pull_request}" dependabot="${4:-hosted}" mode="${5:-guards}"
-  local status ids id created best="" epoch active filter e first
+  local status ids id created best="" epoch active filter evcond cond e first
   if [ "$mode" = simple ]; then
     filter="."
   else
-    local cond="" first=1
+    # The event disjunction is built and parenthesized on its own: `and`
+    # binds tighter than `or` in jq, so appending the Dependabot and fork
+    # guards to a bare disjunction would leave them applying only to the
+    # last event — `pull_request or push and guards` counts a Dependabot
+    # pull request when the record also names push.
+    evcond=""; first=1
     for e in $(printf '%s' "$events" | tr ',' ' '); do
       [ -n "$e" ] || continue
-      if [ "$first" = 1 ]; then first=0; else cond+=" or "; fi
-      cond+=".event == \"$e\""
+      if [ "$first" = 1 ]; then first=0; else evcond+=" or "; fi
+      evcond+=".event == \"$e\""
     done
+    cond="($evcond)"
     if [ "$dependabot" = hosted ]; then
       cond+=" and (.actor.login != \"dependabot[bot]\" and ((.head_branch // \"\") | startswith(\"dependabot/\") | not))"
     fi

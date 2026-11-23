@@ -315,13 +315,13 @@ route_start_restore() {
   fi
   labels="$(lower "$labels")"
   owner="$(scope_owner "$url")"
-  while read -r label repo rhost _opts; do
+  while read -r label repo rhost revents rdependabot rmode; do
     [ -n "$repo" ] || continue
     # The host field (a legacy line without one reads as github.com): only
     # this host's records are this start's to restore — a pending entry for
     # the same owner/repo on another host belongs to that host's runner.
-    # The option fields (the demand side's, #315) are not needed here: the
-    # restore is unconditional once the runner is up.
+    # The option fields ride back into the routing record: dropping them
+    # here would lose the consumer's demand profile on the next stop (#315).
     if [ "${rhost:-github.com}" != "$host" ]; then
       log "${repo}: flipped on ${rhost:-github.com}, not ${host}; leaving it hosted"
       continue
@@ -334,7 +334,8 @@ route_start_restore() {
     # workflow's full runs-on set, not just the label (see serves_jobs).
     serves_jobs "$labels" "$label" || continue
     # See route_stop_fallback: cmd_route reads its host from the environment.
-    if HOMEFIELD_GITHUB_HOST="$host" cmd_route local --repo "$repo" --label "$label"; then
+    if HOMEFIELD_GITHUB_HOST="$host" cmd_route local --repo "$repo" --label "$label" \
+      --events "${revents:-pull_request}" --dependabot "${rdependabot:-hosted}" --mode "${rmode:-guards}"; then
       record_drop "$(autoflip_file)" "$repo" "$host" ||
         { rc=1; echo "homefield: ${repo}: routed local but could not update the record; it will be routed local again on the next start" >&2; }
       restored=$((restored + 1))
@@ -547,6 +548,15 @@ cmd_route() {
   done
   [ "${#repos[@]}" -gt 0 ] || die "route: --repo <owner>/<repo> is required"
   [[ "$label" =~ ^[A-Za-z0-9._-]+$ ]] || die "route: --label must be one label"
+  # The events go into the record canonicalized to one comma-separated
+  # field: the record's fields are whitespace-delimited, so a list with
+  # spaces ("push schedule", which adopt's --events accepts) would smear
+  # across the option fields and be misread on the demand side.
+  local ev canonic=""
+  for ev in $events; do
+    canonic="${canonic:+$canonic,}$ev"
+  done
+  events="$canonic"
   # The option fields are the guard's own (the record mirrors the consumer's
   # guard step, #315): an event the guard cannot route, or a value outside
   # the guard's enums, would make the record describe an expression the
