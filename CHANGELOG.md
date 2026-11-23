@@ -9,7 +9,14 @@ fail, such as a new guard in the routing expression, bumps the minor version
 (0.1 to 0.2). Compatible changes bump the patch. Merged changes wait on
 `main`, under *Unreleased*, until a release is cut.
 
-## Unreleased
+## v0.5.6 (2026-11-22)
+
+Bumps the patch from v0.5.5, and it is compatible for consumers: the routing
+expression, guards, defaults, and options are unchanged, so workflows passing
+`routing-guard@v0.5.5` pass `@v0.5.6` as well. Highlights include scale-to-zero
+and wake-on-demand for the fleet demand scaler (`HOMEFIELD_SCALE_ZERO`, #305 —
+the `0 → N` column the Alternatives matrix answered ⚠️ before), the Homebrew
+install command fix, and idempotent tap release automation.
 
 ### Added
 

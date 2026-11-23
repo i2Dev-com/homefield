@@ -45,7 +45,7 @@ and it stays out of the job log and of every process list.
 
 The workflow can also be run by hand, from the Actions tab (**Tap release →
 Run workflow**, with the release tag as the `tag` input) or with
-`gh workflow run tap-release.yml --ref main -f tag=v0.5.5`: for a backfill
+`gh workflow run tap-release.yml --ref main -f tag=v0.5.6`: for a backfill
 (the tap repository was created after the release), or a retry after a failed
 run. A tap that already carries the release's formula is left alone — the run
 reports it and exits 0, so a retry never fails on an empty commit.
