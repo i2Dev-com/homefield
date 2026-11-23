@@ -54,7 +54,7 @@ On such a Mac, in a terminal, with the URL of your organization (or, for a
 personal account or a single repository, `https://github.com/<owner>/<repo>`):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/i2Dev-com/homefield/v0.5.7/install.sh | bash -s -- --url https://github.com/<org>
+curl -fsSL https://raw.githubusercontent.com/i2Dev-com/homefield/v0.5.8/install.sh | bash -s -- --url https://github.com/<org>
 ```
 
 It asks a few questions and does the rest:
@@ -160,7 +160,7 @@ with them ([routing options](docs/adopting.md#routing-options)).
 `routing-guard` keeps every copy identical and every guard in place:
 
 ```yaml
-      - uses: i2Dev-com/homefield/routing-guard@v0.5.7
+      - uses: i2Dev-com/homefield/routing-guard@v0.5.8
         with:
           jobs: |
             ci.yml:lint
@@ -330,7 +330,7 @@ never moved (backed by the `refs/tags/v*` ruleset in
 [`.github/rulesets/protect-release-tags.json`](.github/rulesets/protect-release-tags.json),
 which blocks tag deletion, updates, and non-fast-forward moves). Pin an exact
 tag, such as `routing-guard@v0.3.0`, or a full 40-character commit SHA
-(`uses: i2Dev-com/homefield/routing-guard@<40-char-sha> # v0.5.7`) — a commit
+(`uses: i2Dev-com/homefield/routing-guard@<40-char-sha> # v0.5.8`) — a commit
 SHA binds your workflow cryptographically to one tree without depending on
 upstream tag rules, and Dependabot's `github-actions` ecosystem updates either
 form for you. There is no floating major tag to follow.
