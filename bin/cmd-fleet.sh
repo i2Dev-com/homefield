@@ -685,9 +685,12 @@ scale_dark_drop() {
 # option fields mirror the guard's `events`, `dependabot` and `mode`, and
 # the filter applies them to the run's own metadata. In guards mode the
 # run's event must be one of the record's events (default pull_request),
-# a `dependabot=hosted` record excludes Dependabot's actor and head branch,
-# and fork pull requests are excluded (head repository != the repository);
-# a simple-mode record counts every active run, because the simple
+# a `dependabot=hosted` record excludes Dependabot's actor on every event
+# and Dependabot's head branch on pull requests (the guard checks
+# github.head_ref, which GitHub defines only for pull_request events, so
+# a human pushing to a dependabot/ branch stays routable), and fork pull
+# requests are excluded (head repository != the repository); a
+# simple-mode record counts every active run, because the simple
 # expression routes every event. A run the expression would keep hosted —
 # a scheduled workflow, a Dependabot PR, a fork PR — can never take the
 # runner, and reading it as demand would wake a dark VM on a schedule
@@ -712,12 +715,19 @@ hosted_activity_since() {
     done
     cond="($evcond)"
     if [ "$dependabot" = hosted ]; then
-      cond+=" and (.actor.login != \"dependabot[bot]\" and ((.head_branch // \"\") | startswith(\"dependabot/\") | not))"
+      # The actor exclusion applies to every event; the branch one only to
+      # pull requests. The guard checks github.head_ref, which GitHub
+      # defines only for pull_request events — a push's head_ref is empty
+      # and passes the check — so a human pushing to a dependabot/ branch
+      # is routable and must count as demand.
+      cond+=" and (.actor.login != \"dependabot[bot]\" and ((.event != \"pull_request\") or ((.head_branch // \"\") | startswith(\"dependabot/\") | not)))"
     fi
     # A fork pull request stays hosted under the guards expression (the
-    # head repository is not the repository the run belongs to). A run
-    # whose head repository is gone cannot take the runner either.
-    cond+=" and ((.head_repository.full_name // \"\") == (.repository.full_name // \"\"))"
+    # head repository is not the repository the run belongs to). The
+    # guard's fork clause lets every other event through — they carry no
+    # pull request, so the comparison would be against null — and the
+    # filter mirrors that instead of comparing unconditionally.
+    cond+=" and ((.event != \"pull_request\") or ((.head_repository.full_name // \"\") == (.repository.full_name // \"\")))"
     filter="select($cond)"
   fi
   for status in queued in_progress; do

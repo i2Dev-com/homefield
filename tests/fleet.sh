@@ -865,17 +865,22 @@ record "hosted-activity: a record naming push counts the push run too" \
 # Dependabot or fork pull request when the record names two events. 1003
 # (fork) and 1001 (Dependabot) must stay out of a push,pull_request record
 # — and they sit earlier than the push run, so a filter that counts either
-# answers an earlier timestamp than the right one.
+# answers an earlier timestamp than the right one. The branch exclusion
+# is pull-request-only (the guard checks github.head_ref, which GitHub
+# defines only for pull_request events), so 1007 — a human pushing to a
+# dependabot/ branch — counts, and it sits earlier than the rest.
 cat > "$TMP/gh-runs-queued.json" <<'EOF'
-{"total_count":3,"workflow_runs":[
+{"total_count":4,"workflow_runs":[
   {"id":1001,"created_at":"2026-11-11T17:30:00Z","event":"pull_request","actor":{"login":"dependabot[bot]"},"head_branch":"dependabot/npm_and_yarn/jest-dom","head_repository":{"full_name":"org/repo"},"repository":{"full_name":"org/repo"}},
   {"id":1003,"created_at":"2026-11-11T17:00:00Z","event":"pull_request","actor":{"login":"bob"},"head_branch":"patch","head_repository":{"full_name":"fork/other"},"repository":{"full_name":"org/repo"}},
-  {"id":1006,"created_at":"2026-11-11T18:00:00Z","event":"push","actor":{"login":"alice"},"head_branch":"main","head_repository":{"full_name":"org/repo"},"repository":{"full_name":"org/repo"}}
+  {"id":1006,"created_at":"2026-11-11T18:00:00Z","event":"push","actor":{"login":"alice"},"head_branch":"main","head_repository":{"full_name":"org/repo"},"repository":{"full_name":"org/repo"}},
+  {"id":1007,"created_at":"2026-11-11T17:15:00Z","event":"push","actor":{"login":"alice"},"head_branch":"dependabot/npm_and_yarn/manual","head_repository":{"full_name":"org/repo"},"repository":{"full_name":"org/repo"}}
 ]}
 EOF
+printf '{"total_count":1,"jobs":[{"id":5007,"status":"queued"}]}\n' >"$JOBS/1007.json"
 since="$(hosted_activity_since org/repo github.com push,pull_request)"
 record "hosted-activity: the guards hold across a multi-event record" \
-  "$(iso_to_epoch '2026-11-11T18:00:00Z')" "$since"
+  "$(iso_to_epoch '2026-11-11T17:15:00Z')" "$since"
 
 # The full fixture again for the remaining profiles.
 cat > "$TMP/gh-runs-queued.json" <<'EOF'
