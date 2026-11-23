@@ -365,6 +365,15 @@ def terminate(signum, frame):
             tunnel_proc.terminate()
         except OSError:
             pass
+    # A running tick would otherwise outlive this process: it was started in
+    # a session of its own, and its budget supervisor is a daemon thread
+    # that dies with us — a restarted receiver merely reads the saved pid
+    # and never reinstates the deadline, so a hung tick could hold the
+    # scaler's lock forever, suppressing webhook and periodic scaling alike.
+    # Kill and reap the ticks this instance spawned before exiting; launchd
+    # restarts the receiver, and the next delivery re-rings the doorbell.
+    for proc in list(tick_children):
+        kill_tree(proc)
     sys.exit(0)
 
 

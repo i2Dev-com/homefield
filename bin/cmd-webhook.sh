@@ -17,7 +17,12 @@ webhook_secret_file() { printf '%s/secret' "$(webhook_dir)"; }
 webhook_config_file() { printf '%s/config' "$(webhook_dir)"; }
 webhook_log_file() { printf '%s/log' "$(webhook_dir)"; }
 webhook_plist_path() { printf '%s/com.homefield.webhook.plist' "${HOMEFIELD_LAUNCH_AGENTS_DIR:-$HOME/Library/LaunchAgents}"; }
-webhook_tunnel_name() { printf 'homefield-webhook'; }
+# The tunnel name, resolved the same way the receiver resolves it (the
+# plist bakes HOMEFIELD_WEBHOOK_TUNNEL and webhook-receiver.py reads it):
+# setup must discover, create and route the very tunnel the agent runs, or
+# an override would route the hostname to one tunnel while the receiver
+# starts another.
+webhook_tunnel_name() { printf '%s' "${HOMEFIELD_WEBHOOK_TUNNEL:-homefield-webhook}"; }
 
 # webhook_tunnel_id: the tunnel's UUID, from cloudflared's own list (the
 # credentials file is named after it: ~/.cloudflared/<id>.json). Empty when

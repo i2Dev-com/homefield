@@ -252,8 +252,32 @@ mv "$TMP/secret.away" "$SECRET_FILE"
 out="$(raw $PORT $'POST /webhook HTTP/1.1\r\nHost: x\r\n\r\n')"
 record "missing Content-Length: 411" "411" "$out"
 
-kill "$RECEIVER_PID" 2>/dev/null || true
-wait "$RECEIVER_PID" 2>/dev/null || true
+# shutdown: a running tick does not outlive the receiver — it was started
+# in a session of its own and its budget supervisor is a daemon thread, so
+# a hung tick would hold the scaler's lock forever after a restart
+printf '60\n' >"$TMP/stub-sleep"
+rm -f "$RECEIVER_DIR/tick.pid"
+out="$(post workflow_job queued)"
+record "shutdown: a delivery with a hung tick is accepted" "204" "$out"
+tick_pid="$(cat "$RECEIVER_DIR/tick.pid")"
+kill -0 "$tick_pid" 2>/dev/null && r=yes || r=no
+record "shutdown: the tick is running" "yes" "$r"
+kill -TERM "$RECEIVER_PID" 2>/dev/null || true
+tick_gone=no
+for _ in $(seq 1 100); do
+  kill -0 "$tick_pid" 2>/dev/null || tick_gone=yes
+  [ "$tick_gone" = yes ] && break
+  sleep 0.1
+done
+record "shutdown: the hung tick is killed with the receiver" "yes" "$tick_gone"
+# the receiver exits after reaping the tick (its kill_tree waits up to 5 s
+# per tick); a watchdog bounds the wait so a hung exit fails the record
+# instead of hanging the suite
+( sleep 15; kill -9 "$RECEIVER_PID" 2>/dev/null ) & watchdog_pid=$!
+wait "$RECEIVER_PID"; rc=$?
+kill "$watchdog_pid" 2>/dev/null
+record "shutdown: the receiver exits cleanly" "0" "$rc"
+rm -f "$TMP/stub-sleep"
 
 # ---------------------------------------------------------------------------
 # Part 2 — the commands, against stubbed cloudflared/gh/launchctl.
@@ -322,6 +346,7 @@ run() {
     HOMEFIELD_SCALE_INTERVAL="${HOMEFIELD_SCALE_INTERVAL:-}" HOMEFIELD_SCALE_WAIT="${HOMEFIELD_SCALE_WAIT:-}" \
     HOMEFIELD_SCALE_IDLE="${HOMEFIELD_SCALE_IDLE:-}" HOMEFIELD_SCALE_MAX="${HOMEFIELD_SCALE_MAX:-}" \
     HOMEFIELD_SCALE_ZERO="${HOMEFIELD_SCALE_ZERO:-}" HOMEFIELD_SCALE_TICK_BUDGET="${HOMEFIELD_SCALE_TICK_BUDGET:-}" \
+    HOMEFIELD_WEBHOOK_TUNNEL="${HOMEFIELD_WEBHOOK_TUNNEL:-}" \
     "$BASH" -c '. "$1"; shift; "$@"' _ "$ROOT/bin/homefield" cmd_webhook "$@" 2>&1 </dev/null
 }
 
@@ -414,6 +439,31 @@ record "setup: the route watcher's scaler policy is inherited" "yes" \
   "$(has "$(cat "$plist" 2>/dev/null)" '<key>HOMEFIELD_SCALE_IDLE</key>')"
 unset CF_CREATE_THEN_LIST
 
+# the documented HOMEFIELD_WEBHOOK_TUNNEL override must reach the tunnel
+# setup discovers, creates and routes: the plist bakes it and the receiver
+# runs it, so a name the shell did not resolve the same way would route the
+# hostname to one tunnel while the agent starts another (own state dir:
+# the purge below must not touch STATE2's config and secret)
+STATE4="$TMP/state4"
+# shellcheck disable=SC2034  # read by the cloudflared stub in the subshell
+CF_LIST_JSON='[{"id": "custom-uuid", "name": "custom-tunnel"}]'
+touch "$HOME/.cloudflared/custom-uuid.json"
+HOMEFIELD_WEBHOOK_TUNNEL=custom-tunnel
+out="$(run "$STATE4" setup --hostname webhook.example.com --port 18787)"
+rc=$?
+record "setup: a tunnel-name override exits 0" "0" "$rc"
+record "setup: the override is routed, not the default name" "1" \
+  "$(grep -c -e 'tunnel route dns custom-tunnel webhook.example.com' "$calls_cloudflared" || true)"
+record "setup: the override is recorded in the config" "custom-tunnel" \
+  "$(grep -h '^tunnel=' "$STATE4/route-watcher/webhook/config" | cut -d= -f2)"
+record "setup: the override is baked into the plist" "yes" \
+  "$(has "$(cat "$plist" 2>/dev/null)" '<string>custom-tunnel</string>')"
+out="$(run "$STATE4" remove --purge)"
+record "setup: remove --purge deletes the overridden tunnel" "1" \
+  "$(grep -c -e 'tunnel delete custom-tunnel' "$calls_cloudflared" || true)"
+unset HOMEFIELD_WEBHOOK_TUNNEL CF_LIST_JSON
+rm -f "$HOME/.cloudflared/custom-uuid.json"
+
 # connect
 # shellcheck disable=SC2034  # read by the gh stub in the subshell
 GH_BODY_OUT="$TMP/body.json"
@@ -504,6 +554,7 @@ kill "$health_pid" 2>/dev/null || true
 
 # remove
 unloads_before="$(grep -c -e '^unload -w' "$calls_launchctl" || true)"
+deletes_before="$(grep -c -e 'tunnel delete' "$calls_cloudflared" || true)"
 out="$(run "$STATE2" remove)"
 rc=$?
 record "remove: exits 0" "0" "$rc"
@@ -511,14 +562,19 @@ record "remove: launchctl unload recorded" "1" \
   "$(( $(grep -c -e '^unload -w' "$calls_launchctl" || true) - unloads_before ))"
 record "remove: the plist is gone" "0" "$(ls "$plist" 2>/dev/null | wc -l | tr -d ' ')"
 record "remove: the secret is gone" "0" "$(ls "$STATE2/route-watcher/webhook/secret" 2>/dev/null | wc -l | tr -d ' ')"
-record "remove: the tunnel is kept without --purge" "0" "$(grep -c -e 'tunnel delete' "$calls_cloudflared" || true)"
+record "remove: the tunnel is kept without --purge" "0" \
+  "$(( $(grep -c -e 'tunnel delete' "$calls_cloudflared" || true) - deletes_before ))"
 
 # rebuild the state, then purge
+deletes_before="$(grep -c -e 'tunnel delete' "$calls_cloudflared" || true)"
+cleanups_before="$(grep -c -e 'tunnel cleanup' "$calls_cloudflared" || true)"
 run "$STATE2" setup --hostname webhook.example.com --port 18787 >/dev/null
 out="$(run "$STATE2" remove --purge)"
 rc=$?
 record "remove --purge: exits 0" "0" "$rc"
-record "remove --purge: the tunnel is deleted" "1" "$(grep -c -e 'tunnel delete' "$calls_cloudflared" || true)"
-record "remove --purge: the tunnel is cleaned up first" "1" "$(grep -c -e 'tunnel cleanup' "$calls_cloudflared" || true)"
+record "remove --purge: the tunnel is deleted" "1" \
+  "$(( $(grep -c -e 'tunnel delete' "$calls_cloudflared" || true) - deletes_before ))"
+record "remove --purge: the tunnel is cleaned up first" "1" \
+  "$(( $(grep -c -e 'tunnel cleanup' "$calls_cloudflared" || true) - cleanups_before ))"
 
 summary
