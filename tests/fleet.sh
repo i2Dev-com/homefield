@@ -30,6 +30,32 @@ exit 0
 EOF
 cat > "$TMP/bin/gh" <<'EOF'
 #!/usr/bin/env bash
+# The runs/jobs answers the hosted-activity test drives (GH_RUNS_*,
+# GH_JOBS_*); everything else succeeds silently, the way the function
+# level stubs above assume.
+case "${GH_MODE:-}" in
+  hosted-activity)
+    case "$*" in
+      *"actions/runs?"*)
+        case "$*" in
+          *status=queued*) printf '%s\n' "${GH_RUNS_QUEUED:-}" ;;
+          *status=in_progress*) printf '%s\n' "${GH_RUNS_PROGRESS:-}" ;;
+        esac
+        [ "${GH_RUNS_FAIL:-}" = 1 ] && exit 1
+        exit 0 ;;
+      *"actions/runs/"*"/jobs"*)
+        # What the real gh --jq would print for the canned page: one id
+        # per active job (the stub replaces gh, jq included).
+        case "$*" in
+          *"/1001/jobs"*) printf '%s\n' "${GH_JOBS_1001:-}" ;;
+          *"/1002/jobs"*) printf '%s\n' "${GH_JOBS_1002:-}" ;;
+          *"/1003/jobs"*) printf '%s\n' "${GH_JOBS_1003:-}" ;;
+        esac
+        [ "${GH_JOBS_FAIL:-}" = 1 ] && exit 1
+        exit 0 ;;
+    esac
+    ;;
+esac
 exit 0
 EOF
 cat > "$TMP/bin/uname" <<'EOF'
@@ -749,5 +775,46 @@ line2_kept="no"; grep -q '^homefield-2|' "$RECORDS/scale-dark" 2>/dev/null && li
 record "wake-from-zero: an unreadable status blocks the partly-running wake too" \
   "0/yes/yes/nonzero" \
   "$(called '^scale:start')/$line2_kept/$(has "$out" 'could not ask Lima')/$(nonzero "$rc")"
+
+# 33. hosted_activity_since counts a run only while it has active jobs: a
+# run listed queued forever with no jobs behind it (its head branch gone)
+# is not demand, and reading it as one would wake a dark VM on a schedule
+# instead of on work
+# The suite stubbed the function above; re-source the real one.
+# shellcheck source=bin/cmd-fleet.sh
+. "$ROOT/bin/cmd-fleet.sh"
+GH_MODE="hosted-activity"
+export GH_MODE GH_RUNS_QUEUED GH_RUNS_PROGRESS GH_JOBS_1001 GH_JOBS_1002 GH_JOBS_1003 GH_RUNS_FAIL GH_JOBS_FAIL
+GH_RUNS_QUEUED=$'1001\t2026-11-11T20:35:51Z'
+GH_RUNS_PROGRESS=""
+GH_JOBS_1001=""
+record "hosted-activity: a queued run with no jobs is not demand" "0" \
+  "$(hosted_activity_since org/repo github.com | wc -l | tr -d ' ')"
+
+GH_JOBS_1001=$'501\n502'
+since="$(hosted_activity_since org/repo github.com)"
+record "hosted-activity: a queued run with active jobs is demand" \
+  "$(iso_to_epoch '2026-11-11T20:35:51Z')" "$since"
+
+GH_RUNS_PROGRESS=$'1002\t2026-11-11T20:30:50Z'
+GH_JOBS_1002='503'
+since="$(hosted_activity_since org/repo github.com)"
+record "hosted-activity: an in_progress run with an active job is demand" "yes" \
+  "$([ -n "$since" ] && echo yes)"
+
+GH_RUNS_QUEUED=$'1001\t2026-11-11T20:35:51Z\n1003\t2026-11-10T10:00:00Z'
+GH_JOBS_1003=""
+since="$(hosted_activity_since org/repo github.com)"
+record "hosted-activity: the jobless run's timestamp is not the answer" \
+  "$(iso_to_epoch '2026-11-11T20:30:50Z')" "$since"
+
+GH_RUNS_FAIL=1
+record "hosted-activity: an unreadable runs list fails safe" "1" \
+  "$(hosted_activity_since org/repo github.com >/dev/null 2>&1; echo $?)"
+GH_RUNS_FAIL=""
+GH_JOBS_FAIL=1
+record "hosted-activity: an unreadable jobs list fails safe" "1" \
+  "$(hosted_activity_since org/repo github.com >/dev/null 2>&1; echo $?)"
+unset GH_MODE GH_RUNS_QUEUED GH_RUNS_PROGRESS GH_JOBS_1001 GH_JOBS_1002 GH_JOBS_1003 GH_RUNS_FAIL GH_JOBS_FAIL
 
 summary
