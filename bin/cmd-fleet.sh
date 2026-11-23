@@ -680,12 +680,21 @@ scale_dark_drop() {
 # spending money is demand now. Empty when nothing runs; 1 when GitHub
 # could not be asked (the caller fails safe and wakes nothing).
 hosted_activity_since() {
-  local repo="$1" host="$2" status ids id created best="" epoch
+  local repo="$1" host="$2" status ids id created best="" epoch active
   for status in queued in_progress; do
     ids="$(gh api --hostname "$host" --paginate "repos/${repo}/actions/runs?status=${status}&per_page=100" \
       --jq '.workflow_runs[] | [.id, .created_at] | @tsv' </dev/null 2>/dev/null)" || return 1
     while IFS=$'\t' read -r id created; do
       [ -n "$id" ] || continue
+      # A run counts only while it still has active jobs: GitHub keeps a
+      # run listed as queued forever when its head branch is gone, with no
+      # jobs behind it, and reading such a row as demand would wake a dark
+      # VM on a schedule instead of on work.
+      active="$(gh api --hostname "$host" --paginate "repos/${repo}/actions/runs/${id}/jobs?per_page=100" \
+        --jq '[.jobs[] | select(.status == "queued" or .status == "in_progress")] | length' \
+        </dev/null 2>/dev/null)" || return 1
+      case "$active" in '' | *[!0-9]*) active=0 ;; esac
+      [ "$active" -gt 0 ] || continue
       epoch="$(iso_to_epoch "$created")" || continue
       if [ -z "$best" ] || [ "$epoch" -lt "$best" ]; then
         best="$epoch"
