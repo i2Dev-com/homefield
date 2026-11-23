@@ -9,6 +9,10 @@ fail, such as a new guard in the routing expression, bumps the minor version
 (0.1 to 0.2). Compatible changes bump the patch. Merged changes wait on
 `main`, under *Unreleased*, until a release is cut.
 
+## Unreleased
+
+- Fixed: the demand scaler's hosted-activity demand (`hosted_activity_since`) counted a workflow run in `queued` or `in_progress` status even when the consumer's routing expression would have kept it hosted — a scheduled workflow (the guard's `events` defaults to `pull_request`), a Dependabot PR (`dependabot` defaults to `hosted`), a fork pull request in `guards` mode. Such a run can never take the local runner, so with scale-to-zero on it read as urgent hosted activity and woke the dark VM every tick after a stop — a wake/stop cycle on a schedule instead of on work that kept the VM up most of the night (measured on this Mac: seven wake/stop cycles between 00:51 and 12:01, each keeping the VM up the full ~17-minute idle cooldown — about two hours of uptime in eleven, ~18% duty cycle, from scheduled workflows and Dependabot PR runs that would never have used the machine). The routing and autoflip records now carry the consumer's guard options after the host (`route local --events push,schedule --dependabot local --mode simple`; the defaults are the guard's defaults), and a run counts as demand only when the record's profile would route it — the same standard the queued-demand lookup already applies. A record without the option fields (one written before #315) carries no profile: the stop/start cycle preserves that shape, and the demand side stays permissive — every active run counts, the model the scaler had before #315 — until `route local` or `adopt` records the profile, because guessing the guard's defaults would silence a simple-mode repository's push and schedule demand for good. An unreadable runs or jobs list still fails safe (#315).
+
 ## v0.5.7 (2026-11-23)
 
 Bumps the patch from v0.5.6, and it is compatible for consumers: the routing

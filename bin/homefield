@@ -202,9 +202,16 @@ usage_cmd_route() {
   route      Switch repositories' routed jobs to hosted or local
              (the CI_RUNNER variable). Switching to hosted also cancels and
              re-runs runs whose jobs are stuck waiting for the local runner.
-             A repository that cannot be switched is warned about and skipped;
-             the others are still routed. Exits 0 only when every repository
-             was routed.
+             `route local` records the consumer's routing-guard options
+             (--events, --dependabot, --mode; the guard's defaults when not
+             given) so the demand scaler counts only runs the expression
+             would route to the runner. --profile unknown records the
+             legacy three-field shape instead: the profile is not known,
+             and the demand scaler stays permissive (every active run
+             counts) until the options are recorded. A repository that
+             cannot be switched is warned about and skipped; the others
+             are still routed. Exits 0 only when every repository was
+             routed.
 EOF
 }
 usage_cmd_route_watch() {

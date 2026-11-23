@@ -160,14 +160,77 @@ echo "the routing records"
 reset_records
 harness_env=(GH_CI_RUNNER=hosted)
 harness cmd_route local --repo acme/api --label homefield-ci
-record "route local: the repo is recorded under its label" "0/homefield-ci acme/api github.com" \
+record "route local: the repo is recorded under its label" "0/homefield-ci acme/api github.com pull_request hosted guards" \
   "$rc/$(cat "$state/routing" 2>/dev/null)"
 record "...the variable was set, and nothing waits in autoflip" "yes/0" \
   "$(grep -q 'variable set CI_RUNNER --repo github.com/acme/api --body local' "$calls" && echo yes || echo no)/$(wc -l <"$state/autoflip" 2>/dev/null | tr -d ' ' || echo 0)"
 
 harness cmd_route local --repo acme/api --label other-label
-record "route local on another label: the repo's line is replaced" "0/other-label acme/api github.com" \
+record "route local on another label: the repo's line is replaced" "0/other-label acme/api github.com pull_request hosted guards" \
   "$rc/$(cat "$state/routing" 2>/dev/null)"
+
+# The option fields (#315): the flags write the consumer's guard options
+# into the record, and the values are the guard's own — the demand side
+# reads them as the expression's exclusions.
+reset_records
+harness_env=(GH_CI_RUNNER=hosted)
+harness cmd_route local --repo acme/api --label homefield-ci --events push,pull_request --dependabot local
+record "route local: the flags land in the record" "0/homefield-ci acme/api github.com push,pull_request local guards" \
+  "$rc/$(cat "$state/routing" 2>/dev/null)"
+harness cmd_route local --repo acme/api --label homefield-ci --events 'push schedule'
+record "route local: a space-separated list canonicalizes to one comma field" \
+  "0/homefield-ci acme/api github.com push,schedule hosted guards" \
+  "$rc/$(cat "$state/routing" 2>/dev/null)"
+harness cmd_route local --repo acme/api --label homefield-ci --mode simple
+record "route local: --mode simple records the mode" "0/homefield-ci acme/api github.com pull_request hosted simple" \
+  "$rc/$(cat "$state/routing" 2>/dev/null)"
+
+# --profile unknown records the legacy three-field shape: the profile is
+# not known, and the demand side stays permissive until it is recorded.
+# It refuses to carry options — an unknown profile with a guessed events
+# list would be neither unknown nor precise.
+reset_records
+harness_env=(GH_CI_RUNNER=hosted)
+harness cmd_route local --repo acme/api --label homefield-ci --profile unknown
+record "route local: --profile unknown records the legacy three-field shape" \
+  "0/homefield-ci acme/api github.com" "$rc/$(cat "$state/routing" 2>/dev/null)"
+harness cmd_route local --repo acme/api --label homefield-ci --profile unknown --events push
+record "route local: --profile unknown refuses to carry options" "1" "$rc"
+harness cmd_route local --repo acme/api --label homefield-ci --profile wrong
+record "route local: a profile outside the two is refused" "1" "$rc"
+
+reset_records
+harness cmd_route local --repo acme/api --events pull_request_target
+record "route local: pull_request_target is refused" "1/yes" \
+  "$rc/$(has "$out" 'never routable')"
+harness cmd_route local --repo acme/api --events merge_group
+record "route local: an event the guard cannot route is refused" "1" "$rc"
+harness cmd_route local --repo acme/api --dependabot sometimes
+record "route local: a dependabot value outside the guard's is refused" "1" "$rc"
+harness cmd_route local --repo acme/api --mode full
+record "route local: a mode outside the guard's is refused" "1" "$rc"
+harness cmd_route local --repo acme/api --mode simple --events push
+record "route local: --events has no effect in simple mode and is refused" "1" "$rc"
+record "...and a refusal records nothing" "0" \
+  "$(wc -l <"$state/routing" 2>/dev/null | tr -d ' ' || echo 0)"
+
+# The route command's option values are the routing-guard's own: the lists
+# must not drift (the same pin tests/label-rule.sh applies to the labels).
+guard_list() {
+  sed -n "s/^$1 = (\(.*\))\$/\1/p" "$ROOT/routing-guard/routing_guard.py" | tr -d '" ' | tr ',' ' '
+}
+route_list() {
+  sed -n "s/^$1=\"\(.*\)\"\$/\1/p" "$ROOT/bin/cmd-route.sh"
+}
+record "the route command's events are the guard's" \
+  "$(guard_list EVENTS | tr ' ' '\n' | sort | tr '\n' ' ')" \
+  "$(route_list ROUTE_EVENTS | tr ' ' '\n' | sort | tr '\n' ' ')"
+record "the route command's dependabot values are the guard's" \
+  "$(guard_list DEPENDABOT | tr ' ' '\n' | sort | tr '\n' ' ')" \
+  "$(route_list ROUTE_DEPENDABOT | tr ' ' '\n' | sort | tr '\n' ' ')"
+record "the route command's modes are the guard's" \
+  "$(guard_list MODES | tr ' ' '\n' | sort | tr '\n' ' ')" \
+  "$(route_list ROUTE_MODE | tr ' ' '\n' | sort | tr '\n' ' ')"
 
 # A Mac may host runners for the same owner/repo on github.com and a GHES
 # host: the records must not mix them (#287, Codex #295 round 2).
@@ -175,7 +238,7 @@ reset_records
 printf 'homefield-ci acme/api ghes.acme.example\n' >"$state/routing"
 harness cmd_route local --repo acme/api --label other-label
 record "route local for a repo recorded on another host: a github.com line is added beside it" "0/homefield-ci acme/api ghes.acme.example
-other-label acme/api github.com" \
+other-label acme/api github.com pull_request hosted guards" \
   "$rc/$(cat "$state/routing" 2>/dev/null)"
 reset_records
 printf 'homefield-ci acme/api ghes.acme.example\n' >"$state/routing"
@@ -188,7 +251,7 @@ record "route hosted for a repo recorded on another host: the other host's lines
 reset_records
 printf 'label-a acme/api\n' >"$state/autoflip"
 harness cmd_route local --repo acme/api --label label-b
-record "a local route clears the pending restore it supersedes" "0/label-b acme/api github.com/0" \
+record "a local route clears the pending restore it supersedes" "0/label-b acme/api github.com pull_request hosted guards/0" \
   "$rc/$(cat "$state/routing" 2>/dev/null)/$(wc -l <"$state/autoflip" 2>/dev/null | tr -d ' ' || echo 0)"
 
 reset_records
@@ -252,6 +315,15 @@ record "...the routing record keeps only the label nobody serves" "other-label a
   "$(cat "$state/routing" 2>/dev/null)"
 record "...the label nobody serves (other-label) is left alone" "0" \
   "$(grep -c 'variable set CI_RUNNER --repo github.com/acme/other' "$calls" || true)"
+
+# A six-field routing record's option fields ride into the autoflip entry,
+# so the wake side's demand filter reads the consumer's guard options (#315).
+reset_records
+printf 'homefield-ci acme/api github.com push local guards\n' >"$state/routing"
+harness_env=(GH_RUNNERS="$runner_rows")
+harness route_stop_fallback https://github.com/acme my-mac-homefield
+record "a six-field record: the flip carries the options into autoflip" "0/yes/homefield-ci acme/api github.com push local guards" \
+  "$rc/$(grep -q 'variable set CI_RUNNER --repo github.com/acme/api --body hosted' "$calls" && echo yes || echo no)/$(cat "$state/autoflip" 2>/dev/null)"
 
 reset_records
 printf 'homefield-ci acme/api\n' >"$state/routing"
@@ -422,6 +494,17 @@ record "...they are recorded as routed local" "homefield-ci acme/api github.com
 homefield-ci acme/web github.com" \
   "$(cat "$state/routing" 2>/dev/null)"
 record "...and autoflip is empty" "0" "$([ -f "$state/autoflip" ] && wc -l <"$state/autoflip" | tr -d ' ' || echo 0)"
+
+# A six-field autoflip entry reads the same: the host is still the third
+# field, and the option fields ride along untyped (#315).
+reset_records
+printf 'homefield-ci acme/api github.com push local guards\n' >"$state/autoflip"
+harness_env=(GH_CI_RUNNER=hosted GH_RUNNERS='42\tmy-mac-homefield\tonline\tself-hosted,linux,arm64,homefield-ci\n')
+harness route_start_restore https://github.com/acme my-mac-homefield
+record "a six-field entry: the restore lands and the entry leaves autoflip" "0/yes/0" \
+  "$rc/$(grep -q 'variable set CI_RUNNER --repo github.com/acme/api --body local' "$calls" && echo yes || echo no)/$([ -f "$state/autoflip" ] && wc -l <"$state/autoflip" | tr -d ' ' || echo 0)"
+record "...and the options survive the restore into the routing record" \
+  "homefield-ci acme/api github.com push local guards" "$(cat "$state/routing" 2>/dev/null)"
 
 # A pending entry for another host is not this start's to restore: the same
 # owner/repo may have been flipped by that host's runner's stop, and

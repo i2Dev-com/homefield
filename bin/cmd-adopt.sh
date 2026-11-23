@@ -589,6 +589,25 @@ adopt_snippets() {
   echo
 }
 
+# adopt_route_local <owner/repo> <label> [extra args]: cmd_route local with
+# the routing options adoption resolved for the repository (ADOPT_EVENTS,
+# ADOPT_DEPENDABOT, ADOPT_MODE). The record must describe the same
+# expression the guard step does: the demand scaler reads its profile from
+# the record (#315), so recording the defaults under a simple-mode workflow
+# or a wider events list would wake the dark fleet on runs the runner can
+# never take. In simple mode only the mode is passed — the guard refuses
+# --events/--dependabot there, and cmd_route does too.
+adopt_route_local() {
+  local repo="$1" label="$2"
+  shift 2
+  if [ "$ADOPT_MODE" = guards ]; then
+    cmd_route local --repo "$repo" --label "$label" \
+      --events "$ADOPT_EVENTS" --dependabot "$ADOPT_DEPENDABOT" --mode guards "$@"
+  else
+    cmd_route local --repo "$repo" --label "$label" --mode simple "$@"
+  fi
+}
+
 # adopt_switch <owner/repo> <label> <dry> <switch> <jobs>: sets CI_RUNNER to
 # local through cmd_route when the routing is ready; otherwise prints what is
 # missing and stops the command.
@@ -604,10 +623,10 @@ adopt_switch() {
       log "switch: ${repo}: CI_RUNNER is ${current}; not switching (--no-switch)"
     elif [ "$dry" = 1 ]; then
       ADOPT_SWITCH_OUTCOME="would be set to local (dry run)"
-      cmd_route local --repo "$repo" --label "$label" --dry-run
+      adopt_route_local "$repo" "$label" --dry-run
     else
       ADOPT_SWITCH_OUTCOME="set to local"
-      cmd_route local --repo "$repo" --label "$label"
+      adopt_route_local "$repo" "$label"
     fi
     return 0
   fi

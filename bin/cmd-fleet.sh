@@ -669,21 +669,78 @@ scale_dark_drop() {
   return 1
 }
 
-# hosted_activity_since <repo> <host>: the earliest created_at of the
-# repository's queued or in-progress runs — the demand a dark fleet's
-# flipped repositories generate. The automatic flip moved them to hosted
-# (their entries live in `autoflip` until a start restores them), so every
-# run they start burns hosted minutes until the fleet comes back. Unlike
-# the queued lookup there is no label to match — the flip changed the
-# workflow's runs-on out of the local label — and no wait: a queued job
-# behind a busy fleet proves itself over the threshold, but a run already
-# spending money is demand now. Empty when nothing runs; 1 when GitHub
-# could not be asked (the caller fails safe and wakes nothing).
+# hosted_activity_since <repo> <host> [events] [dependabot] [mode]: the
+# earliest created_at of the repository's queued or in-progress runs — the
+# demand a dark fleet's flipped repositories generate. The automatic flip
+# moved them to hosted (their entries live in `autoflip` until a start
+# restores them), so every run they start burns hosted minutes until the
+# fleet comes back. Unlike the queued lookup there is no label to match —
+# the flip changed the workflow's runs-on out of the local label — and no
+# wait: a queued job behind a busy fleet proves itself over the threshold,
+# but a run already spending money is demand now. Empty when nothing runs;
+# 1 when GitHub could not be asked (the caller fails safe and wakes nothing).
+#
+# A run counts only when the consumer's own routing expression would have
+# sent it to the local runner had CI_RUNNER been local (#315): the record's
+# option fields mirror the guard's `events`, `dependabot` and `mode`, and
+# the filter applies them to the run's own metadata. In guards mode the
+# run's event must be one of the record's events (default pull_request),
+# a `dependabot=hosted` record excludes Dependabot's actor on every event
+# and Dependabot's head branch on pull requests (the guard checks
+# github.head_ref, which GitHub defines only for pull_request events, so
+# a human pushing to a dependabot/ branch stays routable), and fork pull
+# requests are excluded (head repository != the repository); a
+# simple-mode record counts every active run, because the simple
+# expression routes every event. A run the expression would keep hosted —
+# a scheduled workflow, a Dependabot PR, a fork PR — can never take the
+# runner, and reading it as demand would wake a dark VM on a schedule
+# instead of on work. The fields are in the runs-list response, so this is
+# a select() in the jq the lookup already runs — no extra API calls.
+#
+# Called without a profile (no mode argument — a legacy three-field record,
+# written before #315), every active run counts: the profile is unknown —
+# the record may describe a simple-mode workflow or a custom events list —
+# and guessing the guard's defaults could only narrow the demand, leaving
+# a routable run burning hosted minutes with the fleet dark. Unknown stays
+# permissive, the demand model the scaler had before #315, until `route
+# local` or `adopt` records the profile.
 hosted_activity_since() {
-  local repo="$1" host="$2" status ids id created best="" epoch active
+  local repo="$1" host="$2" events="${3-}" dependabot="${4-}" mode="${5-}"
+  local status ids id created best="" epoch active filter evcond cond e first
+  if [ -z "$mode" ] || [ "$mode" = simple ]; then
+    filter="."
+  else
+    # The event disjunction is built and parenthesized on its own: `and`
+    # binds tighter than `or` in jq, so appending the Dependabot and fork
+    # guards to a bare disjunction would leave them applying only to the
+    # last event — `pull_request or push and guards` counts a Dependabot
+    # pull request when the record also names push.
+    evcond=""; first=1
+    for e in $(printf '%s' "$events" | tr ',' ' '); do
+      [ -n "$e" ] || continue
+      if [ "$first" = 1 ]; then first=0; else evcond+=" or "; fi
+      evcond+=".event == \"$e\""
+    done
+    cond="($evcond)"
+    if [ "$dependabot" = hosted ]; then
+      # The actor exclusion applies to every event; the branch one only to
+      # pull requests. The guard checks github.head_ref, which GitHub
+      # defines only for pull_request events — a push's head_ref is empty
+      # and passes the check — so a human pushing to a dependabot/ branch
+      # is routable and must count as demand.
+      cond+=" and (.actor.login != \"dependabot[bot]\" and ((.event != \"pull_request\") or ((.head_branch // \"\") | startswith(\"dependabot/\") | not)))"
+    fi
+    # A fork pull request stays hosted under the guards expression (the
+    # head repository is not the repository the run belongs to). The
+    # guard's fork clause lets every other event through — they carry no
+    # pull request, so the comparison would be against null — and the
+    # filter mirrors that instead of comparing unconditionally.
+    cond+=" and ((.event != \"pull_request\") or ((.head_repository.full_name // \"\") == (.repository.full_name // \"\")))"
+    filter="select($cond)"
+  fi
   for status in queued in_progress; do
     ids="$(gh api --hostname "$host" --paginate "repos/${repo}/actions/runs?status=${status}&per_page=100" \
-      --jq '.workflow_runs[] | [.id, .created_at] | @tsv' </dev/null 2>/dev/null)" || return 1
+      --jq ".workflow_runs[] | $filter | [.id, .created_at] | @tsv" </dev/null 2>/dev/null)" || return 1
     while IFS=$'\t' read -r id created; do
       [ -n "$id" ] || continue
       # A run counts only while it still has active jobs: GitHub keeps a
@@ -777,7 +834,7 @@ scale_demand() {
   # another Mac, one here), and merging them into the oldest run's
   # repository would let the unreachable one starve the reachable one. The
   # demand loop answers the first entry that actually adds capacity.
-  while read -r label repo host; do
+  while read -r label repo host _opts; do
     [ -n "$repo" ] || continue
     host="${host:-github.com}"
     since="$(queued_wait_since "$repo" "$label" "$host")" || return 1
@@ -1050,13 +1107,26 @@ scale_wake() {
     return 1
   fi
   if [ -f "$(autoflip_file)" ]; then
-    while read -r label repo host; do
+    while read -r label repo host events dependabot mode; do
       [ -n "$repo" ] || continue
       host="${host:-github.com}"
-      since="$(hosted_activity_since "$repo" "$host")" || {
-        echo "homefield: fleet watch: could not read the runs of ${repo}; not waking a dark fleet (fail safe)" >&2
-        return 1
-      }
+      # The entry's option fields (the routing record's at flip time) say
+      # which runs may take the runner: the demand filter applies them
+      # (#315). A legacy three-field entry carries no profile — it is not
+      # read as the guard's defaults, which would silence a simple-mode
+      # repository's push and schedule demand — so it is asked without
+      # one and every active run counts (#315).
+      if [ -n "$mode" ]; then
+        since="$(hosted_activity_since "$repo" "$host" "$events" "$dependabot" "$mode")" || {
+          echo "homefield: fleet watch: could not read the runs of ${repo}; not waking a dark fleet (fail safe)" >&2
+          return 1
+        }
+      else
+        since="$(hosted_activity_since "$repo" "$host")" || {
+          echo "homefield: fleet watch: could not read the runs of ${repo}; not waking a dark fleet (fail safe)" >&2
+          return 1
+        }
+      fi
       [ -n "$since" ] || continue
       WAKE_LABEL+=("$label")
       WAKE_REPO+=("$repo")

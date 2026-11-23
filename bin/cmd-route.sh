@@ -3,15 +3,24 @@
 
 # The routing records, next to the per-instance state files (the same
 # directory, not inside them: they are per-Mac, not per-VM). `routing` holds
-# one `label repo host` line per repository currently routed to a local
-# runner — the mirror of CI_RUNNER=local on GitHub — and `autoflip` holds the
-# repositories a `stop --route-hosted` flipped to hosted, waiting for
-# `start --route-local` (or the next start of an --auto-route VM) to bring
-# them back. One line per repo and host: a Mac may host runners for the same
-# owner/repo on github.com and a GitHub Enterprise Server, and the records
-# must not mix them — a restore against one host must not consume the other
-# host's pending entry. The host is the third field; a line without one (a
-# record written before #287) reads as github.com.
+# one line per repository currently routed to a local runner — the mirror of
+# CI_RUNNER=local on GitHub — and `autoflip` holds the repositories a `stop
+# --route-hosted` flipped to hosted, waiting for `start --route-local` (or
+# the next start of an --auto-route VM) to bring them back. One line per repo
+# and host: a Mac may host runners for the same owner/repo on github.com and
+# a GitHub Enterprise Server, and the records must not mix them — a restore
+# against one host must not consume the other host's pending entry. The host
+# is the third field; a line without one (a record written before #287) reads
+# as github.com.
+#
+# The fourth through sixth fields are the consumer's routing-guard options
+# that change which runs may take the local runner: `events` (comma list,
+# default pull_request), `dependabot` (hosted|local, default hosted) and
+# `mode` (guards|simple, default guards) — the same names and defaults as
+# the guard's (routing-guard/routing_guard.py EVENTS, DEPENDABOT, MODES).
+# The demand side reads them (#315): a run counts as demand for a dark VM
+# only when the consumer's own expression would have sent it to the runner.
+# A line without them (a record written before #315) reads as the defaults.
 routing_file() { printf '%s/routing' "${HOMEFIELD_STATE_DIR:-$HOME/.local/state/homefield}"; }
 autoflip_file() { printf '%s/autoflip' "${HOMEFIELD_STATE_DIR:-$HOME/.local/state/homefield}"; }
 
@@ -19,6 +28,15 @@ autoflip_file() { printf '%s/autoflip' "${HOMEFIELD_STATE_DIR:-$HOME/.local/stat
 # its host is hval (an empty third field is github.com, so a legacy line and
 # a github.com line are the same record).
 RECORD_IS='($2 == r && ($3 == "" ? "github.com" : $3) == hval)'
+
+# The events a record's demand filter can name, and the values the other two
+# option fields take: the routing-guard's own (routing_guard.py EVENTS,
+# DEPENDABOT, MODES — tests/routing.sh pins the two lists together). An event
+# outside the list cannot appear in the guard's expression, so naming it in a
+# record would only ever exclude demand the runner could have taken.
+ROUTE_EVENTS="pull_request push workflow_dispatch schedule"
+ROUTE_DEPENDABOT="hosted local"
+ROUTE_MODE="guards simple"
 
 # record_drop <file> <repo> <host>: remove the repo's line for <host>,
 # keeping the rest. A missing file is already correct. The rewrite goes
@@ -34,9 +52,13 @@ record_drop() {
   mv -f "$tmp" "$f" || { rm -f "$tmp"; return 1; }
 }
 
-# record_add <file> <label> <repo> <host>: one `label repo host` line for the
-# repo on the host, replacing any line it already has for that pair (a
-# record for the same repo on another host stays).
+# record_add <file> <label> <repo> <host> [events] [dependabot] [mode]: one
+# line for the repo on the host, replacing any line it already has for that
+# pair (a record for the same repo on another host stays). With the three
+# option arguments the line carries them (the demand side reads them, #315);
+# without them the line is the three-field legacy shape: the record's
+# routing profile is unknown, and the demand side stays permissive until
+# `route local` or `adopt` records the profile.
 record_add() {
   local f="$1" dir tmp
   dir="$(dirname "$f")"
@@ -44,7 +66,12 @@ record_add() {
   tmp="$(mktemp "$dir/.routing.XXXXXX")" || return 1
   {
     [ ! -f "$f" ] || awk -v r="$3" -v hval="$4" "!$RECORD_IS" "$f"
-    printf '%s %s %s\n' "$2" "$3" "$4"
+    if [ $# -ge 5 ]; then
+      printf '%s %s %s %s %s %s\n' "$2" "$3" "$4" \
+        "${5:-pull_request}" "${6:-hosted}" "${7:-guards}"
+    else
+      printf '%s %s %s\n' "$2" "$3" "$4"
+    fi
   } >"$tmp" || { rm -f "$tmp"; return 1; }
   mv -f "$tmp" "$f" || { rm -f "$tmp"; return 1; }
 }
@@ -176,7 +203,7 @@ route_stop_fallback() {
   local owner repo_scope=org
   owner="$(scope_owner "$url")"
   case "$owner" in */*) repo_scope=repo ;; esac
-  while read -r label repo rhost; do
+  while read -r label repo rhost revents rdependabot rmode; do
     [ -n "$repo" ] || continue
     # The host field (a legacy line without one reads as github.com): this
     # stop only flips github.com records — it refused other hosts above —
@@ -234,10 +261,17 @@ route_stop_fallback() {
     # one part of the flip that can wait a minute, longer than the watcher's
     # sleep budget: killed there, the repo would be CI_RUNNER=hosted with
     # neither record left, and no start or wake could bring it back. Adding it
-    # again below is a no-op (one line per repo and host).
-    if HOMEFIELD_ROUTE_AUTOFLIP=1 HOMEFIELD_GITHUB_HOST="$host" cmd_route hosted --repo "$repo" --label "$label"; then
-      landed=1
+    # again below is a no-op (one line per repo and host). A record without
+    # option fields flips with --profile unknown: the entry stays legacy
+    # three-field, so the wake side keeps counting every active run instead
+    # of guessing this record's profile (#315).
+    if [ -n "$rmode" ]; then
+      HOMEFIELD_ROUTE_AUTOFLIP=1 HOMEFIELD_GITHUB_HOST="$host" cmd_route hosted --repo "$repo" --label "$label" \
+        --events "$revents" --dependabot "$rdependabot" --mode "$rmode" && landed=1
     else
+      HOMEFIELD_ROUTE_AUTOFLIP=1 HOMEFIELD_GITHUB_HOST="$host" cmd_route hosted --repo "$repo" --label "$label" --profile unknown && landed=1
+    fi
+    if [ "$landed" != 1 ]; then
       rc=1
       # cmd_route also returns 1 when the variable landed but the stuck-run
       # recovery failed. The repo leaving the routing record is what a landed
@@ -245,8 +279,13 @@ route_stop_fallback() {
       [ -n "$(awk -v r="$repo" -v hval="$host" "$RECORD_IS { print; exit }" "$(routing_file)" 2>/dev/null)" ] || landed=1
     fi
     if [ "$landed" = 1 ]; then
-      record_add "$(autoflip_file)" "$label" "$repo" "$host" ||
-        { rc=1; echo "homefield: ${repo}: flipped to hosted but could not record it for the next start; run bin/homefield route local --repo ${repo} --label ${label} by hand" >&2; }
+      if [ -n "$rmode" ]; then
+        record_add "$(autoflip_file)" "$label" "$repo" "$host" "$revents" "$rdependabot" "$rmode" ||
+          { rc=1; echo "homefield: ${repo}: flipped to hosted but could not record it for the next start; run bin/homefield route local --repo ${repo} --label ${label} by hand" >&2; }
+      else
+        record_add "$(autoflip_file)" "$label" "$repo" "$host" ||
+          { rc=1; echo "homefield: ${repo}: flipped to hosted but could not record it for the next start; run bin/homefield route local --repo ${repo} --label ${label} by hand" >&2; }
+      fi
       flipped=$((flipped + 1))
     fi
   done <"$(routing_file)"
@@ -286,11 +325,13 @@ route_start_restore() {
   fi
   labels="$(lower "$labels")"
   owner="$(scope_owner "$url")"
-  while read -r label repo rhost; do
+  while read -r label repo rhost revents rdependabot rmode; do
     [ -n "$repo" ] || continue
     # The host field (a legacy line without one reads as github.com): only
     # this host's records are this start's to restore — a pending entry for
     # the same owner/repo on another host belongs to that host's runner.
+    # The option fields ride back into the routing record: dropping them
+    # here would lose the consumer's demand profile on the next stop (#315).
     if [ "${rhost:-github.com}" != "$host" ]; then
       log "${repo}: flipped on ${rhost:-github.com}, not ${host}; leaving it hosted"
       continue
@@ -303,12 +344,29 @@ route_start_restore() {
     # workflow's full runs-on set, not just the label (see serves_jobs).
     serves_jobs "$labels" "$label" || continue
     # See route_stop_fallback: cmd_route reads its host from the environment.
-    if HOMEFIELD_GITHUB_HOST="$host" cmd_route local --repo "$repo" --label "$label"; then
-      record_drop "$(autoflip_file)" "$repo" "$host" ||
-        { rc=1; echo "homefield: ${repo}: routed local but could not update the record; it will be routed local again on the next start" >&2; }
-      restored=$((restored + 1))
+    # A legacy three-field entry (no option fields) restores with
+    # --profile unknown: the routing record stays legacy three-field, so
+    # the next stop writes a legacy entry again and the demand side keeps
+    # counting every active run — guessing the guard's defaults here would
+    # silence a simple-mode repository's push and schedule demand on the
+    # following cycle (#315).
+    if [ -n "$rmode" ]; then
+      if HOMEFIELD_GITHUB_HOST="$host" cmd_route local --repo "$repo" --label "$label" \
+        --events "$revents" --dependabot "$rdependabot" --mode "$rmode"; then
+        record_drop "$(autoflip_file)" "$repo" "$host" ||
+          { rc=1; echo "homefield: ${repo}: routed local but could not update the record; it will be routed local again on the next start" >&2; }
+        restored=$((restored + 1))
+      else
+        rc=1
+      fi
     else
-      rc=1
+      if HOMEFIELD_GITHUB_HOST="$host" cmd_route local --repo "$repo" --label "$label" --profile unknown; then
+        record_drop "$(autoflip_file)" "$repo" "$host" ||
+          { rc=1; echo "homefield: ${repo}: routed local but could not update the record; it will be routed local again on the next start" >&2; }
+        restored=$((restored + 1))
+      else
+        rc=1
+      fi
     fi
   done <"$(autoflip_file)"
   if [ "$restored" -eq 0 ] && [ "$rc" = 0 ]; then
@@ -497,6 +555,7 @@ stuck_runs() {
 
 cmd_route() {
   local target="${1:-}" label="homefield-ci" dry=0 repos=() repo current stuck id status tries rc=0 host
+  local events="pull_request" dependabot="hosted" mode="guards" profile="guard" e
   [ $# -gt 0 ] && shift
   case "$target" in
     hosted | local) ;;
@@ -506,12 +565,60 @@ cmd_route() {
     case "$1" in
       --repo) repos+=("${2:?--repo needs a value}"); shift 2 ;;
       --label) label="${2:?--label needs a value}"; shift 2 ;;
+      --events) events="${2:?--events needs a value}"; shift 2 ;;
+      --dependabot) dependabot="${2:?--dependabot needs a value}"; shift 2 ;;
+      --mode) mode="${2:?--mode needs a value}"; shift 2 ;;
+      --profile) profile="${2:?--profile needs a value}"; shift 2 ;;
       --dry-run) dry=1; shift ;;
       *) die "route: unknown option $1 (see bin/homefield help)" ;;
     esac
   done
   [ "${#repos[@]}" -gt 0 ] || die "route: --repo <owner>/<repo> is required"
   [[ "$label" =~ ^[A-Za-z0-9._-]+$ ]] || die "route: --label must be one label"
+  # The record's routing profile: `guard` (the default) records the options
+  # below, so the demand scaler counts exactly the runs the consumer's
+  # expression would route (#315). `unknown` records the three-field legacy
+  # shape: the profile is not known — the automatic fallback's stop and
+  # start preserve a record they read without options, rather than guessing
+  # one — and the demand side stays permissive (every active run counts,
+  # the model the scaler had before #315) until `route local` or `adopt`
+  # records the profile. Guessing the guard's defaults for a repository
+  # adopted in simple mode would silence its push and schedule demand for
+  # good, so unknown is never resolved by guessing.
+  case "$profile" in
+    guard | unknown) ;;
+    *) die "route: --profile must be guard or unknown" ;;
+  esac
+  if [ "$profile" = unknown ] && [ "$events$dependabot$mode" != "pull_requesthostedguards" ]; then
+    die "route: --profile unknown carries no options; drop --events/--dependabot/--mode"
+  fi
+  # The events go into the record canonicalized to one comma-separated
+  # field: the record's fields are whitespace-delimited, so a list with
+  # spaces ("push schedule", which adopt's --events accepts) would smear
+  # across the option fields and be misread on the demand side.
+  local ev canonic=""
+  for ev in $events; do
+    canonic="${canonic:+$canonic,}$ev"
+  done
+  events="$canonic"
+  # The option fields are the guard's own (the record mirrors the consumer's
+  # guard step, #315): an event the guard cannot route, or a value outside
+  # the guard's enums, would make the record describe an expression the
+  # consumer does not have.
+  for e in $(printf '%s' "$events" | tr ',' ' '); do
+    case " $ROUTE_EVENTS " in *" $e "*) ;; *)
+      die "route: --events: $e is not one of $(echo $ROUTE_EVENTS) (pull_request_target is never routable: it runs with the repository's secrets on code from forks)"
+    ;; esac
+  done
+  case " $ROUTE_DEPENDABOT " in *" $dependabot "*) ;;
+    *) die "route: --dependabot must be hosted or local" ;;
+  esac
+  case " $ROUTE_MODE " in *" $mode "*) ;;
+    *) die "route: --mode must be guards or simple" ;;
+  esac
+  if [ "$mode" = simple ] && { [ "$events" != pull_request ] || [ "$dependabot" != hosted ]; }; then
+    die "route: --mode simple routes every event; --events and --dependabot have no effect there (the guard refuses them too)"
+  fi
   command -v gh >/dev/null || die "route needs gh (https://cli.github.com)"
   host="$(github_host "")"
   # "hosted" means GitHub's hosted runners: github.com has them, and so do the
@@ -541,8 +648,15 @@ cmd_route() {
       # stop's label (the start would flip it back, and the next stop of
       # the operator's runner would then skip the repo and queue its jobs).
       if [ "$target" = local ]; then
-        record_add "$(routing_file)" "$label" "$repo" "$host" ||
-          { rc=1; log "${repo}: routed local but could not record it; the automatic fallback will not cover this repo ($(routing_file))" >&2; }
+        # `guard` records the options; `unknown` records the legacy
+        # three-field shape (see the profile check above).
+        if [ "$profile" = unknown ]; then
+          record_add "$(routing_file)" "$label" "$repo" "$host" ||
+            { rc=1; log "${repo}: routed local but could not record it; the automatic fallback will not cover this repo ($(routing_file))" >&2; }
+        else
+          record_add "$(routing_file)" "$label" "$repo" "$host" "$events" "$dependabot" "$mode" ||
+            { rc=1; log "${repo}: routed local but could not record it; the automatic fallback will not cover this repo ($(routing_file))" >&2; }
+        fi
         record_drop "$(autoflip_file)" "$repo" "$host" || { rc=1; log "${repo}: could not update $(autoflip_file)" >&2; }
       else
         record_drop "$(routing_file)" "$repo" "$host" || { rc=1; log "${repo}: could not update $(routing_file)" >&2; }
@@ -552,9 +666,18 @@ cmd_route() {
           # the recovery can wait a minute, longer than the watcher's sleep
           # budget, and a kill there must leave the entry a start or wake can
           # restore from. A direct `route hosted` has no restore intent — the
-          # operator decided for hosted — and keeps dropping the entry.
-          record_add "$(autoflip_file)" "$label" "$repo" "$host" ||
-            { rc=1; log "${repo}: flipped to hosted but could not record it for the next start; run bin/homefield route local --repo ${repo} --label ${label} by hand" >&2; }
+          # operator decided for hosted — and keeps dropping the entry. The
+          # option fields ride along: the wake side's demand filter (#315)
+          # reads them from this entry; an unknown profile stays legacy
+          # three-field, so the wake side stays permissive instead of
+          # guessing one.
+          if [ "$profile" = unknown ]; then
+            record_add "$(autoflip_file)" "$label" "$repo" "$host" ||
+              { rc=1; log "${repo}: flipped to hosted but could not record it for the next start; run bin/homefield route local --repo ${repo} --label ${label} by hand" >&2; }
+          else
+            record_add "$(autoflip_file)" "$label" "$repo" "$host" "$events" "$dependabot" "$mode" ||
+              { rc=1; log "${repo}: flipped to hosted but could not record it for the next start; run bin/homefield route local --repo ${repo} --label ${label} by hand" >&2; }
+          fi
         else
           record_drop "$(autoflip_file)" "$repo" "$host" || { rc=1; log "${repo}: could not update $(autoflip_file)" >&2; }
         fi
