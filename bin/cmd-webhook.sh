@@ -46,6 +46,23 @@ sys.exit(1)
 PY
 }
 
+# webhook_receiver_answers <port>: 0 when the endpoint on the loopback port
+# answers the receiver's healthz — the listener is our receiver, so
+# re-running setup on its port is reconfiguration, not a conflict.
+webhook_receiver_answers() {
+  python3 - "$1" <<'PY'
+import http.client, sys
+try:
+    c = http.client.HTTPConnection("127.0.0.1", int(sys.argv[1]), timeout=2)
+    c.request("GET", "/healthz")
+    r = c.getresponse()
+    r.read()
+    sys.exit(0 if r.status == 200 else 1)
+except OSError:
+    sys.exit(1)
+PY
+}
+
 # webhook_url: the public URL deliveries are posted to, from the config file.
 webhook_url() {
   local hostname
@@ -75,8 +92,16 @@ webhook_setup() {
   command -v cloudflared >/dev/null 2>&1 || die "webhook setup: cloudflared is not on PATH (brew install cloudflared)"
   command -v jq >/dev/null 2>&1 || die "webhook setup: jq is not on PATH (brew install jq)"
   command -v python3 >/dev/null 2>&1 || die "webhook setup: python3 is required (xcode-select --install)"
-  webhook_port_free "$port" ||
-    die "webhook setup: port $port is already in use on this Mac (pick another with --port)"
+  webhook_port_free "$port" || {
+    if webhook_receiver_answers "$port"; then
+      # The listener answers the receiver's healthz: it is the installed
+      # receiver, and re-running setup on its port is reconfiguration
+      # (changed webhook or scaler settings), not a conflict.
+      log "port $port is the installed receiver's own; reinstalling the agent on it"
+    else
+      die "webhook setup: port $port is already in use on this Mac (pick another with --port)"
+    fi
+  }
 
   # The tunnel login is an interactive browser flow the tool cannot do:
   # say so precisely instead of failing deep in the tunnel steps.
@@ -233,10 +258,6 @@ webhook_connect() {
   [ -s "$secret" ] || die "webhook connect: no webhook secret; run 'homefield webhook setup' first"
 
   hook_id="$(gh api "repos/$repo/hooks" --paginate --jq ".[] | select(.config.url == \"$url\") | .id" 2>/dev/null | head -1)"
-  if [ -n "$hook_id" ]; then
-    log "$repo: webhook already connected (hook $hook_id)"
-    return 0
-  fi
 
   # The secret reaches GitHub through the request body, built from the
   # secret file by python3 — never a command line (ps), never the
@@ -254,6 +275,21 @@ print(json.dumps({
 }))
 PY
   ) || die "webhook connect: could not build the request body"
+
+  if [ -n "$hook_id" ]; then
+    # A hook already exists for this URL: refresh it with the current
+    # secret and subscription instead of treating the URL match as
+    # sufficient — a remove + re-setup rotates the secret, and GitHub
+    # signing deliveries with the old one would 403 every one of them.
+    if ! gh api "repos/$repo/hooks/$hook_id" -X PATCH --input "$body" --jq .id >/dev/null 2>&1; then
+      rm -f "$body"
+      die "webhook connect: could not refresh the webhook on $repo (hook $hook_id; gh failed)"
+    fi
+    rm -f "$body"
+    log "$repo: webhook refreshed with the current secret (hook $hook_id)"
+    return 0
+  fi
+
   if ! hook_id="$(gh api "repos/$repo/hooks" --input "$body" --jq .id 2>/dev/null)"; then
     rm -f "$body"
     die "webhook connect: could not create the webhook on $repo (gh failed; check its auth and the repo admin scope)"

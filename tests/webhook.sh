@@ -47,6 +47,9 @@ cp "$ROOT/bin/webhook-receiver.py" "$TMP/app/bin/"
 cat > "$TMP/app/bin/homefield" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "${CALLS_HOMEFIELD:?}"
+if [ -n "${CALLS_SLEEP_FLAG:-}" ] && [ -f "$CALLS_SLEEP_FLAG" ]; then
+  sleep "$(cat "$CALLS_SLEEP_FLAG")"
+fi
 exit 0
 EOF
 chmod +x "$TMP/app/bin/homefield"
@@ -83,7 +86,12 @@ EOF
 chmod +x "$TMP/bin/cloudflared"
 
 PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
-HOMEFIELD_STATE_DIR="$TMP/state" HOMEFIELD_WEBHOOK_PORT="$PORT" \
+# The tick budget is 5 s — comfortably longer than a stub spawn takes even
+# under the pool's load (a shorter budget has the receiver kill healthy
+# ticks before they record their call) — and the hung-tick stub below sleeps
+# far past it, so the budget is what ends it.
+HOMEFIELD_STATE_DIR="$TMP/state" HOMEFIELD_WEBHOOK_PORT="$PORT" HOMEFIELD_SCALE_TICK_BUDGET=5 \
+  HOMEFIELD_WEBHOOK_DEBOUNCE=10 CALLS_SLEEP_FLAG="$TMP/stub-sleep" \
   python3 "$TMP/app/bin/webhook-receiver.py" 2>"$TMP/receiver.err" &
 RECEIVER_PID=$!
 
@@ -150,10 +158,11 @@ PY
 ticks() { grep -c -e 'fleet watch --max-ticks 1' "$calls_homefield" || true; }
 
 # await_ticks <n>: the receiver's 204 returns as soon as the tick child is
-# forked, while the stub's append lands a moment later — wait for it.
+# forked, while the stub's append lands a moment later — wait for it. The
+# budget is generous because the suite also runs under the pool's load.
 await_ticks() {
   local want="$1" got=0
-  for _ in $(seq 1 100); do
+  for _ in $(seq 1 400); do
     got="$(ticks)"
     [ "$got" -ge "$want" ] && break
     sleep 0.05
@@ -195,16 +204,41 @@ record "completed action: second tick" "2" "$(await_ticks 2)"
 
 # an exited tick child is reaped, not left a zombie that kill -0 still
 # sees as alive: after the debounce, a fresh delivery spawns again
-sleep 1.1
+sleep 10.1
 out="$(post workflow_job queued)"
 record "exited tick reaped: a later delivery spawns again" "204" "$out"
 record "exited tick reaped: third tick" "3" "$(await_ticks 3)"
+
+# a hung tick is killed at the same wall-time budget the route watcher
+# applies to its own ticks — it must not hold the scaler's lock forever.
+# The sleep flag is a file because the stub runs as the receiver's child:
+# only what the receiver's environment carried at startup reaches it.
+printf '60\n' >"$TMP/stub-sleep"
+rm -f "$RECEIVER_DIR/tick.pid"
+out="$(post workflow_job queued)"
+record "hung tick: delivery accepted" "204" "$out"
+tick_pid="$(cat "$RECEIVER_DIR/tick.pid")"
+kill -0 "$tick_pid" 2>/dev/null && r=yes || r=no
+record "hung tick: running right after the spawn" "yes" "$r"
+alive=yes
+for _ in $(seq 1 200); do
+  if ! kill -0 "$tick_pid" 2>/dev/null; then
+    alive=no
+    break
+  fi
+  sleep 0.1
+done
+record "hung tick: killed at the 5s budget" "no" "$alive"
+rm -f "$TMP/stub-sleep"
+# the hung tick's call is logged forever, so the remaining spawn counts are
+# relative to it
+ticks_base="$(ticks)"
 
 python3 -c 'import time; time.sleep(300)' 2>/dev/null &
 sleep_pid=$!
 printf '%s\n' "$sleep_pid" >"$RECEIVER_DIR/tick.pid"
 out="$(post workflow_job queued)"
-record "tick already running: 202, no new spawn" "202/3" "$out/$(ticks)"
+record "tick already running: 202, no new spawn" "202/0" "$out/$(($(ticks) - ticks_base))"
 kill "$sleep_pid" 2>/dev/null || true
 
 out="$(raw $PORT $'POST /webhook HTTP/1.1\r\nHost: x\r\nContent-Length: 1048577\r\n\r\n')" # 1 MiB + 1 of a
@@ -212,7 +246,7 @@ record "oversized Content-Length: 413 before anything else" "413" "$out"
 
 mv "$SECRET_FILE" "$TMP/secret.away"
 out="$(post workflow_job queued missing)"
-record "no secret on disk: 503, no tick" "503/3" "$out/$(ticks)"
+record "no secret on disk: 503, no tick" "503/0" "$out/$(($(ticks) - ticks_base))"
 mv "$TMP/secret.away" "$SECRET_FILE"
 
 out="$(raw $PORT $'POST /webhook HTTP/1.1\r\nHost: x\r\n\r\n')"
@@ -256,7 +290,9 @@ case "$*" in
           prev="$a"
         done
         [ -n "$body" ] && cp "$body" "${GH_BODY_OUT:?}"
-        printf '%s' "4242" ;;
+        # a PATCH of an existing hook carries the hook id in its path
+        hook="$(printf '%s' "$*" | sed -n 's|.*repos/[^/]*/hooks/\([0-9]*\).*|\1|p')"
+        [ -n "$hook" ] && printf '%s' "$hook" || printf '%s' "4242" ;;
       *) printf '%s' "${GH_HOOKS_JSON:-[]}" | jq -r "${expr:-.}" 2>/dev/null ;;
     esac ;;
 esac
@@ -398,10 +434,26 @@ record "connect: the body file is removed" "0" "$(ls "$STATE2/route-watcher/webh
 GH_HOOKS_JSON='[{"id": 7, "config": {"url": "https://webhook.example.com/webhook"}}]'
 out="$(run "$STATE2" connect o/r)"
 rc=$?
-record "connect: already connected exits 0" "0" "$rc"
-case "$out" in *"already connected"*) r=yes ;; *) r=no ;; esac
-record "connect: already connected is reported" "yes" "$r"
-record "connect: already connected does not create" "3" "$(grep -c -e 'repos/o/r/hooks' "$calls_gh" || true)"
+record "connect: an existing hook exits 0" "0" "$rc"
+case "$out" in *"refreshed with the current secret"*) r=yes ;; *) r=no ;; esac
+record "connect: an existing hook is refreshed, not skipped" "yes" "$r"
+record "connect: the refresh PATCHes the hook" "1" "$(grep -c -e 'hooks/7' "$calls_gh" || true)"
+record "connect: the refresh carries the current secret" "yes" \
+  "$(has "$(cat "$TMP/body.json" 2>/dev/null)" "$(cat "$STATE2/route-watcher/webhook/secret")")"
+record "connect: the refresh does not create a second hook" "4" "$(grep -c -e 'repos/o/r/hooks' "$calls_gh" || true)"
+
+# a remove + re-setup rotates the secret; the next connect must push the
+# new one to the hook GitHub still has
+old_secret="$(cat "$STATE2/route-watcher/webhook/secret")"
+run "$STATE2" remove >/dev/null
+run "$STATE2" setup --hostname webhook.example.com --port 18787 >/dev/null
+out="$(run "$STATE2" connect o/r)"
+rc=$?
+record "connect: after a secret rotation, exits 0" "0" "$rc"
+case "$out" in *"refreshed"*) r=yes ;; *) r=no ;; esac
+record "connect: after a secret rotation, the hook is refreshed" "yes" "$r"
+record "connect: the rotation push carries the new secret, not the old" "yes/no" \
+  "$(has "$(cat "$TMP/body.json" 2>/dev/null)" "$(cat "$STATE2/route-watcher/webhook/secret")")/$(has "$(cat "$TMP/body.json" 2>/dev/null)" "$old_secret")"
 
 out="$(run "$TMP/state3" connect o/r)"
 record "connect: without setup is refused" "nonzero" "$(nonzero $?)"
@@ -423,6 +475,32 @@ out="$(run "$STATE2" status)"
 rc=$?
 record "status: a listening receiver passes" "yes/0" "$(has "$out" 'receiver: listening on 127.0.0.1:18787')/$(nonzero $rc)"
 kill "$listen_pid" 2>/dev/null || true
+
+# re-running setup on the installed receiver's own port is
+# reconfiguration, not a conflict: the listener answers the receiver's
+# healthz, so it is ours
+HEALTH_PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
+python3 - "$HEALTH_PORT" <<'PY' &
+import http.server, sys
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+    def log_message(self, *a):
+        pass
+http.server.HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
+PY
+health_pid=$!
+for _ in $(seq 1 50); do
+  python3 -c "import socket; s=socket.socket(); s.connect(('127.0.0.1',$HEALTH_PORT)); s.close()" 2>/dev/null && break
+  sleep 0.1
+done
+out="$(run "$STATE2" setup --hostname webhook.example.com --port "$HEALTH_PORT")"
+rc=$?
+record "setup: the receiver's own port is reconfiguration" "0" "$rc"
+record "setup: the reinstalled agent carries the new port" "yes" "$(has "$(cat "$plist" 2>/dev/null)" "$HEALTH_PORT")"
+kill "$health_pid" 2>/dev/null || true
 
 # remove
 unloads_before="$(grep -c -e '^unload -w' "$calls_launchctl" || true)"

@@ -94,6 +94,11 @@ def _int_env(name, default):
 
 PORT = _int_env("HOMEFIELD_WEBHOOK_PORT", 8787)
 DEBOUNCE = _positive_float("HOMEFIELD_WEBHOOK_DEBOUNCE", 1.0)
+# The same wall-time budget the route watcher gives its ticks: a
+# webhook-spawned tick that hangs must not hold the scaler's tick lock
+# forever, which would stand down every later delivery and periodic tick
+# alike — scaling for the whole fleet would stop.
+TICK_BUDGET = _positive_float("HOMEFIELD_SCALE_TICK_BUDGET", 1800)
 ACTIONS = {
     a.strip()
     for a in (os.environ.get("HOMEFIELD_WEBHOOK_ACTIONS") or "queued,completed").split(",")
@@ -160,6 +165,37 @@ def tick_child_alive():
     return True
 
 
+def kill_tree(proc):
+    """Kill the tick's whole process group and reap it.
+
+    The tick is started in a session of its own (start_new_session), so
+    the group is exactly the run's tree: a multi-VM tick's real work
+    happens in per-VM grandchildren, and killing only the top `homefield`
+    would leave them working after the budget expired.
+    """
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        pass
+
+
+def supervise_tick(proc):
+    """Reap the tick child, killing its tree when it exceeds the budget.
+
+    This is also what reaps the child: without a wait, an exited tick
+    stays a zombie, and a zombie still answers kill -0.
+    """
+    try:
+        proc.wait(timeout=TICK_BUDGET)
+    except subprocess.TimeoutExpired:
+        log("tick pid=%d exceeded the %gs budget; killing its process tree" % (proc.pid, TICK_BUDGET))
+        kill_tree(proc)
+
+
 def spawn_tick():
     """Spawn one scaler tick detached; the tick lock serializes it with the
     route-watcher's own ticks, and its output lands in this helper's log."""
@@ -181,7 +217,8 @@ def spawn_tick():
         f.write(str(proc.pid))
     os.replace(tmp, TICK_PID_FILE)
     tick_children.append(proc)
-    log("spawned tick pid=%d" % proc.pid)
+    threading.Thread(target=supervise_tick, args=(proc,), daemon=True).start()
+    log("spawned tick pid=%d (budget %gs)" % (proc.pid, TICK_BUDGET))
 
 
 class Receiver(http.server.BaseHTTPRequestHandler):
