@@ -669,7 +669,7 @@ scale_dark_drop() {
   return 1
 }
 
-# hosted_activity_since <repo> <host> <events> <dependabot> <mode>: the
+# hosted_activity_since <repo> <host> [events] [dependabot] [mode]: the
 # earliest created_at of the repository's queued or in-progress runs — the
 # demand a dark fleet's flipped repositories generate. The automatic flip
 # moved them to hosted (their entries live in `autoflip` until a start
@@ -696,10 +696,18 @@ scale_dark_drop() {
 # runner, and reading it as demand would wake a dark VM on a schedule
 # instead of on work. The fields are in the runs-list response, so this is
 # a select() in the jq the lookup already runs — no extra API calls.
+#
+# Called without a profile (no mode argument — a legacy three-field record,
+# written before #315), every active run counts: the profile is unknown —
+# the record may describe a simple-mode workflow or a custom events list —
+# and guessing the guard's defaults could only narrow the demand, leaving
+# a routable run burning hosted minutes with the fleet dark. Unknown stays
+# permissive, the demand model the scaler had before #315, until `route
+# local` or `adopt` records the profile.
 hosted_activity_since() {
-  local repo="$1" host="$2" events="${3:-pull_request}" dependabot="${4:-hosted}" mode="${5:-guards}"
+  local repo="$1" host="$2" events="${3-}" dependabot="${4-}" mode="${5-}"
   local status ids id created best="" epoch active filter evcond cond e first
-  if [ "$mode" = simple ]; then
+  if [ -z "$mode" ] || [ "$mode" = simple ]; then
     filter="."
   else
     # The event disjunction is built and parenthesized on its own: `and`
@@ -1104,12 +1112,21 @@ scale_wake() {
       host="${host:-github.com}"
       # The entry's option fields (the routing record's at flip time) say
       # which runs may take the runner: the demand filter applies them
-      # (#315). A legacy three-field entry reads as the guard's defaults.
-      since="$(hosted_activity_since "$repo" "$host" \
-        "${events:-pull_request}" "${dependabot:-hosted}" "${mode:-guards}")" || {
-        echo "homefield: fleet watch: could not read the runs of ${repo}; not waking a dark fleet (fail safe)" >&2
-        return 1
-      }
+      # (#315). A legacy three-field entry carries no profile — it is not
+      # read as the guard's defaults, which would silence a simple-mode
+      # repository's push and schedule demand — so it is asked without
+      # one and every active run counts (#315).
+      if [ -n "$mode" ]; then
+        since="$(hosted_activity_since "$repo" "$host" "$events" "$dependabot" "$mode")" || {
+          echo "homefield: fleet watch: could not read the runs of ${repo}; not waking a dark fleet (fail safe)" >&2
+          return 1
+        }
+      else
+        since="$(hosted_activity_since "$repo" "$host")" || {
+          echo "homefield: fleet watch: could not read the runs of ${repo}; not waking a dark fleet (fail safe)" >&2
+          return 1
+        }
+      fi
       [ -n "$since" ] || continue
       WAKE_LABEL+=("$label")
       WAKE_REPO+=("$repo")

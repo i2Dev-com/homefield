@@ -185,6 +185,20 @@ harness cmd_route local --repo acme/api --label homefield-ci --mode simple
 record "route local: --mode simple records the mode" "0/homefield-ci acme/api github.com pull_request hosted simple" \
   "$rc/$(cat "$state/routing" 2>/dev/null)"
 
+# --profile unknown records the legacy three-field shape: the profile is
+# not known, and the demand side stays permissive until it is recorded.
+# It refuses to carry options — an unknown profile with a guessed events
+# list would be neither unknown nor precise.
+reset_records
+harness_env=(GH_CI_RUNNER=hosted)
+harness cmd_route local --repo acme/api --label homefield-ci --profile unknown
+record "route local: --profile unknown records the legacy three-field shape" \
+  "0/homefield-ci acme/api github.com" "$rc/$(cat "$state/routing" 2>/dev/null)"
+harness cmd_route local --repo acme/api --label homefield-ci --profile unknown --events push
+record "route local: --profile unknown refuses to carry options" "1" "$rc"
+harness cmd_route local --repo acme/api --label homefield-ci --profile wrong
+record "route local: a profile outside the two is refused" "1" "$rc"
+
 reset_records
 harness cmd_route local --repo acme/api --events pull_request_target
 record "route local: pull_request_target is refused" "1/yes" \
@@ -294,8 +308,8 @@ harness_env=(GH_RUNNERS="$runner_rows")
 harness route_stop_fallback https://github.com/acme my-mac-homefield
 record "no other runner serves the labels: every routed repo is flipped" "0/yes/yes" \
   "$rc/$(grep -q 'variable set CI_RUNNER --repo github.com/acme/api --body hosted' "$calls" && echo yes || echo no)/$(grep -q 'variable set CI_RUNNER --repo github.com/acme/web --body hosted' "$calls" && echo yes || echo no)"
-record "...the flipped repos wait in autoflip" "homefield-ci acme/api github.com pull_request hosted guards
-homefield-ci acme/web github.com pull_request hosted guards" \
+record "...the flipped repos wait in autoflip" "homefield-ci acme/api github.com
+homefield-ci acme/web github.com" \
   "$(cat "$state/autoflip" 2>/dev/null)"
 record "...the routing record keeps only the label nobody serves" "other-label acme/other" \
   "$(cat "$state/routing" 2>/dev/null)"
@@ -465,7 +479,7 @@ reset_records
 printf 'homefield-ci acme/api\n' >"$state/routing"
 harness_env=(GH_RUNNERS="$runner_rows")
 harness route_stop_fallback https://acme.ghe.com/acme my-mac-homefield
-record "the stop-side fallback on a GHE.com host: the flip runs and waits in autoflip" "0/1/homefield-ci acme/api acme.ghe.com pull_request hosted guards" \
+record "the stop-side fallback on a GHE.com host: the flip runs and waits in autoflip" "0/1/homefield-ci acme/api acme.ghe.com" \
   "$rc/$(grep -c 'variable set CI_RUNNER --repo acme.ghe.com/acme/api --body hosted' "$calls" || true)/$(cat "$state/autoflip" 2>/dev/null)"
 
 echo
@@ -476,8 +490,8 @@ harness_env=(GH_CI_RUNNER=hosted GH_RUNNERS='42\tmy-mac-homefield\tonline\tself-
 harness route_start_restore https://github.com/acme my-mac-homefield
 record "every pending repo is routed back to local" "0/yes/yes" \
   "$rc/$(grep -q 'variable set CI_RUNNER --repo github.com/acme/api --body local' "$calls" && echo yes || echo no)/$(grep -q 'variable set CI_RUNNER --repo github.com/acme/web --body local' "$calls" && echo yes || echo no)"
-record "...they are recorded as routed local" "homefield-ci acme/api github.com pull_request hosted guards
-homefield-ci acme/web github.com pull_request hosted guards" \
+record "...they are recorded as routed local" "homefield-ci acme/api github.com
+homefield-ci acme/web github.com" \
   "$(cat "$state/routing" 2>/dev/null)"
 record "...and autoflip is empty" "0" "$([ -f "$state/autoflip" ] && wc -l <"$state/autoflip" | tr -d ' ' || echo 0)"
 
@@ -904,7 +918,7 @@ printf 'homefield-ci acme/api\n' >"$state/routing"
 hf "${stop_env[@]}" GH_RUNNERS="$runner_rows" -- stop --route-hosted
 record "stop --route-hosted: the repo is flipped, the VM stops, exit 0" "0/yes/yes/yes" \
   "$rc/$(grep -q 'variable set CI_RUNNER --repo github.com/acme/api --body hosted' "$calls" && echo yes || echo no)/$(grep -q '^limactl stop homefield' "$calls" && echo yes || echo no)/$(has "$out" 'VM homefield: Stopped')"
-record "...the flipped repo waits in autoflip" "homefield-ci acme/api github.com pull_request hosted guards" "$(cat "$state/autoflip" 2>/dev/null)"
+record "...the flipped repo waits in autoflip" "homefield-ci acme/api github.com" "$(cat "$state/autoflip" 2>/dev/null)"
 
 hf "${stop_env[@]}" GH_RUNNERS="$runner_rows" -- stop
 record "plain stop without the switch: no flip" "0/0/yes" \
@@ -950,7 +964,7 @@ hf "${start_env[@]}" -- start --route-local
 record "start --route-local: the pending repo is routed back, exit 0" "0/yes/yes" \
   "$rc/$(grep -q 'variable set CI_RUNNER --repo github.com/acme/api --body local' "$calls" && echo yes || echo no)/$(has "$out" 'taking jobs: yes')"
 record "...the entry leaves autoflip" "0" "$([ -f "$state/autoflip" ] && wc -l <"$state/autoflip" | tr -d ' ' || echo 0)"
-record "...and the repo is recorded as routed local" "homefield-ci acme/api github.com pull_request hosted guards" "$(cat "$state/routing" 2>/dev/null)"
+record "...and the repo is recorded as routed local" "homefield-ci acme/api github.com" "$(cat "$state/routing" 2>/dev/null)"
 
 printf 'homefield-ci acme/api\n' >"$state/autoflip"
 hf LIMA_STATUS=Stopped REG=0 SETTING_OUT="$settings" SVC_NAME='actions.runner.acme.test.service' GH_RUNNERS='42\toffline\tfalse\n' GH_RUNNERS_NAMED="$named_rows" -- start --route-local
@@ -986,7 +1000,7 @@ rm -f "$state/autoflip"
 hf "${sleep_env[@]}" GH_RUNNERS="$runner_rows" -- route-watch sleep
 record "route-watch sleep, jobs queued: the repo is flipped to hosted, the VM is not stopped, exit 0" "0/yes/no/no" \
   "$rc/$(grep -q 'variable set CI_RUNNER --repo github.com/acme/api --body hosted' "$calls" && echo yes || echo no)/$(grep -q '^limactl stop' "$calls" && echo yes || echo no)/$(has "$out" 'VM homefield: Stopped')"
-record "...the flipped repo waits in autoflip" "homefield-ci acme/api github.com pull_request hosted guards" "$(cat "$state/autoflip" 2>/dev/null)"
+record "...the flipped repo waits in autoflip" "homefield-ci acme/api github.com" "$(cat "$state/autoflip" 2>/dev/null)"
 record "...the run is recorded" "sleep/ok" "$(watcher_state_value last_mode)/$(watcher_state_value last_result)"
 
 printf 'homefield-ci acme/api\n' >"$state/routing"
@@ -1018,7 +1032,7 @@ hf LIMA_STATUS=Stopped REG=0 SETTING_OUT="$settings" SVC_NAME='actions.runner.ac
   GH_RUNNERS='42\tonline\tfalse\n' GH_RUNNERS_NAMED="$runner_rows" HOMEFIELD_WATCH_WAKE_WAIT=1 -- route-watch wake
 record "route-watch wake: the VM is started and the pending repo restored, exit 0" "0/yes/yes/0" \
   "$rc/$(grep -q '^limactl start --tty=false homefield' "$calls" && echo yes || echo no)/$(grep -q 'variable set CI_RUNNER --repo github.com/acme/api --body local' "$calls" && echo yes || echo no)/$([ -f "$state/autoflip" ] && wc -l <"$state/autoflip" | tr -d ' ' || echo 0)"
-record "...the repo is recorded as routed local" "homefield-ci acme/api github.com pull_request hosted guards" "$(cat "$state/routing" 2>/dev/null)"
+record "...the repo is recorded as routed local" "homefield-ci acme/api github.com" "$(cat "$state/routing" 2>/dev/null)"
 record "...the run is recorded" "wake/ok" "$(watcher_state_value last_mode)/$(watcher_state_value last_result)"
 
 printf 'homefield-ci acme/api\n' >"$state/autoflip"
@@ -1073,7 +1087,7 @@ hf LIMA_ROWS='homefield Running\nsecond Stopped\n' LIMA_HOME="$lima" SETTINGS_DI
   JOBS_DIR="$work/jobs" REG=0 SETTING_OUT="$settings" GH_RUNNERS="$runner_rows" -- route-watch sleep
 record "sleep skips a Stopped VM: it is not asked and its records stay" "0/no" \
   "$rc/$(grep -q 'second-mac' "$calls" && echo yes || echo no)"
-record "...the Running VM still flips" "homefield-ci acme/api github.com pull_request hosted guards" "$(cat "$state/autoflip" 2>/dev/null)"
+record "...the Running VM still flips" "homefield-ci acme/api github.com" "$(cat "$state/autoflip" 2>/dev/null)"
 
 # A VM literally named route-watcher: its own state file (route-watcher.state)
 # must survive a watcher run, because the watcher's records live in their own

@@ -419,8 +419,10 @@ record "wake-from-zero: hosted activity wakes at once, no wait" "1/yes" \
 
 # 11b. The wake passes the autoflip entry's option fields to the demand
 # lookup (#315): a six-field entry carries the consumer's guard options, a
-# legacy three-field entry reads as the guard's defaults. The function
-# stub records its arguments for the assertion.
+# legacy three-field entry carries none and is asked without a profile —
+# every active run counts, the permissive model — instead of being read as
+# the guard's defaults (which would silence a simple-mode repository's
+# push and schedule demand). The function stub records its arguments.
 hosted_activity_since() {
   printf 'hosted-activity:%s\n' "$*" >>"$calls"
   [ -n "${HOSTED_SINCE:-}" ] && printf '%s\n' "$HOSTED_SINCE"
@@ -438,8 +440,8 @@ printf 'homefield-ci org/repo github.com\n' >"$HOMEFIELD_STATE_DIR/autoflip"
 printf 'homefield-1|https://github.com/org/repo|homefield-ci|1\n' >"$RECORDS/scale-dark"
 : >"$calls"
 fleet_watch_tick >/dev/null 2>&1 || true
-record "wake-from-zero: a legacy three-field entry reads as the defaults" "1" \
-  "$(called '^hosted-activity:org/repo github.com pull_request hosted guards$')"
+record "wake-from-zero: a legacy three-field entry is asked without a profile" "1" \
+  "$(called '^hosted-activity:org/repo github.com$')"
 # Restore the suite's function-level stub for the sections below.
 hosted_activity_since() { [ -n "${HOSTED_SINCE:-}" ] && printf '%s\n' "$HOSTED_SINCE"; return 0; }
 
@@ -846,17 +848,25 @@ export GH_RUNS_PROGRESS_JSON="$TMP/gh-runs-progress.json"
 export GH_JOBS_DIR="$JOBS"
 export GH_RUNS_FAIL GH_JOBS_FAIL
 
-# The defaults — the guard's defaults, which is also what a legacy
-# three-field record reads as — count only the same-repo, non-Dependabot
-# pull_request run with active jobs: the Dependabot PR (1001), the
-# schedule (1002), the fork PR (1003), the jobless zombie (1005) and the
-# push (1006) all stay out, and any one of them counting would show up as
-# an earlier timestamp than 1004's.
-since="$(hosted_activity_since org/repo github.com)"
-record "hosted-activity: the defaults count only the routable run" \
+# The guard's defaults, recorded explicitly, count only the same-repo,
+# non-Dependabot pull_request run with active jobs: the Dependabot PR
+# (1001), the schedule (1002), the fork PR (1003), the jobless zombie
+# (1005) and the push (1006) all stay out, and any one of them counting
+# would show up as an earlier timestamp than 1004's.
+since="$(hosted_activity_since org/repo github.com pull_request hosted guards)"
+record "hosted-activity: the guard's defaults count only the routable run" \
   "$(iso_to_epoch '2026-11-11T20:30:50Z')" "$since"
 
-since="$(hosted_activity_since org/repo github.com push,pull_request)"
+# No profile (the 2-arg call a legacy three-field record produces) stays
+# permissive: every active run counts, the demand model the scaler had
+# before #315. The earliest active run is the push (1006); the schedule
+# and the Dependabot PR count too, and the jobless zombie (1005) still
+# does not.
+since="$(hosted_activity_since org/repo github.com)"
+record "hosted-activity: an unknown profile counts every active run" \
+  "$(iso_to_epoch '2026-11-11T18:00:00Z')" "$since"
+
+since="$(hosted_activity_since org/repo github.com push,pull_request hosted guards)"
 record "hosted-activity: a record naming push counts the push run too" \
   "$(iso_to_epoch '2026-11-11T18:00:00Z')" "$since"
 
@@ -878,7 +888,7 @@ cat > "$TMP/gh-runs-queued.json" <<'EOF'
 ]}
 EOF
 printf '{"total_count":1,"jobs":[{"id":5007,"status":"queued"}]}\n' >"$JOBS/1007.json"
-since="$(hosted_activity_since org/repo github.com push,pull_request)"
+since="$(hosted_activity_since org/repo github.com push,pull_request hosted guards)"
 record "hosted-activity: the guards hold across a multi-event record" \
   "$(iso_to_epoch '2026-11-11T17:15:00Z')" "$since"
 
@@ -894,7 +904,7 @@ cat > "$TMP/gh-runs-queued.json" <<'EOF'
 ]}
 EOF
 
-since="$(hosted_activity_since org/repo github.com pull_request local)"
+since="$(hosted_activity_since org/repo github.com pull_request local guards)"
 record "hosted-activity: a dependabot=local record counts the Dependabot run" \
   "$(iso_to_epoch '2026-11-11T19:30:00Z')" "$since"
 
@@ -903,15 +913,15 @@ record "hosted-activity: a simple-mode record counts every active run" \
   "$(iso_to_epoch '2026-11-11T18:00:00Z')" "$since"
 
 record "hosted-activity: an event nothing runs is no demand" "0" \
-  "$(hosted_activity_since org/repo github.com workflow_dispatch | wc -l | tr -d ' ')"
+  "$(hosted_activity_since org/repo github.com workflow_dispatch hosted guards | wc -l | tr -d ' ')"
 
 GH_RUNS_FAIL=1
 record "hosted-activity: an unreadable runs list fails safe" "1" \
-  "$(hosted_activity_since org/repo github.com >/dev/null 2>&1; echo $?)"
+  "$(hosted_activity_since org/repo github.com pull_request hosted guards >/dev/null 2>&1; echo $?)"
 GH_RUNS_FAIL=""
 GH_JOBS_FAIL=1
 record "hosted-activity: an unreadable jobs list fails safe" "1" \
-  "$(hosted_activity_since org/repo github.com >/dev/null 2>&1; echo $?)"
+  "$(hosted_activity_since org/repo github.com pull_request hosted guards >/dev/null 2>&1; echo $?)"
 unset GH_MODE GH_RUNS_QUEUED_JSON GH_RUNS_PROGRESS_JSON GH_JOBS_DIR GH_RUNS_FAIL GH_JOBS_FAIL
 
 summary
