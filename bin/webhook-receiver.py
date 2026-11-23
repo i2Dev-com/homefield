@@ -114,29 +114,50 @@ def read_secret():
     return secret or None
 
 
-def tick_child_alive():
-    """True when the recorded tick child is still running.
+# One delivery at a time reaches the spawn decision: concurrent request
+# threads would otherwise both pass the alive check and both spawn.
+spawn_lock = threading.Lock()
 
-    A tick evaluates the whole demand, so a delivery that arrives while one
-    runs is satisfied by the running tick; the recorded pid only suppresses
-    a duplicate spawn, it never gates one (a dead or recycled pid just lets
-    the next delivery spawn a fresh tick).
+# The ticks this receiver instance spawned. A exited child stays a zombie
+# until reaped, and a zombie still answers kill -0 — without reaping, the
+# first exited tick would read as "already running" forever and every
+# later delivery would 202 instead of spawning.
+tick_children = []
+# Pids of our own children that have been reaped: the pid file may still
+# name them, and the pid-file fallback below must not read them as alive.
+reaped_pids = set()
+
+
+def tick_child_alive():
+    """True when a spawned tick is still running.
+
+    Our own children are tracked as Popen objects and polled here, which
+    reaps them; the pid file is only a fallback for a tick this receiver
+    instance did not spawn (one started before a restart, or by hand) —
+    for those, kill -0 is a plain live check, because the process is not
+    our child and something else reaps it.
     """
+    still = []
+    for proc in tick_children:
+        if proc.poll() is None:
+            still.append(proc)
+        else:
+            reaped_pids.add(proc.pid)
+    tick_children[:] = still
+    if tick_children:
+        return True
     try:
         with open(TICK_PID_FILE) as f:
             pid = int(f.read().strip())
     except (OSError, ValueError):
+        return False
+    if pid in reaped_pids:
         return False
     try:
         os.kill(pid, 0)
     except OSError:
         return False
     return True
-
-
-# One delivery at a time reaches the spawn decision: concurrent request
-# threads would otherwise both pass the alive check and both spawn.
-spawn_lock = threading.Lock()
 
 
 def spawn_tick():
@@ -159,6 +180,7 @@ def spawn_tick():
     with open(tmp, "w") as f:
         f.write(str(proc.pid))
     os.replace(tmp, TICK_PID_FILE)
+    tick_children.append(proc)
     log("spawned tick pid=%d" % proc.pid)
 
 

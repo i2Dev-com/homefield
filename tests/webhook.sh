@@ -193,11 +193,18 @@ out="$(post workflow_job completed)"
 record "completed action: rings the doorbell" "204" "$out"
 record "completed action: second tick" "2" "$(await_ticks 2)"
 
+# an exited tick child is reaped, not left a zombie that kill -0 still
+# sees as alive: after the debounce, a fresh delivery spawns again
+sleep 1.1
+out="$(post workflow_job queued)"
+record "exited tick reaped: a later delivery spawns again" "204" "$out"
+record "exited tick reaped: third tick" "3" "$(await_ticks 3)"
+
 python3 -c 'import time; time.sleep(300)' 2>/dev/null &
 sleep_pid=$!
 printf '%s\n' "$sleep_pid" >"$RECEIVER_DIR/tick.pid"
 out="$(post workflow_job queued)"
-record "tick already running: 202, no new spawn" "202/2" "$out/$(ticks)"
+record "tick already running: 202, no new spawn" "202/3" "$out/$(ticks)"
 kill "$sleep_pid" 2>/dev/null || true
 
 out="$(raw $PORT $'POST /webhook HTTP/1.1\r\nHost: x\r\nContent-Length: 1048577\r\n\r\n')" # 1 MiB + 1 of a
@@ -205,7 +212,7 @@ record "oversized Content-Length: 413 before anything else" "413" "$out"
 
 mv "$SECRET_FILE" "$TMP/secret.away"
 out="$(post workflow_job queued missing)"
-record "no secret on disk: 503, no tick" "503/2" "$out/$(ticks)"
+record "no secret on disk: 503, no tick" "503/3" "$out/$(ticks)"
 mv "$TMP/secret.away" "$SECRET_FILE"
 
 out="$(raw $PORT $'POST /webhook HTTP/1.1\r\nHost: x\r\n\r\n')"
@@ -276,6 +283,9 @@ run() {
     CF_CREATE_FAIL="${CF_CREATE_FAIL:-}" CF_ROUTE_FAIL="${CF_ROUTE_FAIL:-}" \
     CF_ROUTE_ERR="${CF_ROUTE_ERR:-}" CF_DELETE_FAIL="${CF_DELETE_FAIL:-}" \
     GH_HOOKS_JSON="${GH_HOOKS_JSON:-}" GH_BODY_OUT="${GH_BODY_OUT:-}" \
+    HOMEFIELD_SCALE_INTERVAL="${HOMEFIELD_SCALE_INTERVAL:-}" HOMEFIELD_SCALE_WAIT="${HOMEFIELD_SCALE_WAIT:-}" \
+    HOMEFIELD_SCALE_IDLE="${HOMEFIELD_SCALE_IDLE:-}" HOMEFIELD_SCALE_MAX="${HOMEFIELD_SCALE_MAX:-}" \
+    HOMEFIELD_SCALE_ZERO="${HOMEFIELD_SCALE_ZERO:-}" HOMEFIELD_SCALE_TICK_BUDGET="${HOMEFIELD_SCALE_TICK_BUDGET:-}" \
     "$BASH" -c '. "$1"; shift; "$@"' _ "$ROOT/bin/homefield" cmd_webhook "$@" 2>&1 </dev/null
 }
 
@@ -307,12 +317,15 @@ out="$(run "$STATE2" setup --hostname webhook.example.com --port "$BUSY_PORT")"
 record "setup: an occupied port is refused" "nonzero" "$(nonzero $?)"
 kill "$busy_pid" 2>/dev/null || true
 
+HOMEFIELD_SCALE_ZERO=1 HOMEFIELD_SCALE_MAX=2
 out="$(run "$STATE2" setup --hostname webhook.example.com --port 18787)"
 rc=$?
 record "setup: happy path exits 0" "0" "$rc"
 plist="$HOME/Library/LaunchAgents/com.homefield.webhook.plist"
 record "setup: the plist is written" "yes" "$(has "$(cat "$plist" 2>/dev/null)" 'com.homefield.webhook')"
 record "setup: the port is baked into the plist" "yes" "$(has "$(cat "$plist" 2>/dev/null)" '18787')"
+record "setup: the shell's scaler policy is baked into the plist" "yes/yes" \
+  "$(has "$(cat "$plist" 2>/dev/null)" 'HOMEFIELD_SCALE_ZERO')/$(has "$(cat "$plist" 2>/dev/null)" '<string>2</string>')"
 record "setup: launchctl load recorded" "1" "$(grep -c -e '^load -w' "$calls_launchctl" || true)"
 record "setup: the tunnel was already listed, so no create" "0" "$(grep -c -e 'tunnel create' "$calls_cloudflared" || true)"
 record "setup: the DNS route is added" "1" "$(grep -c -e 'tunnel route dns' "$calls_cloudflared" || true)"
@@ -320,6 +333,7 @@ record "setup: the secret is 0600" "600" "$(python3 -c 'import os,stat,sys; prin
 record "setup: the config records hostname, port, tunnel" "webhook.example.com/18787/homefield-webhook" \
   "$(grep -h '^hostname=' "$STATE2/route-watcher/webhook/config" | cut -d= -f2)/$(grep -h '^port=' "$STATE2/route-watcher/webhook/config" | cut -d= -f2)/$(grep -h '^tunnel=' "$STATE2/route-watcher/webhook/config" | cut -d= -f2)"
 record "setup: prints the public URL" "yes" "$(has "$out" 'https://webhook.example.com/webhook')"
+unset HOMEFIELD_SCALE_ZERO HOMEFIELD_SCALE_MAX
 
 # re-run: the route step's "already exists" failure is not an error
 # shellcheck disable=SC2034  # read by the cloudflared stub in the subshell
@@ -336,15 +350,32 @@ record "setup: the route failure is shown" "yes" "$r"
 unset CF_ROUTE_FAIL CF_ROUTE_ERR
 
 # a tunnel that does not exist yet is created (the marker records that the
-# tunnel exists, so it must be absent for the create path to run)
+# tunnel exists, so it must be absent for the create path to run); with no
+# scaler settings in the shell, the policy is read back from the installed
+# route watcher's plist
 rm -rf "$STATE2"
 rm -f "$CF_MARKER"
+mkdir -p "$HOME/Library/LaunchAgents"
+cat > "$HOME/Library/LaunchAgents/com.homefield.route-watcher.plist" <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOMEFIELD_SCALE_IDLE</key>
+    <string>1200</string>
+  </dict>
+</dict>
+</plist>
+EOF
 # shellcheck disable=SC2034  # read by the cloudflared stub in the subshell
 CF_CREATE_THEN_LIST=1
 out="$(run "$STATE2" setup --hostname webhook.example.com --port 18787)"
 rc=$?
 record "setup: a missing tunnel is created" "1" "$(grep -c -e 'tunnel create' "$calls_cloudflared" || true)"
 record "setup: created tunnel still exits 0" "0" "$rc"
+record "setup: the route watcher's scaler policy is inherited" "yes" \
+  "$(has "$(cat "$plist" 2>/dev/null)" '<key>HOMEFIELD_SCALE_IDLE</key>')"
 unset CF_CREATE_THEN_LIST
 
 # connect

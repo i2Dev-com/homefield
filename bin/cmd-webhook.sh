@@ -167,6 +167,22 @@ webhook_agent_install() {
   if [ -n "${HOMEFIELD_WEBHOOK_TUNNEL:-}" ]; then
     env_xml="${env_xml}    <key>HOMEFIELD_WEBHOOK_TUNNEL</key>"$'\n'"    <string>$(route_watcher_xml_escape "$HOMEFIELD_WEBHOOK_TUNNEL")</string>"$'\n'
   fi
+  # The scaler's tuning reaches this agent the same way it reaches the
+  # route watcher's: a webhook-triggered tick is the same tick, and an
+  # operator's fleet cap, idle cooldown or scale-to-zero switch must bind
+  # it too, or deliveries would scale with the defaults while the
+  # periodic ticks enforce the configured policy. A setting the shell
+  # does not carry is read back from the installed route watcher's plist
+  # (install/upgrade --auto-route baked it there), so a webhook setup in
+  # a plain shell still inherits the policy the fleet runs under.
+  local scale_var scale_val
+  for scale_var in HOMEFIELD_SCALE_INTERVAL HOMEFIELD_SCALE_WAIT HOMEFIELD_SCALE_IDLE HOMEFIELD_SCALE_MAX HOMEFIELD_SCALE_ZERO HOMEFIELD_SCALE_TICK_BUDGET; do
+    scale_val="${!scale_var:-}"
+    if [ -z "$scale_val" ] && [ -f "$(route_watcher_plist_path)" ]; then
+      scale_val="$(sed -n "/<key>$scale_var<\/key>/{n;s/.*<string>\(.*\)<\/string>.*/\1/p;}" "$(route_watcher_plist_path)")"
+    fi
+    [ -n "$scale_val" ] && env_xml="${env_xml}    <key>$scale_var</key>"$'\n'"    <string>$(route_watcher_xml_escape "$scale_val")</string>"$'\n'
+  done
   cat >"$plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
