@@ -793,8 +793,8 @@ record "hosted-activity: a queued run with no jobs is not demand" "0" \
 
 GH_JOBS_1001=$'501\n502'
 since="$(hosted_activity_since org/repo github.com)"
-record "hosted-activity: a queued run with active jobs is demand" "yes/yes" \
-  "$([ -n "$since" ] && echo yes)/$([ "$since" -le "$(date +%s)" ] && echo yes)"
+record "hosted-activity: a queued run with active jobs is demand" \
+  "$(iso_to_epoch '2026-11-11T20:35:51Z')" "$since"
 
 GH_RUNS_PROGRESS=$'1002\t2026-11-11T20:30:50Z'
 GH_JOBS_1002='503'
