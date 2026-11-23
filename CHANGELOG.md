@@ -9,9 +9,15 @@ fail, such as a new guard in the routing expression, bumps the minor version
 (0.1 to 0.2). Compatible changes bump the patch. Merged changes wait on
 `main`, under *Unreleased*, until a release is cut.
 
-## Unreleased
+## v0.5.7 (2026-11-23)
 
-- Fixed: the demand scaler's hosted-activity demand (`hosted_activity_since`) counted a workflow run in `queued` or `in_progress` status even when the run has no jobs behind it. GitHub keeps a run whose head branch is gone listed as queued forever, so with scale-to-zero on, such a row read as urgent hosted activity and woke the dark VM every tick after a stop — a wake/stop cycle on a schedule instead of on work, which kept the VM up most of the time and flapped the flipped repositories' routing every cycle. A run now counts only while it still has a queued or in_progress job behind it, the same standard `queued_wait_since` applies; an unreadable jobs list fails safe (#312).
+Bumps the patch from v0.5.6, and it is compatible for consumers: the routing
+expression, guards, defaults, and options are unchanged, so workflows passing
+`routing-guard@v0.5.6` pass `@v0.5.7` as well.
+
+### Fixed
+
+- The demand scaler's hosted-activity demand ([#313](https://github.com/i2Dev-com/homefield/issues/313)): `hosted_activity_since` counted a workflow run in `queued` or `in_progress` status even when the run has no jobs behind it. GitHub keeps a run whose head branch is gone listed as queued forever, so with scale-to-zero on, such a row read as urgent hosted activity and woke the dark VM every tick after a stop — a wake/stop cycle on a schedule instead of on work, which kept the VM up most of the time and flapped the flipped repositories' routing every cycle. A run now counts only while it still has a queued or in_progress job behind it, the same standard `queued_wait_since` applies; an unreadable jobs list fails safe.
 
 ## v0.5.6 (2026-11-22)
 
