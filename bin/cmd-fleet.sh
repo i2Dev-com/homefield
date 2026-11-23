@@ -689,12 +689,14 @@ hosted_activity_since() {
       # A run counts only while it still has active jobs: GitHub keeps a
       # run listed as queued forever when its head branch is gone, with no
       # jobs behind it, and reading such a row as demand would wake a dark
-      # VM on a schedule instead of on work.
+      # VM on a schedule instead of on work. The ids, not a count: across
+      # --paginate pages a count would arrive one number per page, and the
+      # ids concatenate into one non-empty answer whenever any page has an
+      # active job.
       active="$(gh api --hostname "$host" --paginate "repos/${repo}/actions/runs/${id}/jobs?per_page=100" \
-        --jq '[.jobs[] | select(.status == "queued" or .status == "in_progress")] | length' \
+        --jq '.jobs[] | select(.status == "queued" or .status == "in_progress") | .id' \
         </dev/null 2>/dev/null)" || return 1
-      case "$active" in '' | *[!0-9]*) active=0 ;; esac
-      [ "$active" -gt 0 ] || continue
+      [ -n "$active" ] || continue
       epoch="$(iso_to_epoch "$created")" || continue
       if [ -z "$best" ] || [ "$epoch" -lt "$best" ]; then
         best="$epoch"

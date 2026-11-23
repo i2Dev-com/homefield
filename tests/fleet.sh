@@ -44,6 +44,8 @@ case "${GH_MODE:-}" in
         [ "${GH_RUNS_FAIL:-}" = 1 ] && exit 1
         exit 0 ;;
       *"actions/runs/"*"/jobs"*)
+        # What the real gh --jq would print for the canned page: one id
+        # per active job (the stub replaces gh, jq included).
         case "$*" in
           *"/1001/jobs"*) printf '%s\n' "${GH_JOBS_1001:-}" ;;
           *"/1002/jobs"*) printf '%s\n' "${GH_JOBS_1002:-}" ;;
@@ -785,24 +787,23 @@ GH_MODE="hosted-activity"
 export GH_MODE GH_RUNS_QUEUED GH_RUNS_PROGRESS GH_JOBS_1001 GH_JOBS_1002 GH_JOBS_1003 GH_RUNS_FAIL GH_JOBS_FAIL
 GH_RUNS_QUEUED=$'1001\t2026-11-11T20:35:51Z'
 GH_RUNS_PROGRESS=""
-GH_JOBS_1001='0'
+GH_JOBS_1001=""
 record "hosted-activity: a queued run with no jobs is not demand" "0" \
   "$(hosted_activity_since org/repo github.com | wc -l | tr -d ' ')"
 
-GH_JOBS_1001='2'
+GH_JOBS_1001=$'501\n502'
 since="$(hosted_activity_since org/repo github.com)"
 record "hosted-activity: a queued run with active jobs is demand" "yes/yes" \
   "$([ -n "$since" ] && echo yes)/$([ "$since" -le "$(date +%s)" ] && echo yes)"
 
 GH_RUNS_PROGRESS=$'1002\t2026-11-11T20:30:50Z'
-GH_JOBS_1002='1'
+GH_JOBS_1002='503'
 since="$(hosted_activity_since org/repo github.com)"
 record "hosted-activity: an in_progress run with an active job is demand" "yes" \
   "$([ -n "$since" ] && echo yes)"
 
 GH_RUNS_QUEUED=$'1001\t2026-11-11T20:35:51Z\n1003\t2026-11-10T10:00:00Z'
-GH_JOBS_1001='1'
-GH_JOBS_1003='0'
+GH_JOBS_1003=""
 since="$(hosted_activity_since org/repo github.com)"
 record "hosted-activity: the jobless run's timestamp is not the answer" \
   "$(iso_to_epoch '2026-11-11T20:30:50Z')" "$since"
