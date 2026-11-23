@@ -918,6 +918,25 @@ whose status could not be read keeps the scaler from starting
 anything, whether the fleet is fully dark or partly running, because
 one may already be running and serving the demand.
 
+**What counts as demand** (#315) — the hosted source counts a run only
+when the consumer's own routing expression would have sent it to the
+local runner had `CI_RUNNER` been local. A run the expression keeps
+hosted — a scheduled workflow when the guard's `events` is the default
+`pull_request`, a Dependabot PR while `dependabot` is the default
+`hosted`, a fork pull request in `guards` mode — can never take the
+runner, and reading it as demand would wake a dark VM on a schedule
+instead of on work: each wake costs the full idle cooldown, and a long
+hosted run can wake the VM twice (the tick stops it at the cooldown and
+the next tick sees the same run as urgent demand again). The consumer's
+options therefore ride in the records: the `routing` and `autoflip`
+lines carry the guard's `events`, `dependabot` and `mode` after the host
+(`route local --events push,schedule --dependabot local --mode simple`
+writes them; the defaults are the guard's defaults, so a three-field
+line written before #315 reads as them). A `simple`-mode record counts
+every active run, because the simple expression routes every event. The
+queued source needs none of this: a job queued for the routing label is
+by construction a job the expression routed to the runner.
+
 Because the dark record is per VM, one scope's wake does not strand
 another's: with two repository-scoped VMs dark, waking the first leaves
 the second's line — and its demand — answerable on a later tick, even

@@ -30,28 +30,30 @@ exit 0
 EOF
 cat > "$TMP/bin/gh" <<'EOF'
 #!/usr/bin/env bash
-# The runs/jobs answers the hosted-activity test drives (GH_RUNS_*,
-# GH_JOBS_*); everything else succeeds silently, the way the function
-# level stubs above assume.
+# The hosted-activity test drives the demand filter's real jq: the canned
+# pages are JSON (GH_RUNS_QUEUED_JSON, GH_RUNS_PROGRESS_JSON, one jobs file
+# per run id under GH_JOBS_DIR), and this stub applies the call's --jq to
+# them with the system jq, the way gh does. Everything else succeeds
+# silently, the way the function level stubs above assume.
 case "${GH_MODE:-}" in
   hosted-activity)
+    expr="" prev=""
+    for a in "$@"; do
+      [ "$prev" = "--jq" ] && expr="$a"
+      prev="$a"
+    done
     case "$*" in
       *"actions/runs?"*)
+        if [ "${GH_RUNS_FAIL:-}" = 1 ]; then echo "gh: HTTP 500" >&2; exit 1; fi
         case "$*" in
-          *status=queued*) printf '%s\n' "${GH_RUNS_QUEUED:-}" ;;
-          *status=in_progress*) printf '%s\n' "${GH_RUNS_PROGRESS:-}" ;;
+          *status=queued*) jq -r "${expr:-.}" "$GH_RUNS_QUEUED_JSON" 2>/dev/null ;;
+          *status=in_progress*) jq -r "${expr:-.}" "$GH_RUNS_PROGRESS_JSON" 2>/dev/null ;;
         esac
-        [ "${GH_RUNS_FAIL:-}" = 1 ] && exit 1
         exit 0 ;;
       *"actions/runs/"*"/jobs"*)
-        # What the real gh --jq would print for the canned page: one id
-        # per active job (the stub replaces gh, jq included).
-        case "$*" in
-          *"/1001/jobs"*) printf '%s\n' "${GH_JOBS_1001:-}" ;;
-          *"/1002/jobs"*) printf '%s\n' "${GH_JOBS_1002:-}" ;;
-          *"/1003/jobs"*) printf '%s\n' "${GH_JOBS_1003:-}" ;;
-        esac
-        [ "${GH_JOBS_FAIL:-}" = 1 ] && exit 1
+        if [ "${GH_JOBS_FAIL:-}" = 1 ]; then echo "gh: HTTP 502" >&2; exit 1; fi
+        run="$(printf '%s' "$*" | sed -n 's|.*/actions/runs/\([0-9]*\)/jobs.*|\1|p')"
+        jq -r "${expr:-.}" "$GH_JOBS_DIR/$run.json" 2>/dev/null
         exit 0 ;;
     esac
     ;;
@@ -415,6 +417,32 @@ rc=0; out="$(fleet_watch_tick 2>&1)" || rc=$?
 record "wake-from-zero: hosted activity wakes at once, no wait" "1/yes" \
   "$(called '^scale:start --instance homefield-1$')/$(has "$out" 'hosted runners')"
 
+# 11b. The wake passes the autoflip entry's option fields to the demand
+# lookup (#315): a six-field entry carries the consumer's guard options, a
+# legacy three-field entry reads as the guard's defaults. The function
+# stub records its arguments for the assertion.
+hosted_activity_since() {
+  printf 'hosted-activity:%s\n' "$*" >>"$calls"
+  [ -n "${HOSTED_SINCE:-}" ] && printf '%s\n' "$HOSTED_SINCE"
+  return 0
+}
+printf 'homefield-ci org/repo github.com push local simple\n' >"$HOMEFIELD_STATE_DIR/autoflip"
+HOSTED_SINCE="$(( $(date +%s) - 5 ))"
+QUEUED_SINCE=""
+printf 'homefield-1|https://github.com/org/repo|homefield-ci|1\n' >"$RECORDS/scale-dark"
+: >"$calls"
+fleet_watch_tick >/dev/null 2>&1 || true
+record "wake-from-zero: the entry's option fields reach the demand lookup" "1" \
+  "$(called '^hosted-activity:org/repo github.com push local simple$')"
+printf 'homefield-ci org/repo github.com\n' >"$HOMEFIELD_STATE_DIR/autoflip"
+printf 'homefield-1|https://github.com/org/repo|homefield-ci|1\n' >"$RECORDS/scale-dark"
+: >"$calls"
+fleet_watch_tick >/dev/null 2>&1 || true
+record "wake-from-zero: a legacy three-field entry reads as the defaults" "1" \
+  "$(called '^hosted-activity:org/repo github.com pull_request hosted guards$')"
+# Restore the suite's function-level stub for the sections below.
+hosted_activity_since() { [ -n "${HOSTED_SINCE:-}" ] && printf '%s\n' "$HOSTED_SINCE"; return 0; }
+
 # 12. A hand-stopped VM stays down: no dark line, no wake
 rm -f "$RECORDS/scale-dark" "$HOMEFIELD_STATE_DIR/autoflip"
 printf 'homefield-ci org/repo github.com\n' >"$HOMEFIELD_STATE_DIR/routing"
@@ -776,37 +804,72 @@ record "wake-from-zero: an unreadable status blocks the partly-running wake too"
   "0/yes/yes/nonzero" \
   "$(called '^scale:start')/$line2_kept/$(has "$out" 'could not ask Lima')/$(nonzero "$rc")"
 
-# 33. hosted_activity_since counts a run only while it has active jobs: a
-# run listed queued forever with no jobs behind it (its head branch gone)
-# is not demand, and reading it as one would wake a dark VM on a schedule
-# instead of on work
-# The suite stubbed the function above; re-source the real one.
+# 33. hosted_activity_since counts a run only when the consumer's routing
+# expression would have sent it to the local runner (#315): the record's
+# option fields (events, dependabot, mode) filter the run's own metadata —
+# event, actor, head branch, head repository. A scheduled workflow, a
+# Dependabot PR or a fork PR can never take the runner, and reading one as
+# demand would wake a dark VM on a schedule instead of on work; a run
+# listed queued forever with no jobs behind it is not demand either.
+# The suite stubbed the function above; re-source the real one. The gh
+# stub applies the call's --jq to the canned JSON with the system jq, so
+# the filter itself is what is under test.
 # shellcheck source=bin/cmd-fleet.sh
 . "$ROOT/bin/cmd-fleet.sh"
 GH_MODE="hosted-activity"
-export GH_MODE GH_RUNS_QUEUED GH_RUNS_PROGRESS GH_JOBS_1001 GH_JOBS_1002 GH_JOBS_1003 GH_RUNS_FAIL GH_JOBS_FAIL
-GH_RUNS_QUEUED=$'1001\t2026-11-11T20:35:51Z'
-GH_RUNS_PROGRESS=""
-GH_JOBS_1001=""
-record "hosted-activity: a queued run with no jobs is not demand" "0" \
-  "$(hosted_activity_since org/repo github.com | wc -l | tr -d ' ')"
+JOBS="$TMP/gh-jobs"
+mkdir -p "$JOBS"
+# The queued page: every kind of run the filter must tell apart. 1001 is a
+# Dependabot PR (actor and branch), 1002 a scheduled workflow, 1003 a fork
+# PR, 1004 the only run the defaults count, 1005 a same-repo PR with no
+# active jobs behind it (the zombie shape #312 fixed), 1006 a push.
+cat > "$TMP/gh-runs-queued.json" <<'EOF'
+{"total_count":6,"workflow_runs":[
+  {"id":1001,"created_at":"2026-11-11T19:30:00Z","event":"pull_request","actor":{"login":"dependabot[bot]"},"head_branch":"dependabot/npm_and_yarn/jest-dom","head_repository":{"full_name":"org/repo"},"repository":{"full_name":"org/repo"}},
+  {"id":1002,"created_at":"2026-11-11T21:00:00Z","event":"schedule","actor":{"login":"tom-bot-for-rana[bot]"},"head_branch":"main","head_repository":{"full_name":"org/repo"},"repository":{"full_name":"org/repo"}},
+  {"id":1003,"created_at":"2026-11-11T19:00:00Z","event":"pull_request","actor":{"login":"bob"},"head_branch":"patch","head_repository":{"full_name":"fork/other"},"repository":{"full_name":"org/repo"}},
+  {"id":1004,"created_at":"2026-11-11T20:30:50Z","event":"pull_request","actor":{"login":"alice"},"head_branch":"feature/x","head_repository":{"full_name":"org/repo"},"repository":{"full_name":"org/repo"}},
+  {"id":1005,"created_at":"2026-11-10T10:00:00Z","event":"pull_request","actor":{"login":"alice"},"head_branch":"feature/zombie","head_repository":{"full_name":"org/repo"},"repository":{"full_name":"org/repo"}},
+  {"id":1006,"created_at":"2026-11-11T18:00:00Z","event":"push","actor":{"login":"alice"},"head_branch":"main","head_repository":{"full_name":"org/repo"},"repository":{"full_name":"org/repo"}}
+]}
+EOF
+cat > "$TMP/gh-runs-progress.json" <<'EOF'
+{"total_count":0,"workflow_runs":[]}
+EOF
+for n in 1001 1002 1003 1004 1006; do
+  printf '{"total_count":1,"jobs":[{"id":5%03d,"status":"queued"}]}\n' "$n" >"$JOBS/$n.json"
+done
+printf '{"total_count":1,"jobs":[{"id":505,"status":"completed"}]}\n' >"$JOBS/1005.json"
+export GH_MODE
+export GH_RUNS_QUEUED_JSON="$TMP/gh-runs-queued.json"
+export GH_RUNS_PROGRESS_JSON="$TMP/gh-runs-progress.json"
+export GH_JOBS_DIR="$JOBS"
+export GH_RUNS_FAIL GH_JOBS_FAIL
 
-GH_JOBS_1001=$'501\n502'
+# The defaults — the guard's defaults, which is also what a legacy
+# three-field record reads as — count only the same-repo, non-Dependabot
+# pull_request run with active jobs: the Dependabot PR (1001), the
+# schedule (1002), the fork PR (1003), the jobless zombie (1005) and the
+# push (1006) all stay out, and any one of them counting would show up as
+# an earlier timestamp than 1004's.
 since="$(hosted_activity_since org/repo github.com)"
-record "hosted-activity: a queued run with active jobs is demand" \
-  "$(iso_to_epoch '2026-11-11T20:35:51Z')" "$since"
-
-GH_RUNS_PROGRESS=$'1002\t2026-11-11T20:30:50Z'
-GH_JOBS_1002='503'
-since="$(hosted_activity_since org/repo github.com)"
-record "hosted-activity: an in_progress run with an active job is demand" "yes" \
-  "$([ -n "$since" ] && echo yes)"
-
-GH_RUNS_QUEUED=$'1001\t2026-11-11T20:35:51Z\n1003\t2026-11-10T10:00:00Z'
-GH_JOBS_1003=""
-since="$(hosted_activity_since org/repo github.com)"
-record "hosted-activity: the jobless run's timestamp is not the answer" \
+record "hosted-activity: the defaults count only the routable run" \
   "$(iso_to_epoch '2026-11-11T20:30:50Z')" "$since"
+
+since="$(hosted_activity_since org/repo github.com push,pull_request)"
+record "hosted-activity: a record naming push counts the push run too" \
+  "$(iso_to_epoch '2026-11-11T18:00:00Z')" "$since"
+
+since="$(hosted_activity_since org/repo github.com pull_request local)"
+record "hosted-activity: a dependabot=local record counts the Dependabot run" \
+  "$(iso_to_epoch '2026-11-11T19:30:00Z')" "$since"
+
+since="$(hosted_activity_since org/repo github.com pull_request hosted simple)"
+record "hosted-activity: a simple-mode record counts every active run" \
+  "$(iso_to_epoch '2026-11-11T18:00:00Z')" "$since"
+
+record "hosted-activity: an event nothing runs is no demand" "0" \
+  "$(hosted_activity_since org/repo github.com workflow_dispatch | wc -l | tr -d ' ')"
 
 GH_RUNS_FAIL=1
 record "hosted-activity: an unreadable runs list fails safe" "1" \
@@ -815,6 +878,6 @@ GH_RUNS_FAIL=""
 GH_JOBS_FAIL=1
 record "hosted-activity: an unreadable jobs list fails safe" "1" \
   "$(hosted_activity_since org/repo github.com >/dev/null 2>&1; echo $?)"
-unset GH_MODE GH_RUNS_QUEUED GH_RUNS_PROGRESS GH_JOBS_1001 GH_JOBS_1002 GH_JOBS_1003 GH_RUNS_FAIL GH_JOBS_FAIL
+unset GH_MODE GH_RUNS_QUEUED_JSON GH_RUNS_PROGRESS_JSON GH_JOBS_DIR GH_RUNS_FAIL GH_JOBS_FAIL
 
 summary
