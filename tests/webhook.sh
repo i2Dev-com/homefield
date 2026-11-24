@@ -236,12 +236,38 @@ rm -f "$TMP/stub-sleep"
 # relative to it
 ticks_base="$(ticks)"
 
-python3 -c 'import time; time.sleep(300)' 2>/dev/null &
-sleep_pid=$!
-printf '%s\n' "$sleep_pid" >"$RECEIVER_DIR/tick.pid"
+# a tick recorded as already running suppresses a spawn: the recorded pid
+# is a real `homefield fleet watch` run (the identity the pid-file fallback
+# validates), held by the sleep flag
+printf '60\n' >"$TMP/stub-sleep"
+fake_tick_pid="$(CALLS_SLEEP_FLAG="$TMP/stub-sleep" python3 - "$TMP/app/bin/homefield" <<'PY'
+import subprocess, sys
+print(subprocess.Popen([sys.argv[1], "fleet", "watch", "--max-ticks", "1"],
+                       start_new_session=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).pid)
+PY
+)"
+printf '%s\n' "$fake_tick_pid" >"$RECEIVER_DIR/tick.pid"
 out="$(post workflow_job queued)"
-record "tick already running: 202, no new spawn" "202/0" "$out/$(($(ticks) - ticks_base))"
-kill "$sleep_pid" 2>/dev/null || true
+record "tick already running: 202, no new spawn" "202/1" "$out/$(($(ticks) - ticks_base))"
+kill "$fake_tick_pid" 2>/dev/null || true
+wait "$fake_tick_pid" 2>/dev/null
+rm -f "$TMP/stub-sleep"
+
+# a pid file naming an unrelated live process (a restart or a reboot left
+# it behind and the pid was recycled) is not a running tick: the delivery
+# spawns instead of 202ing forever
+python3 -c 'import time; time.sleep(300)' 2>/dev/null &
+stale_pid=$!
+printf '%s\n' "$stale_pid" >"$RECEIVER_DIR/tick.pid"
+out="$(post workflow_job queued)"
+record "stale pid: an unrelated live process is not a tick" "204/2" \
+  "$out/$(($(ticks) - ticks_base))"
+kill "$stale_pid" 2>/dev/null || true
+wait "$stale_pid" 2>/dev/null
+# the stale-pid delivery spawned a tick whose call is logged forever, so
+# the remaining spawn counts are relative to it again
+ticks_base="$(ticks)"
 
 out="$(raw $PORT $'POST /webhook HTTP/1.1\r\nHost: x\r\nContent-Length: 1048577\r\n\r\n')" # 1 MiB + 1 of a
 record "oversized Content-Length: 413 before anything else" "413" "$out"
@@ -394,6 +420,81 @@ fi
 # ---------------------------------------------------------------------------
 # Part 2 — the commands, against stubbed cloudflared/gh/launchctl.
 
+# The port probes are overridden for the command tests: the setup tests must
+# not probe the host's real listeners (this Mac is a runner host, and the
+# root AGENTS.md forbids observing ambient host state), so each phase picks
+# a stub and the probes themselves are unit-tested below against
+# test-owned, dynamically allocated ports.
+cat > "$TMP/stubs-port-free" <<'EOF'
+webhook_port_free() { return 0; }
+webhook_receiver_answers() { return 1; }
+EOF
+cat > "$TMP/stubs-port-ours" <<'EOF'
+webhook_port_free() { return 1; }
+webhook_receiver_answers() { return 0; }
+EOF
+HOOK_STUBS="$TMP/stubs-port-free"
+
+# probe <fn> <args...>: one port-probe function in a child that sourced
+# bin/homefield; prints the function's exit status (set -e is armed by the
+# source, so the status is captured, not propagated).
+probe() {
+  local fn="$1"
+  shift
+  env -i HOME="$HOME" PATH="$PATH" HOMEFIELD_SOURCE_ONLY=1 HOMEFIELD_STATE_DIR="$TMP/state2" \
+    "$BASH" -c '. "$1"; shift; status=0; "$@" || status=$?; printf "%s" "$status"' \
+    _ "$ROOT/bin/homefield" "$fn" "$@"
+}
+
+PROBE_PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
+record "probe: a port with no listener is free" "0" "$(probe webhook_port_free "$PROBE_PORT")"
+
+python3 - "$PROBE_PORT" <<'PY' &
+import socket, sys, time
+s = socket.socket()
+s.bind(("127.0.0.1", int(sys.argv[1])))
+s.listen(16)
+s.settimeout(60)
+# accept and close: a listener that never accepts fills its backlog with
+# the readiness probe's connection and the port-free probe's connect is
+# then refused, which reads as "free"
+while True:
+    try:
+        c, _ = s.accept()
+        c.close()
+    except socket.timeout:
+        break
+PY
+plain_listener=$!
+for _ in $(seq 1 50); do
+  python3 -c "import socket; s=socket.socket(); s.connect(('127.0.0.1',$PROBE_PORT)); s.close()" 2>/dev/null && break
+  sleep 0.1
+done
+record "probe: a port with a plain listener is not free" "1" "$(probe webhook_port_free "$PROBE_PORT")"
+record "probe: a plain listener is not the receiver" "1" "$(probe webhook_receiver_answers "$PROBE_PORT")"
+kill "$plain_listener" 2>/dev/null || true
+wait "$plain_listener" 2>/dev/null
+
+python3 - "$PROBE_PORT" <<'PY' &
+import http.server, sys
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+    def log_message(self, *a):
+        pass
+http.server.HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
+PY
+healthz_listener=$!
+for _ in $(seq 1 50); do
+  python3 -c "import socket; s=socket.socket(); s.connect(('127.0.0.1',$PROBE_PORT)); s.close()" 2>/dev/null && break
+  sleep 0.1
+done
+record "probe: a healthz listener is the receiver" "0" "$(probe webhook_receiver_answers "$PROBE_PORT")"
+kill "$healthz_listener" 2>/dev/null || true
+wait "$healthz_listener" 2>/dev/null
+
 cat > "$TMP/bin/launchctl" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "${CALLS_LAUNCHCTL:?}"
@@ -460,7 +561,9 @@ run() {
     HOMEFIELD_SCALE_ZERO="${HOMEFIELD_SCALE_ZERO:-}" HOMEFIELD_SCALE_TICK_BUDGET="${HOMEFIELD_SCALE_TICK_BUDGET:-}" \
     HOMEFIELD_WEBHOOK_TUNNEL="${HOMEFIELD_WEBHOOK_TUNNEL:-}" \
     HOMEFIELD_WEBHOOK_READ_TIMEOUT="${HOMEFIELD_WEBHOOK_READ_TIMEOUT:-}" HOMEFIELD_WEBHOOK_MAX_CONNECTIONS="${HOMEFIELD_WEBHOOK_MAX_CONNECTIONS:-}" \
-    "$BASH" -c '. "$1"; shift; "$@"' _ "$ROOT/bin/homefield" cmd_webhook "$@" 2>&1 </dev/null
+    HOOK_STUBS="${HOOK_STUBS:-}" \
+    "$BASH" -c '. "$1"; shift; if [ -n "${HOOK_STUBS:-}" ]; then . "$HOOK_STUBS"; fi; "$@"' \
+    _ "$ROOT/bin/homefield" cmd_webhook "$@" 2>&1 </dev/null
 }
 
 out="$(run "$STATE2" setup)"
@@ -483,13 +586,17 @@ record "setup: the refusal names the login" "yes" "$r"
 : > "$HOME/.cloudflared/cert.pem"
 : > "$HOME/.cloudflared/tunnel-uuid.json"
 
-# a port that is already in use
+# a port that is already in use, against a test-owned listener: the real
+# probes run here (no stub), and the port is one this suite allocated
+unset HOOK_STUBS
 BUSY_PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
 python3 -c "import socket,time; s=socket.socket(); s.bind(('127.0.0.1',$BUSY_PORT)); s.listen(1); time.sleep(60)" 2>/dev/null &
 busy_pid=$!
 out="$(run "$STATE2" setup --hostname webhook.example.com --port "$BUSY_PORT")"
 record "setup: an occupied port is refused" "nonzero" "$(nonzero $?)"
 kill "$busy_pid" 2>/dev/null || true
+wait "$busy_pid" 2>/dev/null
+HOOK_STUBS="$TMP/stubs-port-free"
 
 HOMEFIELD_SCALE_ZERO=1 HOMEFIELD_SCALE_MAX=2
 out="$(run "$STATE2" setup --hostname webhook.example.com --port 18787)"
@@ -643,38 +750,23 @@ record "status: the tunnel is listed" "yes" "$(has "$out" 'tunnel-uuid')"
 record "status: the quiet receiver is reported" "yes" "$(has "$out" 'receiver: not answering')"
 record "status: the quiet receiver fails the status" "nonzero" "$(nonzero $rc)"
 
-python3 -c "import socket,time; s=socket.socket(); s.bind(('127.0.0.1',18787)); s.listen(1); time.sleep(60)" 2>/dev/null &
-listen_pid=$!
+# a listening receiver, through the stub (a real listener on a fixed port
+# would observe the host's ambient state)
+HOOK_STUBS="$TMP/stubs-port-ours"
 out="$(run "$STATE2" status)"
 rc=$?
-record "status: a listening receiver passes" "yes/0" "$(has "$out" 'receiver: listening on 127.0.0.1:18787')/$(nonzero $rc)"
-kill "$listen_pid" 2>/dev/null || true
+record "status: a listening receiver passes" "yes/0" \
+  "$(has "$out" 'receiver: listening on 127.0.0.1:18787')/$(nonzero $rc)"
 
 # re-running setup on the installed receiver's own port is
 # reconfiguration, not a conflict: the listener answers the receiver's
-# healthz, so it is ours
-HEALTH_PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
-python3 - "$HEALTH_PORT" <<'PY' &
-import http.server, sys
-class H(http.server.BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header("Content-Length", "0")
-        self.end_headers()
-    def log_message(self, *a):
-        pass
-http.server.HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
-PY
-health_pid=$!
-for _ in $(seq 1 50); do
-  python3 -c "import socket; s=socket.socket(); s.connect(('127.0.0.1',$HEALTH_PORT)); s.close()" 2>/dev/null && break
-  sleep 0.1
-done
-out="$(run "$STATE2" setup --hostname webhook.example.com --port "$HEALTH_PORT")"
+# healthz (the probes are stubbed; their real logic is unit-tested above
+# and the occupied-port refusal runs against a test-owned listener)
+out="$(run "$STATE2" setup --hostname webhook.example.com --port 18787)"
 rc=$?
 record "setup: the receiver's own port is reconfiguration" "0" "$rc"
-record "setup: the reinstalled agent carries the new port" "yes" "$(has "$(cat "$plist" 2>/dev/null)" "$HEALTH_PORT")"
-kill "$health_pid" 2>/dev/null || true
+record "setup: the reinstalled agent carries the port" "yes" "$(has "$(cat "$plist" 2>/dev/null)" '18787')"
+HOOK_STUBS="$TMP/stubs-port-free"
 
 # remove
 unloads_before="$(grep -c -e '^unload -w' "$calls_launchctl" || true)"

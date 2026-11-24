@@ -183,6 +183,26 @@ def tick_child_alive():
         except OSError:
             pass
         return False
+    # The pid exists, but after a restart or a reboot it can belong to an
+    # unrelated live process: only a process whose command line is the
+    # tick's counts as a running tick, and anything else is a stale file
+    # to drop (a live tick's command line is
+    # `<path>/homefield fleet watch --max-ticks 1`).
+    try:
+        command = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "command="],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        ).stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        command = ""
+    if "fleet watch" not in command:
+        try:
+            os.remove(TICK_PID_FILE)
+        except OSError:
+            pass
+        return False
     return True
 
 
