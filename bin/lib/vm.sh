@@ -655,6 +655,22 @@ guest_has_file() {
 # asked. Commands that act on the answer call is_registered instead.
 registered() { guest_has_file "$RUNNER_HOME/.runner"; }
 
+# guest_has_dir PATH: guest_has_file for a directory. The runner's _work is
+# created by the first job and kept by every cleanup hook, so it is the
+# marker for "this VM has run jobs" (a registration token must not go into
+# such a VM: a root process the job left behind could read it from the
+# provisioning process's environment).
+guest_has_dir() {
+  # shellcheck disable=SC2016  # the guest's shell expands $1, not this one
+  guest_probe sudo 'if test -d "$1"; then echo yes; else echo no; fi' "$1"
+}
+
+# ran_jobs: 0 if the VM's runner has a _work directory (at least one job has
+# run), 1 if not (a fresh VM), 2 if the VM could not be asked. Commands that
+# act on the answer stop on 2: reading "fresh" for a VM that could not be
+# asked would put a registration token into a VM that may have run jobs.
+ran_jobs() { guest_has_dir "$RUNNER_HOME/_work"; }
+
 # is_registered: registered, for the commands that act on "no". A VM that could
 # not be asked ends the command: read as "not registered", it would let
 # uninstall delete the VM and leave the registration on GitHub, and let install

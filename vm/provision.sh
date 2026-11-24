@@ -54,11 +54,16 @@
 # the `runner` user CI jobs run as, and an org registration token lets whoever
 # holds it register a rogue runner for up to an hour. From stdin the token only
 # lives in this root process and reaches config.sh through its environment
-# (/proc/<pid>/environ is readable by the owner alone). No job runs while it
-# does: a first registration has no service yet, and a move stops the service
-# before anything else and refuses to start while a job is running. That last
-# part is what actually holds, because the `docker` group makes jobs
-# root-equivalent inside the guest.
+# (/proc/<pid>/environ is readable by the owner alone). A job that is running
+# now cannot see it: a first registration has no service yet, and a move stops
+# the service before anything else and refuses to start while a job is
+# running. But a job that ran earlier can: jobs run as `runner`, which has
+# passwordless sudo and the `docker` group, so a root process a job left
+# behind (a restart-always container, a unit, a cron entry) can read this
+# process's environment. The check below therefore refuses a token in any VM
+# that has run jobs ($RUNNER_HOME/_work exists): a token only ever goes into
+# a VM that has not run one, which a fresh install or a re-register after
+# `bin/homefield reset` (which deletes the VM) gives.
 #
 # The registration token is a one-hour token, not a credential the runner
 # keeps: config.sh exchanges it for the runner's own identity. Idempotent:
@@ -68,11 +73,10 @@
 # group allows (docs/runbook.md, "Runner group"). A repository URL gives a
 # runner scoped to that one repository.
 #
-# Moving an existing runner (repo -> org, or to another org): run with
-# RUNNER_REREGISTER=1 and both tokens on stdin, RUNNER_REMOVE_TOKEN for its
-# current scope and RUNNER_TOKEN for the new one. The old registration is
-# removed and the runner registered again under RUNNER_NAME and RUNNER_LABEL,
-# so pass the current values to keep them.
+# Moving an existing runner (repo -> org, or to another org): a VM that has
+# run jobs cannot be moved in place (the tokens above), so a move is a fresh
+# registration: `bin/homefield reset --instance <name>` (deregisters, deletes
+# the VM), then `bin/homefield install --url <new scope>`.
 #
 # `bash provision.sh ensure-service [--start]` does only one thing: gives a
 # registered runner its systemd service back, whatever an svc.sh install or
@@ -324,6 +328,22 @@ if [ ! -t 0 ]; then
       *) echo "provision.sh: ignoring an unrecognised line on stdin" >&2 ;;
     esac
   done
+fi
+
+# A token reaches config.sh through this process's environment, and a VM that
+# has run jobs may hold a root process the job left behind (jobs run as
+# `runner`, which has passwordless sudo and the docker group; the VM is not
+# reset between jobs). Such a process can read this process's environment
+# from /proc/<pid>/environ — so a token only goes into a VM with no _work,
+# which is what a fresh install or a re-register after `bin/homefield reset`
+# (which deletes the VM) gives. _work is created by the first job and kept by
+# every cleanup hook, so its presence is the marker for "has run jobs".
+if [ -n "$RUNNER_TOKEN$RUNNER_REMOVE_TOKEN" ] && [ -d "$RUNNER_HOME/_work" ]; then
+  echo "provision.sh: this VM has run jobs ($RUNNER_HOME/_work exists), so a registration or" \
+       "removal token must not go into it: a root process a job left behind could read it" \
+       "from this process's environment. Re-register on a fresh VM:" \
+       "bin/homefield reset --instance <name>, then bin/homefield install." >&2
+  exit 1
 fi
 
 # config.sh reads `--token` from ACTIONS_RUNNER_INPUT_TOKEN when the flag is

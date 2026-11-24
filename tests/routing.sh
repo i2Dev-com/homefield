@@ -1151,6 +1151,10 @@ is_job_running() { return 1; }
 # 1 (the default) is a fresh install; 0 is the registered path the upgrade
 # tests exercise.
 is_registered() { return "${STUB_REG:-1}"; }
+# ran_jobs: 1 (the default) is a fresh VM, 0 one that has run jobs, 2 a guest
+# that cannot be asked. A token only goes into a fresh VM (the install
+# registration check).
+ran_jobs() { return "${STUB_RAN_JOBS:-1}"; }
 runner_service_state() { return 0; }
 stop_runner() { echo stop_runner >>"$CALLS"; }
 runner_back() { :; }
@@ -1160,6 +1164,7 @@ iharness() {
   : >"$calls"
   out="$(env -i HOME="$work/home" PATH="$stubs" CALLS="$calls" ROOT="$ROOT" \
     HOMEFIELD_STATE_DIR="$state" LIMA_STATUS=Running CLOCK_EPOCH="$CLOCK_EPOCH" GH_RUNNERS='41\tonline\tfalse\n' \
+    STUB_RAN_JOBS="${STUB_RAN_JOBS:-1}" \
     ${iharness_env[@]+"${iharness_env[@]}"} "$BASH_BIN" "$IHARNESS" "$@" 2>&1 </dev/null)"
   rc=$?
 }

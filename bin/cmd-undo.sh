@@ -1,19 +1,23 @@
 #!/usr/bin/env bash
 # uninstall and reset: taking the runner, the VM and the tool back down.
 
-# deregister_script: what uninstall runs in the guest, as root, with the remove
-# token on its stdin. config.sh refuses to remove a runner whose service is
-# installed, so the service goes first, and if anything after that fails (svc.sh
-# uninstall partway through, or GitHub refusing the removal: a rejected token,
-# a network failure) the runner is still registered and has to get its service
-# back. provision.sh's ensure-service does that and starts it (#99): this
-# release's copy, put in the guest by cmd_uninstall, so a VM provisioned by an
-# older one gets it too. If that fails as well, the runner is registered with
-# no service, and `homefield install` sets the service up again.
+# deregister_script: what uninstall runs in the guest, as root, with an empty
+# line on its stdin where a remove token used to be: the registration is
+# deleted from the host through the API (deregister_runner), so the guest's
+# config.sh remove --local takes down only the VM's copy and no secret
+# enters the guest. config.sh refuses to remove a runner whose service is
+# installed, so the service goes first, and if anything after that fails
+# (svc.sh uninstall partway through, or the local removal failing) the
+# runner's registration on GitHub is already gone and its VM copy has to be
+# cleaned by hand or by a re-run. provision.sh's ensure-service does that
+# and starts it (#99): this release's copy, put in the guest by
+# cmd_uninstall, so a VM provisioned by an older one gets it too. If that
+# fails as well, the runner is registered with no service, and `homefield
+# install` sets the service up again.
 #
-# deregister_script local: for a runner GitHub no longer has (#76), removes
-# only the VM's copy of the registration (`config.sh remove --local`, which
-# asks GitHub nothing), with an empty line for the token.
+# deregister_script local: removes only the VM's copy of the registration
+# (`config.sh remove --local`, which asks GitHub nothing), with an empty
+# line for the token.
 deregister_script() {
   # shellcheck disable=SC2016  # the guest's shell expands these, not this one
   local script='cd @HOME@ && read -r t && s=0 && { [ ! -f .service ] || s=1; } && { [ "$s" = 0 ] || ./svc.sh uninstall || { rc=$?; bash @PROVISION@ ensure-service --start; exit "$rc"; }; } && { ACTIONS_RUNNER_INPUT_TOKEN="$t" sudo --preserve-env=ACTIONS_RUNNER_INPUT_TOKEN -u runner ./config.sh remove@LOCAL@ || { rc=$?; [ "$s" = 0 ] || bash @PROVISION@ ensure-service --start; exit "$rc"; }; }'
@@ -33,11 +37,11 @@ deregister_script() {
 # runner its service back, so call it as a plain command, never from a
 # condition: errexit is off in there and the failure would pass for success.
 deregister_runner() {
-  local url="$1" id="$2" on="$3" token stage
+  local url="$1" id="$2" on="$3" stage scope host
   echo "homefield: switch every repository that routes to this runner to hosted first:" >&2
   echo "homefield:   gh variable set CI_RUNNER --repo <owner>/<repo> --body hosted" >&2
   # The restore deregister_script falls back on, staged in a private
-  # directory before the token is fetched (#185). RS_STAGE is cleaned up by
+  # directory before anything is changed (#185). RS_STAGE is cleaned up by
   # restart_runner_on_failure (the EXIT trap stop_runner set in the caller)
   # when a failure ends the command mid-flow, and explicitly after runner_back.
   stage="$(guest_stage_dir)"
@@ -46,16 +50,27 @@ deregister_runner() {
   limactl copy "$PROVISION" "${INSTANCE}:${stage}/provision.sh" ||
     { guest_unstage "$stage"; RS_STAGE=""; die "could not copy provision.sh into VM ${INSTANCE}; nothing was deregistered"; }
   # The runner is already offline (the caller stopped it right after the idle
-  # check), so the token is fetched without a job being able to start.
+  # check), so nothing can start a job while the registration goes.
   if [ "$on" = 1 ]; then
     # A full removal would ask GitHub to delete a runner it does not have.
     log "GitHub no longer has this runner (id ${id}) at ${url}; removing its registration from the VM only"
     printf '\n' | guest_stdin sudo sh -c "$(deregister_script "${stage}/provision.sh" local)"
   else
-    token="$(get_token remove "$url")"
-    log "deregistering from ${url}"
-    printf '%s\n' "$token" | guest_stdin sudo sh -c "$(deregister_script "${stage}/provision.sh")"
-    token=""
+    # The registration is deleted from the host, through the API, the way
+    # install's --replace removes a taken name: the removal token never
+    # enters the guest. A VM that has run jobs may hold a root process the
+    # job left behind, and such a process can read a token from the
+    # provisioning process's environment (/proc/<pid>/environ) — so the
+    # guest's config.sh remove --local takes down only the VM's copy, with
+    # no secret on its stdin. A failure here ends the command with the
+    # runner's service still installed, so the caller's restart trap can
+    # start it again; the runner is still registered on GitHub.
+    scope="$(api_scope "$url")" || exit 1
+    host="$(github_host "$url")"
+    log "deregistering from ${url} (id ${id})"
+    gh api --hostname "$host" -X DELETE "${scope}/actions/runners/${id}" >/dev/null ||
+      die "could not deregister runner ${id} from ${url}; remove it at $(runners_page "$url") and run this again"
+    printf '\n' | guest_stdin sudo sh -c "$(deregister_script "${stage}/provision.sh" local)"
   fi
   runner_back
   guest_unstage "$stage"

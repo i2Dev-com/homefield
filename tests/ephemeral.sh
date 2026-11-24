@@ -111,6 +111,10 @@ wait_online() { echo "wait_online:$*" >>"$CALLS"; }
 warm_vm() { WARM_STATE="warm"; WARM_DETAIL=""; }
 is_job_running() { return "${STUB_JOB_RC:-1}"; }
 is_registered() { return 1; }
+# ran_jobs: whether the VM's runner has a _work directory (it has run jobs).
+# 1 = fresh, the default: a VM the registration token may go into. 0 = it has
+# run jobs, 2 = the guest could not be asked (cases below).
+ran_jobs() { return "${STUB_RAN_JOBS:-1}"; }
 runner_service_state() { return "${STUB_SVC_RC:-0}"; }
 "$@"
 EOF
@@ -128,6 +132,7 @@ hrun() {
     STUB_PROV_FAIL="${STUB_PROV_FAIL:-0}" \
     STUB_JOB_RC="${STUB_JOB_RC:-1}" \
     STUB_SVC_RC="${STUB_SVC_RC:-0}" \
+    STUB_RAN_JOBS="${STUB_RAN_JOBS:-1}" \
     STUB_VM_GONE="${STUB_VM_GONE:-0}" \
     STUB_BASE_PRESENT="${STUB_BASE_PRESENT:-0}" \
     STUB_STOP_FAIL="${STUB_STOP_FAIL:-0}" \
@@ -173,6 +178,20 @@ STUB_JOB_RC=1 hrun cmd_re_register
 calls="$(cat "$CALLS")"
 record "re-register passes the saved switch to the guest" "0/yes" "$rc/$(has "$calls" "RUNNER_JOB_CLEANUP=1")"
 
+# 2c. a registration token must not go into a VM that has run jobs (a job's
+# leftover root process could read it from the provisioning process): the
+# fresh-registration path refuses before the token is fetched
+STUB_RAN_JOBS=0 hrun cmd_install --url https://github.com/acme --org --ephemeral
+calls="$(cat "$CALLS")"
+record "install on a VM that has run jobs: refused before the token" "nonzero/yes/no" \
+  "$(nonzero "$rc")/$(has "$out" "has run jobs")/$(has "$calls" "get_token:")"
+record "...saying how to get a fresh VM" "yes" "$(has "$out" "bin/homefield reset --instance homefield")"
+# ...and a guest that cannot be asked is refused the same way: read as fresh,
+# the token would go into a VM that may have run jobs
+STUB_RAN_JOBS=2 hrun cmd_install --url https://github.com/acme --org --ephemeral
+record "install when the guest cannot be asked: refused" "nonzero/yes" \
+  "$(nonzero "$rc")/$(has "$out" "could not ask whether homefield has run jobs")"
+
 # 3. re-register refuses when job is running
 STUB_JOB_RC=0 hrun cmd_re_register
 record "busy VM: re-register refused" "nonzero/yes" "$(nonzero "$rc")/$(has "$out" "a job is running")"
@@ -181,6 +200,16 @@ record "busy VM: re-register refused" "nonzero/yes" "$(nonzero "$rc")/$(has "$ou
 STUB_JOB_RC=1 hrun cmd_re_register
 calls="$(cat "$CALLS")"
 record "re-register happy path: stdin token + PROVISION_CMD=re-register + wait_online" "0/yes/yes/yes" "$rc/$(has "$calls" "cmd=re-register")/$(has "$calls" "input=RUNNER_TOKEN=stub-tok-123")/$(has "$calls" "wait_online:https://github.com/acme")"
+
+# 4b. the VM has run jobs and the reset is off: the re-register refuses
+# rather than put a registration token into a VM a job's leftover root
+# process could read
+printf 'ephemeral=1\nephemeral_url=https://github.com/acme\nephemeral_name=test-mac-homefield\n' >"$WORK/state/homefield.state"
+STUB_JOB_RC=1 STUB_RAN_JOBS=0 hrun cmd_re_register
+calls="$(cat "$CALLS")"
+record "re-register on a VM that has run jobs, reset off: refused" "nonzero/yes/no/no" \
+  "$(nonzero "$rc")/$(has "$out" "has run jobs")/$(has "$calls" "get_token:")/$(has "$calls" "cmd=re-register")"
+record "...naming the fresh-VM path" "yes" "$(has "$out" "bin/homefield reset --instance homefield")"
 
 # 5. re-register failure path: sets ephemeral_error and exits nonzero
 STUB_PROV_FAIL=1 STUB_JOB_RC=1 hrun cmd_re_register
@@ -211,6 +240,7 @@ get_token() { printf 'stub-tok-123\n'; }
 guest_stage_dir() { echo "/tmp/stage-1"; }
 guest_unstage() { :; }
 guest_stdin() { return 42; }
+ran_jobs() { return 1; }
 runner_setting() { echo "test-mac-homefield"; }
 wait_online() { :; }
 cmd_re_register
@@ -578,12 +608,13 @@ record "...a successful cycle clears reset_error" "yes" \
 record "...the fresh working VM does not look like a base (the inherited marker is stripped)" "no" \
   "$(grep -qF '# HomeField reset base VM' "$WORK/home/.lima/homefield/lima.yaml" && echo yes || echo no)"
 
-# 23. the stop fails: the reset is skipped, the VM and the re-register remain
+# 23. the stop fails: the reset is skipped, the old VM stays — and it has run
+# jobs, so the re-register refuses instead of putting a token into it
 mkbase
-STUB_STOP_FAIL=1 STUB_BASE_PRESENT=1 STUB_JOB_RC=1 hrun cmd_re_register
+STUB_STOP_FAIL=1 STUB_BASE_PRESENT=1 STUB_JOB_RC=1 STUB_RAN_JOBS=0 hrun cmd_re_register
 st_body="$(cat "$WORK/state/homefield.state")"; calls="$(cat "$CALLS")"
-record "reset with a failing stop: skipped, the re-register still runs, reset_error recorded" "0/yes/no/no/yes" \
-  "$rc/$(has "$st_body" "reset_error=could not stop the VM to reset it")/$(has "$calls" "limactl:delete")/$(has "$calls" "limactl:clone")/$(has "$calls" "cmd=re-register")"
+record "reset with a failing stop: skipped, the re-register refuses the dirty VM" "nonzero/yes/no/no/no/yes" \
+  "$(nonzero "$rc")/$(has "$st_body" "reset_error=could not stop the VM to reset it")/$(has "$calls" "limactl:delete")/$(has "$calls" "limactl:clone")/$(has "$calls" "cmd=re-register")/$(has "$out" "has run jobs")"
 
 # 24. the clone fails after the delete: the VM is gone, the error is recorded,
 # the re-register does not run
@@ -607,10 +638,10 @@ record "VM gone with reset_vm=1 and no base: dies naming install" "nonzero/yes" 
 
 # 27. the command's --reset-vm/--no-reset-vm override the saved switch
 printf 'ephemeral=1\nephemeral_url=https://github.com/acme\nephemeral_name=test-mac-homefield\nreset_vm=1\n' >"$WORK/state/homefield.state"
-STUB_BASE_PRESENT=1 STUB_JOB_RC=1 hrun cmd_re_register --no-reset-vm
+STUB_BASE_PRESENT=1 STUB_JOB_RC=1 STUB_RAN_JOBS=0 hrun cmd_re_register --no-reset-vm
 calls="$(cat "$CALLS")"; st_body="$(cat "$WORK/state/homefield.state")"
-record "re-register --no-reset-vm: no cycle even with reset_vm=1, error cleared" "0/no/no/yes/yes" \
-  "$rc/$(has "$calls" "limactl:stop homefield")/$(has "$calls" "limactl:clone")/$(has "$calls" "cmd=re-register")/$(grep -qx 'reset_error=' "$WORK/state/homefield.state" && echo yes || echo no)"
+record "re-register --no-reset-vm on a VM that has run jobs: refused, no cycle" "nonzero/yes/no/no/yes" \
+  "$(nonzero "$rc")/$(has "$out" "has run jobs")/$(has "$calls" "limactl:stop homefield")/$(has "$calls" "cmd=re-register")/$(grep -qx 'reset_error=' "$WORK/state/homefield.state" && echo yes || echo no)"
 printf 'ephemeral=1\nephemeral_url=https://github.com/acme\nephemeral_name=test-mac-homefield\nreset_vm=0\n' >"$WORK/state/homefield.state"
 mkbase
 STUB_BASE_PRESENT=1 STUB_JOB_RC=1 hrun cmd_re_register --reset-vm

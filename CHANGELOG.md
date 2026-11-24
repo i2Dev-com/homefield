@@ -11,6 +11,20 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ## Unreleased
 
+- **Breaking for `homefield` users** (bumps the minor when released): a
+  registration or removal token must never enter a VM that has run jobs.
+  Jobs run root-equivalent inside the guest, so a root process a job left
+  behind could read the token from the provisioning process's environment.
+  `provision.sh` refuses a token when the VM's `_work` exists, `install`
+  and `re-register` refuse before the token is fetched, and `uninstall` and
+  `reset` delete the registration through the GitHub API from the Mac, so
+  no removal token enters the guest at all. A move is now a fresh
+  registration — `bin/homefield reset --instance <name>`, then `install` at
+  the new scope; the in-place `RUNNER_REREGISTER=1` move remains only for a
+  VM that has never run a job. An ephemeral re-register with the VM reset
+  off is refused once the VM has run a job: re-register with the reset on
+  (`install --ephemeral --reset-vm`) so every cycle starts from a fresh
+  clone. Runbook: the trust boundary and moving a registration.
 - Documented: the `webhook setup` hostname must be a first-level subdomain
   of the Cloudflare zone's domain (`webhook.example.com`, not
   `webhook.ci.example.com`). The zone's free Universal SSL certificate

@@ -56,6 +56,7 @@ every job holding cloud or production credentials.
 | Secrets in jobs | Jobs on the runner receive the secrets their workflow passes, on same-repo PRs. Push-only secrets never reach it by default, because pushes run hosted; they do when `events` includes `push`, `workflow_dispatch` or `schedule`. |
 | Across repositories | Every allowed repository's PR jobs share one VM, one after another. Workspaces are per repository, but anything a job leaves in the guest (Docker images, `/tmp`, and through `sudo` the packages it installs and the services it enables) is visible to the next job from another repository. Allow only repositories you would trust with each other's PR code. |
 | Inside the VM | Jobs run as user `runner`, which is in the `docker` group and therefore root-equivalent **inside the guest**, and has passwordless `sudo` as a hosted Linux runner does. The VM is the boundary, not the user: neither adds reach the other did not give. |
+| Provisioning tokens | A registration or removal token reaches the guest only on stdin, and only into a VM that has **never run a job** (`_work` absent): jobs are root-equivalent, so a root process a job left behind could read the token from the provisioning process's environment. `provision.sh` refuses a token in a VM that has run jobs, as do `install` and `re-register`; re-register on a fresh VM — `bin/homefield reset --instance <name>` deletes the VM, then `install` registers a new one. Deregistration (`uninstall`, `reset`) removes the registration through the GitHub API from the Mac, so no removal token enters the guest at all. |
 
 **Access checklist.** Check these when something changes (a repository added,
 an owner left, a Mac replaced) and now and then regardless. The first two
@@ -1362,15 +1363,27 @@ many the scaler wakes.
 ## Moving a registration
 
 To move the runner to another scope (for example from one repository to the
-organization), re-register it in place. Pass its current `RUNNER_NAME` and
-`RUNNER_LABEL` so it keeps them and no workflow changes are needed.
-`REMOVE` is a remove-token for the **current**
-scope (for a repository: `gh api -X POST repos/<owner>/<repo>/actions/runners/remove-token --jq .token`,
-which needs repository admin). `TOKEN` is a registration token for the new
-scope (see "Registration tokens").
+organization), register it fresh: a token must not go into a VM that has run
+jobs (see the [trust boundary](#trust-boundary)), and a VM that has served
+jobs has. `bin/homefield reset --instance <name>` deregisters the runner
+(through the GitHub API, from the Mac) and deletes the VM; then install at
+the new scope:
 
-Move it while no job is running: the script refuses otherwise, then stops the
-runner before anything else.
+```bash
+bin/homefield reset --instance <name>
+bin/homefield install --instance <name> --url https://github.com/<new-scope> \
+  --name <name> --label <label>
+```
+
+Pass the current `RUNNER_NAME` and `RUNNER_LABEL` so workflows need no
+changes. The only in-place move left is a VM that has never run a job (a
+fresh registration that has not served one yet): `provision.sh` with
+`RUNNER_REREGISTER=1`, `RUNNER_REMOVE_TOKEN` for the **current** scope (for
+a repository: `gh api -X POST repos/<owner>/<repo>/actions/runners/remove-token --jq .token`,
+which needs repository admin) and `RUNNER_TOKEN` for the new scope (see
+"Registration tokens"). The script refuses both tokens in a VM that has run
+jobs, and refuses the move while a job is running, then stops the runner
+before anything else.
 
 ```bash
 limactl copy vm/provision.sh homefield:/tmp/provision.sh
@@ -1403,12 +1416,16 @@ with new values changes nothing.
 
 ## Removing the runner
 
-`bin/homefield uninstall` deregisters the runner (fetching or asking for a
-remove token), turns off autostart and deletes the VM; `--keep-vm` only
+`bin/homefield uninstall` deregisters the runner (removing the registration
+through the GitHub API from the Mac, so no removal token enters the guest),
+turns off autostart and deletes the VM; `--keep-vm` only
 deregisters. When the deleted VM was the last one on this Mac with the
 automatic fallback on, `uninstall` also removes the sleep/wake agent
 ([The sleep/wake watcher](#the-sleep-wake-watcher-sleep-and-login)); a
-`reset` does the same once its state file is gone. By hand:
+`reset` does the same once its state file is gone. By hand — only on a VM
+that has never run a job; on one that has, remove the runner on GitHub's
+runners page instead and delete the VM, so no removal token enters a guest a
+job's leftover root process could read:
 
 ```bash
 # Every repository that routes to it: switch to hosted first

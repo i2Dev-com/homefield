@@ -134,6 +134,10 @@ fi
 have_terminal() { [ "${TTY:-}" = 1 ]; }
 verify_isolation() { echo "verify_isolation" >>"$CALLS"; LOOPBACK_STATE="${STUB_LOOPBACK_STATE:-}"; log "isolation verified: no host data mounts"; }
 is_registered() { [ "${REGISTERED:-no}" = yes ]; }
+# ran_jobs: 1 (the default) is a fresh VM; 0 is one that has run jobs, which
+# the registration refuses (a token must not go into a VM a job's leftover
+# root process could read).
+ran_jobs() { return "${STUB_RAN_JOBS:-1}"; }
 cmd_upgrade() { echo "cmd_upgrade $*" >>"$CALLS"; log "upgrade ran"; }
 get_token() { echo tok123; }
 # adopt: records its arguments; ADOPT_FAIL=exit ends it like die does, =return
@@ -438,6 +442,9 @@ record "...an id that cannot be read back is not invented" "yes/no" \
 srun LIMA_STATUS=Running REGISTERED=no -- cmd_setup --url $org
 record "a VM that is there but not registered: registers, the VM line says it existed" "yes/yes/1/0" \
   "$(has "$out" '✓ VM homefield already existed (Running)')/$(has "$out" '✓ Runner registered (test-mac-homefield, id 41)')/$(called 'run_provision')/$(called 'limactl create')"
+srun LIMA_STATUS=Running REGISTERED=no STUB_RAN_JOBS=0 -- cmd_setup --url $org
+record "...a VM that has run jobs: the registration is refused before the token" "nonzero/yes" \
+  "$(nonzero "$rc")/$(has "$out" 'has run jobs')"
 
 # ── install is unchanged ───────────────────────────────────────────────────
 echo "install output"

@@ -211,8 +211,9 @@ mkdir -p "$state"
 printf 'group_created=other/x/1\n' >"$state/other.state"
 run GH_ON=0 --
 record "reset succeeds" "0" "$rc"
-record "...deregistered with a remove token, service uninstalled" "removed/no-unit/no-.service/stopped" "$(runner_state)"
-record "...GitHub asked about the runner by URL and id, a token fetched, config.sh got it" "1/1/1" "$(logged 'runner_on_github https://github.com/acme 42')/$(logged 'get_token remove')/$(logged 'config.sh remove token-in-env=yes')"
+record "...deregistered from the host, service uninstalled" "removed/no-unit/no-.service/stopped" "$(runner_state)"
+record "...GitHub asked about the runner by URL and id, the registration deleted from the host, config.sh ran with no token" "1/1/1" \
+  "$(logged 'runner_on_github https://github.com/acme 42')/$(logged 'gh api --hostname github.com -X DELETE orgs/acme/actions/runners/42')/$(logged 'config.sh remove --local token-in-env=no')"
 record "...the VM was deleted once" "1" "$(logged 'limactl delete --force resettest')"
 record "...the group was deleted by id, once" "1" "$(lines "$DEL")"
 record "...the state file is removed, another instance's is not" "no-state/yes" "$(has_state)/$([ -e "$state/other.state" ] && echo yes || echo no)"
@@ -223,6 +224,14 @@ fresh
 run GH_ON=1 --
 record "reset succeeds, removing the VM's copy only, with no token" "0/removed/0/1/1" "$rc/$(runner_state | cut -d/ -f1)/$(logged 'get_token')/$(logged 'config.sh remove --local token-in-env=no')/$(logged 'limactl delete --force')"
 record "...the report says so" "yes" "$(has "$out" 'removed from the VM only, GitHub no longer listed it')"
+
+echo "GitHub refuses the deletion from the host:"
+fresh
+run GH_ON=0 GH_DELETE_FAIL=1 --
+record "reset fails" "1" "$rc"
+record "...still registered, with its service back and running, the VM kept" "registered/unit/.service/active/0" \
+  "$(runner_state)/$(logged 'limactl delete --force resettest')"
+record "...the message says so" "yes" "$(has "$out" 'could not deregister runner 42')"
 
 echo "the reset base VM goes with the VM (#297):"
 reset_base_at() {  # a marked base, as install --reset-vm leaves it
