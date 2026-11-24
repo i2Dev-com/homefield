@@ -67,7 +67,8 @@ These are documented and not treated as vulnerabilities; see the
   Apple's x86-64 translator into the guest read-only as
   `vz-rosetta on /mnt/lima-rosetta` — two Apple-owned runtime files, nothing
   of the host's, writes refused. The isolation probe excludes that exact line
-  and refuses every other host mount.
+  only while it is mounted read-only (a writable share counts as a host
+  mount) and refuses every other host mount.
 
 ## Supported versions
 

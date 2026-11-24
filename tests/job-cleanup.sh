@@ -94,6 +94,17 @@ record "/tmp is emptied, dotfile directories included, exit 0" "0/0" \
   "$rc/$(find "$work/tmp" -mindepth 1 | wc -l | tr -d ' ')"
 record "...a file outside the scratch /tmp is untouched" "yes" "$([ -f "$work/outside" ] && echo yes || echo no)"
 
+# The guest's own /tmp state outlives the job: the PrivateTmp services hold
+# their /tmp in /tmp/systemd-private-*, and a provision run staging files for
+# the next upgrade keeps them in /tmp/homefield-stage-* (guest_stage_dir).
+# Wiping either breaks the service or the run that owns it (#323).
+reset_tree
+mkdir -p "$work/tmp/systemd-private-1ab2c3-resolved" "$work/tmp/homefield-stage-9f3e21ac"
+: >"$work/tmp/job-scratch"
+run_hook --
+record "the job scratch goes; systemd-private and homefield-stage dirs survive" "0/yes/yes/yes" \
+  "$rc/$(gone "$work/tmp/job-scratch")/$([ -d "$work/tmp/systemd-private-1ab2c3-resolved" ] && echo yes || echo no)/$([ -d "$work/tmp/homefield-stage-9f3e21ac" ] && echo yes || echo no)"
+
 # The completed hook runs as a post step of the job itself (the runner
 # registers it in Runner.Worker's job pipeline, before the result is
 # finalized): a job-running guard would match the Worker that invoked the

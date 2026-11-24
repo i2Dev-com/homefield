@@ -19,8 +19,15 @@ while IFS= read -r line; do
     *virtiofs* | *9p* | *sshfs*)
       total=$((total + 1))
       case "$line" in
-        "vz-rosetta on /mnt/lima-rosetta type virtiofs "*)
-          ros=$((ros + 1))
+        # The Rosetta share is promised read-only (SECURITY.md, bin/lib/vm.sh):
+        # the exclusion holds only while its line says so. A writable share is
+        # a host mount like any other and counts.
+        "vz-rosetta on /mnt/lima-rosetta type virtiofs ("*")")
+          opts=${line#"vz-rosetta on /mnt/lima-rosetta type virtiofs ("}
+          opts=${opts%\)}
+          case ",$opts," in
+            *,ro,*) ros=$((ros + 1)) ;;
+          esac
           ;;
       esac
       ;;

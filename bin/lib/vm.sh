@@ -279,7 +279,9 @@ isolation_fail() {
 # sh -c because isolation_probe runs on an unprovisioned VM too). It counts
 # *host data* mounts matching virtiofs/9p/sshfs/reverse-sshfs, excluding at
 # most one read-only Rosetta share (`vz-rosetta on /mnt/lima-rosetta type
-# virtiofs`, #21), and exits 3 if `mount` fails.
+# virtiofs`, #21) — and only while that line carries the ro option it
+# promises: a writable share is a host mount and counts — and exits 3 if
+# `mount` fails.
 isolation_mount_script() {
   local line trimmed
   while IFS= read -r line || [ -n "$line" ]; do

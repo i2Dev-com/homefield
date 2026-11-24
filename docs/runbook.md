@@ -1113,7 +1113,10 @@ nothing, which is easy to misread as "no containers".
     `/opt/actions-runner/.env`): after every job,
     `/usr/local/sbin/homefield-job-cleanup` removes stopped containers and
     unused custom Docker networks, the job's build state under `_work`
-    (anything not starting with `_`), and everything in `/tmp`, while tagged
+    (anything not starting with `_`), and everything in `/tmp` except the
+    guest's own state there (the `systemd-private-*` dirs of PrivateTmp
+    services and a provision run's `homefield-stage-*` staging directory),
+    while tagged
     images, BuildKit layers and apt/preset packages stay warm. `--no-job-cleanup`
     takes it back out; the switch is saved in the guest, so later runs and
     re-registers keep it. The hook runs before the job's result is finalized,

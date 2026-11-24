@@ -76,7 +76,9 @@ empirically from inside the running guest:
   `verify_isolation` runs `isolation_probe` on every install/upgrade/provision,
   executing [`vm/guest/homefield-mount-count`](../vm/guest/homefield-mount-count)
   inside the guest to count host mounts (`virtiofs`/`9p`/`sshfs`/`reverse-sshfs`,
-  excluding at most one `vz-rosetta on /mnt/lima-rosetta` line) and confirming
+  excluding at most one read-only `vz-rosetta on /mnt/lima-rosetta` line: the
+  `ro` option the share promises is required, and a writable share counts as
+  a host mount) and confirming
   `/Users` is invisible (`guest_sees /Users` returns 1). Non-zero counts or
   unresponsive guests abort immediately.
 - **Empirical host-loopback check** ([`bin/lib/vm.sh:445-475`](../bin/lib/vm.sh#L445-L475)):

@@ -32,6 +32,7 @@ stub docker 'echo "docker $*" >>"$CALLS"'
 stub systemctl 'echo "systemctl $*" >>"$CALLS"
 case "$1 $2" in
   "reboot ") [ -n "${REBOOT_FAILS:-}" ] && exit 1 ;;
+  "is-active"*) [ -n "${STOPPED:-}" ] && exit 3 ;;
 esac
 exit 0'
 stub apt-get 'echo "apt-get $*" >>"$CALLS"
@@ -111,13 +112,18 @@ maintenance() {
   : >"$calls"
   rm -rf "$work/runner" "$work/reboot-required"
   mkdir -p "$work/runner"
-  echo "actions.runner.test.service" >"$work/runner/.service"
   local -a envs=()
   while [ $# -gt 0 ] && [ "$1" != "--" ]; do envs+=("$1"); shift; done
   [ $# -gt 0 ] && shift
+  # NO_SERVICE leaves .service absent: the state the guard reads (a cut-off
+  # uninstall, provisioning not finished). ${envs[*]:-}: bash 3.2 calls an
+  # empty array unbound under set -u.
+  case "${envs[*]:-}" in
+    *NO_SERVICE*) ;;
+    *) echo "actions.runner.test.service" >"$work/runner/.service" ;;
+  esac
   # REBOOT_REQUIRED is one of the run's env assignments; the flag file it
   # names is created here, in the tree the sed points the check at.
-  # ${envs[*]:-}: bash 3.2 calls an empty array unbound under set -u.
   case "${envs[*]:-}" in *REBOOT_REQUIRED*) : >"$work/reboot-required" ;; esac
   local cmd=(env -i PATH="$stubs:$PATH" CALLS="$calls" WORK="$work" PAGER=cat)
   [ ${#envs[@]} -gt 0 ] && cmd+=("${envs[@]}")
@@ -143,6 +149,22 @@ record "the reboot is refused: the runner is started instead" "0/1/1/yes" \
 maintenance APT_FAIL=upgrade --
 record "an apt-get failure: the trap starts the unit back up, exit nonzero" "nonzero/1/1" \
   "$(nonzero "$rc")/$(systemctl_calls 'stop')/$(systemctl_calls 'start')"
+
+# A runner that was already stopped when maintenance ran (a provision run
+# mid-re-register, a cut-off deregistration) must stay stopped: maintenance
+# restarts only what it stopped itself (#323).
+maintenance STOPPED=1 --
+record "a runner already stopped: nothing stopped, nothing started, exit 0" "0/0/0" \
+  "$rc/$(systemctl_calls 'stop')/$(systemctl_calls 'start')"
+maintenance STOPPED=1 REBOOT_REQUIRED=1 --
+record "a reboot required with the runner already stopped: the reboot is left to what stopped it" "0/yes/no/0/0" \
+  "$rc/$(has "$out" 'already stopped')/$(has "$out" 'rebooting')/$(systemctl_calls 'reboot')/$(systemctl_calls 'start')"
+maintenance STOPPED=1 APT_FAIL=upgrade --
+record "an apt-get failure with the runner already stopped: the trap leaves it stopped" "nonzero/0/0" \
+  "$(nonzero "$rc")/$(systemctl_calls 'stop')/$(systemctl_calls 'start')"
+maintenance NO_SERVICE=1 --
+record "no .service file: a warning, the upgrade runs, nothing stopped or started" "0/0/0/1" \
+  "$rc/$(systemctl_calls 'stop')/$(systemctl_calls 'start')/$(grep -c 'apt-get upgrade' "$calls")"
 
 if command -v shellcheck >/dev/null; then
   record "shellcheck of the guest helpers" "clean" \
