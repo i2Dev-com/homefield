@@ -9,10 +9,19 @@ fail, such as a new guard in the routing expression, bumps the minor version
 (0.1 to 0.2). Compatible changes bump the patch. Merged changes wait on
 `main`, under *Unreleased*, until a release is cut.
 
-## Unreleased
+## v0.6.0 (2026-11-24)
 
-- **Breaking for consumers of the routing guard** (bumps the minor when
-  released): the guard now refuses workflow shapes it cannot attribute to a
+Bumps the minor from v0.5.10, and it is breaking — for consumers of the
+routing guard and for `homefield` users alike. A workflow that passed
+`routing-guard@v0.5.10` may fail `@v0.6.0`: the guard now refuses shapes it
+cannot attribute to a job (the failure messages say how to write the plain
+form). A `homefield` install that passed an earlier release's token guard
+may refuse to install or re-register: a registration or removal token now
+never enters a VM that has run jobs, and the moves that would put one there
+are refused with the command to run instead. Four security
+advisories are fixed; see [docs/security.md](docs/security.md).
+
+- **Breaking for consumers of the routing guard**: the guard now refuses workflow shapes it cannot attribute to a
   job, and fails any job it read no routing for. Inside `jobs:` a line that
   opens a flow mapping or sequence, or starts an alias, an anchor or a tag,
   fails — a job written as a multi-line `{...}` mapping, or an alias as a
@@ -29,7 +38,7 @@ fail, such as a new guard in the routing expression, bumps the minor version
   way the guard does, and fails closed when the guard step's job cannot be
   read, so a guard disabled at the job level under a quoted key is no
   longer accepted.
-- **Breaking for `homefield` users** (bumps the minor when released): a
+- **Breaking for `homefield` users**: a
   registration or removal token must never enter a VM that has run jobs.
   Jobs run root-equivalent inside the guest, so a root process a job left
   behind could read the token from the provisioning process's environment.
