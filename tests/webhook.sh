@@ -89,9 +89,11 @@ PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); p
 # The tick budget is 5 s — comfortably longer than a stub spawn takes even
 # under the pool's load (a shorter budget has the receiver kill healthy
 # ticks before they record their call) — and the hung-tick stub below sleeps
-# far past it, so the budget is what ends it.
+# far past it, so the budget is what ends it. The read deadline and the
+# connection cap are small so the slowloris tests below run in seconds.
 HOMEFIELD_STATE_DIR="$TMP/state" HOMEFIELD_WEBHOOK_PORT="$PORT" HOMEFIELD_SCALE_TICK_BUDGET=5 \
-  HOMEFIELD_WEBHOOK_DEBOUNCE=10 CALLS_SLEEP_FLAG="$TMP/stub-sleep" \
+  HOMEFIELD_WEBHOOK_DEBOUNCE=10 HOMEFIELD_WEBHOOK_READ_TIMEOUT=2 HOMEFIELD_WEBHOOK_MAX_CONNECTIONS=4 \
+  CALLS_SLEEP_FLAG="$TMP/stub-sleep" \
   python3 "$TMP/app/bin/webhook-receiver.py" 2>"$TMP/receiver.err" &
 RECEIVER_PID=$!
 
@@ -252,6 +254,59 @@ mv "$TMP/secret.away" "$SECRET_FILE"
 out="$(raw $PORT $'POST /webhook HTTP/1.1\r\nHost: x\r\n\r\n')"
 record "missing Content-Length: 411" "411" "$out"
 
+# an unauthenticated peer can declare a Content-Length and never send the
+# body: the read deadline closes the connection instead of holding a thread
+# forever, and the receiver stays healthy afterwards
+python3 - "$PORT" >"$TMP/slowloris.txt" 2>&1 <<'PY'
+import socket, sys
+s = socket.create_connection(("127.0.0.1", int(sys.argv[1])), timeout=5)
+s.sendall(b"POST /webhook HTTP/1.1\r\nHost: x\r\nContent-Length: 100\r\n\r\n")
+s.settimeout(6)
+try:
+    data = s.recv(1024)
+    print("closed" if data == b"" else "responded")
+except socket.timeout:
+    print("held")
+PY
+case "$(cat "$TMP/slowloris.txt")" in
+  closed) r=yes ;; *) r=no ;;
+esac
+record "slowloris: an incomplete body is closed at the read deadline" "yes" "$r"
+record "slowloris: the receiver stays healthy" "200" "$(get /healthz)"
+
+# the connection cap bounds what a peer that only opens connections can
+# make the server hold: excess connections are closed before a thread is
+# spent on them, and the receiver recovers once they go away
+python3 - "$PORT" >"$TMP/cap.txt" 2>&1 <<'PY'
+import socket, sys
+port = int(sys.argv[1])
+holders = []
+for _ in range(4):
+    s = socket.create_connection(("127.0.0.1", port), timeout=5)
+    s.sendall(b"POST /webhook HTTP/1.1\r\nHost: x\r\nContent-Length: 100\r\n\r\n")
+    holders.append(s)
+extra = socket.create_connection(("127.0.0.1", port), timeout=5)
+extra.sendall(b"GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n")
+extra.settimeout(3)
+try:
+    data = extra.recv(1024)
+    print("closed" if data == b"" else "served")
+except socket.timeout:
+    print("held")
+except OSError:
+    # the server tore the connection down with our request unread: a reset
+    # is the cap refusing the connection, same as a clean close
+    print("closed")
+for s in holders:
+    s.close()
+extra.close()
+PY
+case "$(cat "$TMP/cap.txt")" in
+  closed) r=yes ;; *) r=no ;;
+esac
+record "slowloris: a connection past the cap is closed, not threaded" "yes" "$r"
+record "slowloris: the receiver recovers after the holders go away" "200" "$(get /healthz)"
+
 # shutdown: a running tick does not outlive the receiver — it was started
 # in a session of its own and its budget supervisor is a daemon thread, so
 # a hung tick would hold the scaler's lock forever after a restart
@@ -278,6 +333,63 @@ wait "$RECEIVER_PID"; rc=$?
 kill "$watchdog_pid" 2>/dev/null
 record "shutdown: the receiver exits cleanly" "0" "$rc"
 rm -f "$TMP/stub-sleep"
+
+# the sleep side kills a webhook tick the same way it kills its own scale
+# tick: the tick lock serializes ticks with each other, but it does not
+# protect the sleep-side routing flip from a tick that survives the sleep
+# notification. route-watcher.py is macOS-only (IOKit at import); elsewhere
+# the suite skips this part.
+if HOMEFIELD_STATE_DIR="$TMP/state" python3 -c "
+import importlib.util
+spec = importlib.util.spec_from_file_location('rw', '$ROOT/bin/route-watcher.py')
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+" 2>/dev/null; then
+  printf '60\n' >"$TMP/stub-sleep"
+  tick_pid="$(CALLS_SLEEP_FLAG="$TMP/stub-sleep" python3 - "$TMP/app/bin/homefield" <<'PY'
+import subprocess, sys
+print(subprocess.Popen([sys.argv[1], "fleet", "watch", "--max-ticks", "1"],
+                       start_new_session=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).pid)
+PY
+)"
+  printf '%s\n' "$tick_pid" >"$TMP/state/route-watcher/webhook/tick.pid"
+  kill -0 "$tick_pid" 2>/dev/null && r=yes || r=no
+  record "sleep side: the webhook tick is running" "yes" "$r"
+  HOMEFIELD_STATE_DIR="$TMP/state" python3 -c "
+import importlib.util
+spec = importlib.util.spec_from_file_location('rw', '$ROOT/bin/route-watcher.py')
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+m.stop_webhook_tick()
+"
+  r=no
+  for _ in $(seq 1 50); do
+    kill -0 "$tick_pid" 2>/dev/null || { r=yes; break; }
+    sleep 0.1
+  done
+  record "sleep side: the tick is killed before the flip" "yes" "$r"
+
+  # the pid file can be stale and a stale pid recycled: the kill only lands
+  # on a process whose command line is the tick's
+  python3 -c 'import time; time.sleep(300)' 2>/dev/null &
+  innocent_pid=$!
+  printf '%s\n' "$innocent_pid" >"$TMP/state/route-watcher/webhook/tick.pid"
+  HOMEFIELD_STATE_DIR="$TMP/state" python3 -c "
+import importlib.util
+spec = importlib.util.spec_from_file_location('rw', '$ROOT/bin/route-watcher.py')
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+m.stop_webhook_tick()
+"
+  kill -0 "$innocent_pid" 2>/dev/null && r=yes || r=no
+  record "sleep side: a pid that is not a tick is left alone" "yes" "$r"
+  kill "$innocent_pid" 2>/dev/null || true
+  wait "$innocent_pid" 2>/dev/null
+  rm -f "$TMP/stub-sleep"
+else
+  echo "  skip sleep-side tick kill (route-watcher.py needs macOS IOKit)"
+fi
 
 # ---------------------------------------------------------------------------
 # Part 2 — the commands, against stubbed cloudflared/gh/launchctl.
@@ -347,6 +459,7 @@ run() {
     HOMEFIELD_SCALE_IDLE="${HOMEFIELD_SCALE_IDLE:-}" HOMEFIELD_SCALE_MAX="${HOMEFIELD_SCALE_MAX:-}" \
     HOMEFIELD_SCALE_ZERO="${HOMEFIELD_SCALE_ZERO:-}" HOMEFIELD_SCALE_TICK_BUDGET="${HOMEFIELD_SCALE_TICK_BUDGET:-}" \
     HOMEFIELD_WEBHOOK_TUNNEL="${HOMEFIELD_WEBHOOK_TUNNEL:-}" \
+    HOMEFIELD_WEBHOOK_READ_TIMEOUT="${HOMEFIELD_WEBHOOK_READ_TIMEOUT:-}" HOMEFIELD_WEBHOOK_MAX_CONNECTIONS="${HOMEFIELD_WEBHOOK_MAX_CONNECTIONS:-}" \
     "$BASH" -c '. "$1"; shift; "$@"' _ "$ROOT/bin/homefield" cmd_webhook "$@" 2>&1 </dev/null
 }
 
@@ -394,6 +507,11 @@ record "setup: the secret is 0600" "600" "$(python3 -c 'import os,stat,sys; prin
 record "setup: the config records hostname, port, tunnel" "webhook.example.com/18787/homefield-webhook" \
   "$(grep -h '^hostname=' "$STATE2/route-watcher/webhook/config" | cut -d= -f2)/$(grep -h '^port=' "$STATE2/route-watcher/webhook/config" | cut -d= -f2)/$(grep -h '^tunnel=' "$STATE2/route-watcher/webhook/config" | cut -d= -f2)"
 record "setup: prints the public URL" "yes" "$(has "$out" 'https://webhook.example.com/webhook')"
+HOMEFIELD_WEBHOOK_READ_TIMEOUT=5 HOMEFIELD_WEBHOOK_MAX_CONNECTIONS=8
+out="$(run "$STATE2" setup --hostname webhook.example.com --port 18787)"
+record "setup: the receiver's read deadline and cap are baked into the plist" "yes/yes" \
+  "$(has "$(cat "$plist" 2>/dev/null)" '<key>HOMEFIELD_WEBHOOK_READ_TIMEOUT</key>')/$(has "$(cat "$plist" 2>/dev/null)" '<key>HOMEFIELD_WEBHOOK_MAX_CONNECTIONS</key>')"
+unset HOMEFIELD_WEBHOOK_READ_TIMEOUT HOMEFIELD_WEBHOOK_MAX_CONNECTIONS
 unset HOMEFIELD_SCALE_ZERO HOMEFIELD_SCALE_MAX
 
 # re-run: the route step's "already exists" failure is not an error

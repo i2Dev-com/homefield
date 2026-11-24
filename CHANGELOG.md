@@ -28,12 +28,20 @@ delivery spawns one `fleet watch --max-ticks 1` tick — so a dark VM's wake
 payload decides nothing, the tick's demand filter stays the only decision
 point (a delivery for a job the routing would never send here costs one
 harmless evaluation), and the tick lock serializes a webhook tick with the
-route watcher's own. `webhook status` reports the pieces; `webhook remove
-[--purge]` takes them down. Without the setup, the tick design is
-unchanged. `webhook status` and the runbook's receiver section document the
-trade: one more always-on agent, and a public URL that accepts GitHub's
-authenticated deliveries (anything else gets a generic 403 before the body
-is parsed).
+route watcher's own. A webhook-spawned tick runs under the same
+`HOMEFIELD_SCALE_TICK_BUDGET` the route watcher gives its ticks (a hung
+tick is killed with its process tree, on the budget and at receiver
+shutdown), the route watcher's sleep side kills a running webhook tick
+before the sleep-side routing flip, and the endpoint is bounded against
+peers that never speak (a read deadline and a connection cap, both
+env-tunable). `webhook status` reports the pieces; `webhook remove
+[--purge]` takes them down, and `webhook connect` refreshes an existing
+hook with the current secret, so a remove + re-setup secret rotation
+cannot leave GitHub signing with the old one. Without the setup, the tick
+design is unchanged. `webhook status` and the runbook's receiver section
+document the trade: one more always-on agent, and a public URL that
+accepts GitHub's authenticated deliveries (anything else gets a generic
+403 before the body is parsed).
 
 ## v0.5.8 (2026-11-23)
 

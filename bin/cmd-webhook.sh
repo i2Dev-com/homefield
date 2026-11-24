@@ -197,6 +197,12 @@ webhook_agent_install() {
   if [ -n "${HOMEFIELD_WEBHOOK_TUNNEL:-}" ]; then
     env_xml="${env_xml}    <key>HOMEFIELD_WEBHOOK_TUNNEL</key>"$'\n'"    <string>$(route_watcher_xml_escape "$HOMEFIELD_WEBHOOK_TUNNEL")</string>"$'\n'
   fi
+  if [ -n "${HOMEFIELD_WEBHOOK_READ_TIMEOUT:-}" ]; then
+    env_xml="${env_xml}    <key>HOMEFIELD_WEBHOOK_READ_TIMEOUT</key>"$'\n'"    <string>$(route_watcher_xml_escape "$HOMEFIELD_WEBHOOK_READ_TIMEOUT")</string>"$'\n'
+  fi
+  if [ -n "${HOMEFIELD_WEBHOOK_MAX_CONNECTIONS:-}" ]; then
+    env_xml="${env_xml}    <key>HOMEFIELD_WEBHOOK_MAX_CONNECTIONS</key>"$'\n'"    <string>$(route_watcher_xml_escape "$HOMEFIELD_WEBHOOK_MAX_CONNECTIONS")</string>"$'\n'
+  fi
   # The scaler's tuning reaches this agent the same way it reaches the
   # route watcher's: a webhook-triggered tick is the same tick, and an
   # operator's fleet cap, idle cooldown or scale-to-zero switch must bind

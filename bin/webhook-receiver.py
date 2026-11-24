@@ -99,6 +99,18 @@ DEBOUNCE = _positive_float("HOMEFIELD_WEBHOOK_DEBOUNCE", 1.0)
 # forever, which would stand down every later delivery and periodic tick
 # alike — scaling for the whole fleet would stop.
 TICK_BUDGET = _positive_float("HOMEFIELD_SCALE_TICK_BUDGET", 1800)
+# Seconds a connection may take between reads before the server closes it:
+# an unauthenticated peer can declare a Content-Length and never send the
+# body, and without a deadline each such request holds a thread and a
+# socket indefinitely. GitHub's deliveries are a few KB on a live
+# connection; 10 s is generous for them and fatal for a slowloris.
+READ_TIMEOUT = _positive_float("HOMEFIELD_WEBHOOK_READ_TIMEOUT", 10.0)
+# Concurrent connections the server serves at all: each is a thread plus a
+# socket, and the cap bounds what a peer that only opens connections can
+# make the server hold. Excess connections are closed before a thread is
+# spent on them — GitHub retries a rejected delivery; a thread pile-up
+# does not recover.
+MAX_CONNECTIONS = _int_env("HOMEFIELD_WEBHOOK_MAX_CONNECTIONS", 32)
 ACTIONS = {
     a.strip()
     for a in (os.environ.get("HOMEFIELD_WEBHOOK_ACTIONS") or "queued,completed").split(",")
@@ -161,6 +173,15 @@ def tick_child_alive():
     try:
         os.kill(pid, 0)
     except OSError:
+        # A pid the file names that no longer runs: the file is stale (a
+        # tick this receiver instance did not spawn exits without anything
+        # reaping it), and a stale pid can later be recycled — drop the
+        # file so neither we nor the sleep side mistake a recycled pid for
+        # a live tick.
+        try:
+            os.remove(TICK_PID_FILE)
+        except OSError:
+            pass
         return False
     return True
 
@@ -223,6 +244,9 @@ def spawn_tick():
 
 class Receiver(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
+    # Closes a connection that stops reading mid-request (see READ_TIMEOUT);
+    # handle_one_request turns the socket timeout into a clean close.
+    timeout = READ_TIMEOUT
 
     # Generic responses only: an error body that explains which check failed
     # is reconnaissance for an attacker probing the endpoint.
@@ -312,6 +336,37 @@ class Receiver(http.server.BaseHTTPRequestHandler):
         pass  # the handler's own lines say everything worth logging
 
 
+handler_slots = threading.BoundedSemaphore(MAX_CONNECTIONS)
+
+
+class ReceiverServer(http.server.ThreadingHTTPServer):
+    daemon_threads = True
+
+    # Bound the connections the server serves (see MAX_CONNECTIONS): a peer
+    # that only opens connections and never speaks is closed here, before
+    # a thread is spent on it.
+    def process_request(self, request, client_address):
+        if not handler_slots.acquire(blocking=False):
+            try:
+                request.close()
+            except OSError:
+                pass
+            return
+        super().process_request(request, client_address)
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            handler_slots.release()
+
+    def handle_error(self, request, client_address):
+        # A connection the cap closed (or a peer that hung up mid-request)
+        # surfaces here as a reset; a traceback per refused connection is
+        # noise, not signal. One line, then move on.
+        log("dropped a connection from %s: %s" % (client_address[0], sys.exc_info()[1]))
+
+
 def tunnel_command():
     """The cloudflared child's command line, re-resolved on every (re)start
     so a brew upgrade that moves the binary is picked up on the next retry."""
@@ -382,7 +437,7 @@ def main():
     signal.signal(signal.SIGTERM, terminate)
     signal.signal(signal.SIGINT, terminate)
     threading.Thread(target=supervise_tunnel, daemon=True).start()
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", PORT), Receiver)
+    server = ReceiverServer(("127.0.0.1", PORT), Receiver)
     log(
         "listening on 127.0.0.1:%d%s (actions=%s)"
         % (PORT, WEBHOOK_PATH, ",".join(sorted(ACTIONS)))

@@ -971,7 +971,17 @@ default (`HOMEFIELD_WEBHOOK_ACTIONS` changes the set). It is a doorbell,
 not a brain: the payload decides nothing, and a delivery for a job the
 routing would never send here costs one harmless evaluation — the tick
 answers "nothing waits" for it. The tick lock serializes a webhook tick
-with the route watcher's own, so the two agents cannot interleave.
+with the route watcher's own, so the two agents cannot interleave — and
+the route watcher's sleep side kills a running webhook tick before the
+sleep-side routing flip, the same way it kills its own: a tick that
+survived the sleep notification could route repositories back to the
+now-sleeping runner after the flip. The endpoint is also bounded against
+peers that never speak: a connection that stops reading mid-request is
+closed at the read deadline (`HOMEFIELD_WEBHOOK_READ_TIMEOUT`, default
+10 s), and only so many connections are served at once
+(`HOMEFIELD_WEBHOOK_MAX_CONNECTIONS`, default 32) — a peer that only
+opens connections is refused before a thread is spent on it, and GitHub
+retries a refused delivery.
 
 The trade is inbound configuration and attack surface the tick-only
 design does not have: one more always-on agent, and a public URL that
