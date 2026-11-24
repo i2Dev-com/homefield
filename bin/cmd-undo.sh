@@ -22,7 +22,7 @@
 # line for the token.
 deregister_script() {
   # shellcheck disable=SC2016  # the guest's shell expands these, not this one
-  local script='cd @HOME@ && read -r t && s=0 && { [ ! -f .service ] || s=1; } && mkdir -p @BACKUP@ && for f in .runner .credentials .credentials_rsaparams .env; do { [ ! -f "$f" ] || cp -p "$f" @BACKUP@/; }; done && restore_reg() { cd @HOME@ && for f in .runner .credentials .credentials_rsaparams .env; do { [ ! -f @BACKUP@/"$f" ] || cp -p @BACKUP@/"$f" ./; }; done; } && { [ "$s" = 0 ] || ./svc.sh uninstall || { rc=$?; restore_reg; bash @PROVISION@ ensure-service --start; exit "$rc"; }; } && { ACTIONS_RUNNER_INPUT_TOKEN="$t" sudo --preserve-env=ACTIONS_RUNNER_INPUT_TOKEN -u runner ./config.sh remove@LOCAL@ || { rc=$?; restore_reg; [ "$s" = 0 ] || bash @PROVISION@ ensure-service --start; exit "$rc"; }; }'
+  local script='cd @HOME@ && read -r t && s=0 && { [ ! -f .service ] || s=1; } && mkdir -p @BACKUP@ && for f in .runner .credentials .credentials_rsaparams .env; do if [ -f "$f" ]; then cp -p "$f" @BACKUP@/ || { echo "homefield: could not back up $f in the VM; nothing was removed" >&2; exit 1; }; fi; done && restore_reg() { cd @HOME@ && for f in .runner .credentials .credentials_rsaparams .env; do { [ ! -f @BACKUP@/"$f" ] || cp -p @BACKUP@/"$f" ./; }; done; } && { [ "$s" = 0 ] || ./svc.sh uninstall || { rc=$?; restore_reg; bash @PROVISION@ ensure-service --start; exit "$rc"; }; } && { ACTIONS_RUNNER_INPUT_TOKEN="$t" sudo --preserve-env=ACTIONS_RUNNER_INPUT_TOKEN -u runner ./config.sh remove@LOCAL@ || { rc=$?; restore_reg; [ "$s" = 0 ] || bash @PROVISION@ ensure-service --start; exit "$rc"; }; }'
   local provision="$1" flag=""
   [ "${2:-}" != local ] || flag=" --local"
   script="${script//@HOME@/$RUNNER_HOME}"

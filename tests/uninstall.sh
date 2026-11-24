@@ -227,6 +227,22 @@ record "...the registration is kept on GitHub and in the VM, the service back" "
 record "...the service was reinstalled once, and started" "1/yes" "$(logged 'svc.sh install runner')/$([ "$(logged 'systemctl start')" -ge 1 ] && echo yes || echo no)"
 record "...the message says so" "yes" "$(has "$out" 'starting '"$unit"' again')"
 
+echo "a registration file cannot be backed up:"
+# The backup runs before anything is removed, and one failed copy aborts the
+# whole cleanup: proceeding with an incomplete backup would risk a failed
+# API deletion with nothing to restore. The runner is stopped but intact,
+# and the host's restart trap starts its service again.
+fresh
+: >"$home/.credentials"
+chmod 000 "$home/.credentials"
+run env
+record "uninstall fails, nothing removed" "1/registered/unit/.service/active" \
+  "$rc/$(state)"
+record "...the cleanup never ran: no config.sh, no API deletion" "0/0" \
+  "$(logged 'config.sh')/$(logged 'gh api --hostname github.com -X DELETE')"
+record "...the message names the file and says nothing was removed" "yes/yes" \
+  "$(has "$out" 'could not back up .credentials')/$(has "$out" 'nothing was removed')"
+
 echo "svc.sh uninstall fails partway (#83):"
 for at in disable unit_remove marker_remove reload; do
   fresh

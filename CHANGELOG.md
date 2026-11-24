@@ -36,7 +36,8 @@ fail, such as a new guard in the routing expression, bumps the minor version
   re-registering it in place is refused even when `_work` is absent.
   Deregistration order changed: the VM's local cleanup runs first, while
   the registration still exists on GitHub, with the registration files
-  backed up before anything is removed — a failure there restores the
+  backed up before anything is removed (one failed copy aborts the cleanup
+  with nothing removed) — a failure there restores the
   files and the service, and the runner keeps taking jobs; the
   irreversible API deletion goes last, and a failed one restores the same
   backup and says to fix the cause and re-run. A move is now a fresh
