@@ -1162,6 +1162,13 @@ runner_back() { :; }
 EOF
 iharness() {
   : >"$calls"
+  # A clean state file per install: a registration records ever_registered
+  # (the host-side token guard), and the next install on the same VM is
+  # refused by design. Cases that pre-set state before a call do it for
+  # upgrades, which keep the file.
+  if [ "$1" = cmd_install ]; then
+    rm -f "$state/homefield.state"
+  fi
   out="$(env -i HOME="$work/home" PATH="$stubs" CALLS="$calls" ROOT="$ROOT" \
     HOMEFIELD_STATE_DIR="$state" LIMA_STATUS=Running CLOCK_EPOCH="$CLOCK_EPOCH" GH_RUNNERS='41\tonline\tfalse\n' \
     STUB_RAN_JOBS="${STUB_RAN_JOBS:-1}" \

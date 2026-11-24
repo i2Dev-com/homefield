@@ -6,14 +6,14 @@
 # deleted from the host through the API (deregister_runner), so the guest's
 # config.sh remove --local takes down only the VM's copy and no secret
 # enters the guest. config.sh refuses to remove a runner whose service is
-# installed, so the service goes first, and if anything after that fails
-# (svc.sh uninstall partway through, or the local removal failing) the
-# runner's registration on GitHub is already gone and its VM copy has to be
-# cleaned by hand or by a re-run. provision.sh's ensure-service does that
-# and starts it (#99): this release's copy, put in the guest by
-# cmd_uninstall, so a VM provisioned by an older one gets it too. If that
-# fails as well, the runner is registered with no service, and `homefield
-# install` sets the service up again.
+# installed, so the service goes first. This script runs before the API
+# deletion, while the registration still exists on GitHub: if anything here
+# fails (svc.sh uninstall partway through, or the local removal failing),
+# restoring the service recovers a runner GitHub still knows. provision.sh's
+# ensure-service does that and starts it (#99): this release's copy, put in
+# the guest by cmd_uninstall, so a VM provisioned by an older one gets it
+# too. If that fails as well, the runner is registered with no service, and
+# `homefield install` sets the service up again.
 #
 # deregister_script local: removes only the VM's copy of the registration
 # (`config.sh remove --local`, which asks GitHub nothing), with an empty
@@ -32,10 +32,16 @@ deregister_script() {
 # already taken out of service; <on> is runner_on_github's answer for it (1:
 # GitHub no longer has it, so only the VM's copy of the registration goes).
 # Shared by uninstall and reset. The caller has checked that no job is
-# running and called stop_runner, which arms restart_runner_on_failure. A
-# failure ends the command (die, or `set -e`) after that trap has given the
-# runner its service back, so call it as a plain command, never from a
-# condition: errexit is off in there and the failure would pass for success.
+# running and called stop_runner, which arms restart_runner_on_failure. The
+# fallible guest cleanup runs first — while the registration still exists on
+# GitHub, so the trap's restore recovers a working runner — and the
+# irreversible API deletion goes last, after the trap is disarmed: there is
+# no service left to restore, and a failed deletion says what to do by hand
+# instead of starting a runner whose registration is gone. A failure in the
+# guest cleanup ends the command (die, or `set -e`) after that trap has
+# given the runner its service back, so call it as a plain command, never
+# from a condition: errexit is off in there and the failure would pass for
+# success.
 deregister_runner() {
   local url="$1" id="$2" on="$3" stage scope host
   echo "homefield: switch every repository that routes to this runner to hosted first:" >&2
@@ -55,6 +61,9 @@ deregister_runner() {
     # A full removal would ask GitHub to delete a runner it does not have.
     log "GitHub no longer has this runner (id ${id}) at ${url}; removing its registration from the VM only"
     printf '\n' | guest_stdin sudo sh -c "$(deregister_script "${stage}/provision.sh" local)"
+    runner_back
+    guest_unstage "$stage"
+    RS_STAGE=""
   else
     # The registration is deleted from the host, through the API, the way
     # install's --replace removes a taken name: the removal token never
@@ -62,20 +71,25 @@ deregister_runner() {
     # job left behind, and such a process can read a token from the
     # provisioning process's environment (/proc/<pid>/environ) — so the
     # guest's config.sh remove --local takes down only the VM's copy, with
-    # no secret on its stdin. A failure here ends the command with the
-    # runner's service still installed, so the caller's restart trap can
-    # start it again; the runner is still registered on GitHub.
+    # no secret on its stdin. The local cleanup runs first, while the
+    # registration still exists on GitHub: a failure here ends the command
+    # with the runner's service still installed, so the caller's restart
+    # trap can start it again — a runner that is still registered and takes
+    # jobs. The API deletion is irreversible and goes last, after the
+    # restart trap is disarmed: by then there is no service left to restore,
+    # and a failed deletion is handled by the message below, not by starting
+    # a runner whose registration is gone.
     scope="$(api_scope "$url")" || exit 1
     host="$(github_host "$url")"
     log "deregistering from ${url} (id ${id})"
-    gh api --hostname "$host" -X DELETE "${scope}/actions/runners/${id}" >/dev/null ||
-      die "could not deregister runner ${id} from ${url}; remove it at $(runners_page "$url") and run this again"
     printf '\n' | guest_stdin sudo sh -c "$(deregister_script "${stage}/provision.sh" local)"
+    runner_back
+    guest_unstage "$stage"
+    # shellcheck disable=SC2034  # read by lib/vm.sh's restart_runner_on_failure
+    RS_STAGE=""
+    gh api --hostname "$host" -X DELETE "${scope}/actions/runners/${id}" >/dev/null ||
+      die "could not deregister runner ${id} from ${url}; its VM copy is already removed, so remove the runner itself at $(runners_page "$url") (it shows offline until you do), then delete the VM by hand: limactl delete --force ${INSTANCE}"
   fi
-  runner_back
-  guest_unstage "$stage"
-  # shellcheck disable=SC2034  # read by lib/vm.sh's run_provision
-  RS_STAGE=""
 }
 
 # delete_vm: takes the VM out of start at login, stops it and deletes it.

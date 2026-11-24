@@ -890,6 +890,38 @@ cmd_install() {
     env+=(RUNNER_EXTRA_PACKAGES="$packages")
   fi
 
+  # A registration token reaches the guest on stdin and sits in the
+  # provisioning process's environment for the whole provision run (minutes:
+  # the package upgrade alone). A VM that has run jobs may hold a root
+  # process the job left behind, and such a process can read the token from
+  # /proc/<pid>/environ — so a token only goes into a VM that has not run
+  # one. The boundary is host-side: the state file records whether a runner
+  # has ever been registered on this VM, and a registered runner can run
+  # jobs the host never sees, so "never registered" is the only freshness
+  # the host can vouch for. The guest's _work probe is the second line: a
+  # VM that has never been registered cannot have run a job (jobs need a
+  # registered runner), so there its answer is sound, and it catches a lost
+  # state file — but a VM that has run jobs cannot prove anything about
+  # itself (the directory is under the job's root's control), which is why
+  # the state, not the probe, is the boundary. The base a reset clones from
+  # was cloned before any job, so `reset` then `install` re-registers on a
+  # fresh VM.
+  if [ -n "$VM_STATUS" ]; then
+    if [ "$(state_get ever_registered)" = "1" ]; then
+      die "${cmd}: ${INSTANCE} has been registered before, so it may have run jobs, and a registration token must not go into it (a job's leftover root process could read it from the provisioning process); re-register on a fresh VM: bin/homefield reset --instance ${INSTANCE}, then install again"
+    fi
+    local ran_rc=0
+    ran_jobs || ran_rc=$?
+    case "$ran_rc" in
+      0)
+        die "${cmd}: ${INSTANCE} has run jobs, so a registration token must not go into it (a job's leftover root process could read it from the provisioning process); re-register on a fresh VM: bin/homefield reset --instance ${INSTANCE}, then install again"
+        ;;
+      2)
+        die "${cmd}: could not ask whether ${INSTANCE} has run jobs; a registration token must not go into a VM this command cannot check (is it running?)"
+        ;;
+    esac
+  fi
+
   if [ "$reset_vm" = 1 ]; then
     # The base VM: this install is provisioned unregistered first (provision.sh
     # RUNNER_PREPARE_ONLY), cloned to <instance>-base while stopped, and only
@@ -934,26 +966,6 @@ cmd_install() {
     verify_isolation
   fi
 
-  # A registration token reaches the guest on stdin and sits in the
-  # provisioning process's environment for the whole provision run (minutes:
-  # the package upgrade alone). A VM that has run jobs may hold a root
-  # process the job left behind, and such a process can read the token from
-  # /proc/<pid>/environ — so a token only goes into a VM that has not run
-  # one. The base a reset clones from was cloned before any job, so
-  # `reset` then `install` re-registers on a fresh VM.
-  if [ -n "$VM_STATUS" ]; then
-    local ran_rc=0
-    ran_jobs || ran_rc=$?
-    case "$ran_rc" in
-      0)
-        die "${cmd}: ${INSTANCE} has run jobs, so a registration token must not go into it (a job's leftover root process could read it from the provisioning process); re-register on a fresh VM: bin/homefield reset --instance ${INSTANCE}, then install again"
-        ;;
-      2)
-        die "${cmd}: could not ask whether ${INSTANCE} has run jobs; a registration token must not go into a VM this command cannot check (is it running?)"
-        ;;
-    esac
-  fi
-
   local token
   token="$(get_token registration "$url")"
   remove_taken_name "$url" "$name"
@@ -966,6 +978,10 @@ cmd_install() {
   log "provisioning ${INSTANCE} and registering at ${url}"
   run_provision "RUNNER_TOKEN=${token}"$'\n' "${env[@]}"
   token=""
+  # The VM is registered now: from here on it may run jobs the host never
+  # sees, so no later token-carrying command may treat it as fresh (the
+  # guard above reads this).
+  state_set ever_registered 1
   state_set job_cleanup "$job_cleanup"
   state_set reset_vm "$reset_vm"
   state_set reset_error ""
@@ -1101,6 +1117,10 @@ upgrade_single() {
   # provision.sh starts the service again at the end, and waits until it is
   # listening for jobs.
   run_provision "" "${env[@]+"${env[@]}"}"
+  # The VM is registered (the upgrade would not be here otherwise): record
+  # it, so a later token-carrying install refuses this VM even when this
+  # state file predates the record.
+  state_set ever_registered 1
   if [ "$UP_JOB_CLEANUP_SET" = 1 ]; then
     state_set job_cleanup "$UP_JOB_CLEANUP"
   fi
@@ -1856,7 +1876,16 @@ re_register_single() {
     die "re-register: a job is running on ${INSTANCE}; try again when it is idle"
   fi
 
-  if [ "$(reset_effective)" = "1" ] && [ "$recovery" != 1 ]; then
+  # fresh_vm: the token below goes only into a VM this run cloned fresh from
+  # the base — the recovery clone, or a reset cycle that completed. A reset
+  # that was skipped (a step failed before the delete) leaves the old VM, and
+  # a re-register without the reset never clones: both would re-register in
+  # place, and a VM that has been registered may have run jobs the host never
+  # sees, so neither may take a token.
+  local fresh_vm=0
+  if [ "$recovery" = 1 ]; then
+    fresh_vm=1
+  elif [ "$(reset_effective)" = "1" ]; then
     # The clone is stopped; the re-register below configures it. A skipped
     # reset (no base, or a step failed before the delete) leaves the old VM in
     # place, stopped or running; ensure_vm covers both. A clone that failed
@@ -1867,6 +1896,9 @@ re_register_single() {
     reset_vm_cycle || cycle_rc=$?
     if [ "$cycle_rc" = 2 ]; then
       return 1
+    fi
+    if [ "$cycle_rc" = 0 ]; then
+      fresh_vm=1
     fi
     ensure_vm "" ""
   else
@@ -1889,16 +1921,24 @@ re_register_single() {
 
   # The re-register puts a registration token into the VM (on stdin, but it
   # reaches config.sh through the provisioning process's environment). A VM
-  # that has run jobs may hold a root process the job left behind, and such a
-  # process can read that environment — so the token only goes into a VM
-  # with no _work, which the reset paths above guarantee (a fresh clone, or a
-  # clone from the base). A reset that could not run leaves the old VM: die
-  # rather than re-register it in place.
+  # that has run jobs may hold a root process the job left behind, and such
+  # a process can read that environment — and once a runner has been
+  # registered, the host cannot know whether jobs ran. So the token goes
+  # only into the fresh clone the reset paths above made; re-registering the
+  # old VM in place is refused even when its _work is absent, because a VM
+  # that has run jobs can delete that directory (the job's root owns it) and
+  # its answer is not a boundary.
+  if [ "$fresh_vm" != 1 ]; then
+    die "re-register: ${INSTANCE} would be re-registered in place; a VM that has been registered may have run jobs (a job's leftover root process could read the token from the provisioning process), so a registration token only goes into a VM this command clones fresh from the base. Re-register with the reset on: bin/homefield re-register --reset-vm --instance ${INSTANCE} (the base install --ephemeral --reset-vm creates), or reset + install: bin/homefield reset --instance ${INSTANCE}, then bin/homefield install --ephemeral --instance ${INSTANCE} --url ${url}"
+  fi
+  # The clone's own _work probe is the second line: the base was cloned
+  # before any job, so a _work on the clone means the base has run jobs or
+  # was tampered with, and no token goes in.
   local ran_rc=0
   ran_jobs || ran_rc=$?
   case "$ran_rc" in
     0)
-      die "re-register: ${INSTANCE} has run jobs, so a registration token must not go into it (a job's leftover root process could read it from the provisioning process); re-register on a fresh VM: bin/homefield reset --instance ${INSTANCE}, then bin/homefield install --ephemeral --instance ${INSTANCE} --url ${url}"
+      die "re-register: the fresh clone for ${INSTANCE} already has a _work directory, so the base VM it was cloned from has run jobs or was changed; a registration token must not go into it. Rebuild the base: bin/homefield reset --instance ${INSTANCE} (it deletes the base too), then bin/homefield install --ephemeral --reset-vm --instance ${INSTANCE} --url ${url}"
       ;;
     2)
       die "re-register: could not ask whether ${INSTANCE} has run jobs; a registration token must not go into a VM this command cannot check (is it running?)"
@@ -1931,6 +1971,7 @@ re_register_single() {
   fi
   token=""
   state_set ephemeral_error ""
+  state_set ever_registered 1
 
   local registered_name=""
   { IFS= read -r registered_name || true; } < <(runner_setting agentName)

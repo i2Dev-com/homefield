@@ -210,16 +210,19 @@ echo "GitHub refuses the deletion from the host:"
 fresh
 run env FAIL_GH_DELETE=1
 record "uninstall fails" "1" "$rc"
-record "...still registered, with its service back and running" "registered/unit/.service/active" "$(state)"
-record "...the guest was never asked to remove anything" "0/0" "$(logged 'config.sh')/$(logged 'svc.sh')"
-record "...the message says so" "yes" "$(has "$out" 'could not deregister runner 42')"
+record "...the VM's copy was removed first: unregistered, no service" "removed/no-unit/no-.service/stopped" "$(state)"
+record "...the API was asked to delete, after the local removal" "1/1" \
+  "$(logged 'gh api --hostname github.com -X DELETE orgs/acme/actions/runners/42')/$(logged 'config.sh remove --local')"
+record "...the service was not started again: there is no registration to serve" "0" "$(logged 'systemctl start')"
+record "...the message says so, with the hand steps" "yes/yes" \
+  "$(has "$out" 'could not deregister runner 42')/$(has "$out" 'VM copy is already removed')"
 
-echo "the local removal fails after the registration was deleted:"
+echo "the local removal fails, before the registration is deleted:"
 fresh
 run env FAIL_REMOVE=1
 record "uninstall fails" "1" "$rc"
-record "...the registration is gone from GitHub, the VM's copy remains, the service is back" "1/registered/unit/.service/active/1" \
-  "$rc/$(state)/$(logged 'gh api --hostname github.com -X DELETE orgs/acme/actions/runners/42')"
+record "...the registration is kept on GitHub and in the VM, the service back" "registered/unit/.service/active/0" \
+  "$(state)/$(logged 'gh api --hostname github.com -X DELETE orgs/acme/actions/runners/42')"
 # Started by ensure-service in the guest and again by the host's trap, which
 # also covers a failure before the guest script runs; a second start is a no-op.
 record "...the service was reinstalled once, and started" "1/yes" "$(logged 'svc.sh install runner')/$([ "$(logged 'systemctl start')" -ge 1 ] && echo yes || echo no)"
@@ -234,13 +237,15 @@ for at in disable unit_remove marker_remove reload; do
   case "$at" in disable | unit_remove) installs=0 ;; *) installs=1 ;; esac
   record "...reinstalled only if the unit file was gone" "$installs" "$(logged 'svc.sh install runner')"
   record "...the removal was never attempted" "0" "$(logged 'config.sh')"
+  record "...the registration is still on GitHub (the deletion runs last)" "0" "$(logged 'gh api --hostname github.com -X DELETE orgs/acme/actions/runners/42')"
 done
 
 echo "the local removal and the reinstall both fail:"
 fresh
 run env FAIL_REMOVE=1 FAIL_INSTALL=1
 record "uninstall fails" "1" "$rc"
-record "...gone from GitHub, the VM's copy remains, no service, and says it could not start it" "registered/no-unit/no-.service/stopped/yes" "$(state)/$(has "$out" 'could not start')"
+record "...the registration is kept on GitHub, the VM's copy remains, no service, and says it could not start it" "registered/no-unit/no-.service/stopped/yes/0" \
+  "$(state)/$(has "$out" 'could not start')/$(logged 'gh api --hostname github.com -X DELETE orgs/acme/actions/runners/42')"
 
 echo "no service installed (provisioning never finished):"
 fresh

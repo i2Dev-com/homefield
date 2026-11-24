@@ -27,7 +27,7 @@ mkdir -p "$stubs" "$work/home"
 fake_stub "$stubs" limactl CALLS <<'EOF'
 exit 0
 EOF
-for t in awk cat dirname grep head mktemp sed sh tr; do ln -s "$(command -v "$t")" "$stubs/$t"; done
+for t in awk cat dirname grep head mktemp mv mkdir sed sh tr; do ln -s "$(command -v "$t")" "$stubs/$t"; done
 
 cat >"$work/harness.sh" <<'EOF'
 HOMEFIELD_SOURCE_ONLY=1

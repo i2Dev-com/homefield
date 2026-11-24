@@ -56,7 +56,7 @@ every job holding cloud or production credentials.
 | Secrets in jobs | Jobs on the runner receive the secrets their workflow passes, on same-repo PRs. Push-only secrets never reach it by default, because pushes run hosted; they do when `events` includes `push`, `workflow_dispatch` or `schedule`. |
 | Across repositories | Every allowed repository's PR jobs share one VM, one after another. Workspaces are per repository, but anything a job leaves in the guest (Docker images, `/tmp`, and through `sudo` the packages it installs and the services it enables) is visible to the next job from another repository. Allow only repositories you would trust with each other's PR code. |
 | Inside the VM | Jobs run as user `runner`, which is in the `docker` group and therefore root-equivalent **inside the guest**, and has passwordless `sudo` as a hosted Linux runner does. The VM is the boundary, not the user: neither adds reach the other did not give. |
-| Provisioning tokens | A registration or removal token reaches the guest only on stdin, and only into a VM that has **never run a job** (`_work` absent): jobs are root-equivalent, so a root process a job left behind could read the token from the provisioning process's environment. `provision.sh` refuses a token in a VM that has run jobs, as do `install` and `re-register`; re-register on a fresh VM — `bin/homefield reset --instance <name>` deletes the VM, then `install` registers a new one. Deregistration (`uninstall`, `reset`) removes the registration through the GitHub API from the Mac, so no removal token enters the guest at all. |
+| Provisioning tokens | A registration or removal token reaches the guest only on stdin, and only into a VM that has **never run a job**: jobs are root-equivalent, so a root process a job left behind could read the token from the provisioning process's environment. What counts as "never ran a job" is decided on the **Mac, not in the guest**: the state file records whether a runner has ever been registered on this VM, and a VM that has been registered is refused outright — a job's leftover root process could delete the `_work` marker the guest probe checks, so the guest's own answer is not the boundary. `install` refuses a registered VM even when `_work` is absent; `re-register` re-registers only a VM it has just cloned fresh from the base (with the reset on — a skipped reset leaves the old VM and is refused too). The `_work` probe stays as the second line on never-registered VMs and on the fresh clone. Deregistration (`uninstall`, `reset`) removes the registration through the GitHub API from the Mac, so no removal token enters the guest at all. |
 
 **Access checklist.** Check these when something changes (a repository added,
 an owner left, a Mac replaced) and now and then regardless. The first two
@@ -1381,9 +1381,12 @@ fresh registration that has not served one yet): `provision.sh` with
 `RUNNER_REREGISTER=1`, `RUNNER_REMOVE_TOKEN` for the **current** scope (for
 a repository: `gh api -X POST repos/<owner>/<repo>/actions/runners/remove-token --jq .token`,
 which needs repository admin) and `RUNNER_TOKEN` for the new scope (see
-"Registration tokens"). The script refuses both tokens in a VM that has run
-jobs, and refuses the move while a job is running, then stops the runner
-before anything else.
+"Registration tokens"). This is the operator asserting the VM has never run
+a job: the script's `_work` check is a safety net, not a boundary — a VM
+that has run jobs can delete that directory, and the host-side state that
+guards `install` is not consulted here — so be sure before using it. The
+script refuses both tokens in a VM that has run jobs, and refuses the move
+while a job is running, then stops the runner before anything else.
 
 ```bash
 limactl copy vm/provision.sh homefield:/tmp/provision.sh
@@ -1436,13 +1439,18 @@ unset REMOVE
 limactl delete --force homefield
 ```
 
-`config.sh remove` refuses while the service is installed, so the service goes
-first. If GitHub then refuses the removal (a rejected token, no network), or
-`svc.sh uninstall` stops partway, `bin/homefield uninstall` gives the service
-back and starts it, so the runner keeps taking jobs; run it again once the
-cause is fixed. By hand, `provision.sh` does that and works out what the
-uninstall left behind (this one needs only the script, not the `vm/guest/`
-helpers):
+`config.sh remove` refuses while the service is installed, so the service
+goes first. The VM's local cleanup runs while the registration still exists
+on GitHub: if anything there fails (the service uninstall stops partway, or
+the local removal fails), `bin/homefield uninstall` gives the service back
+and starts it, so a runner GitHub still knows keeps taking jobs; run it
+again once the cause is fixed. If the GitHub API deletion itself fails
+after the local cleanup, the VM's copy of the registration is already gone
+and the command says so: remove the runner on GitHub's runners page (it
+shows offline until you do) and delete the VM by hand
+(`limactl delete --force <name>`). By hand, `provision.sh` does the restore
+and works out what the uninstall left behind (this one needs only the
+script, not the `vm/guest/` helpers):
 
 ```bash
 limactl copy vm/provision.sh homefield:/tmp/provision.sh

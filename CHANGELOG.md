@@ -15,16 +15,30 @@ fail, such as a new guard in the routing expression, bumps the minor version
   registration or removal token must never enter a VM that has run jobs.
   Jobs run root-equivalent inside the guest, so a root process a job left
   behind could read the token from the provisioning process's environment.
-  `provision.sh` refuses a token when the VM's `_work` exists, `install`
-  and `re-register` refuse before the token is fetched, and `uninstall` and
-  `reset` delete the registration through the GitHub API from the Mac, so
-  no removal token enters the guest at all. A move is now a fresh
+  `provision.sh` refuses a token when the VM's `_work` exists, and
+  `uninstall` and `reset` delete the registration through the GitHub API
+  from the Mac, so no removal token enters the guest at all. The
+  registration boundary itself is host-side: the state file records whether
+  a runner has ever been registered on this VM, and `install` refuses a
+  registered VM even when its `_work` is absent — the directory is the
+  job's root's to delete, so the guest's answer is not the boundary
+  (`upgrade` records the same, so state files predating the record are
+  covered too). `re-register` re-registers only a VM it has just cloned
+  fresh from the base: a reset that was skipped leaves the old VM, and
+  re-registering it in place is refused even when `_work` is absent.
+  Deregistration order changed: the VM's local cleanup runs first, while
+  the registration still exists on GitHub — a failure there restores the
+  service and the runner keeps taking jobs; the irreversible API deletion
+  goes last, and a failed one says to remove the runner on GitHub's runners
+  page and delete the VM by hand. A move is now a fresh
   registration — `bin/homefield reset --instance <name>`, then `install` at
   the new scope; the in-place `RUNNER_REREGISTER=1` move remains only for a
-  VM that has never run a job. An ephemeral re-register with the VM reset
-  off is refused once the VM has run a job: re-register with the reset on
+  VM that has never run a job (the operator asserts it; the script's
+  `_work` check is a safety net, not a boundary). An ephemeral re-register
+  with the VM reset off is refused: re-register with the reset on
   (`install --ephemeral --reset-vm`) so every cycle starts from a fresh
-  clone. Runbook: the trust boundary and moving a registration.
+  clone. Runbook: the trust boundary, moving a registration, and the
+  removal failure paths.
 - Documented: the `webhook setup` hostname must be a first-level subdomain
   of the Cloudflare zone's domain (`webhook.example.com`, not
   `webhook.ci.example.com`). The zone's free Universal SSL certificate

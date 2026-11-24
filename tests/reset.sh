@@ -229,9 +229,10 @@ echo "GitHub refuses the deletion from the host:"
 fresh
 run GH_ON=0 GH_DELETE_FAIL=1 --
 record "reset fails" "1" "$rc"
-record "...still registered, with its service back and running, the VM kept" "registered/unit/.service/active/0" \
+record "...the VM's copy was removed first: unregistered, no service, the VM kept" "removed/no-unit/no-.service/stopped/0" \
   "$(runner_state)/$(logged 'limactl delete --force resettest')"
-record "...the message says so" "yes" "$(has "$out" 'could not deregister runner 42')"
+record "...the message says so, with the hand steps" "yes/yes" \
+  "$(has "$out" 'could not deregister runner 42')/$(has "$out" 'VM copy is already removed')"
 
 echo "the reset base VM goes with the VM (#297):"
 reset_base_at() {  # a marked base, as install --reset-vm leaves it

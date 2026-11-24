@@ -136,6 +136,10 @@ run_fn() {
   done
   shift
   : >"$calls"
+  # A clean state file per call: a successful install records ever_registered
+  # (the host-side token guard), and the next install on the same VM is
+  # refused by design.
+  rm -f "$work/.local/state/homefield/homefield.state"
   # shellcheck disable=SC2016  # the -c script is expanded by the inner bash
   out="$(env -i HOME="$work" PATH="$stubs" CALLS="$calls" HOMEFIELD_SOURCE_ONLY=1 ONLINE_WAIT_INTERVAL=0 ONLINE_WAIT_TRIES=3 "${envs[@]+"${envs[@]}"}" \
     "$BASH" -c '. "$1"; shift; "$@"' _ "$ROOT/bin/homefield" "$@" 2>&1 </dev/null)"
@@ -308,7 +312,7 @@ settings=$'https://github.com/acme\n42\nbuild-1\n'
 run_fn LIMA_STATUS=Running LIMA_RUN_GUEST=1 LIMA_SHELL_OUT="$settings" LIMA_REGISTERED=yes GH_IDS='41\n' -- cmd_upgrade
 record "upgrade: GitHub does not list the runner: refused, nothing stopped or provisioned" "nonzero/yes/0/0/0" \
   "$(nonzero "$rc")/$(has "$out" 'GitHub no longer has homefield'"'"'s runner (id 42) at https://github.com/acme')/$(called 'systemctl')/$(called 'provision')/$(called pgrep)"
-record "...naming the way to register it again, under its old name" "yes/yes" "$(has "$out" 'uninstall --instance homefield --keep-vm, then bin/homefield install --instance homefield --url https://github.com/acme --name build-1')/$(has "$out" 'Nothing was stopped')"
+record "...naming the way to register it again, under its old name" "yes/yes" "$(has "$out" 'reset --instance homefield (deletes the VM), then bin/homefield install --instance homefield --url https://github.com/acme --name build-1')/$(has "$out" 'Nothing was stopped')"
 run_fn LIMA_STATUS=Running LIMA_RUN_GUEST=1 LIMA_SHELL_OUT="$settings" LIMA_REGISTERED=yes GH_IDS='42\n' LIMA_JOB=yes -- cmd_upgrade
 record "upgrade: GitHub lists it: goes on to the idle check" "nonzero/no/yes" \
   "$(nonzero "$rc")/$(has "$out" 'no longer has')/$(has "$out" 'a job is running on')"

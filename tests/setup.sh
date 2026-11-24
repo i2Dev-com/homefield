@@ -138,6 +138,11 @@ is_registered() { [ "${REGISTERED:-no}" = yes ]; }
 # the registration refuses (a token must not go into a VM a job's leftover
 # root process could read).
 ran_jobs() { return "${STUB_RAN_JOBS:-1}"; }
+# ever_registered: the host-side token guard's state (cmd-install.sh).
+# STUB_EVER_REG=1 pre-sets it: a runner has been registered on this VM
+# before, so the registration is refused even when the guest's _work is
+# absent.
+[ -z "${STUB_EVER_REG:-}" ] || state_set ever_registered "$STUB_EVER_REG"
 cmd_upgrade() { echo "cmd_upgrade $*" >>"$CALLS"; log "upgrade ran"; }
 get_token() { echo tok123; }
 # adopt: records its arguments; ADOPT_FAIL=exit ends it like die does, =return
@@ -343,6 +348,7 @@ record "...install's closing text is not printed" "no" "$(has "$out" 'Registered
 record "...the summary comes after the wait for the runner" "yes" \
   "$(has "${out%%✓ VM homefield created*}" 'is online: labels')"
 record "...the group was recorded for reset, beside the cleanup, reset and fallback switches" "group_created=acme/homefield-ci/7/github.com
+ever_registered=1
 job_cleanup=0
 reset_vm=0
 reset_error=
@@ -445,6 +451,9 @@ record "a VM that is there but not registered: registers, the VM line says it ex
 srun LIMA_STATUS=Running REGISTERED=no STUB_RAN_JOBS=0 -- cmd_setup --url $org
 record "...a VM that has run jobs: the registration is refused before the token" "nonzero/yes" \
   "$(nonzero "$rc")/$(has "$out" 'has run jobs')"
+srun LIMA_STATUS=Running REGISTERED=no STUB_EVER_REG=1 STUB_RAN_JOBS=1 -- cmd_setup --url $org
+record "...a VM that has been registered before: refused even when its _work is absent" "nonzero/yes/0" \
+  "$(nonzero "$rc")/$(has "$out" 'has been registered before')/$(called 'run_provision')"
 
 # ── install is unchanged ───────────────────────────────────────────────────
 echo "install output"
