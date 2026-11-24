@@ -961,7 +961,12 @@ tunnel: `homefield webhook setup --hostname <fqdn>` creates the tunnel,
 routes the DNS name, writes the webhook secret (0600) and installs the
 `com.homefield.webhook` LaunchAgent — the one-time `cloudflared tunnel
 login` is a browser flow the tool cannot do for you, and the hostname
-needs a domain on the Cloudflare account. A hostname that already has a
+needs a domain on the Cloudflare account. Use a **first-level** subdomain
+of that domain (`webhook.example.com`, not
+`webhook.ci.example.com`): the zone's free Universal SSL certificate
+covers only the apex and `*.<domain>`, so a deeper name gets a TLS
+alert 40 at the edge and no delivery ever reaches the tunnel (found live
+setting this one up). A hostname that already has a
 DNS record is refused unless `--overwrite-dns`: the route error says
 nothing about the existing record's target, and a record pointing at
 another tunnel or service would silently swallow every delivery —
