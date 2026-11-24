@@ -21,7 +21,9 @@ fail, such as a new guard in the routing expression, bumps the minor version
   runner it stopped itself: a service that was already stopped when
   maintenance ran — a provision run mid-re-register, a cut-off
   deregistration — stays stopped, and a required reboot is left to whatever
-  stopped it. The isolation probe now verifies the read-only promise of the
+  stopped it; a restart that fails after the upgrade fails the run instead
+  of reading as success. The isolation probe now verifies the read-only
+  promise of the
   Rosetta share: `vz-rosetta on /mnt/lima-rosetta` is excluded only while
   its mount line carries `ro`; a writable share counts as a host mount and
   refuses the VM (#323).
