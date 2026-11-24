@@ -9,43 +9,47 @@ fail, such as a new guard in the routing expression, bumps the minor version
 (0.1 to 0.2). Compatible changes bump the patch. Merged changes wait on
 `main`, under *Unreleased*, until a release is cut.
 
-## Unreleased
+## v0.5.9 (2026-11-24)
 
-Adds the opt-in webhook receiver ([#309](https://github.com/i2Dev-com/homefield/issues/309)),
-and it is compatible for consumers: the routing expression, guards,
-defaults, and options are unchanged, and nothing a consumer's workflow does
-changes. `homefield webhook setup --hostname <fqdn>` wires a cloudflared
-named tunnel to a loopback receiver (the `com.homefield.webhook`
-LaunchAgent; the one-time `cloudflared tunnel login` is a browser flow, and
-the hostname needs a domain on the Cloudflare account), and `homefield
-webhook connect <owner/repo>` subscribes a repository's `workflow_job`
-webhook (repo admin, through gh; safe to re-run). Every delivery is
-authenticated with GitHub's `X-Hub-Signature-256` HMAC over the raw body
-against the 0600 secret before anything else happens, and a verified
-delivery spawns one `fleet watch --max-ticks 1` tick — so a dark VM's wake
-(and the idle side's stop) no longer waits up to the route-watcher's
-60-second tick interval. The receiver is a doorbell, not a brain: the
-payload decides nothing, the tick's demand filter stays the only decision
-point (a delivery for a job the routing would never send here costs one
-harmless evaluation), and the tick lock serializes a webhook tick with the
-route watcher's own. A webhook-spawned tick runs under the same
-`HOMEFIELD_SCALE_TICK_BUDGET` the route watcher gives its ticks (a hung
-tick is killed with its process tree, on the budget and at receiver
-shutdown), the route watcher's sleep side kills a running webhook tick
-before the sleep-side routing flip, and the endpoint is bounded against
-peers that never speak (a read deadline and a connection cap, both
-env-tunable). `webhook status` reports the pieces; `webhook remove
-[--purge]` takes them down, and `webhook connect` refreshes an existing
-hook with the current secret, so a remove + re-setup secret rotation
-cannot leave GitHub signing with the old one. `webhook setup` refuses a
-hostname that already has a DNS record unless `--overwrite-dns`: the
-route error does not say what the existing record points at, and a
-record aimed at another tunnel or service would silently swallow every
-delivery. Without the setup, the tick
-design is unchanged. `webhook status` and the runbook's receiver section
-document the trade: one more always-on agent, and a public URL that
-accepts GitHub's authenticated deliveries (anything else gets a generic
-403 before the body is parsed).
+Bumps the patch from v0.5.8, and it is compatible for consumers: the routing
+expression, guards, defaults, and options are unchanged, so workflows passing
+`routing-guard@v0.5.8` pass `@v0.5.9` as well. The change is in the local
+tool's opt-in webhook receiver; nothing a consumer's workflow does changes.
+
+- Added: the opt-in webhook receiver ([#309](https://github.com/i2Dev-com/homefield/issues/309)).
+  `homefield webhook setup --hostname <fqdn>` wires a cloudflared named
+  tunnel to a loopback receiver (the `com.homefield.webhook` LaunchAgent;
+  the one-time `cloudflared tunnel login` is a browser flow, and the
+  hostname needs a domain on the Cloudflare account), and `homefield
+  webhook connect <owner/repo>` subscribes a repository's `workflow_job`
+  webhook (repo admin, through gh; safe to re-run). Every delivery is
+  authenticated with GitHub's `X-Hub-Signature-256` HMAC over the raw
+  body against the 0600 secret before anything else happens, and a
+  verified delivery spawns one `fleet watch --max-ticks 1` tick — so a
+  dark VM's wake (and the idle side's stop) no longer waits up to the
+  route-watcher's 60-second tick interval. The receiver is a doorbell,
+  not a brain: the payload decides nothing, the tick's demand filter
+  stays the only decision point (a delivery for a job the routing would
+  never send here costs one harmless evaluation), and the tick lock
+  serializes a webhook tick with the route watcher's own. A
+  webhook-spawned tick runs under the same `HOMEFIELD_SCALE_TICK_BUDGET`
+  the route watcher gives its ticks (a hung tick is killed with its
+  process tree, on the budget and at receiver shutdown), the route
+  watcher's sleep side kills a running webhook tick before the
+  sleep-side routing flip, and the endpoint is bounded against peers
+  that never speak (a read deadline and a connection cap, both
+  env-tunable). `webhook status` reports the pieces; `webhook remove
+  [--purge]` takes them down, and `webhook connect` refreshes an
+  existing hook with the current secret, so a remove + re-setup secret
+  rotation cannot leave GitHub signing with the old one. `webhook setup`
+  refuses a hostname that already has a DNS record unless
+  `--overwrite-dns`: the route error does not say what the existing
+  record points at, and a record aimed at another tunnel or service
+  would silently swallow every delivery. Without the setup, the tick
+  design is unchanged. `webhook status` and the runbook's receiver
+  section document the trade: one more always-on agent, and a public URL
+  that accepts GitHub's authenticated deliveries (anything else gets a
+  generic 403 before the body is parsed).
 
 ## v0.5.8 (2026-11-23)
 

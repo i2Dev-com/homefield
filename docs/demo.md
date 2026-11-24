@@ -26,7 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: i2Dev-com/homefield/routing-guard@v0.5.8
+      - uses: i2Dev-com/homefield/routing-guard@v0.5.9
         with:
           jobs: |
             homefield-demo.yml:demo
