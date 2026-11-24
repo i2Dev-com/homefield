@@ -43,7 +43,9 @@ fail, such as a new guard in the routing expression, bumps the minor version
   with nothing removed) — a failure there restores the
   files and the service, and the runner keeps taking jobs; the
   irreversible API deletion goes last, and a failed one restores the same
-  backup and says to fix the cause and re-run. A move is now a fresh
+  backup and says to fix the cause and re-run; a restore that itself fails
+  partway keeps the backup in the VM and says the runner is registered but
+  offline, with the backup's path for a hand recovery. A move is now a fresh
   registration — `bin/homefield reset --instance <name>`, then `install` at
   the new scope; the in-place `RUNNER_REREGISTER=1` move remains only for a
   VM that has never run a job (the operator asserts it; the script's

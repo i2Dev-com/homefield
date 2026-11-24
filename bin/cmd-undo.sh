@@ -22,7 +22,7 @@
 # line for the token.
 deregister_script() {
   # shellcheck disable=SC2016  # the guest's shell expands these, not this one
-  local script='cd @HOME@ && read -r t && s=0 && { [ ! -f .service ] || s=1; } && mkdir -p @BACKUP@ && for f in .runner .credentials .credentials_rsaparams .env; do if [ -f "$f" ]; then cp -p "$f" @BACKUP@/ || { echo "homefield: could not back up $f in the VM; nothing was removed" >&2; exit 1; }; fi; done && restore_reg() { cd @HOME@ && for f in .runner .credentials .credentials_rsaparams .env; do { [ ! -f @BACKUP@/"$f" ] || cp -p @BACKUP@/"$f" ./; }; done; } && { [ "$s" = 0 ] || ./svc.sh uninstall || { rc=$?; restore_reg; bash @PROVISION@ ensure-service --start; exit "$rc"; }; } && { ACTIONS_RUNNER_INPUT_TOKEN="$t" sudo --preserve-env=ACTIONS_RUNNER_INPUT_TOKEN -u runner ./config.sh remove@LOCAL@ || { rc=$?; restore_reg; [ "$s" = 0 ] || bash @PROVISION@ ensure-service --start; exit "$rc"; }; }'
+  local script='cd @HOME@ && read -r t && s=0 && { [ ! -f .service ] || s=1; } && mkdir -p @BACKUP@ && for f in .runner .credentials .credentials_rsaparams .env; do if [ -f "$f" ]; then cp -p "$f" @BACKUP@/ || { echo "homefield: could not back up $f in the VM; nothing was removed" >&2; exit 1; }; fi; done && restore_reg() { cd @HOME@ && for f in .runner .credentials .credentials_rsaparams .env; do if [ -f @BACKUP@/"$f" ]; then cp -p @BACKUP@/"$f" ./ || { echo "homefield: could not restore $f; the backup is kept at @BACKUP@" >&2; return 1; }; fi; done; } && { [ "$s" = 0 ] || ./svc.sh uninstall || { rc=$?; restore_reg; bash @PROVISION@ ensure-service --start; exit "$rc"; }; } && { ACTIONS_RUNNER_INPUT_TOKEN="$t" sudo --preserve-env=ACTIONS_RUNNER_INPUT_TOKEN -u runner ./config.sh remove@LOCAL@ || { rc=$?; restore_reg; [ "$s" = 0 ] || bash @PROVISION@ ensure-service --start; exit "$rc"; }; }'
   local provision="$1" flag=""
   [ "${2:-}" != local ] || flag=" --local"
   script="${script//@HOME@/$RUNNER_HOME}"
@@ -37,10 +37,12 @@ deregister_script() {
 # go back from the backup, and the service is installed and started — the
 # runner is registered on GitHub and working again, and a re-run of the
 # command can try the deletion once the cause (network, token scope) is
-# fixed.
+# fixed. Every copy is checked: a restore that fails partway exits nonzero
+# and says which file, so the caller keeps the backup instead of claiming
+# a recovery it did not make.
 deregister_restore_script() {
   # shellcheck disable=SC2016  # the guest's shell expands these, not this one
-  local script='cd @HOME@ && for f in .runner .credentials .credentials_rsaparams .env; do { [ ! -f @BACKUP@/"$f" ] || cp -p @BACKUP@/"$f" ./; }; done && bash @PROVISION@ ensure-service --start'
+  local script='cd @HOME@ && for f in .runner .credentials .credentials_rsaparams .env; do if [ -f @BACKUP@/"$f" ]; then cp -p @BACKUP@/"$f" ./ || { echo "homefield: could not restore $f from the backup" >&2; exit 1; }; fi; done && bash @PROVISION@ ensure-service --start'
   script="${script//@HOME@/$RUNNER_HOME}"
   script="${script//@BACKUP@/${RS_BACKUP:?}}"
   printf '%s' "${script//@PROVISION@/$1}"
@@ -77,8 +79,10 @@ deregister_runner() {
   # backed up inside it (RS_BACKUP) before the cleanup, and the cleanup and
   # the API deletion both recover from it on failure. RS_STAGE is cleaned up
   # by restart_runner_on_failure (the EXIT trap stop_runner set in the
-  # caller) when a failure ends the command mid-flow, and explicitly after
-  # runner_back.
+  # caller) when a failure ends the command before the guest cleanup runs,
+  # and explicitly on the success paths; inside the guest cleanup it is
+  # disarmed first, so a failure there keeps the directory and its backup
+  # for a hand recovery.
   stage="$(guest_stage_dir)"
   RS_STAGE="$stage"
   RS_BACKUP="${stage}/reg-backup"
@@ -90,10 +94,11 @@ deregister_runner() {
   if [ "$on" = 1 ]; then
     # A full removal would ask GitHub to delete a runner it does not have.
     log "GitHub no longer has this runner (id ${id}) at ${url}; removing its registration from the VM only"
+    # shellcheck disable=SC2034  # read by lib/vm.sh's restart_runner_on_failure
+    RS_STAGE=""
     printf '\n' | guest_stdin sudo sh -c "$(deregister_script "${stage}/provision.sh" local)"
     runner_back
     guest_unstage "$stage"
-    RS_STAGE=""
   else
     # The registration is deleted from the host, through the API, the way
     # install's --replace removes a taken name: the removal token never
@@ -116,18 +121,23 @@ deregister_runner() {
     log "deregistering from ${url} (id ${id})"
     printf '\n' | guest_stdin sudo sh -c "$(deregister_script "${stage}/provision.sh" local)"
     runner_back
+    # From here the guest script's own failure branches preserve the staging
+    # directory (with the registration backup), so the trap must not delete
+    # it: a failure past this point is recovered from the backup by hand if
+    # the automatic restore fails too.
+    # shellcheck disable=SC2034  # read by lib/vm.sh's restart_runner_on_failure
+    RS_STAGE=""
     # The staging directory (with the registration backup) is kept until the
     # API deletion has answered: a failure there restores from it.
     if ! gh api --hostname "$host" -X DELETE "${scope}/actions/runners/${id}" >/dev/null; then
-      printf '\n' | guest_stdin sudo sh -c "$(deregister_restore_script "${stage}/provision.sh")" ||
-        echo "homefield: could not restore the VM's registration either; the runner is registered on GitHub but offline — fix the guest by hand or delete the VM: limactl delete --force ${INSTANCE}" >&2
-      guest_unstage "$stage"
-      RS_STAGE=""
-      die "could not deregister runner ${id} from ${url}; the VM's registration is restored and the service is running again, so the runner still takes jobs — fix the cause (network, gh authorization) and run this again"
+      if printf '\n' | guest_stdin sudo sh -c "$(deregister_restore_script "${stage}/provision.sh")"; then
+        guest_unstage "$stage"
+        die "could not deregister runner ${id} from ${url}; the VM's registration is restored and the service is running again, so the runner still takes jobs — fix the cause (network, gh authorization) and run this again"
+      fi
+      echo "homefield: the backup is kept in the VM at ${RS_BACKUP} (root-only); restore it by hand or delete the VM: limactl delete --force ${INSTANCE}" >&2
+      die "could not deregister runner ${id} from ${url}; the VM's registration could not be restored, so the runner is registered on GitHub but offline — restore the backup named above by hand, or delete the VM: limactl delete --force ${INSTANCE}"
     fi
     guest_unstage "$stage"
-    # shellcheck disable=SC2034  # read by lib/vm.sh's restart_runner_on_failure
-    RS_STAGE=""
   fi
 }
 

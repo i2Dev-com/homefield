@@ -151,7 +151,7 @@ guest() {
   [ -z "\${FAIL_ON:-}" ] || case "\$*" in *"\$FAIL_ON"*) return 1 ;; esac
   "\$@"
 }
-guest_stdin() { "\$@"; }
+guest_stdin() { [ -z "\${FAIL_RESTORE:-}" ] || case "\$*" in *"ensure-service --start"*) case "\$*" in *"config.sh remove"*) ;; *) echo "restore: \$*" >>"\$LOG"; return 1 ;; esac ;; esac; "\$@"; }
 cmd_uninstall \${UNINSTALL_ARGS---keep-vm}
 EOF
 run() {
@@ -203,6 +203,23 @@ record "...saying so" "yes" "$(has "$out" 'removing its registration from the VM
 fresh
 run env GH_ON=1 FAIL_REMOVE=1
 record "the local removal fails: uninstall fails, the service is back" "1/registered/unit/.service/active" "$rc/$(state)"
+
+echo "the API deletion fails and the restore fails too:"
+# The restore copies every registration file back and only then starts the
+# service; a copy that fails exits nonzero and names the file. The staging
+# directory — with the backup — is kept, and the message names it, so a
+# hand recovery is possible instead of a runner reported as working when
+# it is not.
+fresh
+run env FAIL_GH_DELETE=1 FAIL_RESTORE=1
+record "uninstall fails" "1" "$rc"
+record "...the VM's registration is gone, the service down" "removed/no-unit/no-.service/stopped" "$(state)"
+record "...the restore was attempted and failed" "1" \
+  "$(logged 'restore: ')"
+record "...the backup is kept, and the message names it" "yes/yes" \
+  "$([ -e "$work/stage/reg-backup/.runner" ] && echo yes || echo no)/$(has "$out" 'the backup is kept in the VM')"
+record "...the message says the runner is offline, not that it takes jobs" "yes/no" \
+  "$(has "$out" 'registered on GitHub but offline')/$(has "$out" 'the runner still takes jobs')"
 
 echo "the runner's settings cannot be read:"
 fresh
