@@ -89,7 +89,7 @@ status GH_FAIL=0 GH_IDS='41\n420\n4\n' SETTING_OUT='my-mac-homefield\nhttps://gi
 record "not listed: exits 1, says so" "1/yes" "$rc/$(has "$out" 'github: NOT listed')"
 record "...matching the id whole, not a prefix or part" "no" "$(has "$out" 'github: listed')"
 record "...asks the repository's list for a repository URL" "1" "$(gh_calls 'repos/acme/app/actions/runners')"
-record "...with the way to register it again, under its old name" "yes" "$(has "$out" 'uninstall --instance homefield --keep-vm, then bin/homefield install --instance homefield --url https://github.com/acme/app --name my-mac-homefield, with the --label and --group of the first install')"
+record "...with the way to register it again, under its old name" "yes" "$(has "$out" 'reset --instance homefield (deletes the VM), then bin/homefield install --instance homefield --url https://github.com/acme/app --name my-mac-homefield, with the --label and --group of the first install')"
 record "...and reports the rest" "yes/yes/yes/yes" "$(rest)"
 status GH_FAIL=0 GH_IDS='' SETTING_OUT='my-mac-homefield\nhttps://github.com/acme\n42\n'
 record "an empty list is not listed either" "1/yes" "$rc/$(has "$out" 'github: NOT listed')"

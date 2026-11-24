@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 # `homefield uninstall` on a registered runner (#60): the service is
-# uninstalled before the registration is removed, so when GitHub refuses the
-# removal the runner has to get its service back, not only a start command for
-# a unit that is gone; so does an svc.sh uninstall that stops partway (#83).
-# A runner GitHub no longer lists (#76) is removed from the VM only, with no
-# token. And a guest that cannot be asked stops the command with nothing changed,
-# instead of reading as "no": whether the runner is registered (#80, or the VM
-# would be deleted), whether a job is running and whether the runner has a
-# service (#82, or a live job would be stopped).
+# uninstalled before the registration is removed, so when the guest's local
+# removal fails the runner has to get its service back, not only a start
+# command for a unit that is gone; so does an svc.sh uninstall that stops
+# partway (#83). The registration itself is deleted from the host, through
+# the API: no removal token enters the guest, and the guest's config.sh
+# remove --local takes down only the VM's copy. A runner GitHub no longer
+# lists (#76) is removed from the VM only, with no token. And a guest that
+# cannot be asked stops the command with nothing changed, instead of reading
+# as "no": whether the runner is registered (#80, or the VM would be
+# deleted), whether a job is running and whether the runner has a service
+# (#82, or a live job would be stopped).
 #
 # The real cmd_uninstall runs, with the guest side run here in a scratch
 # runner directory: svc.sh, config.sh, systemctl, sudo and limactl are stubs,
@@ -49,6 +52,13 @@ case "$1" in
           esac ;;
 esac'
 stub chown 'exit 0'
+# gh api --hostname <host> -X DELETE <scope>/actions/runners/<id>: the
+# host-side deregistration. FAIL_GH_DELETE makes it fail (GitHub refusing,
+# or no network), the way a real gh failure reaches the command.
+stub gh 'echo "gh $*" >>"$LOG"
+case "$*" in
+  *" -X DELETE "*) [ "${FAIL_GH_DELETE:-}" != 1 ] || exit 1 ;;
+esac'
 stub id 'case "$1" in -u) echo 0 ;; *) exec /usr/bin/id "$@" ;; esac'
 stub pgrep 'case "$*" in *"[R]unner.Worker"*) ;; *) exit 0 ;; esac
 case "${JOB:-idle}" in running) exit 0 ;; idle) exit 1 ;; *) exit 3 ;; esac'
@@ -141,12 +151,12 @@ guest() {
   [ -z "\${FAIL_ON:-}" ] || case "\$*" in *"\$FAIL_ON"*) return 1 ;; esac
   "\$@"
 }
-guest_stdin() { "\$@"; }
+guest_stdin() { [ -z "\${FAIL_RESTORE:-}" ] || case "\$*" in *"ensure-service --start"*) case "\$*" in *"config.sh remove"*) ;; *) echo "restore: \$*" >>"\$LOG"; return 1 ;; esac ;; esac; "\$@"; }
 cmd_uninstall \${UNINSTALL_ARGS---keep-vm}
 EOF
 run() {
   out="$(PATH="$stubs:$PATH" LOG="$work/log" HOME_DIR="$home" UNITS="$units" \
-    LIMA_HOME="$work/lima" "$@" bash "$work/harness.sh" 2>&1 </dev/null)"
+    LIMA_HOME="$work/lima" HOMEFIELD_STATE_DIR="$work/state" "$@" bash "$work/harness.sh" 2>&1 </dev/null)"
   rc=$?
 }
 state() {
@@ -161,13 +171,27 @@ fresh
 run env
 record "uninstall succeeds" "0" "$rc"
 record "...deregistered, service uninstalled, runner left stopped" "removed/no-unit/no-.service/stopped" "$(state)"
-record "...the token reached config.sh through its environment" "1" "$(logged 'config.sh remove token-in-env=yes')"
+record "...the registration was deleted from the host, by URL and id" "1" "$(logged 'gh api --hostname github.com -X DELETE orgs/acme/actions/runners/42')"
+record "...the guest's config.sh remove --local ran with no token" "1" "$(logged 'config.sh remove --local token-in-env=no')"
 record "...no start was attempted" "0" "$(logged 'systemctl start')"
+record "...the VM is recorded as registered before (the host-side token guard)" "1" \
+  "$(grep -qx 'ever_registered=1' "$work/state/homefield.state" && echo 1 || echo 0)"
 
-record "...with a remove token, GitHub checked by the runner's URL and id" "1/1" "$(logged 'get_token remove')/$(logged 'runner_on_github https://github.com/acme 42')"
+echo "a VM installed before the record existed:"
+# deregister_runner writes the record itself, so a legacy VM (installed
+# before ever_registered existed, never upgraded) that is deregistered with
+# the VM kept cannot become eligible for another token if a job deleted its
+# _work marker.
+fresh
+rm -f "$work/state/homefield.state"
+run env GH_ON=0
+record "uninstall --keep-vm on a legacy VM: the record is written" "1" \
+  "$(grep -qx 'ever_registered=1' "$work/state/homefield.state" && echo 1 || echo 0)"
+
 fresh
 run env GH_ON=0
-record "GitHub lists the runner: the full removal, with a token" "0/removed/1/1/0" "$rc/$(state | cut -d/ -f1)/$(logged 'get_token remove')/$(logged 'config.sh remove token-in-env=yes')/$(logged 'remove --local')"
+record "GitHub lists the runner: the same deletion from the host" "0/removed/1/1" \
+  "$rc/$(state | cut -d/ -f1)/$(logged 'gh api --hostname github.com -X DELETE orgs/acme/actions/runners/42')/$(logged 'config.sh remove --local token-in-env=no')"
 
 echo "GitHub no longer lists the runner (#76):"
 fresh
@@ -179,6 +203,23 @@ record "...saying so" "yes" "$(has "$out" 'removing its registration from the VM
 fresh
 run env GH_ON=1 FAIL_REMOVE=1
 record "the local removal fails: uninstall fails, the service is back" "1/registered/unit/.service/active" "$rc/$(state)"
+
+echo "the API deletion fails and the restore fails too:"
+# The restore copies every registration file back and only then starts the
+# service; a copy that fails exits nonzero and names the file. The staging
+# directory — with the backup — is kept, and the message names it, so a
+# hand recovery is possible instead of a runner reported as working when
+# it is not.
+fresh
+run env FAIL_GH_DELETE=1 FAIL_RESTORE=1
+record "uninstall fails" "1" "$rc"
+record "...the VM's registration is gone, the service down" "removed/no-unit/no-.service/stopped" "$(state)"
+record "...the restore was attempted and failed" "1" \
+  "$(logged 'restore: ')"
+record "...the backup is kept, and the message names it" "yes/yes" \
+  "$([ -e "$work/stage/reg-backup/.runner" ] && echo yes || echo no)/$(has "$out" 'the backup is kept in the VM')"
+record "...the message says the runner is offline, not that it takes jobs" "yes/no" \
+  "$(has "$out" 'registered on GitHub but offline')/$(has "$out" 'the runner still takes jobs')"
 
 echo "the runner's settings cannot be read:"
 fresh
@@ -195,15 +236,42 @@ run env FAIL_COPY=1
 record "the copy fails: uninstall fails, saying so" "1/yes" "$rc/$(has "$out" 'could not copy provision.sh')"
 record "...the runner is started again, nothing deregistered" "1/1/0/registered/unit/.service/active" "$(logged 'systemctl stop')/$(logged 'systemctl start')/$(logged 'config.sh')/$(state)"
 
-echo "GitHub refuses the removal:"
+echo "GitHub refuses the deletion from the host:"
+fresh
+run env FAIL_GH_DELETE=1
+record "uninstall fails" "1" "$rc"
+record "...the API was asked to delete, after the local removal" "1/1" \
+  "$(logged 'gh api --hostname github.com -X DELETE orgs/acme/actions/runners/42')/$(logged 'config.sh remove --local')"
+record "...the VM's registration was restored from the backup, the service back and running" "registered/unit/.service/active" "$(state)"
+record "...the message says the runner still takes jobs, and to re-run" "yes/yes" \
+  "$(has "$out" 'could not deregister runner 42')/$(has "$out" 'the runner still takes jobs')"
+
+echo "the local removal fails, before the registration is deleted:"
 fresh
 run env FAIL_REMOVE=1
 record "uninstall fails" "1" "$rc"
-record "...still registered, with its service back and running" "registered/unit/.service/active" "$(state)"
+record "...the registration is kept on GitHub and in the VM, the service back" "registered/unit/.service/active/0" \
+  "$(state)/$(logged 'gh api --hostname github.com -X DELETE orgs/acme/actions/runners/42')"
 # Started by ensure-service in the guest and again by the host's trap, which
 # also covers a failure before the guest script runs; a second start is a no-op.
 record "...the service was reinstalled once, and started" "1/yes" "$(logged 'svc.sh install runner')/$([ "$(logged 'systemctl start')" -ge 1 ] && echo yes || echo no)"
 record "...the message says so" "yes" "$(has "$out" 'starting '"$unit"' again')"
+
+echo "a registration file cannot be backed up:"
+# The backup runs before anything is removed, and one failed copy aborts the
+# whole cleanup: proceeding with an incomplete backup would risk a failed
+# API deletion with nothing to restore. The runner is stopped but intact,
+# and the host's restart trap starts its service again.
+fresh
+: >"$home/.credentials"
+chmod 000 "$home/.credentials"
+run env
+record "uninstall fails, nothing removed" "1/registered/unit/.service/active" \
+  "$rc/$(state)"
+record "...the cleanup never ran: no config.sh, no API deletion" "0/0" \
+  "$(logged 'config.sh')/$(logged 'gh api --hostname github.com -X DELETE')"
+record "...the message names the file and says nothing was removed" "yes/yes" \
+  "$(has "$out" 'could not back up .credentials')/$(has "$out" 'nothing was removed')"
 
 echo "svc.sh uninstall fails partway (#83):"
 for at in disable unit_remove marker_remove reload; do
@@ -214,13 +282,15 @@ for at in disable unit_remove marker_remove reload; do
   case "$at" in disable | unit_remove) installs=0 ;; *) installs=1 ;; esac
   record "...reinstalled only if the unit file was gone" "$installs" "$(logged 'svc.sh install runner')"
   record "...the removal was never attempted" "0" "$(logged 'config.sh')"
+  record "...the registration is still on GitHub (the deletion runs last)" "0" "$(logged 'gh api --hostname github.com -X DELETE orgs/acme/actions/runners/42')"
 done
 
-echo "removal and the reinstall both fail:"
+echo "the local removal and the reinstall both fail:"
 fresh
 run env FAIL_REMOVE=1 FAIL_INSTALL=1
 record "uninstall fails" "1" "$rc"
-record "...still registered, no service, and says it could not start it" "registered/no-unit/no-.service/stopped/yes" "$(state)/$(has "$out" 'could not start')"
+record "...the registration is kept on GitHub, the VM's copy remains, no service, and says it could not start it" "registered/no-unit/no-.service/stopped/yes/0" \
+  "$(state)/$(has "$out" 'could not start')/$(logged 'gh api --hostname github.com -X DELETE orgs/acme/actions/runners/42')"
 
 echo "no service installed (provisioning never finished):"
 fresh

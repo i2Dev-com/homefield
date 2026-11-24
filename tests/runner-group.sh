@@ -136,6 +136,10 @@ run_fn() {
   done
   shift
   : >"$calls"
+  # A clean state file per call: a successful install records ever_registered
+  # (the host-side token guard), and the next install on the same VM is
+  # refused by design.
+  rm -f "$work/.local/state/homefield/homefield.state"
   # shellcheck disable=SC2016  # the -c script is expanded by the inner bash
   out="$(env -i HOME="$work" PATH="$stubs" CALLS="$calls" HOMEFIELD_SOURCE_ONLY=1 ONLINE_WAIT_INTERVAL=0 ONLINE_WAIT_TRIES=3 "${envs[@]+"${envs[@]}"}" \
     "$BASH" -c '. "$1"; shift; "$@"' _ "$ROOT/bin/homefield" "$@" 2>&1 </dev/null)"
@@ -308,7 +312,7 @@ settings=$'https://github.com/acme\n42\nbuild-1\n'
 run_fn LIMA_STATUS=Running LIMA_RUN_GUEST=1 LIMA_SHELL_OUT="$settings" LIMA_REGISTERED=yes GH_IDS='41\n' -- cmd_upgrade
 record "upgrade: GitHub does not list the runner: refused, nothing stopped or provisioned" "nonzero/yes/0/0/0" \
   "$(nonzero "$rc")/$(has "$out" 'GitHub no longer has homefield'"'"'s runner (id 42) at https://github.com/acme')/$(called 'systemctl')/$(called 'provision')/$(called pgrep)"
-record "...naming the way to register it again, under its old name" "yes/yes" "$(has "$out" 'uninstall --instance homefield --keep-vm, then bin/homefield install --instance homefield --url https://github.com/acme --name build-1')/$(has "$out" 'Nothing was stopped')"
+record "...naming the way to register it again, under its old name" "yes/yes" "$(has "$out" 'reset --instance homefield (deletes the VM), then bin/homefield install --instance homefield --url https://github.com/acme --name build-1')/$(has "$out" 'Nothing was stopped')"
 run_fn LIMA_STATUS=Running LIMA_RUN_GUEST=1 LIMA_SHELL_OUT="$settings" LIMA_REGISTERED=yes GH_IDS='42\n' LIMA_JOB=yes -- cmd_upgrade
 record "upgrade: GitHub lists it: goes on to the idle check" "nonzero/no/yes" \
   "$(nonzero "$rc")/$(has "$out" 'no longer has')/$(has "$out" 'a job is running on')"
@@ -667,11 +671,11 @@ mkdir -p "$dflt/bin/lib"
 cp "$ROOT/bin/homefield" "$dflt/bin/homefield"
 cp "$ROOT"/bin/lib/*.sh "$dflt/bin/lib/"
 cp "$ROOT"/bin/cmd-*.sh "$dflt/bin/"
-printf 'repo=i2Dev-com/homefield\nref=v0.5.10\ncommit=%s\n' "$old" >"$dflt/.homefield-ref"
+printf 'repo=i2Dev-com/homefield\nref=v0.6.0\ncommit=%s\n' "$old" >"$dflt/.homefield-ref"
 : >"$calls"
 out="$(env -i HOME="$work/h" PATH="$work/vpub" CALLS="$calls" V_TAGS="$tags_rel" V_COMMIT="$new" "$BASH" "$dflt/bin/homefield" version 2>&1 </dev/null)"
 record "default repo, ref and place: the README's one-liner" "yes" "$(has "$out" "
-  curl -fsSL https://raw.githubusercontent.com/i2Dev-com/homefield/v0.5.10/install.sh | bash
+  curl -fsSL https://raw.githubusercontent.com/i2Dev-com/homefield/v0.6.0/install.sh | bash
 ")"
 
 printf 'repo=acme/tool\nref=release/1\ncommit=%s\n' "$old" >"$work/inst/.homefield-ref"
@@ -681,11 +685,14 @@ version_run V_COMMIT="$new" V_TAGS="$(printf 'v0.1.0\nv0.5.0')"
 record "...even when a release exists" "no" "$(has "$out" ' is out ')"
 
 printf 'repo=acme/tool\nref=v0.1.0\ncommit=%s\n' "$old" >"$work/inst/.homefield-ref"
-version_run V_COMMIT="$old" V_TAGS="$(printf 'v0.1.0\nv0.6.0')"
-record "a later release: says so with the changelog and the one-liner for it, exit 0" "0/yes/yes/yes" "$rc/$(has "$out" 'homefield: v0.6.0 is out (installed: v0.1.0); read CHANGELOG.md for breaking changes, then update with:')/$(has "$out" "  curl -fsSL https://raw.githubusercontent.com/acme/tool/v0.6.0/install.sh | HOMEFIELD_REPO=acme/tool HOMEFIELD_REF=v0.6.0 HOMEFIELD_HOME='$work/inst' bash")/$(has "$out" 'up to date with v0.1.0')"
+# The later release is the one above install.sh's default REF: a release this
+# checkout does not know, so the one-liner pins it with HOMEFIELD_REF. Move it
+# with every release, like tests/adopt.sh's mode-release threshold.
+version_run V_COMMIT="$old" V_TAGS="$(printf 'v0.1.0\nv0.6.1')"
+record "a later release: says so with the changelog and the one-liner for it, exit 0" "0/yes/yes/yes" "$rc/$(has "$out" 'homefield: v0.6.1 is out (installed: v0.1.0); read CHANGELOG.md for breaking changes, then update with:')/$(has "$out" "  curl -fsSL https://raw.githubusercontent.com/acme/tool/v0.6.1/install.sh | HOMEFIELD_REPO=acme/tool HOMEFIELD_REF=v0.6.1 HOMEFIELD_HOME='$work/inst' bash")/$(has "$out" 'up to date with v0.1.0')"
 record "...saying the VM is left alone, once" "1" "$(printf '%s\n' "$out" | grep -c 'homefield upgrade updates the VM')"
-version_run V_COMMIT="$old" V_TAGS="$(printf 'v0.6.0\nv0.1.0')"
-record "...whatever the order of the tags" "yes" "$(has "$out" 'v0.6.0 is out')"
+version_run V_COMMIT="$old" V_TAGS="$(printf 'v0.6.1\nv0.1.0')"
+record "...whatever the order of the tags" "yes" "$(has "$out" 'v0.6.1 is out')"
 version_run V_COMMIT="$old" V_TAGS="$(printf 'v0.1.0\nv0.2.1')"
 record "a later patch counts" "yes" "$(has "$out" 'v0.2.1 is out (installed: v0.1.0)')"
 version_run V_COMMIT="$old" V_TAGS="$(printf 'v0.9.9\nv0.10.0\nv0.5.0\nv0.1.0\nv1\nv2.0')"

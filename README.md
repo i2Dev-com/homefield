@@ -54,7 +54,7 @@ On such a Mac, in a terminal, with the URL of your organization (or, for a
 personal account or a single repository, `https://github.com/<owner>/<repo>`):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/i2Dev-com/homefield/v0.5.10/install.sh | bash -s -- --url https://github.com/<org>
+curl -fsSL https://raw.githubusercontent.com/i2Dev-com/homefield/v0.6.0/install.sh | bash -s -- --url https://github.com/<org>
 ```
 
 It asks a few questions and does the rest:
@@ -160,7 +160,7 @@ with them ([routing options](docs/adopting.md#routing-options)).
 `routing-guard` keeps every copy identical and every guard in place:
 
 ```yaml
-      - uses: i2Dev-com/homefield/routing-guard@v0.5.10
+      - uses: i2Dev-com/homefield/routing-guard@v0.6.0
         with:
           jobs: |
             ci.yml:lint
@@ -285,7 +285,7 @@ HomeField sits in a specific gap in the [self-hosted runner landscape](https://g
 | **Scheduled idle-gated self-update with rollback?** | ✅ (`homefield update --schedule`) | ❌ | ❌ | ❌ | ❌ | ❌ |
 | **Single-job ephemeral registration mode?** | ✅ (optional `--ephemeral` + `homefield re-register --watch`) | ❌ Stock / ✅ Codemany (single-use per job) | ❌ (persistent runners) | ✅ (optional ephemeral container) | ✅ (ephemeral VM clone per job) | ✅ (ephemeral pod or cloud VM per job) |
 | **Automated disk & Docker cleanup?** | ✅ (daily `homefield-cleanup` timer: >24h Docker objects, >7d workspaces; opt-in per-job hook: `--job-cleanup` wipes stopped containers, `_work` build state and `/tmp` after every job, caches kept warm) | ❌ Stock / ✅ Codemany (wipes runner folder per job) | ❌ | ✅ (when running ephemeral containers) | ✅ (VM snapshot discarded after job) | ✅ (pod/VM terminated after job) |
-| **Fresh VM / root-disk reset after every single job?** | ✅ (opt-in `--ephemeral --reset-vm`: each re-register clones a fresh APFS VM from a stopped base VM, so every job starts from a clean root disk — packages and hooks survive in the image, Docker caches do not; without it, keeps the VM warm for fast caches, per-job hook `--job-cleanup`) | ❌ on macOS (Codemany KVM VM per job is Linux only) | ❌ | ❌ (container recreated, shared host kernel) | ✅ (clones a fresh VM snapshot per job) | ✅ (VM autoscalers destroy instance per job) |
+| **Fresh VM / root-disk reset after every single job?** | ✅ (opt-in `--ephemeral --reset-vm`: each re-register clones a fresh APFS VM from a stopped base VM, so every job starts from a clean root disk — packages and hooks survive in the image, Docker caches do not; without it the VM is re-registered once per token and then a fresh VM is required — `--reset-vm` is the way to keep going, per-job hook `--job-cleanup`) | ❌ on macOS (Codemany KVM VM per job is Linux only) | ❌ | ❌ (container recreated, shared host kernel) | ✅ (clones a fresh VM snapshot per job) | ✅ (VM autoscalers destroy instance per job) |
 | **Webhook-driven elastic autoscaling (`0 → N`)?** | ✅ (tick-driven `0 → N` through the always-on route watcher — `fleet watch` boots a spare VM when queued jobs wait longer than a threshold behind a busy fleet, and with the opt-in `HOMEFIELD_SCALE_ZERO=1` stops the fleet's idle VMs when dark and wakes them on queued or hosted-runner demand — [#291](https://github.com/i2Dev-com/homefield/issues/291), [#305](https://github.com/i2Dev-com/homefield/issues/305); the webhook receiver ships opt-in: a cloudflared tunnel delivers `workflow_job` events to a loopback receiver that rings the same scaler, cutting a dark VM's wake from one tick interval to seconds — [#309](https://github.com/i2Dev-com/homefield/issues/309)) | ❌ Stock / ✅ Codemany | ❌ (fixed pools by design) | ❌ `myoung34` / ✅ `zoomies` | ❌ Tart / ✅ Cirrus Runners | ✅ (scales `0 → N` cloud VMs/pods from `workflow_job` webhooks) |
 | **Native macOS / Xcode / iOS & Windows jobs?** | ❌ (Ubuntu 24.04 Linux guest by design — Lima virtualizes Linux only, and host macOS jobs would break isolation; a macOS-guest exploration is tracked in [#306](https://github.com/i2Dev-com/homefield/issues/306)) | ✅ (runs directly on macOS host) | ❌ (Linux only) | ✅ (Linux / Windows containers) | ✅ (native macOS/Xcode VMs on Apple Silicon) | ✅ (Linux, Windows, and EC2 macOS dedicated hosts) |
 | **Direct Linux host installer (without macOS / Lima)?** | ❌ (tracked in [#231](https://github.com/i2Dev-com/homefield/issues/231); `vm/provision.sh` runs on Ubuntu `arm64`) | ✅ (Linux & macOS) | ✅ (built for Linux / SSH hosts) | ✅ (any Docker host) | ❌ (Apple Silicon macOS only) | ✅ (cloud / K8s Linux nodes) |
@@ -332,7 +332,7 @@ never moved (backed by the `refs/tags/v*` ruleset in
 [`.github/rulesets/protect-release-tags.json`](.github/rulesets/protect-release-tags.json),
 which blocks tag deletion, updates, and non-fast-forward moves). Pin an exact
 tag, such as `routing-guard@v0.3.0`, or a full 40-character commit SHA
-(`uses: i2Dev-com/homefield/routing-guard@<40-char-sha> # v0.5.10`) — a commit
+(`uses: i2Dev-com/homefield/routing-guard@<40-char-sha> # v0.6.0`) — a commit
 SHA binds your workflow cryptographically to one tree without depending on
 upstream tag rules, and Dependabot's `github-actions` ecosystem updates either
 form for you. There is no floating major tag to follow.
