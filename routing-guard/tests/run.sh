@@ -151,6 +151,10 @@ case_ "hash inside a quoted script arg"  pass "$EXPECTED" "s/^      - run: echo 
 case_ "hash inside a single-quoted value" pass "$EXPECTED" "s/^      - run: echo docker\$/      - name: 'v1.2 #3'/"
 case_ "comment after a quoted value"     pass "$EXPECTED" "s/^      - run: echo docker\$/      - name: \"Build\" # promoted/"
 case_ "escaped quote, then a hash"       pass "$EXPECTED" "s/^      - run: echo docker\$/      - name: \"say \\\"hi\\\" #1\"/"
+# A quote inside a plain scalar is content, not a delimiter: only a quote at
+# the start of a value opens a quoted scalar.
+case_ "apostrophe in a plain value"      pass "$EXPECTED" "s/^      - run: echo docker\$/      - name: Check '90s compatibility'/"
+case_ "quotes mid-value in a script"     pass "$EXPECTED" "s/^      - run: echo docker\$/      - run: echo foo\" \"/"
 case_ "trailing comment after jobs:"     pass "$EXPECTED" "s/^jobs:\$/jobs: # the jobs/"
 case_ "document start marker"            pass "$EXPECTED" "1s/^/---\\n/"
 case_ "plain flow data elsewhere"        pass "$EXPECTED" "s/^      - run: echo docker\$/      - run: echo docker\\n        env: {A: b}/"

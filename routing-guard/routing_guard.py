@@ -284,6 +284,24 @@ LIST_ITEM = re.compile(r"""^\s*-(\s|$)""")
 HOW = "write routing as a plain `runs-on: ...` line directly under a plain `job-id:` line"
 
 
+# A quote starts a quoted scalar only at the start of a value: at the start
+# of the line, after a `- ` list marker, or right after a plain (or quoted)
+# `key:` and its whitespace. Anything before the quote that is not one of
+# those — `run: echo foo" "`, `name: Check '90s compatibility` — means the
+# quote is content inside a plain scalar, which neither opens nor closes.
+QUOTE_OPENER = re.compile(r"""^\s*(?:-\s+)?(?:["']?[A-Za-z0-9_-]+["']?:\s*)?$""")
+
+
+def opens_quoted_scalar(code: str, i: int) -> bool:
+    """True when the quote at code[i] starts a quoted scalar.
+
+    The prefix before the quote must be a value's start: nothing, a `- `
+    list marker, or a `key:` (the key plain or quoted) and whitespace. A
+    quote anywhere else is content in a plain scalar.
+    """
+    return QUOTE_OPENER.match(code[:i]) is not None
+
+
 def strip_comment(line: str) -> str:
     """The line up to the first `#` outside a quoted scalar.
 
@@ -291,12 +309,13 @@ def strip_comment(line: str) -> str:
     `run: echo "# hello"`. Cutting there would leave the scalar looking
     open at the end of the line, and open_quote would refuse a workflow
     that is plain and single-line. The quote rules are open_quote's: a
-    quote opens a quoted scalar only at the start of the line or after
-    whitespace or a colon, `\\x` escapes inside double quotes, `''` inside
-    single ones. A quote the heuristic does not open (one after `(`, as in
-    `fromJSON('...')`) leaves the `#` cut as a comment would be — the
-    truncated code is only ever shorter, and the checks it feeds are
-    prefix checks and the open-quote one, which such a quote cannot trip.
+    quote opens a quoted scalar only at the start of a value (see
+    opens_quoted_scalar), `\\x` escapes inside double quotes, `''` inside
+    single ones. A quote the rule does not open (one after `(`, as in
+    `fromJSON('...')`, or mid-value) leaves the `#` cut as a comment would
+    be — the truncated code is only ever shorter, and the checks it feeds
+    are prefix checks and the open-quote one, which such a quote cannot
+    trip.
     """
     quote = None
     i = 0
@@ -316,7 +335,7 @@ def strip_comment(line: str) -> str:
                 quote = None
         elif char == "#":
             return line[:i]
-        elif char in "\"'" and (i == 0 or line[i - 1] in " \t:"):
+        elif char in "\"'" and opens_quoted_scalar(line, i):
             quote = char
         i += 1
     return line
@@ -325,13 +344,16 @@ def strip_comment(line: str) -> str:
 def open_quote(code: str) -> bool:
     """True when a quoted scalar is still open at the end of the line.
 
-    A quote opens a quoted scalar only where YAML can start one: at the
-    start of the line or after whitespace or a colon (an apostrophe inside
-    a plain scalar — `don't` — does not). Inside a double-quoted scalar
-    `\\x` escapes the next character; inside a single-quoted one `''` is an
-    escaped quote. A continuation line of an open scalar may sit at any
-    indentation, where it can read as a key, so an open quote at the end of
-    a line inside `jobs:` is refused rather than trusted.
+    A quote opens a quoted scalar only at the start of a value: at the
+    start of the line, after a `- ` list marker, or right after a plain
+    (or quoted) `key:` and its whitespace. Anywhere else — an apostrophe
+    inside a plain scalar (`don't`, `Check '90s`), a quote mid-value
+    (`echo foo" "`) — it is content and neither opens nor closes. Inside a
+    double-quoted scalar `\\x` escapes the next character; inside a
+    single-quoted one `''` is an escaped quote. A continuation line of an
+    open scalar may sit at any indentation, where it can read as a key, so
+    an open quote at the end of a line inside `jobs:` is refused rather
+    than trusted.
     """
     quote = None
     i = 0
@@ -349,7 +371,7 @@ def open_quote(code: str) -> bool:
                     i += 2
                     continue
                 quote = None
-        elif char in "\"'" and (i == 0 or code[i - 1] in " \t:"):
+        elif char in "\"'" and opens_quoted_scalar(code, i):
             quote = char
         i += 1
     return quote is not None
