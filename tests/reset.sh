@@ -211,8 +211,9 @@ mkdir -p "$state"
 printf 'group_created=other/x/1\n' >"$state/other.state"
 run GH_ON=0 --
 record "reset succeeds" "0" "$rc"
-record "...deregistered with a remove token, service uninstalled" "removed/no-unit/no-.service/stopped" "$(runner_state)"
-record "...GitHub asked about the runner by URL and id, a token fetched, config.sh got it" "1/1/1" "$(logged 'runner_on_github https://github.com/acme 42')/$(logged 'get_token remove')/$(logged 'config.sh remove token-in-env=yes')"
+record "...deregistered from the host, service uninstalled" "removed/no-unit/no-.service/stopped" "$(runner_state)"
+record "...GitHub asked about the runner by URL and id, the registration deleted from the host, config.sh ran with no token" "1/1/1" \
+  "$(logged 'runner_on_github https://github.com/acme 42')/$(logged 'gh api --hostname github.com -X DELETE orgs/acme/actions/runners/42')/$(logged 'config.sh remove --local token-in-env=no')"
 record "...the VM was deleted once" "1" "$(logged 'limactl delete --force resettest')"
 record "...the group was deleted by id, once" "1" "$(lines "$DEL")"
 record "...the state file is removed, another instance's is not" "no-state/yes" "$(has_state)/$([ -e "$state/other.state" ] && echo yes || echo no)"
@@ -223,6 +224,15 @@ fresh
 run GH_ON=1 --
 record "reset succeeds, removing the VM's copy only, with no token" "0/removed/0/1/1" "$rc/$(runner_state | cut -d/ -f1)/$(logged 'get_token')/$(logged 'config.sh remove --local token-in-env=no')/$(logged 'limactl delete --force')"
 record "...the report says so" "yes" "$(has "$out" 'removed from the VM only, GitHub no longer listed it')"
+
+echo "GitHub refuses the deletion from the host:"
+fresh
+run GH_ON=0 GH_DELETE_FAIL=1 --
+record "reset fails" "1" "$rc"
+record "...the VM's registration was restored from the backup, the service back and running, the VM kept" "registered/unit/.service/active/0" \
+  "$(runner_state)/$(logged 'limactl delete --force resettest')"
+record "...the message says the runner still takes jobs, and to re-run" "yes/yes" \
+  "$(has "$out" 'could not deregister runner 42')/$(has "$out" 'the runner still takes jobs')"
 
 echo "the reset base VM goes with the VM (#297):"
 reset_base_at() {  # a marked base, as install --reset-vm leaves it
@@ -384,6 +394,29 @@ rm -f "$home/.runner"
 run VM=Running -- --keep-vm
 record "--keep-vm on a VM that is not registered: nothing to do, no confirmation needed" "0/0" "$rc/$(logged 'limactl delete')"
 
+echo "the token guard's record survives a reset that keeps the VM:"
+# A retained VM may have run jobs, so the host-side ever_registered record
+# must outlive the reset: dropping it would let a later install put a
+# registration token into the used VM if a job deleted its _work marker.
+fresh
+mkdir -p "$state"
+printf 'ever_registered=1\njob_cleanup=1\n' >"$state/resettest.state"
+run GH_ON=0 -- --keep-vm
+record "--keep-vm: the record is kept (state_set keeps the other keys)" "yes/yes/yes" \
+  "$(grep -qx 'ever_registered=1' "$state/resettest.state" && echo yes || echo no)/$(grep -qx 'job_cleanup=1' "$state/resettest.state" && echo yes || echo no)/$(has "$out" 'ever_registered kept')"
+fresh
+mkdir -p "$state"
+printf 'ever_registered=1\n' >"$state/resettest.state"
+run GH_ON=0 FAIL_DELETE=1 --
+record "a VM that cannot be deleted: the record is kept, the reset fails" "1/yes/yes" \
+  "$rc/$(grep -qx 'ever_registered=1' "$state/resettest.state" && echo yes || echo no)/$(has "$out" 'ever_registered kept')"
+fresh
+mkdir -p "$state"
+printf 'ever_registered=1\n' >"$state/resettest.state"
+run GH_ON=0 --
+record "a reset that deletes the VM: the record goes with the state file" "0/no-state" \
+  "$rc/$(has_state)"
+
 echo "--keep-group with a registered runner:"
 fresh
 set_state acme/homefield-ci/7
@@ -463,7 +496,7 @@ mkdir -p "$share" "$bin"
 : >"$share/.homefield-ref"
 run GH_ON=0 FAIL_DELETE=1 -- --remove-tool
 record "reset fails, saying how to delete it by hand" "1/yes" "$rc/$(has "$out" 'limactl delete --force resettest')"
-record "...the independent group step still ran" "1/no-state" "$(lines "$DEL")/$(has_state)"
+record "...the independent group step still ran, and the retained VM keeps the token guard's record" "1/state" "$(lines "$DEL")/$(has_state)"
 record "...the tool is kept, because a step failed" "yes/yes" "$([ -e "$share/.homefield-ref" ] && echo yes || echo no)/$(has "$out" 'tool: kept, a step above failed')"
 rm -rf "$share" "$bin"
 

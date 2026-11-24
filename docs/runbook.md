@@ -56,6 +56,11 @@ every job holding cloud or production credentials.
 | Secrets in jobs | Jobs on the runner receive the secrets their workflow passes, on same-repo PRs. Push-only secrets never reach it by default, because pushes run hosted; they do when `events` includes `push`, `workflow_dispatch` or `schedule`. |
 | Across repositories | Every allowed repository's PR jobs share one VM, one after another. Workspaces are per repository, but anything a job leaves in the guest (Docker images, `/tmp`, and through `sudo` the packages it installs and the services it enables) is visible to the next job from another repository. Allow only repositories you would trust with each other's PR code. |
 | Inside the VM | Jobs run as user `runner`, which is in the `docker` group and therefore root-equivalent **inside the guest**, and has passwordless `sudo` as a hosted Linux runner does. The VM is the boundary, not the user: neither adds reach the other did not give. |
+| Provisioning tokens | A registration or removal token reaches the guest only on stdin, and only into a VM that has **never run a job**: jobs are root-equivalent, so a root process a job left behind could read the token from the provisioning process's environment. What counts as "never ran a job" is decided on the **Mac, not in the guest**: the state file records whether a runner has ever been registered on this VM, and a VM that has been registered is refused outright — a job's leftover root process could delete the `_work` marker the guest probe checks, so the guest's own answer is not the boundary. `install` refuses a registered VM even when `_work` is absent, and a
+  `reset` that keeps the VM (`--keep-vm`, or a delete that failed) keeps
+  the record, so a retained VM cannot be re-registered into; `re-register`
+  re-registers only a VM it has just cloned fresh from the base (with the
+  reset on — a skipped reset leaves the old VM and is refused too). The `_work` probe stays as the second line on never-registered VMs and on the fresh clone. Deregistration (`uninstall`, `reset`) removes the registration through the GitHub API from the Mac, so no removal token enters the guest at all. |
 
 **Access checklist.** Check these when something changes (a repository added,
 an owner left, a Mac replaced) and now and then regardless. The first two
@@ -1362,15 +1367,30 @@ many the scaler wakes.
 ## Moving a registration
 
 To move the runner to another scope (for example from one repository to the
-organization), re-register it in place. Pass its current `RUNNER_NAME` and
-`RUNNER_LABEL` so it keeps them and no workflow changes are needed.
-`REMOVE` is a remove-token for the **current**
-scope (for a repository: `gh api -X POST repos/<owner>/<repo>/actions/runners/remove-token --jq .token`,
-which needs repository admin). `TOKEN` is a registration token for the new
-scope (see "Registration tokens").
+organization), register it fresh: a token must not go into a VM that has run
+jobs (see the [trust boundary](#trust-boundary)), and a VM that has served
+jobs has. `bin/homefield reset --instance <name>` deregisters the runner
+(through the GitHub API, from the Mac) and deletes the VM; then install at
+the new scope:
 
-Move it while no job is running: the script refuses otherwise, then stops the
-runner before anything else.
+```bash
+bin/homefield reset --instance <name>
+bin/homefield install --instance <name> --url https://github.com/<new-scope> \
+  --name <name> --label <label>
+```
+
+Pass the current `RUNNER_NAME` and `RUNNER_LABEL` so workflows need no
+changes. The only in-place move left is a VM that has never run a job (a
+fresh registration that has not served one yet): `provision.sh` with
+`RUNNER_REREGISTER=1`, `RUNNER_REMOVE_TOKEN` for the **current** scope (for
+a repository: `gh api -X POST repos/<owner>/<repo>/actions/runners/remove-token --jq .token`,
+which needs repository admin) and `RUNNER_TOKEN` for the new scope (see
+"Registration tokens"). This is the operator asserting the VM has never run
+a job: the script's `_work` check is a safety net, not a boundary — a VM
+that has run jobs can delete that directory, and the host-side state that
+guards `install` is not consulted here — so be sure before using it. The
+script refuses both tokens in a VM that has run jobs, and refuses the move
+while a job is running, then stops the runner before anything else.
 
 ```bash
 limactl copy vm/provision.sh homefield:/tmp/provision.sh
@@ -1403,12 +1423,16 @@ with new values changes nothing.
 
 ## Removing the runner
 
-`bin/homefield uninstall` deregisters the runner (fetching or asking for a
-remove token), turns off autostart and deletes the VM; `--keep-vm` only
+`bin/homefield uninstall` deregisters the runner (removing the registration
+through the GitHub API from the Mac, so no removal token enters the guest),
+turns off autostart and deletes the VM; `--keep-vm` only
 deregisters. When the deleted VM was the last one on this Mac with the
 automatic fallback on, `uninstall` also removes the sleep/wake agent
 ([The sleep/wake watcher](#the-sleep-wake-watcher-sleep-and-login)); a
-`reset` does the same once its state file is gone. By hand:
+`reset` does the same once its state file is gone. By hand — only on a VM
+that has never run a job; on one that has, remove the runner on GitHub's
+runners page instead and delete the VM, so no removal token enters a guest a
+job's leftover root process could read:
 
 ```bash
 # Every repository that routes to it: switch to hosted first
@@ -1419,13 +1443,20 @@ unset REMOVE
 limactl delete --force homefield
 ```
 
-`config.sh remove` refuses while the service is installed, so the service goes
-first. If GitHub then refuses the removal (a rejected token, no network), or
-`svc.sh uninstall` stops partway, `bin/homefield uninstall` gives the service
-back and starts it, so the runner keeps taking jobs; run it again once the
-cause is fixed. By hand, `provision.sh` does that and works out what the
-uninstall left behind (this one needs only the script, not the `vm/guest/`
-helpers):
+`config.sh remove` refuses while the service is installed, so the service
+goes first, and the registration files are copied to a backup in the
+guest before anything is removed. The VM's local cleanup runs while the
+registration still exists on GitHub: if anything there fails (the service
+uninstall stops partway, or the local removal fails), `bin/homefield
+uninstall` restores the files and gives the service back, so a runner
+GitHub still knows keeps taking jobs; run it again once the cause is
+fixed. If the GitHub API deletion itself fails after the local cleanup
+(a network problem, or `gh` not authorized), the same backup puts the
+registration back and the service starts again: the runner is still
+registered and takes jobs, and the command says so — fix the cause and
+run it again. By hand, `provision.sh` does the restore and works out what
+the uninstall left behind (this one needs only the script, not the
+`vm/guest/` helpers):
 
 ```bash
 limactl copy vm/provision.sh homefield:/tmp/provision.sh
@@ -1520,13 +1551,19 @@ gone (remove it on the runners page, `reset` cannot reach it without the VM);
 other instances; Lima, `gh`, Homebrew and your shell's `PATH`.
 
 **The state file.** `${HOMEFIELD_STATE_DIR:-~/.local/state/homefield}/<instance>.state`
-holds `key=value` lines. The only key is `group_created=<org>/<group
-name>/<group id>`, which `install` writes the moment it creates the runner
-group, before the VM exists, so a failed install still has it (the id is empty
-if it could not be read from GitHub's answer, and `reset` then finds the group
-by name). A group that already existed is never recorded. It lives outside the
+holds `key=value` lines. `group_created=<org>/<group name>/<group id>` is
+written by `install` the moment it creates the runner group, before the VM
+exists, so a failed install still has it (the id is empty if it could not be
+read from GitHub's answer, and `reset` then finds the group by name). A group
+that already existed is never recorded. `ever_registered=1` is written by
+`install`, `upgrade` and `re-register` before a registration token enters the
+VM: it is the [trust boundary](#trust-boundary)'s host-side record, and
+`install` refuses a VM it marks, even one whose `_work` is gone. A `reset`
+that keeps the VM keeps the line (a `reset` that deletes the VM removes the
+file with it). It lives outside the
 tool's install directory because `install.sh` replaces that directory on every
-update, and it is per instance. There are no secrets in it. Delete the line, or
+update, and it is per instance. There are no secrets in it. Delete the
+`group_created` line, or
 the file, to make `reset` leave the group alone; without it (a Mac that
 installed before this file existed) delete the group by hand in the
 organization's *Settings → Actions → Runner groups*.

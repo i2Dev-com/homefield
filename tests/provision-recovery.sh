@@ -337,6 +337,26 @@ run_move ""
 rc=$?
 record "a bad saved list on a move: refused before the runner is stopped" "1/0/running" "$rc/$(calls stop)/$(running)"
 
+echo "a token into a VM that has run jobs:"
+# _work is created by the first job and kept by every cleanup hook: its
+# presence is the marker. A token reaches config.sh through the provisioning
+# process's environment, which a root process a job left behind can read —
+# so both a move and a first registration are refused before anything is
+# touched.
+fresh "$current" active
+mkdir -p "$work/runner/_work"
+run_move ""
+rc=$?
+record "a move into a VM that has run jobs: refused before the runner is stopped" "1/0/running" \
+  "$rc/$(calls stop)/$(running)"
+record "...saying why, and the fresh-VM way" "yes/yes" \
+  "$(grep -q 'has run jobs' "$work/out" && echo yes || echo no)/$(grep -q 'bin/homefield reset' "$work/out" && echo yes || echo no)"
+run_first ""
+rc=$?
+record "a first registration into a VM that has run jobs: refused before anything is provisioned" "1/0" \
+  "$rc/$(grep -c '^apt-get' "$work/state.log" 2>/dev/null || echo 0)"
+rm -rf "$work/runner/_work"
+
 echo "the per-job cleanup switch (#285):"
 # run_switch <value>: one provision run with RUNNER_JOB_CLEANUP set, on a
 # registered runner. The switch is saved in the guest only after the .env

@@ -141,7 +141,7 @@ record "booted, GitHub lists it offline: exits 1, not taking jobs" "1/yes/yes" \
 
 hf "${online[@]}" LIMA_STATUS=Stopped GH_RUNNERS='' -- start
 record "booted, GitHub no longer has the runner: exits 1 with how to register it again" "1/yes/yes" \
-  "$rc/$(has "$out" 'github: NOT listed')/$(has "$err+$out" 'bin/homefield uninstall --instance homefield --keep-vm, then bin/homefield install')"
+  "$rc/$(has "$out" 'github: NOT listed')/$(has "$err+$out" 'bin/homefield reset --instance homefield (deletes the VM), then bin/homefield install')"
 
 hf "${online[@]}" LIMA_STATUS=Stopped GH_FAIL=1 -- start
 record "booted, GitHub could not be asked: exits 1, online unproven" "1/yes/yes" \

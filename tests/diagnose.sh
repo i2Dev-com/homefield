@@ -280,7 +280,7 @@ echo "GitHub (#76, #103):"
 guest_fs
 diag "${healthy[@]}" GH_RUNNERS='41\tonline\tfalse\n420\tonline\tfalse\n4\tonline\tfalse\n' --
 record "registered but GitHub does not list it: exits 1, matching the id whole" "1/yes/no" "$rc/$(has "$out" '  - On GitHub: NOT listed')/$(has "$out" 'listed (online')"
-record "...with the way to register it again, under its old name" "yes" "$(has "$out" 'Fix: bin/homefield uninstall --instance homefield --keep-vm, then bin/homefield install --instance homefield --url https://github.com/acme --name my-mac-homefield')"
+record "...with the way to register it again, under its old name" "yes" "$(has "$out" 'Fix: bin/homefield reset --instance homefield (deletes the VM), then bin/homefield install --instance homefield --url https://github.com/acme --name my-mac-homefield')"
 record "...the group is not looked up for a runner GitHub does not list" "yes/0" "$(has "$out" '  - Group: skipped (GitHub did not list the runner, so its group is unknown)')/$(called 'runner-groups')"
 diag "${healthy[@]}" GH_RUNNERS='42\toffline\tfalse\n' --
 record "listed but offline: exits 1" "1/yes/yes" "$rc/$(has "$out" '  - On GitHub: listed (offline, idle)')/$(has "$out" 'GitHub lists the runner my-mac-homefield as offline')"

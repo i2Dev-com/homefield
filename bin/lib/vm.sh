@@ -655,6 +655,29 @@ guest_has_file() {
 # asked. Commands that act on the answer call is_registered instead.
 registered() { guest_has_file "$RUNNER_HOME/.runner"; }
 
+# guest_has_dir PATH: guest_has_file for a directory. The runner's _work is
+# created by the first job and kept by every cleanup hook, so it is the
+# marker for "this VM has run jobs" (a registration token must not go into
+# such a VM: a root process the job left behind could read it from the
+# provisioning process's environment). The directory is the guest's own, so
+# this marker is the second line of the token guard — the boundary is the
+# host-side ever_registered state cmd-install.sh records (the guest cannot
+# reach it): a VM that has run jobs can delete the marker, so its answer is
+# not a boundary, while a VM that has never been registered cannot have run
+# a job (jobs need a registered runner), so there the answer is sound.
+guest_has_dir() {
+  # shellcheck disable=SC2016  # the guest's shell expands $1, not this one
+  guest_probe sudo 'if test -d "$1"; then echo yes; else echo no; fi' "$1"
+}
+
+# ran_jobs: 0 if the VM's runner has a _work directory (at least one job has
+# run), 1 if not (a fresh VM), 2 if the VM could not be asked. Commands that
+# act on the answer stop on 2: reading "fresh" for a VM that could not be
+# asked would put a registration token into a VM that may have run jobs.
+# Second line of the token guard (see guest_has_dir): on a VM that has never
+# been registered the answer is sound; elsewhere it catches what it can.
+ran_jobs() { guest_has_dir "$RUNNER_HOME/_work"; }
+
 # is_registered: registered, for the commands that act on "no". A VM that could
 # not be asked ends the command: read as "not registered", it would let
 # uninstall delete the VM and leave the registration on GitHub, and let install
@@ -667,9 +690,12 @@ is_registered() {
 }
 
 # removed_recovery <url> <name>: how to register a runner GitHub removed again,
-# under its old name. The label and group are not stored in the VM.
+# under its old name. The label and group are not stored in the VM. A VM that
+# has been registered may have run jobs, so the fresh registration goes on a
+# fresh VM: reset deletes it (and removes the VM's copy of the removed
+# runner), install registers a new one.
 removed_recovery() {
-  echo "bin/homefield uninstall --instance ${INSTANCE} --keep-vm, then bin/homefield install --instance ${INSTANCE} --url $1${2:+ --name $2}, with the --label and --group of the first install if they were not the defaults"
+  echo "bin/homefield reset --instance ${INSTANCE} (deletes the VM), then bin/homefield install --instance ${INSTANCE} --url $1${2:+ --name $2}, with the --label and --group of the first install if they were not the defaults"
 }
 
 # job_running: 0 if a job is running, 1 if not, 2 if the guest could not be

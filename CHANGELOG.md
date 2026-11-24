@@ -29,6 +29,49 @@ fail, such as a new guard in the routing expression, bumps the minor version
   way the guard does, and fails closed when the guard step's job cannot be
   read, so a guard disabled at the job level under a quoted key is no
   longer accepted.
+- **Breaking for `homefield` users** (bumps the minor when released): a
+  registration or removal token must never enter a VM that has run jobs.
+  Jobs run root-equivalent inside the guest, so a root process a job left
+  behind could read the token from the provisioning process's environment.
+  `provision.sh` refuses a token when the VM's `_work` exists, and
+  `uninstall` and `reset` delete the registration through the GitHub API
+  from the Mac, so no removal token enters the guest at all. The
+  registration boundary itself is host-side: the state file records whether
+  a runner has ever been registered on this VM, and `install` refuses a
+  registered VM even when its `_work` is absent — the directory is the
+  job's root's to delete, so the guest's answer is not the boundary
+  (`upgrade` records the same, so state files predating the record are
+  covered too). The record is written before the token enters the guest,
+  not after provisioning returns: provisioning starts the runner before
+  its later steps finish, and a failure past that point must not leave a
+  VM running jobs without the record (a failed install then needs `reset`
+  + `install`, which the refusal message says). Deregistration writes the
+  record too, so a VM installed before the record existed (never
+  upgraded) cannot become token-eligible after a deregistration that
+  keeps the VM. A `reset` that keeps the
+  VM (`--keep-vm`, or a delete that failed) keeps the record too, so a
+  retained VM cannot be re-registered into; `reset` that deletes the VM
+  drops the record with the state file. `re-register` re-registers only a
+  VM it has just cloned
+  fresh from the base: a reset that was skipped leaves the old VM, and
+  re-registering it in place is refused even when `_work` is absent.
+  Deregistration order changed: the VM's local cleanup runs first, while
+  the registration still exists on GitHub, with the registration files
+  backed up before anything is removed (one failed copy aborts the cleanup
+  with nothing removed) — a failure there restores the
+  files and the service, and the runner keeps taking jobs; the
+  irreversible API deletion goes last, and a failed one restores the same
+  backup and says to fix the cause and re-run; a restore that itself fails
+  partway keeps the backup in the VM and says the runner is registered but
+  offline, with the backup's path for a hand recovery. A move is now a fresh
+  registration — `bin/homefield reset --instance <name>`, then `install` at
+  the new scope; the in-place `RUNNER_REREGISTER=1` move remains only for a
+  VM that has never run a job (the operator asserts it; the script's
+  `_work` check is a safety net, not a boundary). An ephemeral re-register
+  with the VM reset off is refused: re-register with the reset on
+  (`install --ephemeral --reset-vm`) so every cycle starts from a fresh
+  clone. Runbook: the trust boundary, moving a registration, and the
+  removal failure paths.
 - Documented: the `webhook setup` hostname must be a first-level subdomain
   of the Cloudflare zone's domain (`webhook.example.com`, not
   `webhook.ci.example.com`). The zone's free Universal SSL certificate
