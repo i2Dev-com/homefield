@@ -144,6 +144,10 @@ OPTED_IN = re.compile(r"^\$\{\{\s*vars\.CI_RUNNER == 'local' .*\}\}$")
 # The trigger options after which a pull request may not run the workflow.
 FILTERS = ("branches", "branches-ignore", "paths", "paths-ignore")
 ON_KEY = re.compile(r"^([\"']?)on\1:\s*(.*?)\s*$")
+# The top-level `jobs:` key, quoted or not, with an optional value anchor or
+# tag (`jobs: &a`, the shape routing_guard.py reads) and nothing else on the
+# line: a value there would be inline jobs, which the guard refuses.
+JOBS_KEY = re.compile(r"""^([\"']?)jobs\1:(\s+[&!]\S*)?\s*(#.*)?$""")
 # A mapping key, plain or quoted (`"continue-on-error": true` is the same key).
 KEY = re.compile(r"""^(\s*)(-\s+)?["']?([A-Za-z0-9_-]+)["']?:\s*(.*?)\s*$""")
 # A line that opens a block scalar (`key: |`, `- |`, `- key: >-`), as in
@@ -381,7 +385,7 @@ def parse_jobs(lines):
     job-level key sits at the indent of the job's first child; a step's keys
     are deeper."""
     jobs = []
-    top = next((i for i, line in enumerate(lines) if re.match(r"^jobs:\s*(#.*)?$", line)), None)
+    top = next((i for i, line in enumerate(lines) if JOBS_KEY.match(line)), None)
     if top is None:
         return jobs
     base = None
@@ -445,6 +449,15 @@ def check_guard(name, at, files):
     where = f"{name}:{at + 1}"
     blocks, warns = [], []
     job = next((j for j in jobs if j["start"] < at < j["end"]), None)
+    if job is None and any(JOBS_KEY.match(line) for line in lines):
+        # Fail closed: the step sits in a job adopt could not read (a job
+        # written as a flow mapping, say), so its job-level if: and
+        # continue-on-error: cannot be checked, and a guard that cannot be
+        # checked counts as one that may not run (GHSA-wwwq-2hhr-f9h4).
+        blocks.append(
+            f"the routing-guard step at {where} cannot be checked: adopt"
+            f" could not read the job it sits in from {name}"
+        )
     conditions = [(step_key(lines, at, "if"), "its step")]
     if job:
         conditions.append((job["if"], f"its job {job['id']}"))

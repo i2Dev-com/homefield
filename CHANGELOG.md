@@ -11,6 +11,24 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ## Unreleased
 
+- **Breaking for consumers of the routing guard** (bumps the minor when
+  released): the guard now refuses workflow shapes it cannot attribute to a
+  job, and fails any job it read no routing for. Inside `jobs:` a line that
+  opens a flow mapping or sequence, or starts an alias, an anchor or a tag,
+  fails — a job written as a multi-line `{...}` mapping, or an alias as a
+  job body or as a mapping key, puts the job's real keys where the body
+  scan sees data — and a quoted scalar left open at the end of a line
+  fails, because a continuation line may sit at any indentation, where it
+  reads as a key. A job for which the scan read neither a job-level
+  `runs-on` nor a local `uses:` fails too, even though GitHub would run it
+  hosted: a job the check cannot vouch for is the shape a bypass hides in.
+  Write multi-line text as a block scalar (`name: >-`) and give every job
+  an explicit `runs-on`. A workflow that passed an earlier release may fail
+  this one; the failure messages say how to write the plain form.
+  `homefield adopt` reads a quoted top-level `"jobs":` / `'jobs':` key the
+  way the guard does, and fails closed when the guard step's job cannot be
+  read, so a guard disabled at the job level under a quoted key is no
+  longer accepted.
 - **Breaking for `homefield` users** (bumps the minor when released): a
   registration or removal token must never enter a VM that has run jobs.
   Jobs run root-equivalent inside the guest, so a root process a job left

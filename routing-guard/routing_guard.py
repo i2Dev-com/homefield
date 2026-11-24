@@ -45,15 +45,22 @@ multi-line `runs-on` (a list or mapping on the following lines). Write those
 on one line, or keep the job on a hosted image name.
 
 The file is read line by line, with no YAML parser, so it can only vouch for
-the plain block style. Valid YAML that says the same thing another way (a
-quoted `"runs-on"` key, a `runs-on` key carrying a tag or anchor, a job
-written as a `{...}` mapping, a `<<` merge key, `? runs-on`, a top-level key
-the scan cannot read) would pass unseen. Those fail too, with a message that
-says how to write them plainly. A job that calls a reusable workflow in
-another repository is refused as well: the called workflow's jobs evaluate
-`runs-on` in the caller's context, so its routing cannot be checked from this
-repository — call a local workflow, which this check then reads like any
-other.
+the plain block style. Inside `jobs:` every line must be one: a plain key, a
+`- key:` list item, or the start of a block scalar. Valid YAML that says the
+same thing another way — a line opening a flow mapping or sequence (a job
+written as a multi-line `{...}` mapping), an alias or anchor (an alias as a
+job body or as a mapping key), a quoted scalar that continues on the next
+line (a continuation line may sit at any indentation, so it can look like a
+key), a quoted `"runs-on"` key, a `runs-on` key carrying a tag or anchor, a
+`<<` merge key, `? runs-on`, a top-level key the scan cannot read — is
+refused, with a message that says how to write it plainly. And the scan has
+to have read every job's routing: a job for which it read neither a
+job-level `runs-on` nor a job-level `uses:` fails, even though GitHub would
+run such a job hosted — a job the scan cannot read is one it cannot vouch
+for. A job that calls a reusable workflow in another repository is refused
+as well: the called workflow's jobs evaluate `runs-on` in the caller's
+context, so its routing cannot be checked from this repository — call a
+local workflow, which this check then reads like any other.
 
 The set of opted-in jobs must equal --jobs exactly, so routing a job to the
 local runner is always a deliberate, reviewed change.
@@ -265,7 +272,109 @@ UNREAD = (
 # keys, so a script line that begins with `?`, a bracket or a quote is not YAML
 # the checks above are about.
 BLOCK_START = re.compile(r"""^(\s*)(-\s+)?([^\s#][^#]*?:\s+)?(?:[&!]\S*\s+)*[|>][-+0-9]*\s*$""")
+# A plain block-style line inside `jobs:` starts with a key or a `- key:`
+# list item. A line that opens a flow mapping or sequence, or starts an
+# alias, an anchor or a tag, says something this scan cannot attribute to a
+# job — a job written as a multi-line `{...}` mapping puts its keys at an
+# indent the body scan treats as data, and an alias can carry a whole job
+# body — so the line fails instead of passing unseen. A block scalar start
+# (`run: |`, `- &a !!str >-`) is exempt: the lines under it are text.
+UNREADABLE_LINE = re.compile(r"""^\s*(?:-\s+)?[{\[*&!]""")
+LIST_ITEM = re.compile(r"""^\s*-(\s|$)""")
 HOW = "write routing as a plain `runs-on: ...` line directly under a plain `job-id:` line"
+
+
+# A quote starts a quoted scalar only at the start of a value: at the start
+# of the line, after a `- ` list marker, or right after a plain (or quoted)
+# `key:` and its whitespace. Anything before the quote that is not one of
+# those — `run: echo foo" "`, `name: Check '90s compatibility` — means the
+# quote is content inside a plain scalar, which neither opens nor closes.
+QUOTE_OPENER = re.compile(r"""^\s*(?:-\s+)?(?:["']?[A-Za-z0-9_-]+["']?:\s*)?$""")
+
+
+def opens_quoted_scalar(code: str, i: int) -> bool:
+    """True when the quote at code[i] starts a quoted scalar.
+
+    The prefix before the quote must be a value's start: nothing, a `- `
+    list marker, or a `key:` (the key plain or quoted) and whitespace. A
+    quote anywhere else is content in a plain scalar.
+    """
+    return QUOTE_OPENER.match(code[:i]) is not None
+
+
+def strip_comment(line: str) -> str:
+    """The line up to the first `#` outside a quoted scalar.
+
+    A `#` inside quotes is content, not a comment: `name: "Build #1"` or
+    `run: echo "# hello"`. Cutting there would leave the scalar looking
+    open at the end of the line, and open_quote would refuse a workflow
+    that is plain and single-line. The quote rules are open_quote's: a
+    quote opens a quoted scalar only at the start of a value (see
+    opens_quoted_scalar), `\\x` escapes inside double quotes, `''` inside
+    single ones. A quote the rule does not open (one after `(`, as in
+    `fromJSON('...')`, or mid-value) leaves the `#` cut as a comment would
+    be — the truncated code is only ever shorter, and the checks it feeds
+    are prefix checks and the open-quote one, which such a quote cannot
+    trip.
+    """
+    quote = None
+    i = 0
+    while i < len(line):
+        char = line[i]
+        if quote == '"':
+            if char == "\\":
+                i += 2
+                continue
+            if char == '"':
+                quote = None
+        elif quote == "'":
+            if char == "'":
+                if line[i + 1: i + 2] == "'":
+                    i += 2
+                    continue
+                quote = None
+        elif char == "#":
+            return line[:i]
+        elif char in "\"'" and opens_quoted_scalar(line, i):
+            quote = char
+        i += 1
+    return line
+
+
+def open_quote(code: str) -> bool:
+    """True when a quoted scalar is still open at the end of the line.
+
+    A quote opens a quoted scalar only at the start of a value: at the
+    start of the line, after a `- ` list marker, or right after a plain
+    (or quoted) `key:` and its whitespace. Anywhere else — an apostrophe
+    inside a plain scalar (`don't`, `Check '90s`), a quote mid-value
+    (`echo foo" "`) — it is content and neither opens nor closes. Inside a
+    double-quoted scalar `\\x` escapes the next character; inside a
+    single-quoted one `''` is an escaped quote. A continuation line of an
+    open scalar may sit at any indentation, where it can read as a key, so
+    an open quote at the end of a line inside `jobs:` is refused rather
+    than trusted.
+    """
+    quote = None
+    i = 0
+    while i < len(code):
+        char = code[i]
+        if quote == '"':
+            if char == "\\":
+                i += 2
+                continue
+            if char == '"':
+                quote = None
+        elif quote == "'":
+            if char == "'":
+                if code[i + 1: i + 2] == "'":
+                    i += 2
+                    continue
+                quote = None
+        elif char in "\"'" and opens_quoted_scalar(code, i):
+            quote = char
+        i += 1
+    return quote is not None
 
 
 def main() -> int:
@@ -405,9 +514,11 @@ def main() -> int:
         try:
             with open(path, encoding="utf-8", errors="replace") as fh:
                 for lineno, line in enumerate(fh, 1):
-                    # Comments may name the label; only code counts. Safe to cut at
-                    # '#' because the canonical expression contains none.
-                    code = line.split("#", 1)[0]
+                    # Comments may name the label; only code counts. The cut is quote-aware
+                    # (strip_comment): a '#' inside quotes is content, and
+                    # cutting there would make a single-line quoted value
+                    # read as an open scalar.
+                    code = strip_comment(line)
                     # Inside a block scalar (blank, or indented past its key), the
                     # line is text. The unreadable-syntax checks skip it.
                     in_scalar = False
@@ -415,11 +526,38 @@ def main() -> int:
                         in_scalar = not line.strip() or len(line) - len(line.lstrip()) > scalar_col
                         if not in_scalar:
                             scalar_col = None
+                    block_start = False
                     if not in_scalar:
                         start = BLOCK_START.match(code)
                         if start:
                             # The key's own column, or the dash's for `- |`.
+                            block_start = True
                             scalar_col = len(start.group(1)) + (len(start.group(2)) if start.group(2) and start.group(3) else 0)
+                    # A line inside `jobs:` that this scan cannot read as a
+                    # plain block-style line is refused before anything else
+                    # reads it: a flow mapping opened under a job id puts the
+                    # job's keys at an indent the body scan treats as data,
+                    # an alias can carry a whole job body or be a mapping
+                    # key, and a quoted scalar left open at the end of the
+                    # line may continue on a following line at any
+                    # indentation, where it reads as a key. Each could leave
+                    # a runs-on unchecked while the check passes.
+                    if in_jobs and code.strip() and not in_scalar and not block_start:
+                        if UNREADABLE_LINE.match(code):
+                            fail(
+                                f"{name}:{lineno}: a line opening a flow"
+                                " mapping or sequence, or starting an alias,"
+                                " an anchor or a tag, is not read by this"
+                                f" check; {HOW}"
+                            )
+                            continue
+                        if open_quote(code):
+                            fail(
+                                f"{name}:{lineno}: a quoted scalar that"
+                                " continues on the next line is not read by"
+                                f" this check; {HOW}"
+                            )
+                            continue
                     # Job ids are the keys directly under top-level `jobs:` — at
                     # whatever indent the file's first such key uses, so a
                     # workflow indented other than the common two spaces still
@@ -488,6 +626,21 @@ def main() -> int:
                             if body_indent is None:
                                 body_indent = indent
                             body_key = indent == body_indent
+                            # A key at the job body's own depth must be a
+                            # plain key (a `- key:` list item is allowed:
+                            # YAML may indent a sequence at its parent
+                            # key's depth). Anything else written there is
+                            # not read by this scan.
+                            if (
+                                body_key
+                                and not PLAIN_KEY.match(code.lstrip())
+                                and not LIST_ITEM.match(code)
+                            ):
+                                fail(
+                                    f"{name}:{lineno} (job {job}): unreadable"
+                                    f" job key; {HOW}"
+                                )
+                                continue
                     where = f"{name}:{lineno} (job {job})"
                     m = re.match(r"^\s*runs-on:\s*(.*?)\s*$", code)
                     if in_jobs and m and body_key and not in_scalar and job in file_no_runs_on:
@@ -579,6 +732,14 @@ def main() -> int:
         for key in no_runs_on:
             print(key)
         return 0
+
+    # The positive check: the scan must have read every job's routing. A job
+    # left with neither a job-level `runs-on` nor a job-level `uses:` is one
+    # this check cannot vouch for — GitHub may run it hosted, but a job the
+    # scan cannot read is exactly the shape a bypass hides in, so it fails
+    # instead of passing silently.
+    for key in no_runs_on:
+        fail(f"{key}: no runs-on was read for this job; {HOW}")
 
     for key in expected:
         if key in found:

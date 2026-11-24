@@ -96,13 +96,19 @@ the file the `runs-on` line is in. Write the job in the plain form, `job-id:`
 on a line of its own with `runs-on: ...` on the line below: the guard reads
 workflows line by line and fails on syntax it cannot read (a quoted
 `"runs-on"` key, a `runs-on` key with a tag or anchor, a job written as a
-`{...}` mapping, a `<<` merge key). A job that calls a reusable workflow in
-*another* repository is refused: the called workflow's jobs evaluate
-`runs-on` in this repository's context, and the called file is not here to
-check. Call a local workflow (`uses: ./.github/workflows/<file>`) and route
-its jobs in that file. The bypasses of this contract that were found and
-fixed — the affected versions and the pin each one makes consumers bump —
-are in [the routing guard's contract and past bypasses](security.md).
+`{...}` mapping, a `<<` merge key, a line inside `jobs:` that opens a flow
+mapping or starts an alias, a quoted scalar left open at the end of a line —
+write multi-line text as a block scalar, `name: >-`). Every job must carry a
+job-level `runs-on` or a local `uses:` the guard reads: a job with neither
+fails, even though GitHub would run it hosted, because a job the check
+cannot vouch for is one it cannot promise anything about. A job that calls a
+reusable workflow in *another* repository is refused: the called workflow's
+jobs evaluate `runs-on` in this repository's context, and the called file is
+not here to check. Call a local workflow
+(`uses: ./.github/workflows/<file>`) and route its jobs in that file. The
+bypasses of this contract that were found and fixed — the affected versions
+and the pin each one makes consumers bump — are in [the routing guard's
+contract and past bypasses](security.md).
 
 ## 3. Add the guard
 
