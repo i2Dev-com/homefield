@@ -273,10 +273,44 @@ usage_cmd_fleet() {
              HomeField VM on this Mac, and the demand scaler (watch).
 EOF
 }
+usage_cmd_webhook() {
+  cat <<'EOF'
+  webhook    The webhook receiver: wake the scaler on GitHub workflow_job
+             deliveries instead of the next tick (setup, connect, status,
+             remove).
+EOF
+}
 usage_cmd_version() {
   cat <<'EOF'
   version    Show which version of this tool is installed, and whether a
              newer one is available (checked with gh).
+EOF
+}
+
+usage_sec_webhook() {
+  cat <<'EOF'
+Webhook commands (`webhook <subcommand>`):
+  setup --hostname FQDN [--port N]
+             Wire a cloudflared named tunnel to the loopback receiver and
+             install the com.homefield.webhook LaunchAgent. Needs a one-time
+             'cloudflared tunnel login' (a browser approves the zone) and a
+             domain on the Cloudflare account. Writes the webhook secret
+             (0600) and the tunnel's DNS route.
+  connect REPO
+             Install the workflow_job webhook on owner/repo (needs repo
+             admin; gh's auth). The secret travels in the request body,
+             never on a command line. Safe to re-run.
+  status     Agent loaded, tunnel, secret, receiver port, public URL.
+  remove [--purge]
+             Stop and uninstall the receiver. Connected repositories keep
+             their webhook until you delete it (GitHub then disables it);
+             --purge also deletes the tunnel. The DNS record stays in the
+             Cloudflare dashboard.
+             The receiver spawns one `fleet watch --max-ticks 1` tick per
+             verified workflow_job delivery (actions default
+             queued,completed; HOMEFIELD_WEBHOOK_ACTIONS overrides), so a
+             dark VM's wake no longer waits up to the tick interval. The
+             tick lock serializes it with the route-watcher's own ticks.
 EOF
 }
 
@@ -301,6 +335,7 @@ usage_commands() {
   usage_cmd_memory
   usage_cmd_report
   usage_cmd_fleet
+  usage_cmd_webhook
   usage_cmd_update
   usage_cmd_version
 }
@@ -739,6 +774,8 @@ usage_for() {
       usage_join usage_header usage_cmd_report usage_sec_report usage_options ;;
     fleet)
       usage_join usage_header usage_cmd_fleet usage_sec_fleet usage_options ;;
+    webhook)
+      usage_join usage_header usage_cmd_webhook usage_sec_webhook usage_options ;;
     update)
       usage_join usage_header usage_cmd_update usage_sec_update usage_options ;;
     version)
@@ -840,6 +877,7 @@ main() {
     memory) cmd_memory "$@" ;;
     report) cmd_report "$@" ;;
     fleet) cmd_fleet "$@" ;;
+    webhook) cmd_webhook "$@" ;;
     update) cmd_update "$@" ;;
     version | --version) cmd_version "$@" ;;
     help)

@@ -947,9 +947,56 @@ the second's line — and its demand — answerable on a later tick, even
 while the first stays up. A fleet-wide flag could not do that; that is
 why the record is a record and not a flag.
 
-The webhook receiver a cloud autoscaler would use stays out on purpose:
-the Mac sits behind NAT, and the always-on watcher's tick needs no
-inbound configuration. #309 keeps it as the tracked remainder.
+### The webhook receiver, opt-in (#309)
+
+The tick is the only decision point, and its interval bounds how long a
+dark VM's wake waits. The opt-in webhook receiver closes that gap the way
+a cloud autoscaler does: GitHub delivers `workflow_job` webhooks to the
+Mac, and each verified delivery rings the scaler at once — one
+`fleet watch --max-ticks 1` tick — instead of waiting up to
+`HOMEFIELD_SCALE_INTERVAL` for the route watcher's next tick.
+
+The Mac sits behind NAT, so deliveries arrive through a cloudflared named
+tunnel: `homefield webhook setup --hostname <fqdn>` creates the tunnel,
+routes the DNS name, writes the webhook secret (0600) and installs the
+`com.homefield.webhook` LaunchAgent — the one-time `cloudflared tunnel
+login` is a browser flow the tool cannot do for you, and the hostname
+needs a domain on the Cloudflare account. A hostname that already has a
+DNS record is refused unless `--overwrite-dns`: the route error says
+nothing about the existing record's target, and a record pointing at
+another tunnel or service would silently swallow every delivery —
+`remove --purge` leaves the record behind, so a re-setup after it needs
+the flag too. `homefield webhook connect
+<owner/repo>` subscribes a repository to `workflow_job` (repo admin,
+through gh; safe to re-run). The receiver authenticates every delivery
+with GitHub's `X-Hub-Signature-256` HMAC over the raw body against the
+secret, listens on 127.0.0.1 only (the tunnel is the only path in), caps
+the body it will read, and rings on `queued` and `completed` jobs by
+default (`HOMEFIELD_WEBHOOK_ACTIONS` changes the set). It is a doorbell,
+not a brain: the payload decides nothing, and a delivery for a job the
+routing would never send here costs one harmless evaluation — the tick
+answers "nothing waits" for it. The tick lock serializes a webhook tick
+with the route watcher's own, so the two agents cannot interleave — and
+the route watcher's sleep side kills a running webhook tick before the
+sleep-side routing flip, the same way it kills its own: a tick that
+survived the sleep notification could route repositories back to the
+now-sleeping runner after the flip. The endpoint is also bounded against
+peers that never speak: a connection that stops reading mid-request is
+closed at the read deadline (`HOMEFIELD_WEBHOOK_READ_TIMEOUT`, default
+10 s), and only so many connections are served at once
+(`HOMEFIELD_WEBHOOK_MAX_CONNECTIONS`, default 32) — a peer that only
+opens connections is refused before a thread is spent on it, and GitHub
+retries a refused delivery.
+
+The trade is inbound configuration and attack surface the tick-only
+design does not have: one more always-on agent, and a public URL that
+accepts GitHub's deliveries — authenticated, and anything else gets a
+generic 403 before the body is parsed. `webhook status` reports the
+pieces (agent, tunnel, secret, receiver port, public URL); `webhook
+remove [--purge]` takes them down (connected repositories keep their
+webhook until you delete it, and GitHub disables a hook whose endpoint
+stops answering). Without the setup, nothing changes: the tick design is
+the whole feature.
 
 ## Failure modes
 

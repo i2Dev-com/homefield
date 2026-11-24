@@ -81,6 +81,15 @@ SCALE_TICK_BUDGET = _positive_float("HOMEFIELD_SCALE_TICK_BUDGET", 1800)
 # The helper lives next to homefield in the installed tree.
 HOMEFIELD = os.path.join(os.path.dirname(os.path.abspath(__file__)), "homefield")
 
+# The webhook receiver's state: its ticks record their pid there, and the
+# sleep side below kills a running one the same way it kills its own scale
+# tick (the receiver itself has no power events — this watcher is the
+# process that hears them).
+STATE_DIR = os.environ.get("HOMEFIELD_STATE_DIR") or os.path.join(
+    os.path.expanduser("~"), ".local", "state", "homefield"
+)
+WEBHOOK_TICK_PID_FILE = os.path.join(STATE_DIR, "route-watcher", "webhook", "tick.pid")
+
 IOKit = ctypes.cdll.LoadLibrary(ctypes.util.find_library("IOKit"))
 CF = ctypes.cdll.LoadLibrary(ctypes.util.find_library("CoreFoundation"))
 
@@ -347,6 +356,45 @@ def acknowledge(root_port, message_argument):
     IOKit.IOAllowPowerChange(root_port, token)
 
 
+def stop_webhook_tick():
+    """Kill the webhook receiver's running tick, if there is one.
+
+    The tick lock serializes ticks with each other, but it does not
+    protect the sleep-side routing flip: a webhook tick that survives
+    this notification can run its wake into route_start_restore after
+    the flip and route repositories back to the now-sleeping runner,
+    leaving jobs queued instead of on the hosted fallback. The receiver
+    reaps the killed tick on its next delivery check, and the next
+    delivery after the wake re-rings the doorbell.
+
+    The pid file can be stale — a tick this receiver instance did not
+    spawn exits without anything reaping it — and a stale pid can be
+    recycled, so the kill only lands on a process whose command line is
+    the tick's (`... fleet watch --max-ticks 1`), never on whoever the
+    pid now names.
+    """
+    try:
+        with open(WEBHOOK_TICK_PID_FILE) as f:
+            pid = int(f.read().strip())
+    except (OSError, ValueError):
+        return
+    try:
+        command = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "command="],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        ).stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        return
+    if "fleet watch" not in command:
+        return
+    try:
+        os.killpg(os.getpgid(pid), signal.SIGKILL)
+    except OSError:
+        pass
+
+
 def on_power_event(_refcon, _service, message_type, message_argument):
     if message_type == kIOMessageCanSystemSleep:
         # Idle sleep is fine: the flip happens on WillSleep, which the system
@@ -360,6 +408,7 @@ def on_power_event(_refcon, _service, message_type, message_argument):
         # resume into the awake world, and the next tick starts over.
         stop_scale()
         stop_wake()
+        stop_webhook_tick()
         run_route_watch("sleep", SLEEP_BUDGET)
         acknowledge(root_port, message_argument)
     elif message_type == kIOMessageSystemHasPoweredOn:
