@@ -576,10 +576,16 @@ record "setup: the override is recorded in the config" "custom-tunnel" \
   "$(grep -h '^tunnel=' "$STATE4/route-watcher/webhook/config" | cut -d= -f2)"
 record "setup: the override is baked into the plist" "yes" \
   "$(has "$(cat "$plist" 2>/dev/null)" '<string>custom-tunnel</string>')"
+# removal and status run without the override: the name setup saved in the
+# config is what they act on, not the default
+out="$(run "$STATE4" status)"
+record "setup: status reports the installed tunnel without the env" "yes" \
+  "$(has "$out" 'custom-uuid')"
+unset HOMEFIELD_WEBHOOK_TUNNEL
 out="$(run "$STATE4" remove --purge)"
-record "setup: remove --purge deletes the overridden tunnel" "1" \
+record "setup: remove --purge deletes the overridden tunnel from the saved config" "1" \
   "$(grep -c -e 'tunnel delete custom-tunnel' "$calls_cloudflared" || true)"
-unset HOMEFIELD_WEBHOOK_TUNNEL CF_LIST_JSON
+unset CF_LIST_JSON
 rm -f "$HOME/.cloudflared/custom-uuid.json"
 
 # connect

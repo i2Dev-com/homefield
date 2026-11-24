@@ -24,12 +24,31 @@ webhook_plist_path() { printf '%s/com.homefield.webhook.plist' "${HOMEFIELD_LAUN
 # starts another.
 webhook_tunnel_name() { printf '%s' "${HOMEFIELD_WEBHOOK_TUNNEL:-homefield-webhook}"; }
 
-# webhook_tunnel_id: the tunnel's UUID, from cloudflared's own list (the
-# credentials file is named after it: ~/.cloudflared/<id>.json). Empty when
-# the tunnel does not exist yet.
+# webhook_tunnel_id <name>: the tunnel's UUID, from cloudflared's own list
+# (the credentials file is named after it: ~/.cloudflared/<id>.json). Empty
+# when the tunnel does not exist yet. The name is the one the caller means:
+# setup looks up the name it is setting up, status the installed one.
 webhook_tunnel_id() {
+  local name="${1:-}"
+  [ -n "$name" ] || name="$(webhook_installed_tunnel)"
   cloudflared tunnel list --output json 2>/dev/null |
-    jq -r --arg n "$(webhook_tunnel_name)" '.[] | select(.name == $n) | .id' | head -1
+    jq -r --arg n "$name" '.[] | select(.name == $n) | .id' | head -1
+}
+
+# webhook_installed_tunnel: the tunnel name the installed setup recorded
+# (the config's tunnel= line), or the env/default when nothing is
+# installed. Removal and status must act on the tunnel the setup actually
+# created: a setup that ran with HOMEFIELD_WEBHOOK_TUNNEL has to be
+# removed and reported the same way from a shell without the variable,
+# and the default name must never be deleted in its place.
+webhook_installed_tunnel() {
+  local saved
+  saved="$(webhook_config_get tunnel || true)"
+  if [ -n "$saved" ]; then
+    printf '%s' "$saved"
+  else
+    webhook_tunnel_name
+  fi
 }
 
 # webhook_config_get <key>: one KEY=value line from the setup's config file.
@@ -115,10 +134,10 @@ webhook_setup() {
     die "webhook setup: no cloudflared login found ($cert); run 'cloudflared tunnel login' first (a browser approves the zone)"
 
   tunnel="$(webhook_tunnel_name)"
-  id="$(webhook_tunnel_id)"
+  id="$(webhook_tunnel_id "$tunnel")"
   if [ -z "$id" ]; then
     cloudflared tunnel create "$tunnel" || die "webhook setup: could not create the tunnel '$tunnel'"
-    id="$(webhook_tunnel_id)"
+    id="$(webhook_tunnel_id "$tunnel")"
     [ -n "$id" ] || die "webhook setup: tunnel '$tunnel' created but not listed; check 'cloudflared tunnel list'"
   fi
   creds="$HOME/.cloudflared/$id.json"
@@ -365,7 +384,7 @@ webhook_remove() {
   fi
   if [ "$purge" = 1 ]; then
     local tunnel
-    tunnel="$(webhook_tunnel_name)"
+    tunnel="$(webhook_installed_tunnel)"
     cloudflared tunnel cleanup "$tunnel" 2>/dev/null || true
     if cloudflared tunnel delete "$tunnel" 2>/dev/null; then
       log "deleted the tunnel '$tunnel'"
