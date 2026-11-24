@@ -194,6 +194,10 @@ def kill_tree(proc):
     happens in per-VM grandchildren, and killing only the top `homefield`
     would leave them working after the budget expired.
     """
+    if proc.poll() is not None:
+        # Already exited and reaped: its pid is recyclable, and killpg on
+        # a recycled pid would signal whoever the pid now names.
+        return
     try:
         os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
     except (ProcessLookupError, PermissionError):
@@ -208,13 +212,20 @@ def supervise_tick(proc):
     """Reap the tick child, killing its tree when it exceeds the budget.
 
     This is also what reaps the child: without a wait, an exited tick
-    stays a zombie, and a zombie still answers kill -0.
+    stays a zombie, and a zombie still answers kill -0. A reaped tick is
+    untracked here, so the shutdown path never killpg's a pid the OS may
+    have recycled.
     """
     try:
         proc.wait(timeout=TICK_BUDGET)
     except subprocess.TimeoutExpired:
         log("tick pid=%d exceeded the %gs budget; killing its process tree" % (proc.pid, TICK_BUDGET))
         kill_tree(proc)
+    reaped_pids.add(proc.pid)
+    try:
+        tick_children.remove(proc)
+    except ValueError:
+        pass
 
 
 def spawn_tick():
