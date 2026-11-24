@@ -652,6 +652,16 @@ st_body="$(cat "$WORK/state/homefield.state")"; calls="$(cat "$CALLS")"
 record "reset with a failing stop: skipped, the in-place re-register is refused" "nonzero/yes/no/no/no/yes" \
   "$(nonzero "$rc")/$(has "$st_body" "reset_error=could not stop the VM to reset it")/$(has "$calls" "limactl:delete")/$(has "$calls" "limactl:clone")/$(has "$calls" "cmd=re-register")/$(has "$out" "would be re-registered in place")"
 
+# 23b. the same skipped reset under --watch: the refusal returns instead of
+# dying, so the loop runs its remaining cycles (a multi-VM watch must not
+# lose every other runner because one VM's reset is temporarily failing)
+mkbase
+STUB_STOP_FAIL=1 STUB_BASE_PRESENT=1 STUB_JOB_RC=1 STUB_SVC_RC=1 \
+  hrun cmd_re_register --watch --interval 0 --max-cycles 2
+calls="$(cat "$CALLS")"
+record "watch with a skipped reset: the loop survives both cycles" "0/2/2" \
+  "$rc/$(printf '%s\n' "$calls" | grep -c 'limactl:stop homefield')/$(printf '%s\n' "$out" | grep -c 'would be re-registered in place')"
+
 # 24. the clone fails after the delete: the VM is gone, the error is recorded,
 # the re-register does not run
 mkbase

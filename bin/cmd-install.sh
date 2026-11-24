@@ -1932,7 +1932,13 @@ re_register_single() {
   # that has run jobs can delete that directory (the job's root owns it) and
   # its answer is not a boundary.
   if [ "$fresh_vm" != 1 ]; then
-    die "re-register: ${INSTANCE} would be re-registered in place; a VM that has been registered may have run jobs (a job's leftover root process could read the token from the provisioning process), so a registration token only goes into a VM this command clones fresh from the base. Re-register with the reset on: bin/homefield re-register --reset-vm --instance ${INSTANCE} (the base install --ephemeral --reset-vm creates), or reset + install: bin/homefield reset --instance ${INSTANCE}, then bin/homefield install --ephemeral --instance ${INSTANCE} --url ${url}"
+    # Return, not die: a reset that was skipped for a transient reason (a
+    # stop or delete that failed) reaches here every cycle, and a die would
+    # end the whole re-register --watch process — and with it every other
+    # runner it watches. The refusal itself stands: no token goes into the
+    # retained VM. The one-shot command exits 1 with the same message.
+    echo "homefield: re-register: ${INSTANCE} would be re-registered in place; a VM that has been registered may have run jobs (a job's leftover root process could read the token from the provisioning process), so a registration token only goes into a VM this command clones fresh from the base. Re-register with the reset on: bin/homefield re-register --reset-vm --instance ${INSTANCE} (the base install --ephemeral --reset-vm creates), or reset + install: bin/homefield reset --instance ${INSTANCE}, then bin/homefield install --ephemeral --instance ${INSTANCE} --url ${url}" >&2
+    return 1
   fi
   # The clone's own _work probe is the second line: the base was cloned
   # before any job, so a _work on the clone means the base has run jobs or

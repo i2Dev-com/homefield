@@ -27,7 +27,10 @@ fail, such as a new guard in the routing expression, bumps the minor version
   not after provisioning returns: provisioning starts the runner before
   its later steps finish, and a failure past that point must not leave a
   VM running jobs without the record (a failed install then needs `reset`
-  + `install`, which the refusal message says). A `reset` that keeps the
+  + `install`, which the refusal message says). Deregistration writes the
+  record too, so a VM installed before the record existed (never
+  upgraded) cannot become token-eligible after a deregistration that
+  keeps the VM. A `reset` that keeps the
   VM (`--keep-vm`, or a delete that failed) keeps the record too, so a
   retained VM cannot be re-registered into; `reset` that deletes the VM
   drops the record with the state file. `re-register` re-registers only a

@@ -156,7 +156,7 @@ cmd_uninstall \${UNINSTALL_ARGS---keep-vm}
 EOF
 run() {
   out="$(PATH="$stubs:$PATH" LOG="$work/log" HOME_DIR="$home" UNITS="$units" \
-    LIMA_HOME="$work/lima" "$@" bash "$work/harness.sh" 2>&1 </dev/null)"
+    LIMA_HOME="$work/lima" HOMEFIELD_STATE_DIR="$work/state" "$@" bash "$work/harness.sh" 2>&1 </dev/null)"
   rc=$?
 }
 state() {
@@ -174,6 +174,19 @@ record "...deregistered, service uninstalled, runner left stopped" "removed/no-u
 record "...the registration was deleted from the host, by URL and id" "1" "$(logged 'gh api --hostname github.com -X DELETE orgs/acme/actions/runners/42')"
 record "...the guest's config.sh remove --local ran with no token" "1" "$(logged 'config.sh remove --local token-in-env=no')"
 record "...no start was attempted" "0" "$(logged 'systemctl start')"
+record "...the VM is recorded as registered before (the host-side token guard)" "1" \
+  "$(grep -qx 'ever_registered=1' "$work/state/homefield.state" && echo 1 || echo 0)"
+
+echo "a VM installed before the record existed:"
+# deregister_runner writes the record itself, so a legacy VM (installed
+# before ever_registered existed, never upgraded) that is deregistered with
+# the VM kept cannot become eligible for another token if a job deleted its
+# _work marker.
+fresh
+rm -f "$work/state/homefield.state"
+run env GH_ON=0
+record "uninstall --keep-vm on a legacy VM: the record is written" "1" \
+  "$(grep -qx 'ever_registered=1' "$work/state/homefield.state" && echo 1 || echo 0)"
 
 fresh
 run env GH_ON=0

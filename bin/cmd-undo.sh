@@ -65,6 +65,13 @@ deregister_runner() {
   local url="$1" id="$2" on="$3" stage scope host
   echo "homefield: switch every repository that routes to this runner to hosted first:" >&2
   echo "homefield:   gh variable set CI_RUNNER --repo <owner>/<repo> --body hosted" >&2
+  # The VM is registered now (both callers checked is_registered), so it has
+  # been registered — the token guard's record goes in before the local
+  # registration is removed. This is what covers a VM installed before the
+  # record existed: without it, uninstall/reset --keep-vm on a legacy VM
+  # would leave a used VM with no record, and a job that deleted its _work
+  # could make the next install put a token into it.
+  state_set ever_registered 1
   # The restore deregister_script falls back on, staged in a private
   # directory before anything is changed (#185). The registration files are
   # backed up inside it (RS_BACKUP) before the cleanup, and the cleanup and

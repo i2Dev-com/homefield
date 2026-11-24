@@ -496,7 +496,7 @@ mkdir -p "$share" "$bin"
 : >"$share/.homefield-ref"
 run GH_ON=0 FAIL_DELETE=1 -- --remove-tool
 record "reset fails, saying how to delete it by hand" "1/yes" "$rc/$(has "$out" 'limactl delete --force resettest')"
-record "...the independent group step still ran" "1/no-state" "$(lines "$DEL")/$(has_state)"
+record "...the independent group step still ran, and the retained VM keeps the token guard's record" "1/state" "$(lines "$DEL")/$(has_state)"
 record "...the tool is kept, because a step failed" "yes/yes" "$([ -e "$share/.homefield-ref" ] && echo yes || echo no)/$(has "$out" 'tool: kept, a step above failed')"
 rm -rf "$share" "$bin"
 
