@@ -475,7 +475,11 @@ record "probe: a plain listener is not the receiver" "1" "$(probe webhook_receiv
 kill "$plain_listener" 2>/dev/null || true
 wait "$plain_listener" 2>/dev/null
 
-python3 - "$PROBE_PORT" <<'PY' &
+# a fresh port for the healthz listener: on Linux, the plain listener's
+# accepted connections sit in TIME_WAIT after it closes them, and without
+# SO_REUSEADDR its port is not immediately reusable
+HEALTHZ_PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
+python3 - "$HEALTHZ_PORT" <<'PY' &
 import http.server, sys
 class H(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
@@ -491,7 +495,7 @@ for _ in $(seq 1 50); do
   python3 -c "import socket; s=socket.socket(); s.connect(('127.0.0.1',$PROBE_PORT)); s.close()" 2>/dev/null && break
   sleep 0.1
 done
-record "probe: a healthz listener is the receiver" "0" "$(probe webhook_receiver_answers "$PROBE_PORT")"
+record "probe: a healthz listener is the receiver" "0" "$(probe webhook_receiver_answers "$HEALTHZ_PORT")"
 kill "$healthz_listener" 2>/dev/null || true
 wait "$healthz_listener" 2>/dev/null
 
