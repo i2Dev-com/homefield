@@ -9,6 +9,15 @@ fail, such as a new guard in the routing expression, bumps the minor version
 (0.1 to 0.2). Compatible changes bump the patch. Merged changes wait on
 `main`, under *Unreleased*, until a release is cut.
 
+## Unreleased
+
+- Documented: the `webhook setup` hostname must be a first-level subdomain
+  of the Cloudflare zone's domain (`webhook.example.com`, not
+  `webhook.ci.example.com`). The zone's free Universal SSL certificate
+  covers only the apex and `*.<domain>`, so a deeper name gets a TLS alert
+  40 at the edge and no delivery reaches the tunnel — found live setting
+  the production receiver up. Runbook and `docs/cli.md`.
+
 ## v0.5.10 (2026-11-24)
 
 Bumps the patch from v0.5.9, and it is compatible for consumers: the routing
