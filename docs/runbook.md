@@ -333,7 +333,7 @@ limactl start homefield
 
 # 2. Confirm the isolation before anything runs in it: no host data mounts
 #    (the read-only vz-rosetta share is expected), no home dir
-limactl shell homefield -- sh -c 'mount | grep -E "virtiofs|9p|sshfs|reverse-sshfs" | grep -vc "^vz-rosetta on /mnt/lima-rosetta type virtiofs "; ls /Users 2>&1'
+limactl shell homefield -- sh -c 'mount | grep -E "virtiofs|9p|sshfs|reverse-sshfs" | grep -vc "^vz-rosetta on /mnt/lima-rosetta type virtiofs (ro,"; ls /Users 2>&1'
 # expect: 0, and "No such file or directory"
 
 # 3. Provision: packages, Docker, runner binary (checksum-verified), systemd
@@ -1067,7 +1067,10 @@ nothing, which is easy to misread as "no containers".
   runs `apt-get upgrade`, and starts the runner again, or reboots the guest
   first if the update needs it (`/var/run/reboot-required`, which
   `update-notifier-common` writes; a minimal image without that package never
-  writes it, so the upgrade then finishes without a reboot). Queued jobs wait
+  writes it, so the upgrade then finishes without a reboot). A runner that
+  was already stopped when maintenance ran stays stopped: maintenance
+  restarts only a runner it stopped itself, and leaves a needed reboot to
+  whatever stopped it (#323). Queued jobs wait
   through it, typically under a minute and longer on a reboot.
   - A job's own `sudo apt-get` (#176) never restarts a service. Ubuntu's
     needrestart would restart everything using an upgraded library, the
@@ -1118,7 +1121,10 @@ nothing, which is easy to misread as "no containers".
     `/opt/actions-runner/.env`): after every job,
     `/usr/local/sbin/homefield-job-cleanup` removes stopped containers and
     unused custom Docker networks, the job's build state under `_work`
-    (anything not starting with `_`), and everything in `/tmp`, while tagged
+    (anything not starting with `_`), and everything in `/tmp` except the
+    guest's own state there (the `systemd-private-*` dirs of PrivateTmp
+    services and a provision run's `homefield-stage-*` staging directory),
+    while tagged
     images, BuildKit layers and apt/preset packages stay warm. `--no-job-cleanup`
     takes it back out; the switch is saved in the guest, so later runs and
     re-registers keep it. The hook runs before the job's result is finalized,

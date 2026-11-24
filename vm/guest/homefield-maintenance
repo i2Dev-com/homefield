@@ -1,24 +1,52 @@
 #!/usr/bin/env bash
 set -euo pipefail
-unit="$(cat /opt/actions-runner/.service)"
+unit=""
+if [ -f /opt/actions-runner/.service ]; then
+  unit="$(cat /opt/actions-runner/.service 2>/dev/null || true)"
+fi
 if pgrep -f Runner.Worker >/dev/null; then
   echo "homefield-maintenance: job in progress, skipping until tomorrow"
   exit 0
 fi
-systemctl stop "$unit"
-# Whatever happens below, the runner comes back up.
-trap 'systemctl start "$unit"' EXIT
+# The runner is stopped only when it was running. A service that was already
+# stopped — a provision run mid-re-register, a deregistration cut off — stays
+# stopped: maintenance must not restart what it did not stop. No .service at
+# all (or a name whose unit is not loaded) is the same state with nothing to
+# stop; the host-side stop_runner reads it the same way and upgrades on.
+was_active=0
+if [ -n "$unit" ] && systemctl is-active --quiet "$unit"; then
+  was_active=1
+  systemctl stop "$unit"
+fi
+# Whatever happens below, the runner comes back up — but only if it was up.
+# A restart that fails after a clean upgrade must not read as success: the
+# trap fails the run (systemd records it) while keeping the original status
+# when that was already nonzero.
+# shellcheck disable=SC2154  # the assignment is in the trap, which shellcheck does not track
+trap 'status=$?
+      if [ "$was_active" = 1 ] && ! systemctl start "$unit"; then
+        echo "homefield-maintenance: could not start ${unit}; check the guest" >&2
+        [ "$status" -ne 0 ] || status=1
+      fi
+      exit "$status"' EXIT
 export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a
 apt-get update -q
 apt-get upgrade -y -q --with-new-pkgs \
   -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold
 apt-get autoremove -y -q --purge
-# A kernel or libc update asks for a reboot. The runner is still stopped, so
-# reboot now rather than start it and give it a job to lose. Its service is
-# enabled, so it comes back on boot. A guest reboot keeps the VM running
-# under Lima's vz backend (verified with Lima 2.2.0).
+# A kernel or libc update asks for a reboot. When maintenance stopped the
+# runner itself, reboot now rather than start it and give it a job to lose:
+# its service is enabled, so it comes back on boot. A guest reboot keeps the
+# VM running under Lima's vz backend (verified with Lima 2.2.0). When the
+# runner was already stopped, whatever stopped it — a provision run, most
+# likely — owns the restart, and a reboot now could cut that run short; the
+# next idle run applies it.
 if [ -f /var/run/reboot-required ]; then
-  echo "homefield-maintenance: rebooting to finish the upgrade"
-  trap - EXIT
-  systemctl reboot || systemctl start "$unit"
+  if [ "$was_active" = 1 ]; then
+    echo "homefield-maintenance: rebooting to finish the upgrade"
+    trap - EXIT
+    systemctl reboot || systemctl start "$unit"
+  else
+    echo "homefield-maintenance: a reboot is required, but the runner was already stopped; skipping the reboot"
+  fi
 fi

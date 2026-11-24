@@ -545,13 +545,16 @@ run_fn LIMA_SHELL_OUT=0 LIMA_USERS_FAIL=1 -- verify_isolation
 record "the /Users call fails: refused, not read as 'cannot see it'" "nonzero/yes/no" "$(nonzero "$rc")/$(has "$out" 'could not run the /Users check')/$(has "$out" 'isolation verified')"
 
 # The one expected host mount, #21's Rosetta share: the exact line is
-# excluded from the count, once.
-run_fn LIMA_RUN_GUEST=1 MOUNT_OUT='vz-rosetta on /mnt/lima-rosetta type virtiofs (rw,relatime)' -- verify_isolation
-record "the rosetta share alone: verified (the #21 carve-out)" "0/yes" "$rc/$(has "$out" 'isolation verified: no host data mounts')"
-run_fn LIMA_RUN_GUEST=1 MOUNT_OUT='vz-rosetta on /mnt/lima-rosetta type virtiofs (rw,relatime)
+# excluded from the count, once, and only while it is read-only — a writable
+# share is a host mount like any other (#323).
+run_fn LIMA_RUN_GUEST=1 MOUNT_OUT='vz-rosetta on /mnt/lima-rosetta type virtiofs (ro,relatime)' -- verify_isolation
+record "the read-only rosetta share alone: verified (the #21 carve-out)" "0/yes" "$rc/$(has "$out" 'isolation verified: no host data mounts')"
+run_fn LIMA_RUN_GUEST=1 MOUNT_OUT='vz-rosetta on /mnt/lima-rosetta type virtiofs (ro,relatime)
 proc on /proc type proc (rw)' -- verify_isolation
-record "the rosetta share with no host mounts: verified" "0/yes" "$rc/$(has "$out" 'isolation verified: no host data mounts')"
-run_fn LIMA_RUN_GUEST=1 MOUNT_OUT='vz-rosetta on /mnt/lima-rosetta type virtiofs (rw,relatime)
+record "the read-only rosetta share with no host mounts: verified" "0/yes" "$rc/$(has "$out" 'isolation verified: no host data mounts')"
+run_fn LIMA_RUN_GUEST=1 MOUNT_OUT='vz-rosetta on /mnt/lima-rosetta type virtiofs (rw,relatime)' -- verify_isolation
+record "a writable rosetta share: the ro promise is verified, refused" "nonzero/yes/no" "$(nonzero "$rc")/$(has "$out" 'has host mounts')/$(has "$out" 'isolation verified')"
+run_fn LIMA_RUN_GUEST=1 MOUNT_OUT='vz-rosetta on /mnt/lima-rosetta type virtiofs (ro,relatime)
 mount0 on /Users type virtiofs (rw)' -- verify_isolation
 record "the rosetta share and a foreign virtiofs mount: refused" "nonzero/yes/no" "$(nonzero "$rc")/$(has "$out" 'has host mounts')/$(has "$out" 'isolation verified')"
 run_fn LIMA_RUN_GUEST=1 MOUNT_OUT='vz-rosetta on /mnt/evil type virtiofs (rw,relatime)' -- verify_isolation

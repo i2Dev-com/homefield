@@ -9,6 +9,25 @@ fail, such as a new guard in the routing expression, bumps the minor version
 (0.1 to 0.2). Compatible changes bump the patch. Merged changes wait on
 `main`, under *Unreleased*, until a release is cut.
 
+## Unreleased
+
+- Fixed: the per-job cleanup hook no longer wipes `/tmp` entries the guest
+  keeps across jobs — the `systemd-private-*` directories of PrivateTmp
+  services (`systemd-resolved`, `systemd-timesyncd`, ...) and a provision
+  run's `homefield-stage-*` staging directory. Everything else a job left is
+  still removed. `homefield-maintenance` no longer crashes when the runner's
+  `.service` file is missing (the upgrade runs with nothing to stop, the way
+  the host-side `stop_runner` reads that state), and it restarts only a
+  runner it stopped itself: a service that was already stopped when
+  maintenance ran — a provision run mid-re-register, a cut-off
+  deregistration — stays stopped, and a required reboot is left to whatever
+  stopped it; a restart that fails after the upgrade fails the run instead
+  of reading as success. The isolation probe now verifies the read-only
+  promise of the
+  Rosetta share: `vz-rosetta on /mnt/lima-rosetta` is excluded only while
+  its mount line carries `ro`; a writable share counts as a host mount and
+  refuses the VM (#323).
+
 ## v0.6.0 (2026-11-24)
 
 Bumps the minor from v0.5.10, and it is breaking — for consumers of the

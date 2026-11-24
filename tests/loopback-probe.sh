@@ -300,8 +300,14 @@ for msh in "${mount_shells[@]}"; do
   record "$mname: no host mounts is 0" "0/0" "$rc/$out"
   out="$(env -i PATH="$mount_stubs" MOUNT_OUT=$'mount0 on /Users type virtiofs (rw)\nshare1 on /mnt/a type 9p (rw)\nssh0 on /mnt/b type fuse.sshfs (rw)\nrev0 on /mnt/c type reverse-sshfs (rw)\n' "$msh" "$ROOT/vm/guest/homefield-mount-count" 2>&1 </dev/null)"; rc=$?
   record "$mname: virtiofs/9p/sshfs/reverse-sshfs counted" "0/4" "$rc/$out"
-  out="$(env -i PATH="$mount_stubs" MOUNT_OUT=$'vz-rosetta on /mnt/lima-rosetta type virtiofs (rw,relatime)\nproc on /proc type proc (rw)\n' "$msh" "$ROOT/vm/guest/homefield-mount-count" 2>&1 </dev/null)"; rc=$?
-  record "$mname: single rosetta share excluded" "0/0" "$rc/$out"
+  out="$(env -i PATH="$mount_stubs" MOUNT_OUT=$'vz-rosetta on /mnt/lima-rosetta type virtiofs (ro,relatime)\nproc on /proc type proc (rw)\n' "$msh" "$ROOT/vm/guest/homefield-mount-count" 2>&1 </dev/null)"; rc=$?
+  record "$mname: single read-only rosetta share excluded" "0/0" "$rc/$out"
+  out="$(env -i PATH="$mount_stubs" MOUNT_OUT=$'vz-rosetta on /mnt/lima-rosetta type virtiofs (ro,nosuid,nodev,noexec,relatime)\n' "$msh" "$ROOT/vm/guest/homefield-mount-count" 2>&1 </dev/null)"; rc=$?
+  record "$mname: the rosetta share's full ro option list is excluded" "0/0" "$rc/$out"
+  out="$(env -i PATH="$mount_stubs" MOUNT_OUT=$'vz-rosetta on /mnt/lima-rosetta type virtiofs (rw,relatime)\n' "$msh" "$ROOT/vm/guest/homefield-mount-count" 2>&1 </dev/null)"; rc=$?
+  record "$mname: a writable rosetta share counts: the ro promise is verified (#323)" "0/1" "$rc/$out"
+  out="$(env -i PATH="$mount_stubs" MOUNT_OUT=$'vz-rosetta on /mnt/lima-rosetta type virtiofs (relatime,ro)\n' "$msh" "$ROOT/vm/guest/homefield-mount-count" 2>&1 </dev/null)"; rc=$?
+  record "$mname: ro is matched as an option, not a substring" "0/0" "$rc/$out"
   out="$(env -i PATH="$mount_stubs" MOUNT_OUT=$'vz-rosetta on /mnt/evil type virtiofs (rw,relatime)\n' "$msh" "$ROOT/vm/guest/homefield-mount-count" 2>&1 </dev/null)"; rc=$?
   record "$mname: rosetta at wrong path counts" "0/1" "$rc/$out"
   out="$(env -i PATH="$mount_stubs" MOUNT_OUT=$'vz-rosetta on /mnt/lima-rosetta type virtiofs (rw,relatime)\nvz-rosetta on /mnt/lima-rosetta type virtiofs (rw,relatime)\n' "$msh" "$ROOT/vm/guest/homefield-mount-count" 2>&1 </dev/null)"; rc=$?

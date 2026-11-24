@@ -61,9 +61,15 @@ for entry in "$runner_home"/_work/*; do
 done
 
 # /tmp: everything in it is per-job scratch (checkouts' temp files, step
-# leftovers). The guest's own machinery does not keep state there: the
-# provisioning staging directories are created and removed per run, and
-# systemd units do not use /tmp.
+# leftovers), except what the guest's own machinery keeps there across jobs:
+# the PrivateTmp services (systemd-resolved, systemd-timesyncd, ...) hold
+# their /tmp in /tmp/systemd-private-*, and a provision run stages its files
+# in /tmp/homefield-stage-* (guest_stage_dir, bin/lib/vm.sh). Wiping either
+# breaks the service or the run that owns it, so both are skipped; everything
+# else a job left goes.
 while IFS= read -r -d '' entry; do
+  case "${entry##*/}" in
+    systemd-private-* | homefield-stage-*) continue ;;
+  esac
   rm -rf -- "$entry" || echo "homefield-job-cleanup: could not remove $entry" >&2
 done < <(find "$tmp_dir" -mindepth 1 -maxdepth 1 -print0 2>/dev/null)
