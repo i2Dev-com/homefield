@@ -312,7 +312,10 @@ webhook_connect() {
 import json, sys
 secret = open(sys.argv[1]).read().strip()
 print(json.dumps({
-    "name": "webhook",
+    # GitHub's create-repository-webhook API requires the hook name "web"
+    # ("webhook" is a 422: Hook.name invalid) — discovered on the live
+    # connect, the stubbed suite never validated it.
+    "name": "web",
     "active": True,
     "events": ["workflow_job"],
     "config": {"url": sys.argv[2], "content_type": "json", "secret": secret},

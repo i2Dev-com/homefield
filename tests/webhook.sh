@@ -544,6 +544,13 @@ case "$*" in
           [ "$prev" = "--input" ] && body="$a"
           prev="$a"
         done
+        # GitHub's create-repository-webhook API rejects a payload whose
+        # name is not "web" (422, Hook.name invalid) — pin the contract the
+        # live connect exposed.
+        if [ -n "$body" ] && [ "$(jq -r .name "$body" 2>/dev/null)" != "web" ]; then
+          printf 'gh: Validation Failed (Hook.name invalid)\n' >&2
+          exit 1
+        fi
         [ -n "$body" ] && cp "$body" "${GH_BODY_OUT:?}"
         # a PATCH of an existing hook carries the hook id in its path
         hook="$(printf '%s' "$*" | sed -n 's|.*repos/[^/]*/hooks/\([0-9]*\).*|\1|p')"

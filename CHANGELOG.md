@@ -19,6 +19,11 @@ fail, such as a new guard in the routing expression, bumps the minor version
   running the whole time). The status now captures the list and matches it
   in bash, with no pipe to signal; the suite's launchctl stub pads its list
   past the match so the old pattern fails and the fix is pinned.
+- Fixed: `webhook connect` could not create the hook at all. The create
+  payload named the hook `"webhook"`; GitHub's create-repository-webhook
+  API requires `"web"` and answered 422 (Hook.name invalid) — found on the
+  first live connect, which the stubbed suite never validated. The suite's
+  gh stub now rejects any payload whose name is not `web`.
 
 ## v0.5.9 (2026-11-24)
 
