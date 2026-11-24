@@ -976,12 +976,15 @@ cmd_install() {
     env+=(RUNNER_JOB_CLEANUP="$job_cleanup")
   fi
   log "provisioning ${INSTANCE} and registering at ${url}"
+  # Written before the token enters the guest, not after provisioning
+  # returns: provisioning registers the runner and starts it before its
+  # later (fallible) steps finish, and a failure past that point would exit
+  # here without the record — a VM running jobs the host does not know
+  # about, exactly what this key exists to prevent. A failed install now
+  # needs reset (deletes the VM) + install, which the guard's message says.
+  state_set ever_registered 1
   run_provision "RUNNER_TOKEN=${token}"$'\n' "${env[@]}"
   token=""
-  # The VM is registered now: from here on it may run jobs the host never
-  # sees, so no later token-carrying command may treat it as fresh (the
-  # guard above reads this).
-  state_set ever_registered 1
   state_set job_cleanup "$job_cleanup"
   state_set reset_vm "$reset_vm"
   state_set reset_error ""
@@ -1964,6 +1967,10 @@ re_register_single() {
   [ -z "$job_cleanup" ] || env+=(RUNNER_JOB_CLEANUP="$job_cleanup")
 
   log "re-registering ephemeral runner ${INSTANCE} at ${url}"
+  # Written before the token enters the guest, not after provisioning
+  # returns: a failure past the registration would exit here without the
+  # record (see cmd_install's same write).
+  state_set ever_registered 1
   if ! PROVISION_CMD=re-register run_provision "RUNNER_TOKEN=${token}"$'\n' "${env[@]}"; then
     token=""
     state_set ephemeral_error "re-registration failed"
@@ -1971,7 +1978,6 @@ re_register_single() {
   fi
   token=""
   state_set ephemeral_error ""
-  state_set ever_registered 1
 
   local registered_name=""
   { IFS= read -r registered_name || true; } < <(runner_setting agentName)

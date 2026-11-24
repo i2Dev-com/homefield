@@ -23,14 +23,23 @@ fail, such as a new guard in the routing expression, bumps the minor version
   registered VM even when its `_work` is absent — the directory is the
   job's root's to delete, so the guest's answer is not the boundary
   (`upgrade` records the same, so state files predating the record are
-  covered too). `re-register` re-registers only a VM it has just cloned
+  covered too). The record is written before the token enters the guest,
+  not after provisioning returns: provisioning starts the runner before
+  its later steps finish, and a failure past that point must not leave a
+  VM running jobs without the record (a failed install then needs `reset`
+  + `install`, which the refusal message says). A `reset` that keeps the
+  VM (`--keep-vm`, or a delete that failed) keeps the record too, so a
+  retained VM cannot be re-registered into; `reset` that deletes the VM
+  drops the record with the state file. `re-register` re-registers only a
+  VM it has just cloned
   fresh from the base: a reset that was skipped leaves the old VM, and
   re-registering it in place is refused even when `_work` is absent.
   Deregistration order changed: the VM's local cleanup runs first, while
-  the registration still exists on GitHub — a failure there restores the
-  service and the runner keeps taking jobs; the irreversible API deletion
-  goes last, and a failed one says to remove the runner on GitHub's runners
-  page and delete the VM by hand. A move is now a fresh
+  the registration still exists on GitHub, with the registration files
+  backed up before anything is removed — a failure there restores the
+  files and the service, and the runner keeps taking jobs; the
+  irreversible API deletion goes last, and a failed one restores the same
+  backup and says to fix the cause and re-run. A move is now a fresh
   registration — `bin/homefield reset --instance <name>`, then `install` at
   the new scope; the in-place `RUNNER_REREGISTER=1` move remains only for a
   VM that has never run a job (the operator asserts it; the script's

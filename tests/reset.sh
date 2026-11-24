@@ -229,10 +229,10 @@ echo "GitHub refuses the deletion from the host:"
 fresh
 run GH_ON=0 GH_DELETE_FAIL=1 --
 record "reset fails" "1" "$rc"
-record "...the VM's copy was removed first: unregistered, no service, the VM kept" "removed/no-unit/no-.service/stopped/0" \
+record "...the VM's registration was restored from the backup, the service back and running, the VM kept" "registered/unit/.service/active/0" \
   "$(runner_state)/$(logged 'limactl delete --force resettest')"
-record "...the message says so, with the hand steps" "yes/yes" \
-  "$(has "$out" 'could not deregister runner 42')/$(has "$out" 'VM copy is already removed')"
+record "...the message says the runner still takes jobs, and to re-run" "yes/yes" \
+  "$(has "$out" 'could not deregister runner 42')/$(has "$out" 'the runner still takes jobs')"
 
 echo "the reset base VM goes with the VM (#297):"
 reset_base_at() {  # a marked base, as install --reset-vm leaves it
@@ -393,6 +393,29 @@ fresh
 rm -f "$home/.runner"
 run VM=Running -- --keep-vm
 record "--keep-vm on a VM that is not registered: nothing to do, no confirmation needed" "0/0" "$rc/$(logged 'limactl delete')"
+
+echo "the token guard's record survives a reset that keeps the VM:"
+# A retained VM may have run jobs, so the host-side ever_registered record
+# must outlive the reset: dropping it would let a later install put a
+# registration token into the used VM if a job deleted its _work marker.
+fresh
+mkdir -p "$state"
+printf 'ever_registered=1\njob_cleanup=1\n' >"$state/resettest.state"
+run GH_ON=0 -- --keep-vm
+record "--keep-vm: the record is kept (state_set keeps the other keys)" "yes/yes/yes" \
+  "$(grep -qx 'ever_registered=1' "$state/resettest.state" && echo yes || echo no)/$(grep -qx 'job_cleanup=1' "$state/resettest.state" && echo yes || echo no)/$(has "$out" 'ever_registered kept')"
+fresh
+mkdir -p "$state"
+printf 'ever_registered=1\n' >"$state/resettest.state"
+run GH_ON=0 FAIL_DELETE=1 --
+record "a VM that cannot be deleted: the record is kept, the reset fails" "1/yes/yes" \
+  "$rc/$(grep -qx 'ever_registered=1' "$state/resettest.state" && echo yes || echo no)/$(has "$out" 'ever_registered kept')"
+fresh
+mkdir -p "$state"
+printf 'ever_registered=1\n' >"$state/resettest.state"
+run GH_ON=0 --
+record "a reset that deletes the VM: the record goes with the state file" "0/no-state" \
+  "$rc/$(has_state)"
 
 echo "--keep-group with a registered runner:"
 fresh

@@ -210,12 +210,11 @@ echo "GitHub refuses the deletion from the host:"
 fresh
 run env FAIL_GH_DELETE=1
 record "uninstall fails" "1" "$rc"
-record "...the VM's copy was removed first: unregistered, no service" "removed/no-unit/no-.service/stopped" "$(state)"
 record "...the API was asked to delete, after the local removal" "1/1" \
   "$(logged 'gh api --hostname github.com -X DELETE orgs/acme/actions/runners/42')/$(logged 'config.sh remove --local')"
-record "...the service was not started again: there is no registration to serve" "0" "$(logged 'systemctl start')"
-record "...the message says so, with the hand steps" "yes/yes" \
-  "$(has "$out" 'could not deregister runner 42')/$(has "$out" 'VM copy is already removed')"
+record "...the VM's registration was restored from the backup, the service back and running" "registered/unit/.service/active" "$(state)"
+record "...the message says the runner still takes jobs, and to re-run" "yes/yes" \
+  "$(has "$out" 'could not deregister runner 42')/$(has "$out" 'the runner still takes jobs')"
 
 echo "the local removal fails, before the registration is deleted:"
 fresh
