@@ -37,7 +37,11 @@ peers that never speak (a read deadline and a connection cap, both
 env-tunable). `webhook status` reports the pieces; `webhook remove
 [--purge]` takes them down, and `webhook connect` refreshes an existing
 hook with the current secret, so a remove + re-setup secret rotation
-cannot leave GitHub signing with the old one. Without the setup, the tick
+cannot leave GitHub signing with the old one. `webhook setup` refuses a
+hostname that already has a DNS record unless `--overwrite-dns`: the
+route error does not say what the existing record points at, and a
+record aimed at another tunnel or service would silently swallow every
+delivery. Without the setup, the tick
 design is unchanged. `webhook status` and the runbook's receiver section
 document the trade: one more always-on agent, and a public URL that
 accepts GitHub's authenticated deliveries (anything else gets a generic

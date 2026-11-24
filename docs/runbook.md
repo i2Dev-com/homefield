@@ -961,7 +961,12 @@ tunnel: `homefield webhook setup --hostname <fqdn>` creates the tunnel,
 routes the DNS name, writes the webhook secret (0600) and installs the
 `com.homefield.webhook` LaunchAgent — the one-time `cloudflared tunnel
 login` is a browser flow the tool cannot do for you, and the hostname
-needs a domain on the Cloudflare account. `homefield webhook connect
+needs a domain on the Cloudflare account. A hostname that already has a
+DNS record is refused unless `--overwrite-dns`: the route error says
+nothing about the existing record's target, and a record pointing at
+another tunnel or service would silently swallow every delivery —
+`remove --purge` leaves the record behind, so a re-setup after it needs
+the flag too. `homefield webhook connect
 <owner/repo>` subscribes a repository to `workflow_job` (repo admin,
 through gh; safe to re-run). The receiver authenticates every delivery
 with GitHub's `X-Hub-Signature-256` HMAC over the raw body against the

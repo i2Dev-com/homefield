@@ -95,11 +95,12 @@ webhook_url() {
 }
 
 webhook_setup() {
-  local hostname="" port="${HOMEFIELD_WEBHOOK_PORT:-8787}" tunnel cert id creds
+  local hostname="" port="${HOMEFIELD_WEBHOOK_PORT:-8787}" overwrite_dns=0 tunnel cert id creds
   while [ $# -gt 0 ]; do
     case "$1" in
       --hostname) hostname="${2:?webhook setup: --hostname needs a value}"; shift 2 ;;
       --port) port="${2:?webhook setup: --port needs a value}"; shift 2 ;;
+      --overwrite-dns) overwrite_dns=1; shift ;;
       *) die "webhook setup: unknown option $1 (see bin/homefield help)" ;;
     esac
   done
@@ -143,12 +144,25 @@ webhook_setup() {
   creds="$HOME/.cloudflared/$id.json"
   [ -f "$creds" ] || die "webhook setup: tunnel credentials missing ($creds); re-run 'cloudflared tunnel create $tunnel'"
 
-  # An existing DNS record is not an error (a re-run lands here); anything
-  # else the route step says is fatal and shown.
+  # An existing DNS record is not automatically fine: the route error says
+  # nothing about the existing record's target, and the record is a
+  # proxied CNAME whose target resolution cannot reveal — it may point at
+  # this tunnel (a re-run) or at another tunnel or service, in which case
+  # deliveries would never arrive and scaling would never run. Overwrite
+  # only when the operator asks; refuse with the exact command otherwise.
   local route_out
   if ! route_out="$(cloudflared tunnel route dns "$tunnel" "$hostname" 2>&1)"; then
     case "$route_out" in
-      *"already exist"*) log "DNS record for $hostname already points at the tunnel" ;;
+      *"already exists"*)
+        if [ "$overwrite_dns" = 1 ]; then
+          if ! cloudflared tunnel route dns --overwrite-dns "$tunnel" "$hostname" 2>&1; then
+            die "webhook setup: could not replace the DNS record for $hostname (delete it in the Cloudflare dashboard, then re-run 'homefield webhook setup')"
+          fi
+          log "replaced the existing DNS record for $hostname (it may have pointed at another tunnel or service)"
+        else
+          die "webhook setup: a DNS record for $hostname already exists (it may point at another tunnel or service, in which case deliveries would not arrive). If it is this tunnel's, re-run with --overwrite-dns; otherwise fix the record in the Cloudflare dashboard first"
+        fi
+        ;;
       *) die "webhook setup: could not route $hostname to the tunnel: $route_out" ;;
     esac
   fi

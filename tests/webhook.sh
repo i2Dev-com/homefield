@@ -71,11 +71,17 @@ case "$*" in
     : > "${CF_MARKER:?}"
     echo "created tunnel homefield-webhook" ;;
   "tunnel route dns"*)
-    if [ "${CF_ROUTE_FAIL:-}" = 1 ]; then
-      printf '%s\n' "${CF_ROUTE_ERR:-cloudflared: boom}" >&2
-      exit 1
-    fi
-    echo "route added" ;;
+    case "$*" in
+      # the overwrite retry always succeeds: it is the operator's explicit
+      # --overwrite-dns, and the plain route's conflict is what fails
+      *--overwrite-dns*) echo "route replaced" ;;
+      *)
+        if [ "${CF_ROUTE_FAIL:-}" = 1 ]; then
+          printf '%s\n' "${CF_ROUTE_ERR:-cloudflared: boom}" >&2
+          exit 1
+        fi
+        echo "route added" ;;
+    esac ;;
   "tunnel cleanup"*) : ;;
   "tunnel delete"*)
     [ "${CF_DELETE_FAIL:-}" = 1 ] && exit 1
@@ -625,11 +631,25 @@ record "setup: the receiver's read deadline and cap are baked into the plist" "y
 unset HOMEFIELD_WEBHOOK_READ_TIMEOUT HOMEFIELD_WEBHOOK_MAX_CONNECTIONS
 unset HOMEFIELD_SCALE_ZERO HOMEFIELD_SCALE_MAX
 
-# re-run: the route step's "already exists" failure is not an error
+# re-run: the route step's "already exists" conflict is refused, because
+# the error says nothing about the existing record's target - it may point
+# at this tunnel or at another tunnel or service, and the record is a
+# proxied CNAME whose target resolution cannot reveal
 # shellcheck disable=SC2034  # read by the cloudflared stub in the subshell
-CF_ROUTE_FAIL=1 CF_ROUTE_ERR="record already exists"
+CF_ROUTE_FAIL=1 CF_ROUTE_ERR="An A, AAAA or CNAME record already exists with that host"
 out="$(run "$STATE2" setup --hostname webhook.example.com --port 18787)"
-record "setup: an existing DNS record is not an error" "0" "$?"
+rc=$?
+record "setup: an existing DNS record is refused" "nonzero" "$(nonzero $rc)"
+case "$out" in *"--overwrite-dns"*) r=yes ;; *) r=no ;; esac
+record "setup: the conflict names the fix" "yes" "$r"
+# the operator's explicit --overwrite-dns replaces the record
+out="$(run "$STATE2" setup --hostname webhook.example.com --port 18787 --overwrite-dns)"
+rc=$?
+record "setup: --overwrite-dns replaces the record" "0" "$rc"
+case "$out" in *"replaced the existing DNS record"*) r=yes ;; *) r=no ;; esac
+record "setup: the replacement is reported" "yes" "$r"
+record "setup: the overwrite hit cloudflared" "1" \
+  "$(grep -c -e 'route dns --overwrite-dns' "$calls_cloudflared" || true)"
 # shellcheck disable=SC2034  # read by the cloudflared stub in the subshell
 CF_ROUTE_ERR="cloudflared: zone not found"
 out="$(run "$STATE2" setup --hostname webhook.example.com --port 18787)"
