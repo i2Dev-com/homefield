@@ -84,7 +84,7 @@ import urllib.request
 # The release the snippet adopt prints pins, and that docs/adopting.md and the
 # README tell consumers to pin; tests/adopt.sh checks that the docs still say
 # it. Bump it when a release is cut.
-RELEASE = "v0.5.8"
+RELEASE = "v0.5.9"
 REPO = "i2Dev-com/homefield"
 ACTION_PATH = f"{REPO}/routing-guard"
 ACTION = f"{ACTION_PATH}@{RELEASE}"
