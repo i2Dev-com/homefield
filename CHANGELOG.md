@@ -9,6 +9,22 @@ fail, such as a new guard in the routing expression, bumps the minor version
 (0.1 to 0.2). Compatible changes bump the patch. Merged changes wait on
 `main`, under *Unreleased*, until a release is cut.
 
+## Unreleased
+
+- Fixed: `webhook status` reported "installed but not loaded" for a loaded
+  receiver. The check ran `launchctl list | grep -q`, and `grep -q`'s early
+  exit SIGPIPEs the producer of the ~18 KB agent list — which
+  `set -o pipefail` turns into a failed pipeline and a false negative
+  (found on the live receiver the day v0.5.9 shipped; the LaunchAgent was
+  running the whole time). The status now captures the list and matches it
+  in bash, with no pipe to signal; the suite's launchctl stub pads its list
+  past the match so the old pattern fails and the fix is pinned.
+- Fixed: `webhook connect` could not create the hook at all. The create
+  payload named the hook `"webhook"`; GitHub's create-repository-webhook
+  API requires `"web"` and answered 422 (Hook.name invalid) — found on the
+  first live connect, which the stubbed suite never validated. The suite's
+  gh stub now rejects any payload whose name is not `web`.
+
 ## v0.5.9 (2026-11-24)
 
 Bumps the patch from v0.5.8, and it is compatible for consumers: the routing

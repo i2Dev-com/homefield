@@ -509,7 +509,15 @@ cat > "$TMP/bin/launchctl" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "${CALLS_LAUNCHCTL:?}"
 case "${1-}" in
-  list) printf -- '-\t0\tcom.homefield.route-watcher\n-\t0\tcom.homefield.webhook\n' ;;
+  list)
+    # grep -q exits as soon as it matches, and any line the producer writes
+    # after that is a SIGPIPE — which set -o pipefail turns into a false
+    # "not loaded" (the capture-first fix exists for this; launchctl list is
+    # slow enough over IPC that it always writes past the match). The
+    # webhook line therefore sits in the middle, with padding after it.
+    printf -- '-\t0\tcom.apple.Placeholder\n%.0s' $(seq 1 50)
+    printf -- '-\t0\tcom.homefield.route-watcher\n-\t0\tcom.homefield.webhook\n'
+    printf -- '-\t0\tcom.apple.Placeholder\n%.0s' $(seq 1 400000) ;;
 esac
 exit 0
 EOF
@@ -536,6 +544,13 @@ case "$*" in
           [ "$prev" = "--input" ] && body="$a"
           prev="$a"
         done
+        # GitHub's create-repository-webhook API rejects a payload whose
+        # name is not "web" (422, Hook.name invalid) — pin the contract the
+        # live connect exposed.
+        if [ -n "$body" ] && [ "$(jq -r .name "$body" 2>/dev/null)" != "web" ]; then
+          printf 'gh: Validation Failed (Hook.name invalid)\n' >&2
+          exit 1
+        fi
         [ -n "$body" ] && cp "$body" "${GH_BODY_OUT:?}"
         # a PATCH of an existing hook carries the hook id in its path
         hook="$(printf '%s' "$*" | sed -n 's|.*repos/[^/]*/hooks/\([0-9]*\).*|\1|p')"

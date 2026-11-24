@@ -312,7 +312,10 @@ webhook_connect() {
 import json, sys
 secret = open(sys.argv[1]).read().strip()
 print(json.dumps({
-    "name": "webhook",
+    # GitHub's create-repository-webhook API requires the hook name "web"
+    # ("webhook" is a 422: Hook.name invalid) — discovered on the live
+    # connect, the stubbed suite never validated it.
+    "name": "web",
     "active": True,
     "events": ["workflow_job"],
     "config": {"url": sys.argv[2], "content_type": "json", "secret": secret},
@@ -348,12 +351,20 @@ webhook_status() {
     echo "agent: not installed (run 'homefield webhook setup --hostname <fqdn>')"
     return 1
   fi
-  if launchctl list 2>/dev/null | grep -q 'com\.homefield\.webhook'; then
-    echo "agent: loaded ($(webhook_plist_path))"
-  else
-    echo "agent: installed but not loaded (launchctl load $(webhook_plist_path))"
-    rc=1
-  fi
+  # launchctl list writes the agent list to stdout, and grep -q's early exit
+  # SIGPIPEs the producer — which set -o pipefail turns into a false "not
+  # loaded" (#318 review; the list is large enough that this fires whether
+  # the producer is launchctl or a printf of the captured list). Match in
+  # bash: no pipe, no producer to signal.
+  local launchctl_list
+  launchctl_list="$(launchctl list 2>/dev/null || true)"
+  case "$launchctl_list" in
+    *"com.homefield.webhook"*)
+      echo "agent: loaded ($(webhook_plist_path))" ;;
+    *)
+      echo "agent: installed but not loaded (launchctl load $(webhook_plist_path))"
+      rc=1 ;;
+  esac
   hostname="$(webhook_config_get hostname)" &&
     port="$(webhook_config_get port)" ||
     {
