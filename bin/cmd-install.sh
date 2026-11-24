@@ -982,7 +982,9 @@ cmd_install() {
   # here without the record — a VM running jobs the host does not know
   # about, exactly what this key exists to prevent. A failed install now
   # needs reset (deletes the VM) + install, which the guard's message says.
-  state_set ever_registered 1
+  # The check is explicit for the same reason as re_register_single's.
+  state_set ever_registered 1 ||
+    die "${cmd}: could not record the registration for ${INSTANCE}; no token goes into the VM (fix the state directory: $(state_file))"
   run_provision "RUNNER_TOKEN=${token}"$'\n' "${env[@]}"
   token=""
   state_set job_cleanup "$job_cleanup"
@@ -1975,8 +1977,14 @@ re_register_single() {
   log "re-registering ephemeral runner ${INSTANCE} at ${url}"
   # Written before the token enters the guest, not after provisioning
   # returns: a failure past the registration would exit here without the
-  # record (see cmd_install's same write).
-  state_set ever_registered 1
+  # record (see cmd_install's same write). The check is explicit because
+  # the watch loop calls this function as `re_register_single || ...`,
+  # which turns errexit off for the whole function — a failed write must
+  # return, not pass.
+  if ! state_set ever_registered 1; then
+    echo "homefield: re-register: could not record the registration for ${INSTANCE}; no token goes into the VM (fix the state directory: \$(state_file))" >&2
+    return 1
+  fi
   if ! PROVISION_CMD=re-register run_provision "RUNNER_TOKEN=${token}"$'\n' "${env[@]}"; then
     token=""
     state_set ephemeral_error "re-registration failed"

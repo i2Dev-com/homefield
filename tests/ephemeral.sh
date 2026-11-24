@@ -252,6 +252,19 @@ STUB_SVC_RC=1 STUB_JOB_RC=1 STUB_BASE_PRESENT=1 hrun cmd_re_register --watch --i
 calls="$(cat "$CALLS")"
 record "--watch when service stopped (job finished): re-registers" "0/yes/yes" "$rc/$(has "$out" "finished a job; re-registering")/$(has "$calls" "cmd=re-register")"
 
+# 7b. the trust-marker write fails (the state directory is not writable):
+# no token goes into the VM. The watch loop calls re_register_single as a
+# condition, which turns errexit off for the whole function, so the failed
+# write has to be checked explicitly.
+printf 'ephemeral=1\nephemeral_url=https://github.com/acme\nephemeral_name=test-mac-homefield\nreset_vm=1\n' >"$WORK/state/homefield.state"
+mkbase
+chmod 555 "$WORK/state"
+STUB_BASE_PRESENT=1 STUB_JOB_RC=1 hrun cmd_re_register
+calls="$(cat "$CALLS")"
+record "the marker write fails: re-register is refused before the token" "nonzero/yes/no" \
+  "$(nonzero "$rc")/$(has "$out" "could not record the registration")/$(has "$calls" "cmd=re-register")"
+chmod 755 "$WORK/state"
+
 # 8. Real run_provision propagates guest_stdin failure inside cmd_re_register
 REAL_PROV_HARNESS="$WORK/real_prov_harness.sh"
 cat >"$REAL_PROV_HARNESS" <<'EOF'
