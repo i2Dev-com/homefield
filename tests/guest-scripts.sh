@@ -33,6 +33,7 @@ stub systemctl 'echo "systemctl $*" >>"$CALLS"
 case "$1 $2" in
   "reboot ") [ -n "${REBOOT_FAILS:-}" ] && exit 1 ;;
   "is-active"*) [ -n "${STOPPED:-}" ] && exit 3 ;;
+  "start "*) [ -n "${RESTART_FAILS:-}" ] && exit 1 ;;
 esac
 exit 0'
 stub apt-get 'echo "apt-get $*" >>"$CALLS"
@@ -149,6 +150,9 @@ record "the reboot is refused: the runner is started instead" "0/1/1/yes" \
 maintenance APT_FAIL=upgrade --
 record "an apt-get failure: the trap starts the unit back up, exit nonzero" "nonzero/1/1" \
   "$(nonzero "$rc")/$(systemctl_calls 'stop')/$(systemctl_calls 'start')"
+maintenance RESTART_FAILS=1 --
+record "a restart that fails after a clean upgrade: exit nonzero, the failure is said" "nonzero/yes/1" \
+  "$(nonzero "$rc")/$(has "$out" 'could not start')/$(systemctl_calls 'start')"
 
 # A runner that was already stopped when maintenance ran (a provision run
 # mid-re-register, a cut-off deregistration) must stay stopped: maintenance

@@ -19,10 +19,16 @@ if [ -n "$unit" ] && systemctl is-active --quiet "$unit"; then
   systemctl stop "$unit"
 fi
 # Whatever happens below, the runner comes back up — but only if it was up.
-trap 'if [ "$was_active" = 1 ]; then
-        systemctl start "$unit" ||
-          echo "homefield-maintenance: could not start ${unit}; check the guest" >&2
-      fi' EXIT
+# A restart that fails after a clean upgrade must not read as success: the
+# trap fails the run (systemd records it) while keeping the original status
+# when that was already nonzero.
+# shellcheck disable=SC2154  # the assignment is in the trap, which shellcheck does not track
+trap 'status=$?
+      if [ "$was_active" = 1 ] && ! systemctl start "$unit"; then
+        echo "homefield-maintenance: could not start ${unit}; check the guest" >&2
+        [ "$status" -ne 0 ] || status=1
+      fi
+      exit "$status"' EXIT
 export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a
 apt-get update -q
 apt-get upgrade -y -q --with-new-pkgs \
