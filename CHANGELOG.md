@@ -9,7 +9,13 @@ fail, such as a new guard in the routing expression, bumps the minor version
 (0.1 to 0.2). Compatible changes bump the patch. Merged changes wait on
 `main`, under *Unreleased*, until a release is cut.
 
-## Unreleased
+## v0.5.10 (2026-11-24)
+
+Bumps the patch from v0.5.9, and it is compatible for consumers: the routing
+expression, guards, defaults, and options are unchanged, so workflows passing
+`routing-guard@v0.5.9` pass `@v0.5.10` as well. The changes are two webhook
+receiver fixes found on the live receiver the day v0.5.9 shipped; nothing a
+consumer's workflow does changes.
 
 - Fixed: `webhook status` reported "installed but not loaded" for a loaded
   receiver. The check ran `launchctl list | grep -q`, and `grep -q`'s early
