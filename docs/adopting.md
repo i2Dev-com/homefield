@@ -63,7 +63,7 @@ hosted.
 ## 2. Route them
 
 Replace each chosen job's `runs-on` with the routing expression, verbatim.
-It must match the `routing-guard` version used in step 3 (`@v0.5.10` below); see
+It must match the `routing-guard` version used in step 3 (`@v0.6.0` below); see
 [`CHANGELOG.md`](../CHANGELOG.md) when upgrading. There are two shapes.
 
 A repository whose every contributor you trust with the Mac routes with the
@@ -116,7 +116,7 @@ In a job that runs on every PR, after `actions/checkout`:
 
 ```yaml
       - name: Routing guard
-        uses: i2Dev-com/homefield/routing-guard@v0.5.10
+        uses: i2Dev-com/homefield/routing-guard@v0.6.0
         with:
           jobs: |
             ci.yml:lint
@@ -128,7 +128,7 @@ carries `mode: simple` and nothing else changes:
 
 ```yaml
       - name: Routing guard
-        uses: i2Dev-com/homefield/routing-guard@v0.5.10
+        uses: i2Dev-com/homefield/routing-guard@v0.6.0
         with:
           jobs: |
             ci.yml:lint
@@ -143,9 +143,9 @@ a deliberate, reviewed change.
 
 `homefield adopt` counts a step as the guard only if:
 
-- it uses `i2Dev-com/homefield/routing-guard@v0.5.10`, the release your
+- it uses `i2Dev-com/homefield/routing-guard@v0.6.0`, the release your
   installed `homefield` checks with (`homefield version` shows it), or a full
-  40-character commit SHA (`uses: i2Dev-com/homefield/routing-guard@<40-char-sha> # v0.5.10`).
+  40-character commit SHA (`uses: i2Dev-com/homefield/routing-guard@<40-char-sha> # v0.6.0`).
   Another release, `@v0` or `@main` do not count;
   **Why choose a full commit SHA:** a Git tag is only as immutable as the
   upstream repository's tag protections (see
@@ -187,7 +187,7 @@ mode also accepts the guarded expression, so a repository can move between
 the shapes, or mix them, without failing.
 
 ```yaml
-      - uses: i2Dev-com/homefield/routing-guard@v0.5.10
+      - uses: i2Dev-com/homefield/routing-guard@v0.6.0
         with:
           jobs: |
             ci.yml:lint
