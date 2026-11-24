@@ -83,6 +83,13 @@ case_ "single-quoted runs-on key"        fail "$EXPECTED" "" "$(printf "  unsafe
 case_ "job written as a {...} mapping"   fail "$EXPECTED" "" "  unsafe: {runs-on: self-hosted, steps: [{run: echo unsafe}]}"
 case_ "quoted key in a {...} job"        fail "$EXPECTED" "" '  unsafe: {"runs-on": Self-Hosted}'
 case_ "{...} mapping on the next line"   fail "$EXPECTED" "" "$(printf '  unsafe:\n    {runs-on: self-hosted}')"
+# A job body written as a multi-line {...} mapping, a remote reusable call
+# inside one, an alias as a job body and an alias as a mapping key: each
+# puts the job's real keys where the body scan sees data (GHSA-3qqr-mvcw-h8w2).
+case_ "job body as a multi-line {...} mapping" fail "$EXPECTED" "" "$(printf '  evil:\n    {\n      runs-on: self-hosted,\n      steps: [{ run: echo pwned }]\n    }')"
+case_ "remote reusable call inside a {...} mapping" fail "$EXPECTED" "" "$(printf '  evil:\n    { uses: evil/repo/.github/workflows/pwn.yml@main }')"
+case_ "an alias as a job body" fail "$EXPECTED" "" "$(printf '  setup:\n    runs-on: ubuntu-latest\n    strategy:\n      matrix:\n        include:\n          - &pwn\n            runs-on: self-hosted\n            steps:\n              - run: echo hi\n  evil:\n    *pwn')"
+case_ "an alias as a mapping key" fail "$EXPECTED" "" "$(printf '  setup:\n    runs-on: ubuntu-latest\n    strategy:\n      matrix:\n        x: [&k runs-on]\n  evil:\n    *k : self-hosted')"
 case_ "runs-on through a merge key"      fail "$EXPECTED" "" "$(printf '  unsafe:\n    <<: {runs-on: self-hosted}\n    steps: []')"
 case_ "runs-on as a ? complex key"       fail "$EXPECTED" "" "$(printf '  unsafe:\n    ? runs-on\n    : self-hosted')"
 case_ "space before the colon"           fail "$EXPECTED" "" "$(printf '  unsafe:\n    runs-on : self-hosted')"
@@ -93,6 +100,14 @@ case_ "spaced top-level jobs key"        fail "$EXPECTED" "" "s/^jobs:\$/jobs :/
 case_ "quoted key left open on its line"  fail "$EXPECTED" "" "$(printf '  unsafe:\n    "runs-\\\n    on": self-hosted')"
 case_ "? key split by a trailing \\"     fail "$EXPECTED" "" "$(printf '  unsafe:\n    ? "runs-\\\n      on"\n    : self-hosted')"
 case_ "single-quoted key left open"     fail "$EXPECTED" "" "$(printf "  unsafe:\n    'runs-\n    on': self-hosted")"
+# A quoted scalar *value* left open at the end of the line: its continuation
+# may sit at any indentation, where it reads as a key that ends `jobs:` or
+# starts a fake job (GHSA-mv22-x2vq-9c3w). A legitimate multi-line quoted
+# value fails the same way — write it as a block scalar (`name: >-`) or on
+# one line.
+case_ "quoted value open, continuation at column 0" fail "$EXPECTED" "" "$(printf '  build:\n    name: "a\nx: b"\n    runs-on: self-hosted')"
+case_ "quoted value open, continuation at the job indent" fail "$EXPECTED" "" "$(printf '  build:\n    name: "x\n  fake:\n        y"\n    runs-on: self-hosted')"
+case_ "a quoted value that continues, indented" fail "$EXPECTED" "" "$(printf '  named:\n    name: "a very long\n      job name"\n    runs-on: ubuntu-latest')"
 case_ "tagged runs-on key"              fail "$EXPECTED" "" "$(printf '  unsafe:\n    !!str runs-on: self-hosted\n    steps:\n      - run: echo unsafe')"
 case_ "anchored runs-on key"            fail "$EXPECTED" "" "$(printf '  unsafe:\n    &a runs-on: self-hosted\n    steps:\n      - run: echo unsafe')"
 case_ "anchored and quoted runs-on key" fail "$EXPECTED" "" "$(printf '  unsafe:\n    &a "runs-on": self-hosted\n    steps:\n      - run: echo unsafe')"
@@ -129,9 +144,27 @@ case_ "key at the scalar key indent"     fail "$EXPECTED" "" "$(printf '  script
 case_ "a step script that quotes runs-on" pass "$EXPECTED" "s/^      - run: echo docker\$/      - run: echo \"runs-on\"/"
 case_ "a step script with {runs-on: x}"  pass "$EXPECTED" "s/^      - run: echo docker\$/      - run: echo '{runs-on: self-hosted}'/"
 case_ "a block script that quotes it"    pass "$EXPECTED" "" "$(printf '  doc:\n    runs-on: ubuntu-latest\n    steps:\n      - run: |\n          echo "runs-on"\n          echo "a, runs-on: x"')"
+# A '#' inside a quoted value is content, not a comment: cutting there would
+# leave the scalar looking open at the end of the line.
+case_ "hash inside a quoted name"        pass "$EXPECTED" "s/^      - run: echo docker\$/      - name: \"Build #1 verify\"/"
+case_ "hash inside a quoted script arg"  pass "$EXPECTED" "s/^      - run: echo docker\$/      - run: echo \"# hello\"/"
+case_ "hash inside a single-quoted value" pass "$EXPECTED" "s/^      - run: echo docker\$/      - name: 'v1.2 #3'/"
+case_ "comment after a quoted value"     pass "$EXPECTED" "s/^      - run: echo docker\$/      - name: \"Build\" # promoted/"
+case_ "escaped quote, then a hash"       pass "$EXPECTED" "s/^      - run: echo docker\$/      - name: \"say \\\"hi\\\" #1\"/"
+# A quote inside a plain scalar is content, not a delimiter: only a quote at
+# the start of a value opens a quoted scalar.
+case_ "apostrophe in a plain value"      pass "$EXPECTED" "s/^      - run: echo docker\$/      - name: Check '90s compatibility'/"
+case_ "quotes mid-value in a script"     pass "$EXPECTED" "s/^      - run: echo docker\$/      - run: echo foo\" \"/"
 case_ "trailing comment after jobs:"     pass "$EXPECTED" "s/^jobs:\$/jobs: # the jobs/"
 case_ "document start marker"            pass "$EXPECTED" "1s/^/---\\n/"
 case_ "plain flow data elsewhere"        pass "$EXPECTED" "s/^      - run: echo docker\$/      - run: echo docker\\n        env: {A: b}/"
+# A sequence may sit at its parent key's depth: a `- key:` list item at the
+# job body's indent is a plain line the scan reads.
+case_ "steps listed at the job body indent" pass "$EXPECTED" "" "$(printf '  listed:\n    runs-on: ubuntu-latest\n    steps:\n    - run: echo listed\n    env:\n      A: b')"
+# The positive check: a job the scan read but found no routing for fails,
+# even though GitHub would run it hosted — a job the scan cannot vouch for
+# is the shape a bypass hides in.
+case_ "a job with no runs-on at all" fail "$EXPECTED" "" "$(printf '  hosted-anyway:\n    steps:\n      - run: echo hi')"
 # Hosted forms that must keep passing.
 case_ "hosted image, quoted and pinned"  pass "$EXPECTED" "s/^    runs-on: ubuntu-latest$/    runs-on: 'ubuntu-24.04'/"
 case_ "hosted image, other case"         pass "$EXPECTED" "s/^    runs-on: ubuntu-latest$/    runs-on: Ubuntu-Latest/"

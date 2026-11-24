@@ -94,4 +94,27 @@ record "...and the rewritten workflows pass the scanner's --list" "b.yml:quoted
 ci.yml:routed
 ci.yml:hosted" "$out"
 
+# A quoted top-level jobs key, which YAML reads as the same key: the
+# scanner attributes the job's runs-on (it has since v0.2.1), and adopt's
+# plan must read it too, or a guard disabled at the job level under a
+# quoted key would not be caught (GHSA-wwwq-2hhr-f9h4).
+cat >"$work/wf/c.yml" <<EOF
+name: C
+on: [pull_request]
+"jobs":
+  routed:
+    runs-on: $expr
+    steps:
+      - run: echo routed
+EOF
+
+scan "$work/wf" --list
+record "a quoted jobs key: the scanner routes its job (b.yml:quoted is not routed, its runs-on key is quoted)" "c.yml:routed
+ci.yml:routed" "$out"
+plan "$work/wf"
+record "...and adopt's plan reads the quoted jobs key" "b.yml:quoted
+c.yml:routed
+ci.yml:hosted
+ci.yml:routed" "$(routed_keys "$out")"
+
 summary
