@@ -284,6 +284,44 @@ LIST_ITEM = re.compile(r"""^\s*-(\s|$)""")
 HOW = "write routing as a plain `runs-on: ...` line directly under a plain `job-id:` line"
 
 
+def strip_comment(line: str) -> str:
+    """The line up to the first `#` outside a quoted scalar.
+
+    A `#` inside quotes is content, not a comment: `name: "Build #1"` or
+    `run: echo "# hello"`. Cutting there would leave the scalar looking
+    open at the end of the line, and open_quote would refuse a workflow
+    that is plain and single-line. The quote rules are open_quote's: a
+    quote opens a quoted scalar only at the start of the line or after
+    whitespace or a colon, `\\x` escapes inside double quotes, `''` inside
+    single ones. A quote the heuristic does not open (one after `(`, as in
+    `fromJSON('...')`) leaves the `#` cut as a comment would be — the
+    truncated code is only ever shorter, and the checks it feeds are
+    prefix checks and the open-quote one, which such a quote cannot trip.
+    """
+    quote = None
+    i = 0
+    while i < len(line):
+        char = line[i]
+        if quote == '"':
+            if char == "\\":
+                i += 2
+                continue
+            if char == '"':
+                quote = None
+        elif quote == "'":
+            if char == "'":
+                if line[i + 1: i + 2] == "'":
+                    i += 2
+                    continue
+                quote = None
+        elif char == "#":
+            return line[:i]
+        elif char in "\"'" and (i == 0 or line[i - 1] in " \t:"):
+            quote = char
+        i += 1
+    return line
+
+
 def open_quote(code: str) -> bool:
     """True when a quoted scalar is still open at the end of the line.
 
@@ -454,9 +492,11 @@ def main() -> int:
         try:
             with open(path, encoding="utf-8", errors="replace") as fh:
                 for lineno, line in enumerate(fh, 1):
-                    # Comments may name the label; only code counts. Safe to cut at
-                    # '#' because the canonical expression contains none.
-                    code = line.split("#", 1)[0]
+                    # Comments may name the label; only code counts. The cut is quote-aware
+                    # (strip_comment): a '#' inside quotes is content, and
+                    # cutting there would make a single-line quoted value
+                    # read as an open scalar.
+                    code = strip_comment(line)
                     # Inside a block scalar (blank, or indented past its key), the
                     # line is text. The unreadable-syntax checks skip it.
                     in_scalar = False

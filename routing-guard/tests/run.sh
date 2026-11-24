@@ -144,6 +144,13 @@ case_ "key at the scalar key indent"     fail "$EXPECTED" "" "$(printf '  script
 case_ "a step script that quotes runs-on" pass "$EXPECTED" "s/^      - run: echo docker\$/      - run: echo \"runs-on\"/"
 case_ "a step script with {runs-on: x}"  pass "$EXPECTED" "s/^      - run: echo docker\$/      - run: echo '{runs-on: self-hosted}'/"
 case_ "a block script that quotes it"    pass "$EXPECTED" "" "$(printf '  doc:\n    runs-on: ubuntu-latest\n    steps:\n      - run: |\n          echo "runs-on"\n          echo "a, runs-on: x"')"
+# A '#' inside a quoted value is content, not a comment: cutting there would
+# leave the scalar looking open at the end of the line.
+case_ "hash inside a quoted name"        pass "$EXPECTED" "s/^      - run: echo docker\$/      - name: \"Build #1 verify\"/"
+case_ "hash inside a quoted script arg"  pass "$EXPECTED" "s/^      - run: echo docker\$/      - run: echo \"# hello\"/"
+case_ "hash inside a single-quoted value" pass "$EXPECTED" "s/^      - run: echo docker\$/      - name: 'v1.2 #3'/"
+case_ "comment after a quoted value"     pass "$EXPECTED" "s/^      - run: echo docker\$/      - name: \"Build\" # promoted/"
+case_ "escaped quote, then a hash"       pass "$EXPECTED" "s/^      - run: echo docker\$/      - name: \"say \\\"hi\\\" #1\"/"
 case_ "trailing comment after jobs:"     pass "$EXPECTED" "s/^jobs:\$/jobs: # the jobs/"
 case_ "document start marker"            pass "$EXPECTED" "1s/^/---\\n/"
 case_ "plain flow data elsewhere"        pass "$EXPECTED" "s/^      - run: echo docker\$/      - run: echo docker\\n        env: {A: b}/"
