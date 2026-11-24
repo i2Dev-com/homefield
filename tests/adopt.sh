@@ -487,6 +487,23 @@ wf_stepif wf-stepcoe-sq 'true' "'continue-on-error'"
 wf_stepif wf-stepif-dq 'false' '"if"'
 wf_jobif wf-jobcoe-dq 'true' before '"continue-on-error"'
 wf_jobif wf-jobcoe-sq 'true' after "'continue-on-error'"
+# The top-level jobs key quoted, which YAML reads as the same key: the
+# guard step's job must still be found, so a disabled guard is still
+# caught (GHSA-wwwq-2hhr-f9h4). wf_qjobs <dir> <jobs line> <value>
+# <before|after> [key] is wf_jobif with the jobs key spelled out.
+wf_qjobs() {
+  mkdir -p "$work/$1"
+  {
+    printf 'name: CI\non: [pull_request]\n%s\n  lint:\n' "$2"
+    [ "${4:-}" != before ] || printf '    %s: %s\n' "${5:-if}" "$3"
+    printf '    runs-on: %s\n    steps:\n      - uses: actions/checkout@v5\n%s\n' "$expr" "$(guard ci.yml:lint)"
+    [ "${4:-}" != after ] || printf '    %s: %s\n' "${5:-if}" "$3"
+  } >"$work/$1/ci.yml"
+}
+wf_qjobs wf-qjobs-ok '"jobs":'
+wf_qjobs wf-qjobs-iffalse '"jobs":' 'false' before
+wf_qjobs wf-qjobs-coe '"jobs":' 'true' before continue-on-error
+wf_qjobs wf-qjobs-sq-coe "'jobs':" 'true' before continue-on-error
 
 # The guard in a reusable workflow, called from a pull_request workflow.
 # wf_reuse <dir> <caller on:> <extra keys of the calling job, \n-terminated>
@@ -968,6 +985,10 @@ route_case "continue-on-error: true on the job, above runs-on: not a guard" wf-j
 route_case "continue-on-error: True on the job, after the steps: not a guard" wf-jobcoe-true-after not "cannot fail the check: its job lint has continue-on-error: true"
 route_case "continue-on-error: false on the job: ready" wf-jobcoe-false ready "!continue-on-error"
 route_case "continue-on-error: an expression on the job: ready, with a warning" wf-jobcoe-cond ready "ci.yml:5: its job lint has a continue-on-error: condition"
+route_case "\"jobs\": quoted, a clean guard: ready" wf-qjobs-ok ready "routing: ready"
+route_case "\"jobs\": quoted, if: false on the job: not a guard" wf-qjobs-iffalse not "never runs: its job lint has an if: that is false"
+route_case "\"jobs\": quoted, continue-on-error: true on the job: not a guard" wf-qjobs-coe not "cannot fail the check: its job lint has continue-on-error: true"
+route_case "'jobs': quoted, continue-on-error: true on the job: not a guard" wf-qjobs-sq-coe not "cannot fail the check: its job lint has continue-on-error: true"
 
 route_case "a reusable workflow called from a pull_request workflow: ready" wf-reuse-ok ready "!$may_not_run"
 route_case "a reusable workflow that nothing calls: not a guard" wf-reuse-uncalled not "only reusable (workflow_call) and no workflow that runs on pull_request calls it with uses: ./.github/workflows/checks.yml"

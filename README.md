@@ -169,8 +169,10 @@ with them ([routing options](docs/adopting.md#routing-options)).
 
 It also fails on any other `runs-on` that could reach the runner (a bare
 `self-hosted`, a label list, a runner group), because GitHub hands a job to
-any runner whose labels are a superset of the request, and on workflow syntax
-it cannot read ([adopting, step 2](docs/adopting.md#2-route-them)). The
+any runner whose labels are a superset of the request, on workflow syntax
+it cannot read, and on any job it read no `runs-on` for — a job the check
+cannot vouch for fails rather than passing silently
+([adopting, step 2](docs/adopting.md#2-route-them)). The
 bypasses of this contract found so far — and what each consumer does — are
 documented in [the routing guard's contract and past
 bypasses](docs/security.md).
