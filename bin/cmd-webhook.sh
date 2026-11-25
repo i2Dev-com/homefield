@@ -114,6 +114,13 @@ webhook_setup() {
   case "$port" in
     '' | *[!0-9]*) die "webhook setup: --port must be a number, got: $port" ;;
   esac
+  # 0 would bind an ephemeral port that disagrees with the config file
+  # status reads back, and anything above 65535 is not a port (the
+  # receiver's bind would raise OverflowError); the length guard keeps
+  # the 10# arithmetic below free of an overflow on absurd input.
+  if [ "${#port}" -gt 5 ] || [ "$((10#$port))" -lt 1 ] || [ "$((10#$port))" -gt 65535 ]; then
+    die "webhook setup: --port must be between 1 and 65535, got: $port"
+  fi
   command -v cloudflared >/dev/null 2>&1 || die "webhook setup: cloudflared is not on PATH (brew install cloudflared)"
   command -v jq >/dev/null 2>&1 || die "webhook setup: jq is not on PATH (brew install jq)"
   command -v python3 >/dev/null 2>&1 || die "webhook setup: python3 is required (xcode-select --install)"
@@ -187,16 +194,17 @@ webhook_setup() {
 
 # webhook_agent_install [port]: write and load the LaunchAgent. Idempotent
 # like the route watcher's: an existing agent is unloaded and rewritten.
-# The agent runs the receiver through /bin/sh so it survives python3 moving
-# (a brew upgrade), with the PATH it needs for gh, limactl, jq and
-# cloudflared — launchd's own PATH has none of them.
+# The agent runs the receiver through /bin/sh, re-resolving python3 from
+# the baked PATH at every start so it survives python3 moving (a brew
+# upgrade), with the PATH it needs for gh, limactl, jq and cloudflared —
+# launchd's own PATH has none of them.
 webhook_agent_install() {
-  local port="${1:-8787}" plist dir log py
+  local port="${1:-8787}" plist dir log
   command -v launchctl >/dev/null 2>&1 || {
     echo "homefield: launchctl is required to install the webhook receiver" >&2
     return 1
   }
-  py="$(command -v python3)" || {
+  command -v python3 >/dev/null 2>&1 || {
     echo "homefield: the webhook receiver needs python3; install it (xcode-select --install) and re-run webhook setup" >&2
     return 1
   }
@@ -263,7 +271,7 @@ webhook_agent_install() {
   <array>
     <string>/bin/sh</string>
     <string>-c</string>
-    <string>exec "$(route_watcher_xml_escape "$py")" "$(route_watcher_xml_escape "$ROOT/bin/webhook-receiver.py")"</string>
+    <string>exec "$(command -v python3)" "$(route_watcher_xml_escape "$ROOT/bin/webhook-receiver.py")"</string>
   </array>
   <key>RunAtLoad</key>
   <true/>
@@ -305,9 +313,14 @@ webhook_connect() {
 
   # The secret reaches GitHub through the request body, built from the
   # secret file by python3 — never a command line (ps), never the
-  # environment — and the body file is 0600 in the state dir, removed on
-  # every exit path.
-  body="$(webhook_dir)/connect-body.json"
+  # environment — and the body file is a 0600 mktemp (a fresh name per
+  # run, so concurrent connects cannot clobber each other) removed on
+  # every exit path: an interrupt during the gh api call must not leave
+  # the secret on disk.
+  local body
+  body="$(mktemp)" || die "webhook connect: could not create a temporary request body file"
+  trap 'rm -f "$body"' EXIT
+  trap 'exit 1' INT TERM
   (umask 077 && python3 - "$secret" "$url" >"$body" <<'PY'
 import json, sys
 secret = open(sys.argv[1]).read().strip()
@@ -329,24 +342,29 @@ PY
     # sufficient — a remove + re-setup rotates the secret, and GitHub
     # signing deliveries with the old one would 403 every one of them.
     if ! gh api "repos/$repo/hooks/$hook_id" -X PATCH --input "$body" --jq .id >/dev/null 2>&1; then
-      rm -f "$body"
       die "webhook connect: could not refresh the webhook on $repo (hook $hook_id; gh failed)"
     fi
     rm -f "$body"
+    trap - EXIT INT TERM
     log "$repo: webhook refreshed with the current secret (hook $hook_id)"
     return 0
   fi
 
   if ! hook_id="$(gh api "repos/$repo/hooks" --input "$body" --jq .id 2>/dev/null)"; then
-    rm -f "$body"
     die "webhook connect: could not create the webhook on $repo (gh failed; check its auth and the repo admin scope)"
   fi
   rm -f "$body"
+  trap - EXIT INT TERM
   log "$repo: webhook connected (hook $hook_id), events workflow_job, url $url"
 }
 
 webhook_status() {
   local rc=0 port hostname
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      *) die "webhook status: unknown option $1 (see bin/homefield help)" ;;
+    esac
+  done
   if [ ! -f "$(webhook_plist_path)" ]; then
     echo "agent: not installed (run 'homefield webhook setup --hostname <fqdn>')"
     return 1
@@ -381,10 +399,16 @@ webhook_status() {
     echo "tunnel: not found (cloudflared tunnel list; re-run 'homefield webhook setup')"
     rc=1
   }
-  if ! webhook_port_free "$port"; then
+  if webhook_receiver_answers "$port"; then
+    # The listener answers the receiver's healthz: it is our receiver.
     echo "receiver: listening on 127.0.0.1:$port"
-  else
+  elif webhook_port_free "$port"; then
     echo "receiver: not answering on 127.0.0.1:$port (check $(webhook_log_file))"
+    rc=1
+  else
+    # Something listens but it is not the receiver: reporting it as ours
+    # would be a false positive (an unrelated process on the port).
+    echo "receiver: 127.0.0.1:$port is held by another process (check $(webhook_log_file); re-run 'homefield webhook setup' with another --port)"
     rc=1
   fi
   return "$rc"
@@ -431,7 +455,7 @@ cmd_webhook() {
   case "$sub" in
     setup) shift; webhook_setup "$@" ;;
     connect) shift; webhook_connect "$@" ;;
-    status) webhook_status "$@" ;;
+    status) shift; webhook_status "$@" ;;
     remove) shift; webhook_remove "$@" ;;
     *) die "webhook: expected setup, connect, status, or remove (see bin/homefield help)" ;;
   esac

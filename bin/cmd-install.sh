@@ -1139,8 +1139,23 @@ upgrade_single() {
       seed_routing_records "$url" "$name" || true
       # The sleep/wake half (#290); see install. A failure leaves the
       # fallback covering stop and start only.
-      route_watcher_install ||
+      if route_watcher_install; then
+        # The webhook receiver's agent bakes the same HOMEFIELD_SCALE_*
+        # policy (webhook setup copied it from the shell or from the
+        # route watcher's plist, which this install just rewrote): an
+        # upgrade --auto-route that refreshes the route watcher must
+        # refresh this copy too, or the receiver's ticks keep scaling
+        # with the settings the last webhook setup baked. Nothing to
+        # refresh when the receiver was never set up.
+        if [ -f "$(webhook_plist_path)" ]; then
+          local wh_port
+          wh_port="$(webhook_config_get port || true)"
+          webhook_agent_install "${wh_port:-8787}" ||
+            echo "homefield: the webhook receiver's agent could not be refreshed; its scaler policy is stale (re-run 'homefield webhook setup --hostname <fqdn>')" >&2
+        fi
+      else
         echo "homefield: the route watcher could not be installed; the automatic fallback covers stop and start but not sleep and wake (retry: bin/homefield upgrade --auto-route)" >&2
+      fi
     else
       route_watcher_remove_if_unneeded || true
     fi
