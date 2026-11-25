@@ -1150,7 +1150,7 @@ upgrade_single() {
         if [ -f "$(webhook_plist_path)" ]; then
           local wh_port
           wh_port="$(webhook_config_get port || true)"
-          webhook_agent_install "${wh_port:-8787}" ||
+          webhook_agent_install "${wh_port:-8787}" refresh ||
             echo "homefield: the webhook receiver's agent could not be refreshed; its scaler policy is stale (re-run 'homefield webhook setup --hostname <fqdn>')" >&2
         fi
       else

@@ -893,7 +893,7 @@ unset HOMEFIELD_WEBHOOK_TUNNEL HOMEFIELD_WEBHOOK_READ_TIMEOUT
 env -i HOME="$HOME" PATH="$PATH" HOMEFIELD_SOURCE_ONLY=1 \
   HOMEFIELD_STATE_DIR="$STATE4" \
   "$BASH" -c '. "$1"; shift; status=0; "$@" || status=$?; printf "%s" "$status"' \
-  _ "$ROOT/bin/homefield" webhook_agent_install 18787 >/dev/null 2>&1
+  _ "$ROOT/bin/homefield" webhook_agent_install 18787 refresh >/dev/null 2>&1
 refresh_rc=$?
 record "setup: an agent refresh without the overrides exits 0" "0" "$(nonzero $refresh_rc)"
 record "setup: the refresh keeps the installed tunnel baked" "yes" \
@@ -933,6 +933,18 @@ record "setup: the re-run's agent bakes the routed tunnel" "yes" \
   "$(has "$(cat "$plist" 2>/dev/null)" '<string>homefield-webhook</string>')"
 record "setup: the re-run's agent no longer bakes the old tunnel" "0" \
   "$(grep -c -e '<string>custom-tunnel</string>' "$plist" 2>/dev/null || true)"
+# a setup-mode install in a shell without the state dir must not inherit
+# the previous installation's either: a fresh setup writes its secret
+# under the shell's own resolution, and an agent reading a different
+# state dir would answer 403 to every delivery. Only a refresh (upgrade
+# --auto-route) reads the installed plist back.
+env -i HOME="$HOME" PATH="$PATH" HOMEFIELD_SOURCE_ONLY=1 \
+  "$BASH" -c '. "$1"; shift; status=0; "$@" || status=$?; printf "%s" "$status"' \
+  _ "$ROOT/bin/homefield" webhook_agent_install 18787 >/dev/null 2>&1
+setup_install_rc=$?
+record "setup: an install without the shell's state dir exits 0" "0" "$(nonzero $setup_install_rc)"
+record "setup: it does not inherit the previous state dir" "0" \
+  "$(grep -c -e "<string>$STATE5</string>" "$plist" 2>/dev/null || true)"
 unset CF_LIST_JSON
 rm -f "$HOME/.cloudflared/custom-uuid.json"
 

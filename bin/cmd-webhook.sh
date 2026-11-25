@@ -203,14 +203,19 @@ webhook_setup() {
   log "next: connect repositories with 'homefield webhook connect <owner/repo>'"
 }
 
-# webhook_agent_install [port]: write and load the LaunchAgent. Idempotent
-# like the route watcher's: an existing agent is unloaded and rewritten.
-# The agent runs the receiver through /bin/sh, re-resolving python3 from
-# the baked PATH at every start so it survives python3 moving (a brew
-# upgrade), with the PATH it needs for gh, limactl, jq and cloudflared —
-# launchd's own PATH has none of them.
+# webhook_agent_install <port> [refresh]: write and load the LaunchAgent.
+# Idempotent like the route watcher's: an existing agent is unloaded and
+# rewritten. The agent runs the receiver through /bin/sh, re-resolving
+# python3 from the baked PATH at every start so it survives python3 moving
+# (a brew upgrade), with the PATH it needs for gh, limactl, jq and
+# cloudflared — launchd's own PATH has none of them. The optional second
+# argument marks a refresh (upgrade --auto-route re-runs this install): a
+# refresh preserves the settings the installed plist baked for anything
+# the upgrading shell does not carry, while a setup — which has just
+# written its config and secret under the shell's own resolution — must
+# not inherit them.
 webhook_agent_install() {
-  local port="${1:-8787}" plist dir log
+  local port="${1:-8787}" refresh="${2:-}" plist dir log
   command -v launchctl >/dev/null 2>&1 || {
     echo "homefield: launchctl is required to install the webhook receiver" >&2
     return 1
@@ -234,24 +239,26 @@ webhook_agent_install() {
   # default (8787) would otherwise disagree with the config file status
   # reads back.
   env_xml="${env_xml}    <key>HOMEFIELD_WEBHOOK_PORT</key>"$'\n'"    <string>$(route_watcher_xml_escape "$port")</string>"$'\n'
-  # Everything else comes from this shell, or — when the shell does not
-  # carry it — from what the installation already records: the tunnel
-  # from the setup's config (written just before this install runs, and
-  # the name the DNS route points at) and the remaining settings from the
-  # installed plist's own baked values. A refresh — upgrade --auto-route
-  # re-runs this install — must preserve the tunnel name, state dir and
-  # tuning the setup baked, or the receiver would silently start a
-  # different tunnel or read a different state dir than the one its DNS
-  # route and secret live under. A shell value wins: an explicit re-setup
-  # with a new setting is how it changes, and a re-run without the
-  # override re-routes the default tunnel, which the agent then follows.
+  # Everything else comes from this shell, or — on a refresh only — from
+  # what the installation already records: the tunnel from the setup's
+  # config (written just before this install runs, and the name the DNS
+  # route points at) and the remaining settings from the installed plist's
+  # own baked values. A refresh — upgrade --auto-route re-runs this
+  # install — must preserve the tunnel name, state dir and tuning the
+  # setup baked, or the receiver would silently start a different tunnel
+  # or read a different state dir than the one its DNS route and secret
+  # live under. A shell value wins: an explicit re-setup with a new
+  # setting is how it changes, and a re-run without the override
+  # re-routes the default tunnel, which the agent then follows.
   local env_var env_val
   for env_var in HOMEFIELD_STATE_DIR LIMA_HOME HOMEFIELD_WEBHOOK_ACTIONS HOMEFIELD_WEBHOOK_DEBOUNCE HOMEFIELD_WEBHOOK_TUNNEL HOMEFIELD_WEBHOOK_READ_TIMEOUT HOMEFIELD_WEBHOOK_MAX_CONNECTIONS; do
     env_val="${!env_var:-}"
     if [ -z "$env_val" ] && [ "$env_var" = HOMEFIELD_WEBHOOK_TUNNEL ]; then
       env_val="$(webhook_config_get tunnel || true)"
     fi
-    [ -n "$env_val" ] || env_val="$(plist_env "$plist" "$env_var")"
+    if [ -z "$env_val" ] && [ -n "$refresh" ]; then
+      env_val="$(plist_env "$plist" "$env_var")"
+    fi
     [ -n "$env_val" ] && env_xml="${env_xml}    <key>$env_var</key>"$'\n'"    <string>$(route_watcher_xml_escape "$env_val")</string>"$'\n'
   done
   # The scaler's tuning reaches this agent the same way it reaches the
@@ -281,7 +288,7 @@ webhook_agent_install() {
   <array>
     <string>/bin/sh</string>
     <string>-c</string>
-    <string>exec "$(command -v python3)" "$(route_watcher_xml_escape "$ROOT/bin/webhook-receiver.py")"</string>
+    <string>exec "\$(command -v python3)" "$(route_watcher_xml_escape "$ROOT/bin/webhook-receiver.py")"</string>
   </array>
   <key>RunAtLoad</key>
   <true/>

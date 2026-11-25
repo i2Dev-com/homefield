@@ -238,7 +238,7 @@ route_watcher_install() {
   <array>
     <string>/bin/sh</string>
     <string>-c</string>
-    <string>exec "$(command -v python3)" "$(route_watcher_xml_escape "$ROOT/bin/route-watcher.py")"</string>
+    <string>exec "\$(command -v python3)" "$(route_watcher_xml_escape "$ROOT/bin/route-watcher.py")"</string>
   </array>
   <key>RunAtLoad</key>
   <true/>
