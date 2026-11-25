@@ -1150,6 +1150,13 @@ upgrade_single() {
         if [ -f "$(webhook_plist_path)" ]; then
           local wh_port
           wh_port="$(webhook_config_get port || true)"
+          # A custom state dir the upgrading shell does not carry leaves
+          # this config read empty (it reads the shell's resolution, not
+          # the one the refresh preserves); the installed plist bakes the
+          # port the receiver has actually been serving, so that is the
+          # fallback.
+          [ -n "$wh_port" ] ||
+            wh_port="$(plist_env "$(webhook_plist_path)" HOMEFIELD_WEBHOOK_PORT)"
           webhook_agent_install "${wh_port:-8787}" refresh ||
             echo "homefield: the webhook receiver's agent could not be refreshed; its scaler policy is stale (re-run 'homefield webhook setup --hostname <fqdn>')" >&2
         fi
