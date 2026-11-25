@@ -103,7 +103,11 @@ runner_serves_repo() {
   case "$vis" in
     selected)
       repos="$(group_repositories "$org" "$gid" "$host" 2>/dev/null)" || return 2
-      printf '%s\n' "$repos" | grep -qx "$repo" && return 0
+      # -F -x: a literal whole-line match — a repository name is data, not a
+      # pattern (a dot in a name must not match as a regex wildcard). -i:
+      # GitHub matches repository names case-insensitively, so the record's
+      # casing and the group listing's need not agree.
+      printf '%s\n' "$repos" | grep -Fixq "$repo" && return 0
       return 1
       ;;
     # the Default group admits every repository in the organization
@@ -166,7 +170,7 @@ serves_jobs() {
 # is the status quo, flipping them off a runner that is actually there is a
 # regression. Returns 1 when anything was left undone, so stop can report it.
 route_stop_fallback() {
-  local url="$1" name="$2" exclude="${3:-}" rows rname rstatus rlabels label repo served flipped=0 rc=0 host
+  local url="$1" name="$2" exclude="${3:-}" rows rname rstatus rlabels label repo served flipped=0 rc=0 host group_rc
   host="$(github_host "$url")"
   # Nothing routed to any local runner: nothing to flip, and GitHub need not
   # be asked. (A missing file reads as empty: set -e turns a failed
@@ -206,11 +210,14 @@ route_stop_fallback() {
   while read -r label repo rhost revents rdependabot rmode; do
     [ -n "$repo" ] || continue
     # The host field (a legacy line without one reads as github.com): this
-    # stop only flips github.com records — it refused other hosts above —
-    # and a record for another host belongs to that host's runner, whose
-    # stop is the one that may flip it.
-    [ "${rhost:-github.com}" = github.com ] || {
-      log "${repo}: routed on ${rhost}, not github.com; not switching it to hosted"
+    # stop only flips records on its own host — a GHE.com stop flips the
+    # host's records the same way a github.com stop flips github.com ones
+    # (both have hosted runners; a GHES host was refused above) — and a
+    # record for another host belongs to that host's runner, whose stop is
+    # the one that may flip it. A legacy record reads as github.com, so a
+    # GHE.com stop leaves it for the github.com runner's own stop.
+    [ "${rhost:-github.com}" = "$host" ] || {
+      log "${repo}: routed on ${rhost:-github.com}, not ${host}; not switching it to hosted"
       continue
     }
     # The rows describe this scope's runners only, so a record for a repo in
@@ -244,8 +251,12 @@ route_stop_fallback() {
       if [ "$repo_scope" = repo ]; then
         served=1
       else
-        runner_serves_repo "$owner" "$rid" "$repo" "$host"
-        case $? in 0 | 2) served=1 ;; esac
+        # `cmd || rc=$?` captures the status without tripping set -e: a
+        # bare failing call here would abort the whole fallback, and "does
+        # not serve" is a normal 1, not an error.
+        group_rc=0
+        runner_serves_repo "$owner" "$rid" "$repo" "$host" || group_rc=$?
+        case $group_rc in 0 | 2) served=1 ;; esac
       fi
     done <<<"$rows"
     if [ "$served" = 1 ]; then
@@ -425,7 +436,7 @@ routing_label_from_rows() {
 # failure: the fallback stays silent-but-uncovered until the repositories
 # are recorded by hand, which is exactly what the warnings say to do.
 seed_routing_records() {
-  local url="$1" name="$2" label="${3:-}" gid="${4:-}" scope org repos r current rc=0 n=0 preserved=0 gc host
+  local url="$1" name="$2" label="${3:-}" gid="${4:-}" scope org repos r current rc=0 n=0 preserved=0 gc host group_rc
   local rows="" rid rname rstatus rlabels other conflict owner repo_scope
   host="$(github_host "$url")"
   scope="$(api_scope "$url" 2>/dev/null)" || {
@@ -507,8 +518,10 @@ seed_routing_records() {
       if [ "$repo_scope" = repo ]; then
         conflict=1
       else
-        runner_serves_repo "$owner" "$rid" "$r" "$host"
-        case $? in 0 | 2) conflict=1 ;; esac
+        # See route_stop_fallback: the status is captured set -e-safely.
+        group_rc=0
+        runner_serves_repo "$owner" "$rid" "$r" "$host" || group_rc=$?
+        case $group_rc in 0 | 2) conflict=1 ;; esac
       fi
     done <<<"$rows"
     if [ "$conflict" = 1 ]; then
@@ -595,21 +608,38 @@ cmd_route() {
   # The events go into the record canonicalized to one comma-separated
   # field: the record's fields are whitespace-delimited, so a list with
   # spaces ("push schedule", which adopt's --events accepts) would smear
-  # across the option fields and be misread on the demand side.
-  local ev canonic=""
+  # across the option fields and be misread on the demand side. The
+  # whitespace split must not glob: --events is data, not a pattern, and
+  # `--events '*'` must die as an unknown event, not expand against the
+  # working directory (set -f is shell-global, so the caller's setting is
+  # saved and restored — the same rule merge_packages follows).
+  local ev canonic="" had_f
+  case "$-" in *f*) had_f=1 ;; *) had_f=0 ;; esac
+  set -f
   for ev in $events; do
     canonic="${canonic:+$canonic,}$ev"
   done
+  if [ "$had_f" = 1 ]; then set -f; else set +f; fi
+  # An empty or comma-only list is refused, not persisted: an empty events
+  # field breaks the demand side's jq query (a select over an empty
+  # disjunction) and would silence the wake side's demand (#325), and an
+  # empty item inside the list builds the same broken query.
+  [ -n "$canonic" ] || die "route: --events must name at least one of: $ROUTE_EVENTS"
+  case ",$canonic," in *",,"*)
+    die "route: --events: empty event in: $events"
+  ;; esac
   events="$canonic"
   # The option fields are the guard's own (the record mirrors the consumer's
   # guard step, #315): an event the guard cannot route, or a value outside
   # the guard's enums, would make the record describe an expression the
-  # consumer does not have.
-  for e in $(printf '%s' "$events" | tr ',' ' '); do
+  # consumer does not have. The split is glob-free for the same reason as
+  # the canonicalization above.
+  while read -r e; do
+    [ -n "$e" ] || continue
     case " $ROUTE_EVENTS " in *" $e "*) ;; *)
-      die "route: --events: $e is not one of $(echo $ROUTE_EVENTS) (pull_request_target is never routable: it runs with the repository's secrets on code from forks)"
+      die "route: --events: $e is not one of $ROUTE_EVENTS (pull_request_target is never routable: it runs with the repository's secrets on code from forks)"
     ;; esac
-  done
+  done <<<"$(printf '%s' "$events" | tr ',' '\n')"
   case " $ROUTE_DEPENDABOT " in *" $dependabot "*) ;;
     *) die "route: --dependabot must be hosted or local" ;;
   esac

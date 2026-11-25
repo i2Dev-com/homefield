@@ -11,6 +11,31 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ## Unreleased
 
+- Fixed: four bugs in the route command and the automatic fallback's host
+  and validation handling (#325). `route_stop_fallback` compared every
+  routing record's host against a hardcoded `github.com` while the stop
+  itself accepted a GHE.com host, so stopping a `*.ghe.com` VM skipped that
+  host's own records — the repositories it was taking down — and could flip
+  a same-scope `github.com` record instead, sending a github.com
+  repository's jobs to hosted while its own runner was still up; the stop
+  now flips only its own host's records, the same rule the start-side
+  restore already applied. The still-served check's group lookup matched a
+  repository name as a regex and case-sensitively (`grep -qx`), so a dot in
+  a record's repository name (`acme/ap.`) matched a different listed
+  repository (`acme/api`) and a casing difference hid a match; it is a
+  literal, case-insensitive whole-line match (`grep -Fixq`), as GitHub
+  treats names. `route --events` persisted an empty or comma-only list
+  (`--events ,,,`), which the demand side's jq filter then turned into a
+  `select(())` syntax error and a failed tick, and the canonicalizing split
+  expanded globs (`--events '*'` read the working directory's file names as
+  events); an empty list, an empty item inside one, and a glob are refused
+  now, and the split is glob-free. And the fallback's and the seeding's
+  group-admission check called `runner_serves_repo` bare and read `$?`
+  afterwards, so under `set -e` — the way `bin/homefield` runs — a group's
+  normal "does not admit this repository" answer (status 1) aborted the
+  whole stop-side flip or seed mid-loop; the status is captured
+  set-e-safely now.
+
 - Hardened: the webhook receiver and its CLI (#324). The receiver rejects a
   malformed delivery (a payload that is not a JSON object, a truncated body)
   with a generic 400 instead of dropping the connection or crashing on it;
