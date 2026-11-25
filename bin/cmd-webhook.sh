@@ -235,15 +235,22 @@ webhook_agent_install() {
   # reads back.
   env_xml="${env_xml}    <key>HOMEFIELD_WEBHOOK_PORT</key>"$'\n'"    <string>$(route_watcher_xml_escape "$port")</string>"$'\n'
   # Everything else comes from this shell, or — when the shell does not
-  # carry it — from the installed plist's own baked value: a refresh
-  # (upgrade --auto-route re-runs this install) must preserve the tunnel
-  # name, state dir and tuning the setup baked, or the receiver would
-  # silently start a different tunnel or read a different state dir than
-  # the one its DNS route and secret live under. A shell value wins: an
-  # explicit re-setup with a new setting is how it changes.
+  # carry it — from what the installation already records: the tunnel
+  # from the setup's config (written just before this install runs, and
+  # the name the DNS route points at) and the remaining settings from the
+  # installed plist's own baked values. A refresh — upgrade --auto-route
+  # re-runs this install — must preserve the tunnel name, state dir and
+  # tuning the setup baked, or the receiver would silently start a
+  # different tunnel or read a different state dir than the one its DNS
+  # route and secret live under. A shell value wins: an explicit re-setup
+  # with a new setting is how it changes, and a re-run without the
+  # override re-routes the default tunnel, which the agent then follows.
   local env_var env_val
   for env_var in HOMEFIELD_STATE_DIR LIMA_HOME HOMEFIELD_WEBHOOK_ACTIONS HOMEFIELD_WEBHOOK_DEBOUNCE HOMEFIELD_WEBHOOK_TUNNEL HOMEFIELD_WEBHOOK_READ_TIMEOUT HOMEFIELD_WEBHOOK_MAX_CONNECTIONS; do
     env_val="${!env_var:-}"
+    if [ -z "$env_val" ] && [ "$env_var" = HOMEFIELD_WEBHOOK_TUNNEL ]; then
+      env_val="$(webhook_config_get tunnel || true)"
+    fi
     [ -n "$env_val" ] || env_val="$(plist_env "$plist" "$env_var")"
     [ -n "$env_val" ] && env_xml="${env_xml}    <key>$env_var</key>"$'\n'"    <string>$(route_watcher_xml_escape "$env_val")</string>"$'\n'
   done

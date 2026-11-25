@@ -874,7 +874,7 @@ STATE4="$TMP/state4"
 # shellcheck disable=SC2034  # read by the cloudflared stub in the subshell
 CF_LIST_JSON='[{"id": "custom-uuid", "name": "custom-tunnel"}]'
 touch "$HOME/.cloudflared/custom-uuid.json"
-HOMEFIELD_WEBHOOK_TUNNEL=custom-tunnel
+HOMEFIELD_WEBHOOK_TUNNEL=custom-tunnel HOMEFIELD_WEBHOOK_READ_TIMEOUT=7
 out="$(run "$STATE4" setup --hostname webhook.example.com --port 18787)"
 rc=$?
 record "setup: a tunnel-name override exits 0" "0" "$rc"
@@ -884,18 +884,23 @@ record "setup: the override is recorded in the config" "custom-tunnel" \
   "$(grep -h '^tunnel=' "$STATE4/route-watcher/webhook/config" | cut -d= -f2)"
 record "setup: the override is baked into the plist" "yes" \
   "$(has "$(cat "$plist" 2>/dev/null)" '<string>custom-tunnel</string>')"
-# a later agent refresh from a shell without the override (upgrade
+# a later agent refresh from a shell without the overrides (upgrade
 # --auto-route re-runs webhook_agent_install the same way) must preserve
-# the installed tunnel: the DNS route points at the saved name, and a
-# receiver started on the default tunnel would never see a delivery
+# the installed tunnel (the config's saved one, the name the DNS route
+# points at) and the tuning (the plist's baked value): a receiver started
+# on the default tunnel would never see a delivery
+unset HOMEFIELD_WEBHOOK_TUNNEL HOMEFIELD_WEBHOOK_READ_TIMEOUT
 env -i HOME="$HOME" PATH="$PATH" HOMEFIELD_SOURCE_ONLY=1 \
   HOMEFIELD_STATE_DIR="$STATE4" \
   "$BASH" -c '. "$1"; shift; status=0; "$@" || status=$?; printf "%s" "$status"' \
   _ "$ROOT/bin/homefield" webhook_agent_install 18787 >/dev/null 2>&1
 refresh_rc=$?
-record "setup: an agent refresh without the override exits 0" "0" "$(nonzero $refresh_rc)"
+record "setup: an agent refresh without the overrides exits 0" "0" "$(nonzero $refresh_rc)"
 record "setup: the refresh keeps the installed tunnel baked" "yes" \
   "$(has "$(cat "$plist" 2>/dev/null)" '<string>custom-tunnel</string>')"
+record "setup: the refresh keeps the installed tuning baked" "yes" \
+  "$(has "$(sed -n '/<key>HOMEFIELD_WEBHOOK_READ_TIMEOUT<\/key>/{n;p;}' "$plist" 2>/dev/null)" '7')"
+
 # removal and status run without the override: the name setup saved in the
 # config is what they act on, not the default
 unset HOMEFIELD_WEBHOOK_TUNNEL
@@ -905,6 +910,29 @@ record "setup: status reports the installed tunnel without the env" "yes" \
 out="$(run "$STATE4" remove --purge)"
 record "setup: remove --purge deletes the overridden tunnel from the saved config" "1" \
   "$(grep -c -e 'tunnel delete custom-tunnel' "$calls_cloudflared" || true)"
+
+# a setup re-run without the override re-routes the default tunnel: the
+# agent must follow the config and the DNS route, not keep the old tunnel
+# baked (a receiver on the old tunnel would never see the deliveries the
+# re-routed record sends)
+STATE5="$TMP/state5"
+# shellcheck disable=SC2034  # read by the cloudflared stub in the subshell
+CF_LIST_JSON='[{"id": "custom-uuid", "name": "custom-tunnel"}, {"id": "tunnel-uuid", "name": "homefield-webhook"}]'
+HOMEFIELD_WEBHOOK_TUNNEL=custom-tunnel
+run "$STATE5" setup --hostname webhook.example.com --port 18787 >/dev/null
+unset HOMEFIELD_WEBHOOK_TUNNEL
+routes_before="$(grep -c -e 'tunnel route dns homefield-webhook webhook.example.com' "$calls_cloudflared" || true)"
+out="$(run "$STATE5" setup --hostname webhook.example.com --port 18787)"
+rc=$?
+record "setup: a re-run without the override exits 0" "0" "$rc"
+record "setup: the re-run routes the default tunnel" "1" \
+  "$(( $(grep -c -e 'tunnel route dns homefield-webhook webhook.example.com' "$calls_cloudflared" || true) - routes_before ))"
+record "setup: the re-run's config records the default tunnel" "homefield-webhook" \
+  "$(grep -h '^tunnel=' "$STATE5/route-watcher/webhook/config" | cut -d= -f2)"
+record "setup: the re-run's agent bakes the routed tunnel" "yes" \
+  "$(has "$(cat "$plist" 2>/dev/null)" '<string>homefield-webhook</string>')"
+record "setup: the re-run's agent no longer bakes the old tunnel" "0" \
+  "$(grep -c -e '<string>custom-tunnel</string>' "$plist" 2>/dev/null || true)"
 unset CF_LIST_JSON
 rm -f "$HOME/.cloudflared/custom-uuid.json"
 
