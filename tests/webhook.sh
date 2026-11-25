@@ -884,12 +884,24 @@ record "setup: the override is recorded in the config" "custom-tunnel" \
   "$(grep -h '^tunnel=' "$STATE4/route-watcher/webhook/config" | cut -d= -f2)"
 record "setup: the override is baked into the plist" "yes" \
   "$(has "$(cat "$plist" 2>/dev/null)" '<string>custom-tunnel</string>')"
+# a later agent refresh from a shell without the override (upgrade
+# --auto-route re-runs webhook_agent_install the same way) must preserve
+# the installed tunnel: the DNS route points at the saved name, and a
+# receiver started on the default tunnel would never see a delivery
+env -i HOME="$HOME" PATH="$PATH" HOMEFIELD_SOURCE_ONLY=1 \
+  HOMEFIELD_STATE_DIR="$STATE4" \
+  "$BASH" -c '. "$1"; shift; status=0; "$@" || status=$?; printf "%s" "$status"' \
+  _ "$ROOT/bin/homefield" webhook_agent_install 18787 >/dev/null 2>&1
+refresh_rc=$?
+record "setup: an agent refresh without the override exits 0" "0" "$(nonzero $refresh_rc)"
+record "setup: the refresh keeps the installed tunnel baked" "yes" \
+  "$(has "$(cat "$plist" 2>/dev/null)" '<string>custom-tunnel</string>')"
 # removal and status run without the override: the name setup saved in the
 # config is what they act on, not the default
+unset HOMEFIELD_WEBHOOK_TUNNEL
 out="$(run "$STATE4" status)"
 record "setup: status reports the installed tunnel without the env" "yes" \
   "$(has "$out" 'custom-uuid')"
-unset HOMEFIELD_WEBHOOK_TUNNEL
 out="$(run "$STATE4" remove --purge)"
 record "setup: remove --purge deletes the overridden tunnel from the saved config" "1" \
   "$(grep -c -e 'tunnel delete custom-tunnel' "$calls_cloudflared" || true)"

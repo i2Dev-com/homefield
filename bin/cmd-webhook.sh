@@ -57,6 +57,17 @@ webhook_config_get() {
   sed -n "s/^$1=//p" "$(webhook_config_file)" | head -1
 }
 
+# plist_env <plist> <key>: the value the plist bakes for an environment
+# key, or nothing when it does not. A refresh (upgrade --auto-route calls
+# webhook_agent_install again) must not drop a setting the setup baked and
+# this shell does not carry: a lost tunnel name or state dir would
+# silently point the receiver somewhere else.
+plist_env() {
+  [ -f "$1" ] || return 0
+  sed -n "/<key>$2<\/key>/{n;s/.*<string>\(.*\)<\/string>.*/\1/p;}" "$1" |
+    sed -e 's/&lt;/</g' -e 's/&gt;/>/g' -e 's/&amp;/\&/g'
+}
+
 # webhook_port_free <port>: 0 when nothing is listening on the loopback port.
 webhook_port_free() {
   python3 - "$1" <<'PY'
@@ -215,35 +226,27 @@ webhook_agent_install() {
     echo "homefield: could not create ${dir} or $(webhook_dir); the receiver was not installed" >&2
     return 1
   }
+  local env_xml=""
   # launchd does not inherit a shell's environment: every variable the
   # receiver and its tick child read must be baked into the plist's own
-  # environment block (the same rule the route watcher follows).
-  local env_xml=""
-  # The port is always baked: an explicit --port must reach the receiver,
-  # whose own default (8787) would otherwise disagree with the config file
-  # status reads back.
+  # environment block (the same rule the route watcher follows). The port
+  # is always baked: an explicit --port must reach the receiver, whose own
+  # default (8787) would otherwise disagree with the config file status
+  # reads back.
   env_xml="${env_xml}    <key>HOMEFIELD_WEBHOOK_PORT</key>"$'\n'"    <string>$(route_watcher_xml_escape "$port")</string>"$'\n'
-  if [ -n "${HOMEFIELD_STATE_DIR:-}" ]; then
-    env_xml="${env_xml}    <key>HOMEFIELD_STATE_DIR</key>"$'\n'"    <string>$(route_watcher_xml_escape "$HOMEFIELD_STATE_DIR")</string>"$'\n'
-  fi
-  if [ -n "${LIMA_HOME:-}" ]; then
-    env_xml="${env_xml}    <key>LIMA_HOME</key>"$'\n'"    <string>$(route_watcher_xml_escape "$LIMA_HOME")</string>"$'\n'
-  fi
-  if [ -n "${HOMEFIELD_WEBHOOK_ACTIONS:-}" ]; then
-    env_xml="${env_xml}    <key>HOMEFIELD_WEBHOOK_ACTIONS</key>"$'\n'"    <string>$(route_watcher_xml_escape "$HOMEFIELD_WEBHOOK_ACTIONS")</string>"$'\n'
-  fi
-  if [ -n "${HOMEFIELD_WEBHOOK_DEBOUNCE:-}" ]; then
-    env_xml="${env_xml}    <key>HOMEFIELD_WEBHOOK_DEBOUNCE</key>"$'\n'"    <string>$(route_watcher_xml_escape "$HOMEFIELD_WEBHOOK_DEBOUNCE")</string>"$'\n'
-  fi
-  if [ -n "${HOMEFIELD_WEBHOOK_TUNNEL:-}" ]; then
-    env_xml="${env_xml}    <key>HOMEFIELD_WEBHOOK_TUNNEL</key>"$'\n'"    <string>$(route_watcher_xml_escape "$HOMEFIELD_WEBHOOK_TUNNEL")</string>"$'\n'
-  fi
-  if [ -n "${HOMEFIELD_WEBHOOK_READ_TIMEOUT:-}" ]; then
-    env_xml="${env_xml}    <key>HOMEFIELD_WEBHOOK_READ_TIMEOUT</key>"$'\n'"    <string>$(route_watcher_xml_escape "$HOMEFIELD_WEBHOOK_READ_TIMEOUT")</string>"$'\n'
-  fi
-  if [ -n "${HOMEFIELD_WEBHOOK_MAX_CONNECTIONS:-}" ]; then
-    env_xml="${env_xml}    <key>HOMEFIELD_WEBHOOK_MAX_CONNECTIONS</key>"$'\n'"    <string>$(route_watcher_xml_escape "$HOMEFIELD_WEBHOOK_MAX_CONNECTIONS")</string>"$'\n'
-  fi
+  # Everything else comes from this shell, or — when the shell does not
+  # carry it — from the installed plist's own baked value: a refresh
+  # (upgrade --auto-route re-runs this install) must preserve the tunnel
+  # name, state dir and tuning the setup baked, or the receiver would
+  # silently start a different tunnel or read a different state dir than
+  # the one its DNS route and secret live under. A shell value wins: an
+  # explicit re-setup with a new setting is how it changes.
+  local env_var env_val
+  for env_var in HOMEFIELD_STATE_DIR LIMA_HOME HOMEFIELD_WEBHOOK_ACTIONS HOMEFIELD_WEBHOOK_DEBOUNCE HOMEFIELD_WEBHOOK_TUNNEL HOMEFIELD_WEBHOOK_READ_TIMEOUT HOMEFIELD_WEBHOOK_MAX_CONNECTIONS; do
+    env_val="${!env_var:-}"
+    [ -n "$env_val" ] || env_val="$(plist_env "$plist" "$env_var")"
+    [ -n "$env_val" ] && env_xml="${env_xml}    <key>$env_var</key>"$'\n'"    <string>$(route_watcher_xml_escape "$env_val")</string>"$'\n'
+  done
   # The scaler's tuning reaches this agent the same way it reaches the
   # route watcher's: a webhook-triggered tick is the same tick, and an
   # operator's fleet cap, idle cooldown or scale-to-zero switch must bind

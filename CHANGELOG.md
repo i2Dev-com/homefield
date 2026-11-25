@@ -31,7 +31,11 @@ fail, such as a new guard in the routing expression, bumps the minor version
   `python3` from their baked PATH at every start, so a brew upgrade that
   moves it no longer breaks them; and `upgrade --auto-route` now refreshes
   the installed webhook agent's plist along with the route watcher's, so
-  its baked `HOMEFIELD_SCALE_*` policy cannot go stale.
+  its baked `HOMEFIELD_SCALE_*` policy cannot go stale; the refresh
+  preserves the settings the setup baked (tunnel name, state dir,
+  receiver tuning) for anything the upgrading shell does not carry, so a
+  receiver installed with a `HOMEFIELD_WEBHOOK_TUNNEL` override does not
+  silently switch to the default tunnel.
 
 - Fixed: the per-job cleanup hook no longer wipes `/tmp` entries the guest
   keeps across jobs — the `systemd-private-*` directories of PrivateTmp
