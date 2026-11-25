@@ -94,6 +94,13 @@ case "$*" in
     ;;
   *"actions/runs?status=in_progress"*)
     printf '%b' "${GH_RUNS_IN_PROGRESS-}" ;;
+  # per-group overrides (the same idiom the fleet stub below uses), so a
+  # fixture can put one runner in a group that admits the repo and another
+  # in one that does not
+  *"runner-groups/7/runners"*) printf '%b' "${GH_GROUP_RUNNERS_7:-${GH_GROUP_RUNNERS-}}" ;;
+  *"runner-groups/8/runners"*) printf '%b' "${GH_GROUP_RUNNERS_8:-${GH_GROUP_RUNNERS-}}" ;;
+  *"runner-groups/7/repositories"*) printf '%b' "${GH_GROUP_REPOS_7:-${GH_GROUP_REPOS-}}" ;;
+  *"runner-groups/8/repositories"*) printf '%b' "${GH_GROUP_REPOS_8:-${GH_GROUP_REPOS-}}" ;;
   *"actions/runner-groups/"*"repositories"*)
     printf '%b' "${GH_GROUP_REPOS-}" ;;
   *"actions/runner-groups/"*"runners"*)
@@ -131,6 +138,10 @@ HARNESS="$work/harness.sh"
 cat >"$HARNESS" <<'EOF'
 #!/usr/bin/env bash
 set -uo pipefail
+# HARNESS_STRICT=1 runs the harness under set -e, the way bin/homefield runs
+# the code: a bare failing command that set -e would abort on must abort
+# here too (the #325 set -e tests read that).
+[ -z "${HARNESS_STRICT:-}" ] || set -e
 HOMEFIELD_STATE_DIR="$STATE_DIR"
 INSTANCE="homefield"
 . "$ROOT/bin/lib/emit.sh"
@@ -143,6 +154,7 @@ EOF
 harness() {
   : >"$calls"
   out="$(
+    cd "${HARNESS_CWD:-$PWD}" &&
     env -i HOME="$work/home" PATH="$stubs" CALLS="$calls" ROOT="$ROOT" \
       STATE_DIR="$state" GH_TIMEOUT=5 ROUTE_TRIES=1 ROUTE_INTERVAL=0 \
       ${harness_env[@]+"${harness_env[@]}"} "$BASH_BIN" "$HARNESS" "$@" 2>&1 </dev/null)"
@@ -213,6 +225,34 @@ harness cmd_route local --repo acme/api --mode simple --events push
 record "route local: --events has no effect in simple mode and is refused" "1" "$rc"
 record "...and a refusal records nothing" "0" \
   "$(wc -l <"$state/routing" 2>/dev/null | tr -d ' ' || echo 0)"
+
+# An empty or comma-only list must be refused, not persisted: an empty
+# events field in the record breaks the demand side's jq query (a select
+# over an empty disjunction) and would silence the wake side's demand (#325).
+# `--events ''` is refused by the option parser itself (a null value fails
+# ${2:?}); a comma-only list reaches the canonicalization and dies there.
+harness cmd_route local --repo acme/api --events ''
+record "route local: an empty --events is refused" "1/yes" \
+  "$rc/$(has "$out" 'needs a value')"
+harness cmd_route local --repo acme/api --events ,,,
+record "route local: a comma-only --events is refused" "1/yes" \
+  "$rc/$(has "$out" 'empty event in')"
+harness cmd_route local --repo acme/api --events 'push,,schedule'
+record "route local: an empty event inside the list is refused" "1/yes" \
+  "$rc/$(has "$out" 'empty event in')"
+harness cmd_route local --repo acme/api --events 'push,'
+record "route local: a trailing comma is refused" "1/yes" \
+  "$rc/$(has "$out" 'empty event in')"
+# --events is data, not a pattern: a `*` must die as an unknown event even
+# when the working directory holds a file whose name is a valid event (the
+# old glob-expanding split read that file as the event and recorded it).
+mkdir "$work/globdir"
+: >"$work/globdir/push"
+HARNESS_CWD="$work/globdir"
+harness cmd_route local --repo acme/api --events '*'
+record "route local: an --events glob is not expanded against the working directory" "1/yes/0" \
+  "$rc/$(has "$out" 'not one of')/$(grep -c 'variable set' "$calls" || true)"
+HARNESS_CWD=""
 
 # The route command's option values are the routing-guard's own: the lists
 # must not drift (the same pin tests/label-rule.sh applies to the labels).
@@ -358,6 +398,18 @@ harness route_stop_fallback https://github.com/acme my-mac-homefield
 record "the other runner's group does not admit the repo: the flip happens" "0/yes" \
   "$rc/$(grep -q 'variable set CI_RUNNER --repo github.com/acme/api --body hosted' "$calls" && echo yes || echo no)"
 
+# The same scenario under set -e, the way bin/homefield runs the code: the
+# "does not serve" answer is a normal 1, and a bare failing call of it must
+# not abort the fallback (#325).
+reset_records
+printf 'homefield-ci acme/api\n' >"$state/routing"
+harness_env=(GH_RUNNERS="$runner_rows
+43\tother-mac\tonline\tself-hosted,linux,arm64,homefield-ci\n" \
+  GH_GROUPS='homefield-ci\tselected\tpublic\t7\n' GH_GROUP_RUNNERS='43\n' GH_GROUP_REPOS='acme/web\n' HARNESS_STRICT=1)
+harness route_stop_fallback https://github.com/acme my-mac-homefield
+record "under set -e, a group that does not admit the repo does not abort the fallback" "0/yes" \
+  "$rc/$(grep -q 'variable set CI_RUNNER --repo github.com/acme/api --body hosted' "$calls" && echo yes || echo no)"
+
 reset_records
 printf 'homefield-ci acme/api\n' >"$state/routing"
 harness_env=(GH_RUNNERS="$runner_rows
@@ -396,6 +448,28 @@ harness_env=(GH_RUNNERS='42\tmy-mac-homefield\tonline\tself-hosted,linux,arm64,H
   GH_GROUPS='homefield-ci\tselected\tpublic\t7\n' GH_GROUP_RUNNERS='43\n' GH_GROUP_REPOS='acme/api\n')
 harness route_stop_fallback https://github.com/acme my-mac-homefield
 record "the still-served check is case-insensitive too: nothing flips" "0/0" \
+  "$rc/$(grep -c 'variable set' "$calls" || true)"
+
+# The record's repository name is data, not a pattern: a dot in it must not
+# match as a regex wildcard against the group's list (#325). The record's
+# repo is "acme/ap."; the group lists "acme/api" — a different repository
+# the other runner serves, which the old regex match read as the same one.
+reset_records
+printf 'homefield-ci acme/ap.\n' >"$state/routing"
+harness_env=(GH_RUNNERS="$runner_rows
+43\tother-mac\tonline\tself-hosted,linux,arm64,homefield-ci\n" \
+  GH_GROUPS='homefield-ci\tselected\tpublic\t7\n' GH_GROUP_RUNNERS='43\n' GH_GROUP_REPOS='acme/api\n')
+harness route_stop_fallback https://github.com/acme my-mac-homefield
+record "a dotted repo name in the record is matched literally, not as a regex: the flip happens" "0/yes" \
+  "$rc/$(grep -q 'variable set CI_RUNNER --repo github.com/acme/ap. --body hosted' "$calls" && echo yes || echo no)"
+
+reset_records
+printf 'homefield-ci acme/api\n' >"$state/routing"
+harness_env=(GH_RUNNERS="$runner_rows
+43\tother-mac\tonline\tself-hosted,linux,arm64,homefield-ci\n" \
+  GH_GROUPS='homefield-ci\tselected\tpublic\t7\n' GH_GROUP_RUNNERS='43\n' GH_GROUP_REPOS='ACME/API\n')
+harness route_stop_fallback https://github.com/acme my-mac-homefield
+record "the group's repo list matches the record case-insensitively: nothing flips" "0/0" \
   "$rc/$(grep -c 'variable set' "$calls" || true)"
 
 reset_records
@@ -476,11 +550,24 @@ record "the stop-side fallback on a GHES host: skipped, nothing flipped" "0/yes/
   "$rc/$(has "$out" 'which ghes.acme.example does not have')/$(grep -c 'variable set' "$calls" || true)"
 
 reset_records
-printf 'homefield-ci acme/api\n' >"$state/routing"
+printf 'homefield-ci acme/api acme.ghe.com\n' >"$state/routing"
 harness_env=(GH_RUNNERS="$runner_rows")
 harness route_stop_fallback https://acme.ghe.com/acme my-mac-homefield
-record "the stop-side fallback on a GHE.com host: the flip runs and waits in autoflip" "0/1/homefield-ci acme/api acme.ghe.com" \
+record "the stop-side fallback on a GHE.com host: the host's record flips and waits in autoflip" "0/1/homefield-ci acme/api acme.ghe.com" \
   "$rc/$(grep -c 'variable set CI_RUNNER --repo acme.ghe.com/acme/api --body hosted' "$calls" || true)/$(cat "$state/autoflip" 2>/dev/null)"
+
+# The stop only flips its own host's records: a legacy record (no host
+# field) and an explicit github.com record belong to the github.com runner,
+# whose own stop flips them — a GHE.com stop skipping them must not flip
+# the github.com records instead (#325).
+reset_records
+printf 'homefield-ci acme/api\nhomefield-ci acme/web github.com\n' >"$state/routing"
+harness_env=(GH_RUNNERS="$runner_rows")
+harness route_stop_fallback https://acme.ghe.com/acme my-mac-homefield
+record "a GHE.com stop skips github.com records (legacy and explicit)" "0/yes/0" \
+  "$rc/$(has "$out" 'routed on github.com, not acme.ghe.com')/$(grep -c 'variable set' "$calls" || true)"
+record "...they stay routed local" "homefield-ci acme/api
+homefield-ci acme/web github.com" "$(cat "$state/routing" 2>/dev/null)"
 
 echo
 echo "the start-side restore"
@@ -649,6 +736,21 @@ harness_env=(GH_GROUP_REPOS='acme/web\n' GH_RUNNERS='42\tmy-mac-homefield\tonlin
 harness seed_routing_records https://github.com/acme my-mac-homefield homefield-ci 7
 record "another runner with a different label can serve the repo: not recorded, exit 1" "1/yes/0" \
   "$rc/$(has "$out" 'not provably the only label')/$([ -f "$state/routing" ] && wc -l < "$state/routing" | tr -d ' ' || echo 0)"
+
+# Under set -e, the group check's "does not admit" answer (a normal 1) must
+# not abort the seed (#325): the other runner sits in a group of its own
+# that excludes the candidate, so there is no conflict and the repo is
+# recorded.
+reset_records
+printf 'acme/web local\n' >"$work/byrepo"
+harness_env=(GH_RUNNERS='42\tmy-mac-homefield\tonline\tself-hosted,linux,arm64,homefield-ci\n43\tother-mac\tonline\tself-hosted,linux,arm64,label-web\n' \
+  GH_GROUPS='homefield-ci\tselected\tpublic\t7\nlabel-web\tselected\tpublic\t8\n' \
+  GH_GROUP_RUNNERS_7='42\n' GH_GROUP_RUNNERS_8='43\n' \
+  GH_GROUP_REPOS_7='acme/web\n' GH_GROUP_REPOS_8='acme/other\n' \
+  GH_CI_RUNNER_BY_REPO="$work/byrepo" HARNESS_STRICT=1)
+harness seed_routing_records https://github.com/acme my-mac-homefield homefield-ci 7
+record "under set -e, a group that does not admit the repo does not abort the seed" "0/homefield-ci acme/web github.com" \
+  "$rc/$(cat "$state/routing" 2>/dev/null)"
 
 reset_records
 printf 'acme/web local\n' >"$work/byrepo"
