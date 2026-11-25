@@ -1257,6 +1257,36 @@ printf 'auto_route=1\n' >"$state/other.state"
 iharness cmd_upgrade --auto-route
 record "upgrade --auto-route: the agent is back" "yes" \
   "$([ -f "$work/home/Library/LaunchAgents/com.homefield.route-watcher.plist" ] && echo yes || echo no)"
+# The receiver's agent is refreshed with the route watcher's. A receiver
+# set up with a custom port keeps it when the upgrading shell carries
+# neither the port nor the receiver's state dir: the config read comes
+# up empty (it reads the shell's state resolution, not the one the
+# refresh preserves), so the port falls back to the one the installed
+# plist bakes — the port the receiver has actually been serving. The
+# 8787 default would leave it unable to start (or status probing the
+# wrong port) whenever 8787 is taken.
+printf 'auto_route=1\n' >"$state/homefield.state"
+wh_plist="$work/home/Library/LaunchAgents/com.homefield.webhook.plist"
+cat >"$wh_plist" <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.homefield.webhook</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOMEFIELD_WEBHOOK_PORT</key>
+    <string>18787</string>
+  </dict>
+</dict>
+</plist>
+EOF
+iharness_env=(STUB_REG=0)
+iharness cmd_upgrade --auto-route
+record "upgrade --auto-route refreshes the receiver's agent too" "0" "$rc"
+record "...it keeps the installed port, not the default" "yes" \
+  "$(grep -A1 '<key>HOMEFIELD_WEBHOOK_PORT</key>' "$wh_plist" | grep -q '<string>18787</string>' && echo yes || echo no)"
+rm -f "$wh_plist"
 iharness cmd_upgrade --no-auto-route
 record "upgrade --no-auto-route, another VM still wants the watcher: the agent stays" "0/0/yes" \
   "$rc/$(state_value auto_route)/$([ -f "$work/home/Library/LaunchAgents/com.homefield.route-watcher.plist" ] && echo yes || echo no)"

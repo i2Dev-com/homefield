@@ -158,10 +158,11 @@ route_watcher_xml_escape() {
 # route_watcher_install: write the LaunchAgent and load it. Idempotent: an
 # existing agent is unloaded and rewritten (an upgrade may have moved the
 # tool or changed the environment it needs). The agent runs the Python helper
-# through /bin/sh so it survives python3 moving (a brew upgrade), with the
-# PATH it needs for gh and limactl — launchd's own PATH has neither.
+# through /bin/sh, re-resolving python3 from the baked PATH at every start
+# so it survives python3 moving (a brew upgrade), with the PATH it needs
+# for gh and limactl — launchd's own PATH has neither.
 route_watcher_install() {
-  local plist dir state_dir log py
+  local plist dir state_dir log
   command -v python3 >/dev/null 2>&1 || {
     echo "homefield: the route watcher needs python3 (its power-event helper); install it (xcode-select --install, or brew install python3) and run bin/homefield upgrade --auto-route" >&2
     return 1
@@ -170,7 +171,6 @@ route_watcher_install() {
     echo "homefield: launchctl is required to install the route watcher" >&2
     return 1
   }
-  py="$(command -v python3)"
   plist="$(route_watcher_plist_path)"
   dir="$(dirname "$plist")"
   state_dir="$(dirname "$(route_watcher_state_file)")"
@@ -238,7 +238,7 @@ route_watcher_install() {
   <array>
     <string>/bin/sh</string>
     <string>-c</string>
-    <string>exec "$(route_watcher_xml_escape "$py")" "$(route_watcher_xml_escape "$ROOT/bin/route-watcher.py")"</string>
+    <string>exec "\$(command -v python3)" "$(route_watcher_xml_escape "$ROOT/bin/route-watcher.py")"</string>
   </array>
   <key>RunAtLoad</key>
   <true/>

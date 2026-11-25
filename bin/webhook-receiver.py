@@ -20,8 +20,9 @@ tunnel):
   body is parsed. A replayed delivery only re-rings the doorbell, and one
   tick evaluates the whole demand — there is nothing to replay into.
 - The request body is capped (BODY_LIMIT) and rejected before parsing; the
-  action comes from an allowlist; no payload field reaches a command line,
-  a path, or a log line. The spawned tick command is fixed.
+  action comes from an allowlist; no payload field reaches a command line
+  or a path, and no unvalidated payload field reaches a log line (only an
+  allowlisted action name does). The spawned tick command is fixed.
 - The server binds to 127.0.0.1 only: the tunnel is the only path in, and
   the Mac's own users already own the secret file.
 
@@ -48,6 +49,7 @@ the tunnel child's output interleaves with this helper's log (launchd
 redirects both to `<state>/route-watcher/webhook/log`).
 """
 
+import collections
 import hashlib
 import hmac
 import http.server
@@ -109,8 +111,8 @@ READ_TIMEOUT = _positive_float("HOMEFIELD_WEBHOOK_READ_TIMEOUT", 10.0)
 # socket, and the cap bounds what a peer that only opens connections can
 # make the server hold. Excess connections are closed before a thread is
 # spent on them — GitHub retries a rejected delivery; a thread pile-up
-# does not recover.
-MAX_CONNECTIONS = _int_env("HOMEFIELD_WEBHOOK_MAX_CONNECTIONS", 32)
+# does not recover. (The count itself is resolved after log() below: an
+# env value that is not a count above zero must be reported, not crash.)
 ACTIONS = {
     a.strip()
     for a in (os.environ.get("HOMEFIELD_WEBHOOK_ACTIONS") or "queued,completed").split(",")
@@ -120,6 +122,26 @@ ACTIONS = {
 
 def log(message):
     print(time.strftime("%Y-%m-%dT%H:%M:%S%z") + " webhook: " + message, file=sys.stderr, flush=True)
+
+
+# Concurrent connections the server serves at all (see the cap comment
+# above the ACTIONS set): a value that is not a count above zero is not a
+# usable cap — a semaphore of 0 refuses every connection and a negative
+# one raises ValueError at import, crashing the helper into a launchd
+# restart loop — so it falls back to the default, with the reason in the
+# log.
+def _max_connections():
+    value = _int_env("HOMEFIELD_WEBHOOK_MAX_CONNECTIONS", 32)
+    if value < 1:
+        log(
+            "HOMEFIELD_WEBHOOK_MAX_CONNECTIONS=%s is not a connection count above zero; using 32"
+            % (os.environ.get("HOMEFIELD_WEBHOOK_MAX_CONNECTIONS") or value)
+        )
+        return 32
+    return value
+
+
+MAX_CONNECTIONS = _max_connections()
 
 
 def read_secret():
@@ -142,11 +164,15 @@ spawn_lock = threading.Lock()
 tick_children = []
 # Pids of our own children that have been reaped: the pid file may still
 # name them, and the pid-file fallback below must not read them as alive.
-reaped_pids = set()
+# Bounded: a daemon that runs for months must not grow it without limit,
+# and the oldest reaped pids are exactly the ones a recycled pid file can
+# no longer plausibly name — the command-line check below still rejects a
+# recycled pid whose process is not a tick.
+reaped_pids = collections.deque(maxlen=256)
 
 
 def tick_child_alive():
-    """True when a spawned tick is still running.
+    """True when a spawned tick is still running. Caller holds spawn_lock.
 
     Our own children are tracked as Popen objects and polled here, which
     reaps them; the pid file is only a fallback for a tick this receiver
@@ -159,7 +185,7 @@ def tick_child_alive():
         if proc.poll() is None:
             still.append(proc)
         else:
-            reaped_pids.add(proc.pid)
+            reaped_pids.append(proc.pid)
     tick_children[:] = still
     if tick_children:
         return True
@@ -234,23 +260,28 @@ def supervise_tick(proc):
     This is also what reaps the child: without a wait, an exited tick
     stays a zombie, and a zombie still answers kill -0. A reaped tick is
     untracked here, so the shutdown path never killpg's a pid the OS may
-    have recycled.
+    have recycled. The bookkeeping takes spawn_lock: tick_children and
+    reaped_pids are shared with the delivery threads (spawn_tick,
+    tick_child_alive) and with the shutdown handler.
     """
     try:
         proc.wait(timeout=TICK_BUDGET)
     except subprocess.TimeoutExpired:
         log("tick pid=%d exceeded the %gs budget; killing its process tree" % (proc.pid, TICK_BUDGET))
         kill_tree(proc)
-    reaped_pids.add(proc.pid)
-    try:
-        tick_children.remove(proc)
-    except ValueError:
-        pass
+    with spawn_lock:
+        reaped_pids.append(proc.pid)
+        try:
+            tick_children.remove(proc)
+        except ValueError:
+            pass
 
 
 def spawn_tick():
     """Spawn one scaler tick detached; the tick lock serializes it with the
-    route-watcher's own ticks, and its output lands in this helper's log."""
+    route-watcher's own ticks, and its output lands in this helper's log.
+    Caller holds spawn_lock: the tick_children append below is shared with
+    the supervisors and the shutdown handler."""
     log_fd = os.open(
         os.path.join(WEBHOOK_DIR, "tick.log"), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600
     )
@@ -294,18 +325,32 @@ class Receiver(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         if self.path != WEBHOOK_PATH:
+            # The body is unread, and with keep-alive its bytes would sit
+            # in the stream to be parsed as the next request: every
+            # response sent before the body is read closes the connection
+            # with itself.
+            self.close_connection = True
             self._respond(404)
             return
         length = self.headers.get("Content-Length")
         try:
             length = int(length)
         except (TypeError, ValueError):
+            self.close_connection = True
             self._respond(411)
             return
         if length < 0 or length > BODY_LIMIT:
+            self.close_connection = True
             self._respond(413)
             return
         body = self.rfile.read(length) if length else b""
+        if len(body) != length:
+            # Truncated: the peer hung up (or the read deadline fired)
+            # mid-body. A signature over a truncated body cannot verify,
+            # and the stream is not in sync for a next request.
+            self._respond(400)
+            self.close_connection = True
+            return
 
         secret = read_secret()
         if secret is None:
@@ -327,23 +372,33 @@ class Receiver(http.server.BaseHTTPRequestHandler):
             return
         try:
             payload = json.loads(body or b"{}")
-            action = payload.get("action")
         except ValueError:
             self._respond(400)
             return
-        repo = (payload.get("repository") or {}).get("full_name") or "?"
-        if action not in ACTIONS:
-            log("ignored: workflow_job action=%r not in %s (repo=%s)" % (action, ",".join(sorted(ACTIONS)), repo))
+        # GitHub's payloads are objects, but the endpoint is reachable
+        # from the internet: a list, a number or null is a malformed
+        # delivery to reject with a generic 400, not an AttributeError
+        # that drops the connection.
+        if not isinstance(payload, dict):
+            self._respond(400)
+            return
+        action = payload.get("action")
+        if not isinstance(action, str) or action not in ACTIONS:
+            # Authenticated delivery for an action we did not ask for (or
+            # a malformed one): accepted, nothing to ring. The action is
+            # not logged — it is unvalidated payload data, and the
+            # docstring promises that no payload field reaches a log line.
+            log("ignored: workflow_job action outside the allowlist (%s)" % ",".join(sorted(ACTIONS)))
             self._respond(204)
             return
 
         if not spawn_lock.acquire(blocking=False):
-            log("doorbell: another delivery is spawning a tick (action=%s repo=%s)" % (action, repo))
+            log("doorbell: another delivery is spawning a tick (action=%s)" % action)
             self._respond(202)
             return
         try:
             if tick_child_alive():
-                log("doorbell: tick already running (action=%s repo=%s)" % (action, repo))
+                log("doorbell: tick already running (action=%s)" % action)
                 self._respond(202)
                 return
             # A tick recorded as just spawned may not have its pid on disk yet
@@ -355,7 +410,7 @@ class Receiver(http.server.BaseHTTPRequestHandler):
             except OSError:
                 age = None
             if age is not None and age < DEBOUNCE:
-                log("doorbell: debounced (action=%s repo=%s)" % (action, repo))
+                log("doorbell: debounced (action=%s)" % action)
                 self._respond(202)
                 return
             spawn_tick()
@@ -383,7 +438,16 @@ class ReceiverServer(http.server.ThreadingHTTPServer):
             except OSError:
                 pass
             return
-        super().process_request(request, client_address)
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            # The thread that would run process_request_thread — and
+            # release the permit in its finally — was never started (a
+            # thread-creation failure): release here so the cap does not
+            # leak one permit at a time. The exception still propagates to
+            # handle_error, which logs the drop and closes the socket.
+            handler_slots.release()
+            raise
 
     def process_request_thread(self, request, client_address):
         try:
@@ -416,6 +480,13 @@ def tunnel_command():
 
 tunnel_proc = None
 
+# Set by the SIGTERM handler: the tunnel supervisor's backoff waits wake
+# the moment it is set, and nothing is spawned after it — a SIGTERM that
+# lands at the end of a backoff sleep (or between the loop's check and
+# the spawn) cannot wake up into a new cloudflared child the exiting
+# helper would leave orphaned.
+shutdown = threading.Event()
+
 
 def supervise_tunnel():
     """Keep one cloudflared child running, retrying with a capped backoff.
@@ -423,17 +494,28 @@ def supervise_tunnel():
     The receiver itself stays up (launchd's KeepAlive only restarts it if
     this helper exits), so a crash-looping tunnel degrades to retries every
     60 s with the reason in the log, not to a restart loop of the whole
-    agent.
+    agent. The waits are interruptible by the shutdown event (see above).
     """
     global tunnel_proc
     backoff = 5.0
-    while True:
+    while not shutdown.is_set():
         cmd = tunnel_command()
         if cmd is None:
             log("cloudflared not found on PATH; retrying in 60s (reinstall the agent if it moved)")
-            time.sleep(60.0)
+            if shutdown.wait(60.0):
+                break
             continue
+        if shutdown.is_set():
+            break
         tunnel_proc = subprocess.Popen(cmd)
+        if shutdown.is_set():
+            # SIGTERM landed between the loop's check and the spawn: kill
+            # the child just started instead of orphaning it.
+            try:
+                tunnel_proc.terminate()
+            except OSError:
+                pass
+            break
         log("tunnel child pid=%d (%s)" % (tunnel_proc.pid, " ".join(cmd)))
         started = time.time()
         tunnel_proc.wait()
@@ -441,11 +523,13 @@ def supervise_tunnel():
         if time.time() - started > 300.0:
             backoff = 5.0  # a healthy stretch resets the backoff
         log("tunnel child exited rc=%s; retrying in %.0fs" % (code, backoff))
-        time.sleep(backoff)
+        if shutdown.wait(backoff):
+            break
         backoff = min(backoff + 5.0, 60.0)
 
 
 def terminate(signum, frame):
+    shutdown.set()
     if tunnel_proc is not None:
         try:
             tunnel_proc.terminate()
@@ -458,8 +542,9 @@ def terminate(signum, frame):
     # scaler's lock forever, suppressing webhook and periodic scaling alike.
     # Kill and reap the ticks this instance spawned before exiting; launchd
     # restarts the receiver, and the next delivery re-rings the doorbell.
-    for proc in list(tick_children):
-        kill_tree(proc)
+    with spawn_lock:
+        for proc in list(tick_children):
+            kill_tree(proc)
     sys.exit(0)
 
 

@@ -140,6 +140,25 @@ print(r.status)
 PY
 }
 
+# post_raw <body> [event]: one signed delivery with an arbitrary body;
+# prints the status. The payload-shape tests below use it: GitHub's
+# payloads are objects, but the endpoint is reachable from the internet.
+post_raw() {
+  python3 - "$PORT" "$SECRET_FILE" "$1" "${2:-workflow_job}" <<'PY'
+import hashlib, hmac, http.client, sys
+port, secret_file, body, event = sys.argv[1:5]
+secret = open(secret_file, "rb").read().strip()
+sig = "sha256=" + hmac.new(secret, body.encode(), hashlib.sha256).hexdigest()
+c = http.client.HTTPConnection("127.0.0.1", int(port))
+c.request("POST", "/webhook", body=body.encode(),
+          headers={"Content-Type": "application/json", "X-GitHub-Event": event,
+                   "X-Hub-Signature-256": sig})
+r = c.getresponse()
+r.read()
+print(r.status)
+PY
+}
+
 # get <path>: a plain GET; prints the status.
 get() {
   python3 - "$PORT" "$1" <<'PY'
@@ -275,6 +294,26 @@ wait "$stale_pid" 2>/dev/null
 # the remaining spawn counts are relative to it again
 ticks_base="$(ticks)"
 
+# a payload that is not a JSON object must be rejected with a generic 400,
+# not crash the handler into a dropped connection
+out="$(post_raw '[]')"
+record "a JSON array payload is rejected, not dropped" "400" "$out"
+out="$(post_raw 'null')"
+record "a JSON null payload is rejected, not dropped" "400" "$out"
+out="$(post_raw '{"action": ["queued"]}')"
+record "an unhashable action is ignored, not crashed" "204" "$out"
+out="$(post_raw '{"repository": "o/r"}')"
+record "a missing action rings nothing" "204" "$out"
+
+# a non-dict repository must not raise AttributeError on the way to the
+# doorbell (the receiver logs no payload field, so there is nothing to trip)
+rm -f "$RECEIVER_DIR/tick.pid"
+out="$(post_raw '{"action": "queued", "repository": "o/r"}')"
+record "a non-dict repository still rings the doorbell" "204" "$out"
+want=$((ticks_base + 1))
+record "a non-dict repository: one tick" "$want" "$(await_ticks "$want")"
+ticks_base="$(ticks)"
+
 out="$(raw $PORT $'POST /webhook HTTP/1.1\r\nHost: x\r\nContent-Length: 1048577\r\n\r\n')" # 1 MiB + 1 of a
 record "oversized Content-Length: 413 before anything else" "413" "$out"
 
@@ -285,6 +324,77 @@ mv "$TMP/secret.away" "$SECRET_FILE"
 
 out="$(raw $PORT $'POST /webhook HTTP/1.1\r\nHost: x\r\n\r\n')"
 record "missing Content-Length: 411" "411" "$out"
+
+# keep-alive desync: a response sent before the body is read (404, 411,
+# 413) must close the connection, or the unread body bytes sit in the
+# stream and are parsed as the next request on it
+python3 - "$PORT" >"$TMP/desync404.txt" 2>&1 <<'PY'
+import socket, sys
+s = socket.create_connection(("127.0.0.1", int(sys.argv[1])), timeout=5)
+s.sendall(b"POST /nope HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\n\r\nhello"
+          b"GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n")
+print(s.recv(4096).decode(errors="replace").split()[1])
+s.settimeout(3)
+try:
+    more = s.recv(4096)
+    print("closed" if more == b"" else "kept-alive")
+except socket.timeout:
+    print("kept-alive")
+except OSError:
+    # the server tore the connection down with our pipelined request
+    # unread: a reset is the close, same as a clean one
+    print("closed")
+PY
+record "framing: a 404 POST with an unread body is refused" "404" "$(head -1 "$TMP/desync404.txt")"
+record "framing: the unread body is not parsed as the next request" "closed" "$(sed -n 2p "$TMP/desync404.txt")"
+
+python3 - "$PORT" >"$TMP/desync413.txt" 2>&1 <<'PY'
+import socket, sys
+s = socket.create_connection(("127.0.0.1", int(sys.argv[1])), timeout=5)
+s.sendall(b"POST /webhook HTTP/1.1\r\nHost: x\r\nContent-Length: 1048577\r\n\r\n"
+          b"GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n")
+print(s.recv(4096).decode(errors="replace").split()[1])
+s.settimeout(3)
+try:
+    more = s.recv(4096)
+    print("closed" if more == b"" else "kept-alive")
+except socket.timeout:
+    print("kept-alive")
+except OSError:
+    print("closed")
+PY
+record "framing: a 413 POST with an unread body is refused" "413" "$(head -1 "$TMP/desync413.txt")"
+record "framing: the oversized body is not parsed as the next request" "closed" "$(sed -n 2p "$TMP/desync413.txt")"
+
+# a truncated body (the peer hangs up mid-body) is a 400, not a signature
+# failure over whatever arrived: the read must reject short reads
+python3 - "$PORT" >"$TMP/trunc.txt" 2>&1 <<'PY'
+import socket, sys
+s = socket.create_connection(("127.0.0.1", int(sys.argv[1])), timeout=5)
+s.sendall(b"POST /webhook HTTP/1.1\r\nHost: x\r\nContent-Length: 100\r\n\r\nshort")
+s.shutdown(socket.SHUT_WR)
+data = s.recv(4096)
+print(data.decode(errors="replace").split()[1] if data else "none")
+PY
+record "a truncated body is rejected, not signature-checked" "400" "$(cat "$TMP/trunc.txt")"
+
+# an env count that is not above zero must not crash the helper at import
+# (a negative BoundedSemaphore raises ValueError; a zero one would refuse
+# every connection) and the reaped-pid record must stay bounded over a
+# daemon's lifetime
+out="$(HOMEFIELD_WEBHOOK_MAX_CONNECTIONS=0 python3 - "$ROOT/bin/webhook-receiver.py" <<'PY' 2>/dev/null
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("wr", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+assert m.MAX_CONNECTIONS == 32, m.MAX_CONNECTIONS
+for i in range(300):
+    m.reaped_pids.append(i)
+assert len(m.reaped_pids) == 256, len(m.reaped_pids)
+print("ok")
+PY
+)"
+record "a max-connections of 0 starts with the default, reaped pids bounded" "ok" "$out"
 
 # an unauthenticated peer can declare a Content-Length and never send the
 # body: the read deadline closes the connection instead of holding a thread
@@ -366,6 +476,42 @@ kill "$watchdog_pid" 2>/dev/null
 record "shutdown: the receiver exits cleanly" "0" "$rc"
 rm -f "$TMP/stub-sleep"
 
+# the tunnel supervisor must not spawn a cloudflared after SIGTERM: the
+# backoff sleeps are interruptible by the shutdown event, and a spawn
+# that raced the shutdown is killed instead of orphaned. A stub
+# cloudflared that exits after 0.3 s puts the supervisor into its 5 s
+# backoff before the SIGTERM lands.
+ORPHAN_PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
+mkdir -p "$TMP/cfbin"
+cat > "$TMP/cfbin/cloudflared" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$$" >> "${CF_ORPHAN_PIDS:?}"
+sleep 0.3
+EOF
+chmod +x "$TMP/cfbin/cloudflared"
+CF_ORPHAN_PIDS="$TMP/cf-orphan-pids"
+: > "$CF_ORPHAN_PIDS"
+HOMEFIELD_STATE_DIR="$TMP/orphan-state" HOMEFIELD_WEBHOOK_PORT="$ORPHAN_PORT" \
+  PATH="$TMP/cfbin:$PATH" CF_ORPHAN_PIDS="$CF_ORPHAN_PIDS" \
+  python3 "$ROOT/bin/webhook-receiver.py" 2>"$TMP/orphan.err" &
+ORPHAN_PID=$!
+orphan_started=no
+for _ in $(seq 1 50); do
+  [ -s "$CF_ORPHAN_PIDS" ] && { orphan_started=yes; break; }
+  sleep 0.1
+done
+record "shutdown: the tunnel child is spawned" "yes" "$orphan_started"
+sleep 0.5  # the child (0.3 s) has exited; the supervisor is in its backoff
+kill -TERM "$ORPHAN_PID" 2>/dev/null || true
+( sleep 15; kill -9 "$ORPHAN_PID" 2>/dev/null ) & watchdog_pid=$!
+wait "$ORPHAN_PID"; rc=$?
+kill "$watchdog_pid" 2>/dev/null
+record "shutdown: the receiver exits cleanly with the tunnel dead" "0" "$rc"
+spawns_before="$(wc -l < "$CF_ORPHAN_PIDS" | tr -d ' ')"
+sleep 1
+record "shutdown: no cloudflared is spawned after SIGTERM" "$spawns_before" \
+  "$(wc -l < "$CF_ORPHAN_PIDS" | tr -d ' ')"
+
 # the sleep side kills a webhook tick the same way it kills its own scale
 # tick: the tick lock serializes ticks with each other, but it does not
 # protect the sleep-side routing flip from a tick that survives the sleep
@@ -438,6 +584,10 @@ EOF
 cat > "$TMP/stubs-port-ours" <<'EOF'
 webhook_port_free() { return 1; }
 webhook_receiver_answers() { return 0; }
+EOF
+cat > "$TMP/stubs-port-held" <<'EOF'
+webhook_port_free() { return 1; }
+webhook_receiver_answers() { return 1; }
 EOF
 HOOK_STUBS="$TMP/stubs-port-free"
 
@@ -553,7 +703,11 @@ case "$*" in
         fi
         [ -n "$body" ] && cp "$body" "${GH_BODY_OUT:?}"
         # a PATCH of an existing hook carries the hook id in its path
-        hook="$(printf '%s' "$*" | sed -n 's|.*repos/[^/]*/hooks/\([0-9]*\).*|\1|p')"
+        hook="$(printf '%s' "$*" | sed -n 's|.*repos/.*/hooks/\([0-9]*\).*|\1|p')"
+        if [ -n "$hook" ] && [ "${GH_PATCH_FAIL:-}" = 1 ]; then
+          printf 'gh: boom\n' >&2
+          exit 1
+        fi
         [ -n "$hook" ] && printf '%s' "$hook" || printf '%s' "4242" ;;
       *) printf '%s' "${GH_HOOKS_JSON:-[]}" | jq -r "${expr:-.}" 2>/dev/null ;;
     esac ;;
@@ -581,6 +735,7 @@ run() {
     CF_CREATE_FAIL="${CF_CREATE_FAIL:-}" CF_ROUTE_FAIL="${CF_ROUTE_FAIL:-}" \
     CF_ROUTE_ERR="${CF_ROUTE_ERR:-}" CF_DELETE_FAIL="${CF_DELETE_FAIL:-}" \
     GH_HOOKS_JSON="${GH_HOOKS_JSON:-}" GH_BODY_OUT="${GH_BODY_OUT:-}" \
+    GH_PATCH_FAIL="${GH_PATCH_FAIL:-}" \
     HOMEFIELD_SCALE_INTERVAL="${HOMEFIELD_SCALE_INTERVAL:-}" HOMEFIELD_SCALE_WAIT="${HOMEFIELD_SCALE_WAIT:-}" \
     HOMEFIELD_SCALE_IDLE="${HOMEFIELD_SCALE_IDLE:-}" HOMEFIELD_SCALE_MAX="${HOMEFIELD_SCALE_MAX:-}" \
     HOMEFIELD_SCALE_ZERO="${HOMEFIELD_SCALE_ZERO:-}" HOMEFIELD_SCALE_TICK_BUDGET="${HOMEFIELD_SCALE_TICK_BUDGET:-}" \
@@ -601,6 +756,13 @@ out="$(run "$STATE2" setup --hostname 'bad hostname' --port 18787)"
 record "setup: a hostname with spaces is refused" "nonzero" "$(nonzero $?)"
 out="$(run "$STATE2" setup --hostname 'localhost' --port 18787)"
 record "setup: a dotless hostname is refused" "nonzero" "$(nonzero $?)"
+out="$(run "$STATE2" setup --hostname webhook.example.com --port 0)"
+record "setup: --port 0 is refused" "nonzero" "$(nonzero $?)"
+out="$(run "$STATE2" setup --hostname webhook.example.com --port 99999)"
+rc=$?
+record "setup: --port 99999 is refused" "nonzero" "$(nonzero $rc)"
+case "$out" in *"between 1 and 65535"*) r=yes ;; *) r=no ;; esac
+record "setup: the port refusal names the valid range" "yes" "$r"
 
 # no cloudflared login yet (the fresh HOME has none)
 out="$(run "$STATE2" setup --hostname webhook.example.com --port 18787)"
@@ -712,7 +874,7 @@ STATE4="$TMP/state4"
 # shellcheck disable=SC2034  # read by the cloudflared stub in the subshell
 CF_LIST_JSON='[{"id": "custom-uuid", "name": "custom-tunnel"}]'
 touch "$HOME/.cloudflared/custom-uuid.json"
-HOMEFIELD_WEBHOOK_TUNNEL=custom-tunnel
+HOMEFIELD_WEBHOOK_TUNNEL=custom-tunnel HOMEFIELD_WEBHOOK_READ_TIMEOUT=7
 out="$(run "$STATE4" setup --hostname webhook.example.com --port 18787)"
 rc=$?
 record "setup: a tunnel-name override exits 0" "0" "$rc"
@@ -722,19 +884,78 @@ record "setup: the override is recorded in the config" "custom-tunnel" \
   "$(grep -h '^tunnel=' "$STATE4/route-watcher/webhook/config" | cut -d= -f2)"
 record "setup: the override is baked into the plist" "yes" \
   "$(has "$(cat "$plist" 2>/dev/null)" '<string>custom-tunnel</string>')"
+# a later agent refresh from a shell without the overrides (upgrade
+# --auto-route re-runs webhook_agent_install the same way) must preserve
+# the installed tunnel (the config's saved one, the name the DNS route
+# points at) and the tuning (the plist's baked value): a receiver started
+# on the default tunnel would never see a delivery
+unset HOMEFIELD_WEBHOOK_TUNNEL HOMEFIELD_WEBHOOK_READ_TIMEOUT
+env -i HOME="$HOME" PATH="$PATH" HOMEFIELD_SOURCE_ONLY=1 \
+  HOMEFIELD_STATE_DIR="$STATE4" \
+  "$BASH" -c '. "$1"; shift; status=0; "$@" || status=$?; printf "%s" "$status"' \
+  _ "$ROOT/bin/homefield" webhook_agent_install 18787 refresh >/dev/null 2>&1
+refresh_rc=$?
+record "setup: an agent refresh without the overrides exits 0" "0" "$(nonzero $refresh_rc)"
+record "setup: the refresh keeps the installed tunnel baked" "yes" \
+  "$(has "$(cat "$plist" 2>/dev/null)" '<string>custom-tunnel</string>')"
+record "setup: the refresh keeps the installed tuning baked" "yes" \
+  "$(has "$(sed -n '/<key>HOMEFIELD_WEBHOOK_READ_TIMEOUT<\/key>/{n;p;}' "$plist" 2>/dev/null)" '7')"
+
 # removal and status run without the override: the name setup saved in the
 # config is what they act on, not the default
+unset HOMEFIELD_WEBHOOK_TUNNEL
 out="$(run "$STATE4" status)"
 record "setup: status reports the installed tunnel without the env" "yes" \
   "$(has "$out" 'custom-uuid')"
-unset HOMEFIELD_WEBHOOK_TUNNEL
 out="$(run "$STATE4" remove --purge)"
 record "setup: remove --purge deletes the overridden tunnel from the saved config" "1" \
   "$(grep -c -e 'tunnel delete custom-tunnel' "$calls_cloudflared" || true)"
+
+# a setup re-run without the override re-routes the default tunnel: the
+# agent must follow the config and the DNS route, not keep the old tunnel
+# baked (a receiver on the old tunnel would never see the deliveries the
+# re-routed record sends)
+STATE5="$TMP/state5"
+# shellcheck disable=SC2034  # read by the cloudflared stub in the subshell
+CF_LIST_JSON='[{"id": "custom-uuid", "name": "custom-tunnel"}, {"id": "tunnel-uuid", "name": "homefield-webhook"}]'
+HOMEFIELD_WEBHOOK_TUNNEL=custom-tunnel
+run "$STATE5" setup --hostname webhook.example.com --port 18787 >/dev/null
+unset HOMEFIELD_WEBHOOK_TUNNEL
+routes_before="$(grep -c -e 'tunnel route dns homefield-webhook webhook.example.com' "$calls_cloudflared" || true)"
+out="$(run "$STATE5" setup --hostname webhook.example.com --port 18787)"
+rc=$?
+record "setup: a re-run without the override exits 0" "0" "$rc"
+record "setup: the re-run routes the default tunnel" "1" \
+  "$(( $(grep -c -e 'tunnel route dns homefield-webhook webhook.example.com' "$calls_cloudflared" || true) - routes_before ))"
+record "setup: the re-run's config records the default tunnel" "homefield-webhook" \
+  "$(grep -h '^tunnel=' "$STATE5/route-watcher/webhook/config" | cut -d= -f2)"
+record "setup: the re-run's agent bakes the routed tunnel" "yes" \
+  "$(has "$(cat "$plist" 2>/dev/null)" '<string>homefield-webhook</string>')"
+record "setup: the re-run's agent no longer bakes the old tunnel" "0" \
+  "$(grep -c -e '<string>custom-tunnel</string>' "$plist" 2>/dev/null || true)"
+# a setup-mode install in a shell without the state dir must not inherit
+# the previous installation's either: a fresh setup writes its secret
+# under the shell's own resolution, and an agent reading a different
+# state dir would answer 403 to every delivery. Only a refresh (upgrade
+# --auto-route) reads the installed plist back.
+env -i HOME="$HOME" PATH="$PATH" HOMEFIELD_SOURCE_ONLY=1 \
+  "$BASH" -c '. "$1"; shift; status=0; "$@" || status=$?; printf "%s" "$status"' \
+  _ "$ROOT/bin/homefield" webhook_agent_install 18787 >/dev/null 2>&1
+setup_install_rc=$?
+record "setup: an install without the shell's state dir exits 0" "0" "$(nonzero $setup_install_rc)"
+record "setup: it does not inherit the previous state dir" "0" \
+  "$(grep -c -e "<string>$STATE5</string>" "$plist" 2>/dev/null || true)"
 unset CF_LIST_JSON
 rm -f "$HOME/.cloudflared/custom-uuid.json"
 
-# connect
+# connect. The request body is a 0600 mktemp (a fresh name per run) with
+# an EXIT/INT/TERM cleanup trap: a test-owned TMPDIR makes the leftovers
+# observable, and the old fixed connect-body.json path in the state dir is
+# gone with it.
+CONNECT_TMPDIR="$TMP/connect-tmp"
+mkdir -p "$CONNECT_TMPDIR"
+TMPDIR_OLD="${TMPDIR:-}"
+TMPDIR="$CONNECT_TMPDIR"
 # shellcheck disable=SC2034  # read by the gh stub in the subshell
 GH_BODY_OUT="$TMP/body.json"
 # shellcheck disable=SC2034  # read by the gh stub in the subshell
@@ -748,7 +969,7 @@ record "connect: the body subscribes workflow_job" "yes" "$(has "$(cat "$TMP/bod
 record "connect: the body carries the public URL" "yes" "$(has "$(cat "$TMP/body.json" 2>/dev/null)" 'https://webhook.example.com/webhook')"
 record "connect: the secret never appears on a command line" "0" "$(grep -c -e "$(cat "$STATE2/route-watcher/webhook/secret")" "$calls_gh" || true)"
 record "connect: prints the hook id" "yes" "$(has "$out" '4242')"
-record "connect: the body file is removed" "0" "$(ls "$STATE2/route-watcher/webhook/connect-body.json" 2>/dev/null | wc -l | tr -d ' ')"
+record "connect: no request body file is left behind" "0" "$(ls -A "$CONNECT_TMPDIR" 2>/dev/null | wc -l | tr -d ' ')"
 
 # shellcheck disable=SC2034  # read by the gh stub in the subshell
 GH_HOOKS_JSON='[{"id": 7, "config": {"url": "https://webhook.example.com/webhook"}}]'
@@ -761,6 +982,17 @@ record "connect: the refresh PATCHes the hook" "1" "$(grep -c -e 'hooks/7' "$cal
 record "connect: the refresh carries the current secret" "yes" \
   "$(has "$(cat "$TMP/body.json" 2>/dev/null)" "$(cat "$STATE2/route-watcher/webhook/secret")")"
 record "connect: the refresh does not create a second hook" "4" "$(grep -c -e 'repos/o/r/hooks' "$calls_gh" || true)"
+
+# a gh failure must not leave the secret-bearing body on disk either:
+# the EXIT/INT/TERM cleanup trap is what removes it
+# shellcheck disable=SC2034  # read by the gh stub in the subshell
+GH_PATCH_FAIL=1
+out="$(run "$STATE2" connect o/r)"
+rc=$?
+record "connect: a failed refresh exits nonzero" "nonzero" "$(nonzero $rc)"
+record "connect: a failed refresh leaves no body file behind" "0" \
+  "$(ls -A "$CONNECT_TMPDIR" 2>/dev/null | wc -l | tr -d ' ')"
+unset GH_PATCH_FAIL
 
 # a remove + re-setup rotates the secret; the next connect must push the
 # new one to the hook GitHub still has
@@ -778,6 +1010,7 @@ record "connect: the rotation push carries the new secret, not the old" "yes/no"
 out="$(run "$TMP/state3" connect o/r)"
 record "connect: without setup is refused" "nonzero" "$(nonzero $?)"
 unset GH_HOOKS_JSON GH_BODY_OUT
+TMPDIR="$TMPDIR_OLD"
 
 # status: the agent is loaded (the stub lists it), the receiver is not up
 out="$(run "$STATE2" status)"
@@ -788,6 +1021,17 @@ record "status: the secret is present" "yes" "$(has "$out" 'secret: present')"
 record "status: the tunnel is listed" "yes" "$(has "$out" 'tunnel-uuid')"
 record "status: the quiet receiver is reported" "yes" "$(has "$out" 'receiver: not answering')"
 record "status: the quiet receiver fails the status" "nonzero" "$(nonzero $rc)"
+
+out="$(run "$STATE2" status junk)"
+record "status: an unknown argument is refused" "nonzero" "$(nonzero $?)"
+
+# a listener that holds the port but is not the receiver must not be
+# reported as ours (the old check read the port being busy as "listening")
+HOOK_STUBS="$TMP/stubs-port-held"
+out="$(run "$STATE2" status)"
+rc=$?
+record "status: a foreign listener on the port is reported" "yes/nonzero" \
+  "$(has "$out" 'another process')/$(nonzero $rc)"
 
 # a listening receiver, through the stub (a real listener on a fixed port
 # would observe the host's ambient state)
@@ -810,6 +1054,7 @@ HOOK_STUBS="$TMP/stubs-port-free"
 # remove
 unloads_before="$(grep -c -e '^unload -w' "$calls_launchctl" || true)"
 deletes_before="$(grep -c -e 'tunnel delete' "$calls_cloudflared" || true)"
+printf 'stale\n' >"$STATE2/route-watcher/webhook/connect-body.json"
 out="$(run "$STATE2" remove)"
 rc=$?
 record "remove: exits 0" "0" "$rc"
@@ -817,6 +1062,8 @@ record "remove: launchctl unload recorded" "1" \
   "$(( $(grep -c -e '^unload -w' "$calls_launchctl" || true) - unloads_before ))"
 record "remove: the plist is gone" "0" "$(ls "$plist" 2>/dev/null | wc -l | tr -d ' ')"
 record "remove: the secret is gone" "0" "$(ls "$STATE2/route-watcher/webhook/secret" 2>/dev/null | wc -l | tr -d ' ')"
+record "remove: a stale connect-body.json is cleaned up" "0" \
+  "$(ls "$STATE2/route-watcher/webhook/connect-body.json" 2>/dev/null | wc -l | tr -d ' ')"
 record "remove: the tunnel is kept without --purge" "0" \
   "$(( $(grep -c -e 'tunnel delete' "$calls_cloudflared" || true) - deletes_before ))"
 

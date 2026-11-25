@@ -11,6 +11,32 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ## Unreleased
 
+- Hardened: the webhook receiver and its CLI (#324). The receiver rejects a
+  malformed delivery (a payload that is not a JSON object, a truncated body)
+  with a generic 400 instead of dropping the connection or crashing on it;
+  a response sent before the body is read (404, 411, 413) closes the
+  connection, so an unread body can no longer be parsed as the next
+  keep-alive request; `HOMEFIELD_WEBHOOK_MAX_CONNECTIONS` below 1 falls
+  back to the default instead of crashing the agent at startup, and a
+  failed thread start no longer leaks a connection-cap permit; the tick
+  bookkeeping takes the spawn lock, the reaped-pid record is bounded, and
+  SIGTERM can no longer wake the tunnel supervisor into an orphaned
+  `cloudflared` child. `webhook connect` writes its request body to a
+  0600 `mktemp` removed by an EXIT/INT/TERM trap instead of a fixed path
+  in the state dir (an interrupt during the `gh api` call can no longer
+  leave the secret on disk, and concurrent connects cannot clobber each
+  other); `webhook setup` refuses a `--port` outside 1–65535; `webhook
+  status` no longer reports an unrelated process listening on the port as
+  the receiver, and refuses unknown arguments; the LaunchAgents re-resolve
+  `python3` from their baked PATH at every start, so a brew upgrade that
+  moves it no longer breaks them; and `upgrade --auto-route` now refreshes
+  the installed webhook agent's plist along with the route watcher's, so
+  its baked `HOMEFIELD_SCALE_*` policy cannot go stale; the refresh
+  preserves the settings the setup baked (tunnel name, state dir,
+  receiver tuning) for anything the upgrading shell does not carry, so a
+  receiver installed with a `HOMEFIELD_WEBHOOK_TUNNEL` override does not
+  silently switch to the default tunnel.
+
 - Fixed: the per-job cleanup hook no longer wipes `/tmp` entries the guest
   keeps across jobs — the `systemd-private-*` directories of PrivateTmp
   services (`systemd-resolved`, `systemd-timesyncd`, ...) and a provision

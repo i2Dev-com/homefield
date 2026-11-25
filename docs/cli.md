@@ -84,7 +84,7 @@ agents that drive the tool without a human in the loop. The guides:
 | `HOMEFIELD_WEBHOOK_DEBOUNCE` | Minimum seconds between ticks the receiver spawns (default 1; a tick child already running always suppresses a spawn instead) |
 | `HOMEFIELD_WEBHOOK_TUNNEL` | The cloudflared tunnel name the receiver runs (default `homefield-webhook`) |
 | `HOMEFIELD_WEBHOOK_READ_TIMEOUT` | Seconds a connection may sit between reads before the receiver closes it (default 10); bounds what a peer that declares a body and never sends it can hold |
-| `HOMEFIELD_WEBHOOK_MAX_CONNECTIONS` | Concurrent connections the receiver serves (default 32); excess connections are closed before a thread is spent on them |
+| `HOMEFIELD_WEBHOOK_MAX_CONNECTIONS` | Concurrent connections the receiver serves (default 32); excess connections are closed before a thread is spent on them; a value below 1 is not a usable cap and falls back to the default |
 
 The `HOMEFIELD_WATCH_*`, `HOMEFIELD_SCALE_*` and `HOMEFIELD_WEBHOOK_*` variables set when `install`/`upgrade --auto-route` or `webhook setup` runs are baked into the LaunchAgent's plist environment, so the agent runs with the tuning the installer chose (launchd does not inherit a shell's environment).
 | `HOMEFIELD_SOURCE_ONLY=1` | Internal: source `bin/homefield` for its functions, run nothing |
