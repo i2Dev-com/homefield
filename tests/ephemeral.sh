@@ -299,6 +299,38 @@ real_prov_rc=$?
 st_body="$(cat "$WORK/state/homefield.state")"
 record "real run_provision: guest_stdin failure propagates and sets ephemeral_error" "nonzero/yes/yes" "$(nonzero "$real_prov_rc")/$(has "$state_set_err_out" "re-register: failed on homefield")/$(has "$st_body" "ephemeral_error=re-registration failed")"
 
+# 8b. run_provision's stage cleanup stays inside run_provision (#327): a
+# failed step must not leave a RETURN trap armed in the caller, where it fires
+# on the caller's return — under set -u a crash, or a guest rm -rf of the
+# caller's own $stage. The exit code survives the cleanup, success included.
+STAGE_HARNESS="$WORK/stage_harness.sh"
+cat >"$STAGE_HARNESS" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+HOMEFIELD_SOURCE_ONLY=1
+. "$REPO_ROOT/bin/homefield"
+guest_stage_dir() { printf '/tmp/stage-own'; }
+guest_unstage() { echo "unstage:$1"; }
+limactl() { return 0; }
+guest_stdin() { cat >/dev/null; return "${STUB_GUEST_RC:-0}"; }
+caller() {
+  local stage=/sentinel rc=0
+  run_provision "" || rc=$?
+  echo "rc=$rc"
+}
+caller
+echo "after-caller"
+echo "trap:[$(trap -p RETURN)]"
+EOF
+for stage_rc in 42 0; do
+  stage_out="$(env -i HOME="$WORK/home" PATH="$STUBS" REPO_ROOT="$REPO_ROOT" \
+    HOMEFIELD_STATE_DIR="$WORK/state" STUB_GUEST_RC="$stage_rc" \
+    bash "$STAGE_HARNESS" 2>&1 </dev/null)"
+  record "real run_provision (guest rc $stage_rc): its stage removed once, the caller's untouched, rc kept, no trap left" \
+    "1/0/yes/yes/no/yes" \
+    "$(printf '%s\n' "$stage_out" | grep -c '^unstage:/tmp/stage-own$')/$(printf '%s\n' "$stage_out" | grep -c '^unstage:/sentinel$')/$(has "$stage_out" "rc=$stage_rc")/$(has "$stage_out" "after-caller")/$(has "$stage_out" "unbound variable")/$(has "$stage_out" "trap:[]")"
+done
+
 # 9. provision.sh re_register restores previous registration on config.sh failure
 REREG_WORK="$TMP/rereg"
 mkdir -p "$REREG_WORK/runner"

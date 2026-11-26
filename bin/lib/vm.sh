@@ -855,20 +855,32 @@ guest_unstage() {
   guest rm -rf -- "$1" </dev/null 2>/dev/null || true
 }
 
+# unstage_die <dir> <message>: removes the stage directory, then dies. A
+# staging function cleans up explicitly on every way out, never with a
+# RETURN trap (#327): die exits, which fires no RETURN trap, and a return
+# that skips the `trap - RETURN` leaves the trap armed in the caller, where
+# it fires on the caller's return with this function's locals gone (under
+# set -u a crash; otherwise a guest rm -rf of the caller's own $stage).
+unstage_die() {
+  guest_unstage "$1"
+  die "$2"
+}
+
 # run_provision <stdin text> [VAR=value ...]
 run_provision() {
-  local input="$1" stage
+  local input="$1" stage rc=0
   shift
   stage="$(guest_stage_dir)"
-  trap 'guest_unstage "$stage"' RETURN
-  limactl copy "$PROVISION" "${INSTANCE}:${stage}/provision.sh" || return $?
   # The guest helpers provision.sh installs from its own directory (vm/guest/).
   # The uninstall path stages provision.sh alone and runs ensure-service, which
-  # needs none of them.
-  limactl copy -r "$GUEST_DIR" "${INSTANCE}:${stage}/guest" || return $?
-  printf '%s' "$input" | guest_stdin sudo "$@" bash "${stage}/provision.sh" ${PROVISION_CMD:+"$PROVISION_CMD"} || return $?
+  # needs none of them. The stage is removed on every way out, and the status
+  # is the failing step's (see unstage_die: no RETURN trap).
+  limactl copy "$PROVISION" "${INSTANCE}:${stage}/provision.sh" &&
+    limactl copy -r "$GUEST_DIR" "${INSTANCE}:${stage}/guest" &&
+    printf '%s' "$input" | guest_stdin sudo "$@" bash "${stage}/provision.sh" ${PROVISION_CMD:+"$PROVISION_CMD"} ||
+    rc=$?
   guest_unstage "$stage"
-  trap - RETURN
+  return "$rc"
 }
 
 enable_autostart() {

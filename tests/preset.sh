@@ -89,6 +89,12 @@ case "$mode" in
     done
     ;;
   merge) printf 'merged:%s\n' "$(merge_packages "${M1:-}" "${M2:-}" "${M3:-}")" ;;
+  noglob)
+    load_presets hosted
+    [ -z "${NOGLOB:-}" ] || set -f
+    copy_preset_hooks
+    case "$-" in *f*) echo 'noglob:on' ;; *) echo 'noglob:off' ;; esac
+    ;;
   usage) usage ;;
   *) "$@" ;;
 esac
@@ -324,6 +330,15 @@ srun MODE=upgrade SAVED="" GUEST_MANIFEST_EXISTS=1 GUEST_CAT_FAIL=1 -- cmd_upgra
 record "the read of an existing manifest fails: refused before any hook changes" \
   "nonzero/yes/0/0/0" \
   "$(nonzero "$rc")/$(has "$out" 'could not read the preset hook manifest')/$(called '^guest sudo install -D -m 0755')/$(called 'sudo tee /etc/homefield/preset-hooks')/$(called 'sudo rm -f')"
+# die exits, and an exit fires no RETURN trap: the stage is removed before it
+# (#327).
+record "the same refusal still removes the guest stage directory" "1" "$(called "rm -rf -- $work/stage\$")"
+srun MODE=upgrade SAVED="" -- cmd_upgrade --preset hosted
+record "a successful copy removes the guest stage directory once" "1" "$(called "rm -rf -- $work/stage\$")"
+srun MODE=noglob NOGLOB=1 --
+record "copy_preset_hooks keeps a caller's set -f (#327)" "on" "$(field noglob)"
+srun MODE=noglob --
+record "copy_preset_hooks leaves a caller's globbing on" "off" "$(field noglob)"
 srun MODE=upgrade SAVED="" GUEST_MANIFEST_EXISTS=1 GUEST_HAVE="" -- cmd_upgrade --preset hosted
 record "an existing empty manifest: hooks installed, manifest rewritten, nothing removed" "2/1/0" \
   "$(called '^guest sudo install -D -m 0755')/$(called 'sudo tee /etc/homefield/preset-hooks')/$(called 'sudo rm -f')"

@@ -11,6 +11,17 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ## Unreleased
 
+- Fixed: provisioning (`install`, `upgrade`, `re-register`) and the preset
+  hook copy no longer use a `RETURN` trap to remove their guest staging
+  directory (#327). A failed copy or provision step returned without
+  disarming the trap, which stayed armed in the calling function and fired
+  again when that function returned, with the original stage variable gone.
+  Under `set -u` this crashed the caller with `stage: unbound variable`; in a
+  caller with its own `stage` variable it removed that directory in the guest
+  instead. Every bash, not only macOS's 3.2, behaves this way. A failure in
+  the preset hook copy dies, and an exit fires no `RETURN` trap, so it left a
+  `/tmp/homefield-stage-*` directory in the guest; every way out now removes
+  it. The hook copy also stops clearing a caller's `set -f`.
 - Fixed: the sleep/wake watcher's wake side started every VM whose automatic
   fallback was on, whether or not it was running when the Mac slept — every
   Mac wake, login, reboot, or LaunchAgent restart booted the scale-to-zero
