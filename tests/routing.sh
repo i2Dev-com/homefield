@@ -1045,6 +1045,15 @@ record "auto_route=1: plain stop runs the fallback" "0/yes/yes" \
 record "...and the stop cancels the VM's wake eligibility: its line leaves the sleep record" "0" \
   "$(sleep_running_lines)"
 
+# A stop of an already-stopped VM is the same decision: the line goes. A
+# wake start that failed leaves the VM Stopped with its line still in the
+# record — the operator's stop is what says it stays down.
+printf 'homefield\n' >"$state/route-watcher/sleep-running"
+hf LIMA_STATUS=Stopped REG=0 SETTING_OUT="$settings" -- stop
+record "stop of an already-stopped VM: nothing to stop, exit 0" "0/yes" \
+  "$rc/$(has "$out" 'already Stopped, nothing to stop')"
+record "...and its line leaves the sleep record" "0" "$(sleep_running_lines)"
+
 printf 'auto_route=0\n' >"$state/homefield.state"
 printf 'homefield-ci acme/api\n' >"$state/routing"
 hf "${stop_env[@]}" GH_RUNNERS="$runner_rows" -- stop

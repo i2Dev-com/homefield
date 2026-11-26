@@ -759,7 +759,10 @@ it, and its pending entries keep waiting for the explicit `start
 A stop cancels a VM's wake eligibility: every stop path — a plain `stop`,
 `--route-hosted`, `fleet stop`, and the demand scaler's scale-to-zero —
 removes the VM's line from the sleep record, so the Mac's next wake does
-not start a VM someone explicitly put down. (The scaler's zero-stop writes
+not start a VM someone explicitly put down. A stop of an already-stopped
+VM does the same: a wake start that failed leaves the VM Stopped with its
+line still in the record, and the operator's stop is what says it stays
+down. (The scaler's zero-stop writes
 the dark line that arms the demand wake, the same stop.) The record is
 rewritten whole by every sleep run, and a line goes when its VM is up
 again, so a wake that runs without an intervening sleep — a LaunchAgent

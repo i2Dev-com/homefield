@@ -22,7 +22,9 @@ fail, such as a new guard in the routing expression, bumps the minor version
   — a stop's own paths bring it back, the operator's `start` or the tick's
   wake on demand for a dark line — and a stop of any kind (plain,
   `--route-hosted`, `fleet stop`, the scaler's zero-stop) cancels the VM's
-  wake eligibility by dropping its line. The record is rewritten whole by
+  wake eligibility by dropping its line — a stop of an already-stopped VM
+  (a wake start that failed leaves the VM Stopped with its line still in
+  the record) drops it too. The record is rewritten whole by
   every sleep run and a line goes when its VM is up again, so a wake that
   runs without an intervening sleep (a LaunchAgent restart) does not start a
   VM that has since been stopped by hand. A sleep run whose pre-pass cannot

@@ -1742,6 +1742,12 @@ stop_single() {
   [ -n "$VM_STATUS" ] || die "no VM ${INSTANCE}; nothing to stop"
   if [ "$VM_STATUS" != "Running" ]; then
     echo "VM ${INSTANCE}: already ${VM_STATUS}, nothing to stop"
+    # An explicit stop of a down VM is the same decision as a stop of a
+    # running one: its line in the watcher's sleep-running record goes, so
+    # the Mac's next wake does not start it again. A wake start that failed
+    # leaves the VM Stopped with its line still in the record — the operator
+    # stopping it by hand is what says it stays down.
+    route_watcher_sleep_running_drop "$INSTANCE" || true
     return 0
   fi
   # A live job would be cancelled by the stop, so it is refused; a VM that
