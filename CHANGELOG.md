@@ -27,7 +27,12 @@ fail, such as a new guard in the routing expression, bumps the minor version
   the record) drops it too. The record is rewritten whole by
   every sleep run and a line goes when its VM is up again, so a wake that
   runs without an intervening sleep (a LaunchAgent restart) does not start a
-  VM that has since been stopped by hand. A sleep run whose pre-pass cannot
+  VM that has since been stopped by hand. The record's writers (the sleep
+  pre-pass's store, the explicit-instance sleep's add, the stop and wake
+  sides' drop) hold a lock while they rewrite it: atomic rename alone does
+  not stop two overlapping writers from reading the same record before
+  either replaces it, and the last rename would resurrect a line the other
+  removed. A lock left by a killed writer is stolen once its owner is gone. A sleep run whose pre-pass cannot
   read a Running VM's runner identity still stores the record (the flip
   fails safe, but the VMs' Running statuses were proven); the record is
   stored after the statuses and before any guest identity is read, so a

@@ -1062,6 +1062,27 @@ record "stop of an already-stopped VM: nothing to stop, exit 0" "0/yes" \
   "$rc/$(has "$out" 'already Stopped, nothing to stop')"
 record "...and its line leaves the sleep record" "0" "$(sleep_running_lines)"
 
+# The record's writers hold a lock (two overlapping stops, or a stop racing
+# a wake's line-drop, would otherwise resurrect a removed line through the
+# last rename). A lock left by a killed writer is stolen once its owner is
+# gone; a live holder is waited for, and the drop defers — the line stays.
+dead_pid=; ( : ) & dead_pid=$!; wait "$dead_pid"
+printf 'homefield\n' >"$state/route-watcher/sleep-running"
+mkdir -p "$state/route-watcher/.sleep-running.lock"
+printf 'pid=%s\nstarted=%s\n' "$dead_pid" "$(( $(date +%s) - 60 ))" >"$state/route-watcher/.sleep-running.lock/owner"
+hf "${stop_env[@]}" GH_RUNNERS="$runner_rows" -- stop
+record "stop under a dead writer's lock: the lock is stolen, the line still goes" "0/0/no" \
+  "$rc/$(sleep_running_lines)/$([ -d "$state/route-watcher/.sleep-running.lock" ] && echo yes || echo no)"
+
+printf 'homefield\n' >"$state/route-watcher/sleep-running"
+mkdir -p "$state/route-watcher/.sleep-running.lock"
+printf 'pid=%s\nstarted=%s\n' "$$" "$(date +%s)" >"$state/route-watcher/.sleep-running.lock/owner"
+hf "${stop_env[@]}" GH_RUNNERS="$runner_rows" -- stop
+record "stop under a live writer's lock: the drop defers, the line stays for the next wake" \
+  "0/yes" "$rc/$(sleep_running_has homefield)"
+# the holder (this test) releases the lock
+rm -rf "${state:?}/route-watcher/.sleep-running.lock"
+
 printf 'auto_route=0\n' >"$state/homefield.state"
 printf 'homefield-ci acme/api\n' >"$state/routing"
 hf "${stop_env[@]}" GH_RUNNERS="$runner_rows" -- stop

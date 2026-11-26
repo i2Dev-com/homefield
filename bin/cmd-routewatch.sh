@@ -88,12 +88,14 @@ route_watcher_sleep_running_file() { printf '%s/sleep-running' "$(route_watcher_
 
 # route_watcher_sleep_running_store: SLEEP_RUNNING (one instance name per
 # line, possibly empty) to the record, whole, through a temp file moved over
-# the target — the way the run record and the dark record are written.
+# the target — the way the run record and the dark record are written, under
+# the record's lock (a store that overwrites a concurrent drop's result
+# would resurrect the line the drop removed).
 # Called by the multi-VM sleep run's pre-pass, between the status pass and
 # the guest identity reads (a guest that hangs in its read must not erase
 # the record the proven statuses earned), and never by a dispatched child
 # (the parent's pre-pass wrote the whole record already).
-route_watcher_sleep_running_store() {
+route_watcher_sleep_running_store_transaction() {
   local f dir tmp
   f="$(route_watcher_sleep_running_file)"
   dir="$(dirname "$f")"
@@ -101,10 +103,62 @@ route_watcher_sleep_running_store() {
   tmp="$(mktemp "$dir/.sleep-running.XXXXXX")" || return 1
   printf '%s' "$SLEEP_RUNNING" >"$tmp" || { rm -f "$tmp"; return 1; }
   mv -f "$tmp" "$f" || { rm -f "$tmp"; return 1; }
+  return 0
+}
+
+route_watcher_sleep_running_store() {
+  local rc=0
+  route_watcher_sleep_running_with_lock || return 1
+  route_watcher_sleep_running_store_transaction || rc=$?
+  route_watcher_sleep_running_unlock
+  return "$rc"
+}
+
+# route_watcher_sleep_running_lock: the record's writers — the pre-pass's
+# store, the explicit-instance sleep's add, and the stop and wake sides'
+# drop — run one at a time. The record is rewritten whole through a temp
+# file and an atomic rename, but rename alone does not serialize two
+# writers that both read the same record before either replaces it: the
+# last rename would resurrect the line the other removed, and a stopped VM
+# would be started again by the next wake. The lock is a directory (mkdir
+# is atomic); its owner file carries the pid and the start time, so a
+# writer killed mid-transaction — the sleep budget kills a whole sleep run
+# — leaves a lock the next writer steals once its owner is gone or older
+# than any live transaction (a transaction is a grep and a rename). A
+# holder that is merely slow is waited for, briefly.
+route_watcher_sleep_running_lock_dir() { printf '%s/.sleep-running.lock' "$(route_watcher_dir)"; }
+
+route_watcher_sleep_running_with_lock() {
+  local age dir pid started waited=0
+  dir="$(route_watcher_sleep_running_lock_dir)"
+  mkdir -p "$(dirname "$dir")" || return 1
+  until mkdir "$dir" 2>/dev/null; do
+    if [ -f "$dir/owner" ]; then
+      pid="$(sed -n 's/^pid=//p' "$dir/owner" 2>/dev/null)"
+      started="$(sed -n 's/^started=//p' "$dir/owner" 2>/dev/null)"
+      age=0
+      [ -n "$started" ] && age=$(( $(date +%s) - started ))
+      if { [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; } || [ "$age" -gt 5 ]; then
+        rm -rf "${dir:?}" 2>/dev/null || true
+        continue
+      fi
+    fi
+    waited=$((waited + 1))
+    [ "$waited" -gt 50 ] && return 1
+    sleep 0.05
+  done
+  printf 'pid=%s\nstarted=%s\n' "$$" "$(date +%s)" >"$dir/owner" 2>/dev/null
+  return 0
+}
+
+route_watcher_sleep_running_unlock() {
+  rm -rf "$(route_watcher_sleep_running_lock_dir)" 2>/dev/null || true
+  return 0
 }
 
 # route_watcher_sleep_running_has <name>: whether the VM was running when
-# the Mac slept.
+# the Mac slept. A read needs no lock: the writers' rename is atomic, so a
+# concurrent read sees the old or the new record, both whole.
 route_watcher_sleep_running_has() {
   local f
   f="$(route_watcher_sleep_running_file)"
@@ -115,8 +169,9 @@ route_watcher_sleep_running_has() {
 # route_watcher_sleep_running_add <name>: one line for a VM the pre-pass did
 # not see — an explicit `route-watch sleep --instance` runs no pre-pass, so
 # it maintains its own VM's line itself. The record is rewritten whole (the
-# name's line replaced, the rest kept), through a temp file.
-route_watcher_sleep_running_add() {
+# name's line replaced, the rest kept), through a temp file, under the
+# record's lock.
+route_watcher_sleep_running_add_transaction() {
   local f dir tmp rc name="$1"
   f="$(route_watcher_sleep_running_file)"
   dir="$(dirname "$f")"
@@ -139,10 +194,19 @@ route_watcher_sleep_running_add() {
   return 0
 }
 
+route_watcher_sleep_running_add() {
+  local rc=0
+  route_watcher_sleep_running_with_lock || return 1
+  route_watcher_sleep_running_add_transaction "$1" || rc=$?
+  route_watcher_sleep_running_unlock
+  return "$rc"
+}
+
 # route_watcher_sleep_running_drop <name>: the VM is up, stopped by hand, or
 # gone; its line goes with it, the record rewritten whole through a temp
-# file. A missing record is already without the line.
-route_watcher_sleep_running_drop() {
+# file, under the record's lock. A missing record is already without the
+# line.
+route_watcher_sleep_running_drop_transaction() {
   local f dir tmp rc name="$1"
   f="$(route_watcher_sleep_running_file)"
   [ -f "$f" ] || return 0
@@ -156,6 +220,14 @@ route_watcher_sleep_running_drop() {
   fi
   mv -f "$tmp" "$f" || { rm -f "$tmp"; return 1; }
   return 0
+}
+
+route_watcher_sleep_running_drop() {
+  local rc=0
+  route_watcher_sleep_running_with_lock || return 1
+  route_watcher_sleep_running_drop_transaction "$1" || rc=$?
+  route_watcher_sleep_running_unlock
+  return "$rc"
 }
 
 # route_watcher_is_running: whether a watcher run is live — the marker
