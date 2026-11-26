@@ -96,7 +96,7 @@ route_watcher_sleep_running_file() { printf '%s/sleep-running' "$(route_watcher_
 # the record the proven statuses earned), and never by a dispatched child
 # (the parent's pre-pass wrote the whole record already).
 route_watcher_sleep_running_store_transaction() {
-  local f dir tmp name saved status verified=""
+  local f dir lockpid tmp name saved status verified=""
   f="$(route_watcher_sleep_running_file)"
   dir="$(dirname "$f")"
   mkdir -p "$dir" || return 1
@@ -129,16 +129,33 @@ route_watcher_sleep_running_store_transaction() {
   INSTANCE="$saved"
   SLEEP_RUNNING="$verified"
   tmp="$(mktemp "$dir/.sleep-running.XXXXXX")" || return 1
+  # The lock must still be mine: a reclamation by another writer could
+  # have replaced it while this transaction ran (the reclamation is
+  # fenced, but the fence's windows are measured in microseconds, not
+  # zero). If it is not mine, the write must not land under another
+  # writer's lock — the transaction gives up and the wrapper retries.
+  lockpid="$(sed -n 's/^pid=//p' "$(route_watcher_sleep_running_lock_dir)/owner" 2>/dev/null)"
+  if [ "$lockpid" != "$$" ]; then
+    rm -f "$tmp"
+    return 1
+  fi
   printf '%s' "$SLEEP_RUNNING" >"$tmp" || { rm -f "$tmp"; return 1; }
   mv -f "$tmp" "$f" || { rm -f "$tmp"; return 1; }
   return 0
 }
 
 route_watcher_sleep_running_store() {
-  local rc=0
-  route_watcher_sleep_running_with_lock || return 1
-  route_watcher_sleep_running_store_transaction || rc=$?
-  route_watcher_sleep_running_unlock
+  local attempt=0 rc
+  while [ "$attempt" -lt 3 ]; do
+    attempt=$((attempt + 1))
+    rc=0
+    route_watcher_sleep_running_with_lock || return 1
+    route_watcher_sleep_running_store_transaction || rc=$?
+    route_watcher_sleep_running_unlock
+    if [ "$rc" -eq 0 ]; then
+      return 0
+    fi
+  done
   return "$rc"
 }
 
@@ -151,7 +168,11 @@ route_watcher_sleep_running_store() {
 # would be started again by the next wake. The lock is a directory (mkdir
 # is atomic); its owner file carries the pid, so a writer killed
 # mid-transaction — the sleep budget kills a whole sleep run — leaves a
-# lock the next writer steals once the owner is gone. A live owner is
+# lock the next writer steals once the owner is gone. The reclamation is
+# fenced twice: it only removes a lock whose owner is still the same dead
+# pid the contender saw, and it removes the directory by renaming it to a
+# unique name, so of two reclaimers only one gets the directory — the
+# other's removal cannot take a replacement lock with it. A live owner is
 # never stolen, however long it holds the lock: the transaction may run
 # Lima reads, and taking a live writer's lock would reintroduce the race
 # the lock exists to prevent. Instead a writer waits a live holder out —
@@ -174,7 +195,7 @@ route_watcher_sleep_running_lock_wait() {
 }
 
 route_watcher_sleep_running_with_lock() {
-  local dir ownerless=0 pid rounds waited=0
+  local curpid dir ownerless=0 pid rounds trash waited=0
   dir="$(route_watcher_sleep_running_lock_dir)"
   mkdir -p "$(dirname "$dir")" || return 1
   rounds="$(awk -v w="$(route_watcher_sleep_running_lock_wait)" 'BEGIN { print int(w / 0.05) }')"
@@ -189,26 +210,53 @@ route_watcher_sleep_running_with_lock() {
         sleep 0.05
         continue
       fi
-      # The owner is gone: a writer killed mid-transaction. Steal.
-      rm -rf "${dir:?}" 2>/dev/null || return 1
+      # The owner is gone: a writer killed mid-transaction. Reclaim the
+      # lock, but only if it is still this same dead owner — another
+      # writer may have reclaimed it first, and this reclamation must not
+      # delete the replacement lock. The reclaim itself is a rename to a
+      # unique name, so of two reclaimers only one gets the directory.
+      curpid="$(sed -n 's/^pid=//p' "$dir/owner" 2>/dev/null)"
+      if [ "$curpid" != "$pid" ]; then
+        continue
+      fi
+      trash="${dir}.stale.$$.$RANDOM.$(date +%s)"
+      if mv "$dir" "$trash" 2>/dev/null; then
+        rm -rf "${trash:?}" 2>/dev/null || true
+      fi
       continue
     fi
     # No owner: a live writer publishes it within the first retry, so a
     # lock still undescribed after a fraction of a second is a writer
-    # killed between the mkdir and the owner write. Steal it.
-    ownerless=$((ownerless + 1))
-    if [ "$ownerless" -gt 20 ]; then
-      rm -rf "${dir:?}" 2>/dev/null || return 1
+    # killed between the mkdir and the owner write. Reclaim it the same
+    # way, but only if it is still undescribed.
+    if [ "$ownerless" -le 20 ]; then
+      ownerless=$((ownerless + 1))
+      sleep 0.05
       continue
     fi
-    sleep 0.05
+    if [ -f "$dir/owner" ]; then
+      continue
+    fi
+    trash="${dir}.stale.$$.$RANDOM.$(date +%s)"
+    if mv "$dir" "$trash" 2>/dev/null; then
+      rm -rf "${trash:?}" 2>/dev/null || true
+    fi
+    continue
   done
   printf 'pid=%s\nstarted=%s\n' "$$" "$(date +%s)" >"$dir/owner" 2>/dev/null
   return 0
 }
 
+# The release: only the owner removes the lock. A transaction that lost
+# its lock to a reclamation (the transactions check, see below) must not
+# take the new owner's lock down with it.
 route_watcher_sleep_running_unlock() {
-  rm -rf "$(route_watcher_sleep_running_lock_dir)" 2>/dev/null || true
+  local dir pid
+  dir="$(route_watcher_sleep_running_lock_dir)"
+  pid="$(sed -n 's/^pid=//p' "$dir/owner" 2>/dev/null)"
+  if [ "$pid" = "$$" ]; then
+    rm -rf "${dir:?}" 2>/dev/null || true
+  fi
   return 0
 }
 
@@ -228,7 +276,7 @@ route_watcher_sleep_running_has() {
 # name's line replaced, the rest kept), through a temp file, under the
 # record's lock.
 route_watcher_sleep_running_add_transaction() {
-  local f dir tmp rc name="$1"
+  local f dir lockpid tmp rc name="$1"
   f="$(route_watcher_sleep_running_file)"
   dir="$(dirname "$f")"
   mkdir -p "$dir" || return 1
@@ -246,15 +294,28 @@ route_watcher_sleep_running_add_transaction() {
     : >"$tmp" || { rm -f "$tmp"; return 1; }
   fi
   printf '%s\n' "$name" >>"$tmp" || { rm -f "$tmp"; return 1; }
+  # The lock must still be mine (see the store's transaction).
+  lockpid="$(sed -n 's/^pid=//p' "$(route_watcher_sleep_running_lock_dir)/owner" 2>/dev/null)"
+  if [ "$lockpid" != "$$" ]; then
+    rm -f "$tmp"
+    return 1
+  fi
   mv -f "$tmp" "$f" || { rm -f "$tmp"; return 1; }
   return 0
 }
 
 route_watcher_sleep_running_add() {
-  local rc=0
-  route_watcher_sleep_running_with_lock || return 1
-  route_watcher_sleep_running_add_transaction "$1" || rc=$?
-  route_watcher_sleep_running_unlock
+  local attempt=0 rc
+  while [ "$attempt" -lt 3 ]; do
+    attempt=$((attempt + 1))
+    rc=0
+    route_watcher_sleep_running_with_lock || return 1
+    route_watcher_sleep_running_add_transaction "$1" || rc=$?
+    route_watcher_sleep_running_unlock
+    if [ "$rc" -eq 0 ]; then
+      return 0
+    fi
+  done
   return "$rc"
 }
 
@@ -263,7 +324,7 @@ route_watcher_sleep_running_add() {
 # file, under the record's lock. A missing record is already without the
 # line.
 route_watcher_sleep_running_drop_transaction() {
-  local f dir tmp rc name="$1"
+  local f dir lockpid tmp rc name="$1"
   f="$(route_watcher_sleep_running_file)"
   [ -f "$f" ] || return 0
   dir="$(dirname "$f")"
@@ -274,15 +335,28 @@ route_watcher_sleep_running_drop_transaction() {
     rm -f "$tmp"
     return 1
   fi
+  # The lock must still be mine (see the store's transaction).
+  lockpid="$(sed -n 's/^pid=//p' "$(route_watcher_sleep_running_lock_dir)/owner" 2>/dev/null)"
+  if [ "$lockpid" != "$$" ]; then
+    rm -f "$tmp"
+    return 1
+  fi
   mv -f "$tmp" "$f" || { rm -f "$tmp"; return 1; }
   return 0
 }
 
 route_watcher_sleep_running_drop() {
-  local rc=0
-  route_watcher_sleep_running_with_lock || return 1
-  route_watcher_sleep_running_drop_transaction "$1" || rc=$?
-  route_watcher_sleep_running_unlock
+  local attempt=0 rc
+  while [ "$attempt" -lt 3 ]; do
+    attempt=$((attempt + 1))
+    rc=0
+    route_watcher_sleep_running_with_lock || return 1
+    route_watcher_sleep_running_drop_transaction "$1" || rc=$?
+    route_watcher_sleep_running_unlock
+    if [ "$rc" -eq 0 ]; then
+      return 0
+    fi
+  done
   return "$rc"
 }
 

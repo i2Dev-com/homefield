@@ -35,8 +35,13 @@ fail, such as a new guard in the routing expression, bumps the minor version
   removed. A lock left behind by a killed writer is stolen once its owner
   is gone — including a lock whose writer died before it could write its
   owner, which is stolen once it has stayed undescribed through the wait —
-  and a live owner is never stolen, however long it holds the lock — a
-  writer waits a live holder out (half a minute by default, which covers a
+  and a live owner is never stolen, however long it holds the lock. The
+  reclamation is fenced: it only removes a lock whose owner is still the
+  dead pid the writer saw, and it removes the directory by a rename that
+  only one contender can win, so two reclaimers cannot take each other's
+  replacement lock — and a transaction whose lock was taken over mid-flight
+  gives up and retries rather than writing under another writer's lock.
+  Instead a writer waits a live holder out (half a minute by default, which covers a
   sleep-side store: the sleep budget kills a sleep run before it could
   hold the lock longer), and a writer that still cannot get the lock
   leaves the record as it is, loudly on the stop side (the stop says the

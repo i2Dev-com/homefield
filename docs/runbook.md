@@ -774,17 +774,17 @@ would resurrect the line the other removed. A lock left behind by a
 killed writer is stolen once its owner is gone — including one whose
 writer died before it could write its owner, stolen once it has stayed
 undescribed through the wait — and a live owner is never stolen,
-however long it holds the lock. Instead a writer waits a live holder
-out — half a minute by default, which covers a sleep-side store, since
-the sleep budget kills a sleep run before it could hold the lock
+however long it holds the lock. The reclamation is fenced: it only
+removes a lock whose owner is still the dead pid the writer saw, and it
+removes the directory by a rename only one contender can win, so two
+reclaimers cannot take each other's replacement lock; a transaction
+whose lock was taken over mid-flight gives up and retries rather than
+writing under another writer's lock. Instead a writer waits a live
+holder out — half a minute by default, which covers a sleep-side store,
+since the sleep budget kills a sleep run before it could hold the lock
 longer — and a writer that still cannot get the lock leaves the record
 as it is, loudly on the stop side: the stop says the wake eligibility is
 uncertain and to run it again. The store re-proves each recorded VM
-under the lock, so a stop that completed between the pre-pass's status
-read and the store is not undone by the stale snapshot; a Lima that
-cannot be asked at the re-prove keeps the line, the phase-1 proof
-standing. A live holder is waited for, and a writer that cannot get the
-lock in a few seconds leaves the record as it is. A
 sleep run whose pre-pass cannot read a Running VM's runner identity
 still writes the record: the flip fails safe (nothing is flipped), but
 the VMs' Running statuses were proven, and the wake side must not lose
