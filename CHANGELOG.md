@@ -11,6 +11,77 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ## Unreleased
 
+- Fixed: the sleep/wake watcher's wake side started every VM whose automatic
+  fallback was on, whether or not it was running when the Mac slept — every
+  Mac wake, login, reboot, or LaunchAgent restart booted the scale-to-zero
+  fleet the demand scaler had put dark (defeating `HOMEFIELD_SCALE_ZERO=1`)
+  and every VM a hand `stop` had put down, burning full idle cooldowns with
+  zero demand (#326). The sleep side now records the VMs that were running
+  (a `sleep-running` line per VM, in the watcher's state directory), and the
+  wake side starts only those: a VM that was not running at sleep stays down
+  — a stop's own paths bring it back, the operator's `start` or the tick's
+  wake on demand for a dark line — and a stop of any kind (plain,
+  `--route-hosted`, `fleet stop`, the scaler's zero-stop) cancels the VM's
+  wake eligibility by dropping its line — a stop of an already-stopped VM
+  (a wake start that failed leaves the VM Stopped with its line still in
+  the record) drops it too. The record is rewritten whole by
+  every sleep run, with the previous record's still-pending lines carried
+  over: a VM still Stopped with a valid line is a recovery that has not
+  finished (a wake whose start failed, or one the Mac slept again before it
+  reached), and only a VM gone from Lima's list, or an explicit stop,
+  removes its line — the next wake retries the start. Otherwise a line goes
+  when its VM is up again, so a wake that
+  runs without an intervening sleep (a LaunchAgent restart) does not start a
+  VM that has since been stopped by hand. The record's writers (the sleep
+  pre-pass's store, the explicit-instance sleep's add, the stop and wake
+  sides' drop) hold a lock while they rewrite it: atomic rename alone does
+  not stop two overlapping writers from reading the same record before
+  either replaces it, and the last rename would resurrect a line the other
+  removed. A lock left behind by a killed writer is stolen once its owner
+  is gone — including a lock whose writer died before it could write its
+  owner, which is stolen once it has stayed undescribed through the wait —
+  and a live owner is never stolen, however long it holds the lock. The
+  reclamation is fenced: it only removes a lock whose owner is still the
+  dead pid the writer saw, and it removes the directory by a rename that
+  only one contender can win, so two reclaimers cannot take each other's
+  replacement lock — and a transaction whose lock was taken over mid-flight
+  gives up and retries rather than writing under another writer's lock.
+  Instead a writer waits a live holder out (half a minute by default, which covers a
+  sleep-side store: the sleep budget kills a sleep run before it could
+  hold the lock longer), and a writer that still cannot get the lock
+  leaves the record as it is, loudly on the stop side (the stop says the
+  wake eligibility is uncertain and to run it again). The
+  store also re-proves each recorded VM under the lock: a stop that
+  completed between the pre-pass's status read and the store must not be
+  undone by the stale snapshot putting the stopped VM's line back, while a
+  Lima that cannot be asked at the re-prove keeps the line (the phase-1
+  proof stands; only a confirmed Stopped loses it). A sleep run whose pre-pass cannot
+  read a Running VM's runner identity still stores the record (the flip
+  fails safe, but the VMs' Running statuses were proven); the record is
+  stored after the statuses and before any guest identity is read, so a
+  guest that hangs in its read — the sleep budget killing the whole run —
+  cannot erase it either. Only a pre-pass that cannot prove the statuses at
+  all leaves the previous record.
+
+- Fixed: three races in the route-watcher agent itself (#326). The agent
+  handled no SIGTERM, so unloading the LaunchAgent (or shutting the Mac
+  down) left its detached wake recovery and scaler tick running for their
+  whole budgets — minutes to half an hour of flipping repositories with no
+  agent behind it; the agent now kills both on SIGTERM and SIGINT, and its
+  run loop runs in bounded slices so the handler (a Python-level one, which
+  only runs at a bytecode checkpoint of the main thread) gets a checkpoint
+  while the Mac is quiet — an unbounded `CFRunLoopRun` would have kept the
+  handler unreachable until the next power event. The scaler's loop is now
+  parked across the sleep-side flip (a WillSleep kills the running tick but
+  the loop's next interval could spawn a fresh one mid-flip, routing
+  repositories while the flip was routing them the other way); the wake
+  sets the gate again, and a cancelled sleep (WillNotSleep) does too. And
+  the tick threads cleared the shared process handles without an identity
+  check, so an older run's exit could clear a newer run's handle and leave
+  it unknowable to a later kill; `kill_tree` signalled the process group of
+  a run that had already exited, whose group id could belong to someone
+  else by now.
+
 - Fixed: four bugs in the route command and the automatic fallback's host
   and validation handling (#325). `route_stop_fallback` compared every
   routing record's host against a hardcoded `github.com` while the stop

@@ -802,7 +802,20 @@ case "$1" in
   list)
     # LIMA_ROWS: a multi-VM Mac (the watcher's fleet tests); otherwise one VM.
     if [ -n "${LIMA_ROWS:-}" ]; then printf '%b' "$LIMA_ROWS"
-    else [ -z "${LIMA_STATUS:-}" ] || echo "homefield ${LIMA_STATUS}"
+    else
+      # STOP_MIDPASS: the VM answers Running for the pre-pass's own reads,
+      # then Stopped from the record store's re-prove on — a stop that
+      # completed between the pre-pass's status read and the store.
+      # RECHECK_FAIL: Lima cannot be asked from the re-prove on.
+      if [ -n "${RECHECK_FAIL:-}" ] && [ "$(grep -c '^limactl list' "$CALLS")" -gt 2 ]; then
+        echo "limactl: could not list" >&2
+        exit 1
+      fi
+      if [ -n "${STOP_MIDPASS:-}" ] && [ "$(grep -c '^limactl list' "$CALLS")" -gt 2 ]; then
+        echo "homefield Stopped"
+      else
+        [ -z "${LIMA_STATUS:-}" ] || echo "homefield ${LIMA_STATUS}"
+      fi
     fi ;;
   start) [ -z "${START_FAIL:-}" ] || { echo "limactl: could not start" >&2; exit 1; } ;;
   stop) [ -z "${STOP_FAIL:-}" ] || { echo "limactl: could not stop" >&2; exit 1; } ;;
@@ -835,6 +848,14 @@ case "$1" in
       python3)
         # SETTINGS_DIR: per-VM settings for a multi-VM Mac; otherwise the one
         # SETTING_OUT every VM answers with.
+        # IDENTITY_KILL: the guest hangs in its identity read and the agent's
+        # sleep budget kills the whole run — simulated by killing the run
+        # from its marker pid, the way the budget would.
+        if [ -n "${IDENTITY_KILL:-}" ]; then
+          pid="$(sed -n 's/^pid=//p' "$HOMEFIELD_STATE_DIR/route-watcher/running" 2>/dev/null)"
+          [ -n "$pid" ] && kill -9 "$pid" 2>/dev/null
+          exit 99
+        fi
         if [ -n "${SETTINGS_DIR:-}" ] && [ -f "$SETTINGS_DIR/$vm" ]; then cat "$SETTINGS_DIR/$vm"
         else printf '%b' "${SETTING_OUT-}"
         fi ;;
@@ -935,6 +956,15 @@ hf() {
   err="$(cat "$work/err")"
 }
 
+# sleep_running_has <name> / sleep_running_lines: the wake side's record of
+# what was running when the Mac slept (one instance name per line, in the
+# watcher's subdirectory of the state directory).
+sleep_running_has() { grep -Fxq "$1" "$state/route-watcher/sleep-running" 2>/dev/null && echo yes || echo no; }
+sleep_running_lines() {
+  [ -f "$state/route-watcher/sleep-running" ] &&
+    wc -l <"$state/route-watcher/sleep-running" | tr -d ' ' || echo 0
+}
+
 # sysctl: the host's cores and memory, for the scaler's headroom budget —
 # driven from the test the same way every outside effect is.
 cat >"$stubs/sysctl" <<'EOF'
@@ -1028,9 +1058,63 @@ record "plain stop without the switch: no flip" "0/0/yes" \
 
 printf 'homefield-ci acme/api\n' >"$state/routing"
 printf 'auto_route=1\n' >"$state/homefield.state"
+mkdir -p "$state/route-watcher"
+printf 'homefield\n' >"$state/route-watcher/sleep-running"
 hf "${stop_env[@]}" GH_RUNNERS="$runner_rows" -- stop
 record "auto_route=1: plain stop runs the fallback" "0/yes/yes" \
   "$rc/$(grep -q 'variable set CI_RUNNER --repo github.com/acme/api --body hosted' "$calls" && echo yes || echo no)/$(has "$out" 'VM homefield: Stopped')"
+record "...and the stop cancels the VM's wake eligibility: its line leaves the sleep record" "0" \
+  "$(sleep_running_lines)"
+
+# A stop of an already-stopped VM is the same decision: the line goes. A
+# wake start that failed leaves the VM Stopped with its line still in the
+# record — the operator's stop is what says it stays down.
+printf 'homefield\n' >"$state/route-watcher/sleep-running"
+hf LIMA_STATUS=Stopped REG=0 SETTING_OUT="$settings" -- stop
+record "stop of an already-stopped VM: nothing to stop, exit 0" "0/yes" \
+  "$rc/$(has "$out" 'already Stopped, nothing to stop')"
+record "...and its line leaves the sleep record" "0" "$(sleep_running_lines)"
+
+# The record's writers hold a lock (two overlapping stops, or a stop racing
+# a wake's line-drop, would otherwise resurrect a removed line through the
+# last rename). A lock left by a killed writer is stolen once its owner is
+# gone; a live holder is waited for, and the drop defers — the line stays.
+dead_pid=; ( : ) & dead_pid=$!; wait "$dead_pid"
+printf 'homefield\n' >"$state/route-watcher/sleep-running"
+mkdir -p "$state/route-watcher/.sleep-running.lock"
+printf 'pid=%s\nstarted=%s\n' "$dead_pid" "$(( CLOCK_EPOCH - 60 ))" >"$state/route-watcher/.sleep-running.lock/owner"
+hf "${stop_env[@]}" GH_RUNNERS="$runner_rows" -- stop
+record "stop under a dead writer's lock: the lock is stolen, the line still goes" "0/0/no" \
+  "$rc/$(sleep_running_lines)/$([ -d "$state/route-watcher/.sleep-running.lock" ] && echo yes || echo no)"
+
+printf 'homefield\n' >"$state/route-watcher/sleep-running"
+mkdir -p "$state/route-watcher/.sleep-running.lock"
+( sleep 1; rm -rf "${state:?}/route-watcher/.sleep-running.lock" ) &
+holder_pid=$!
+printf 'pid=%s\nstarted=%s\n' "$holder_pid" "$CLOCK_EPOCH" >"$state/route-watcher/.sleep-running.lock/owner"
+hf "${stop_env[@]}" GH_RUNNERS="$runner_rows" -- stop
+record "stop under a live holder that releases: the drop waits it out, the line still goes" "0/0" \
+  "$rc/$(sleep_running_lines)"
+wait "$holder_pid" 2>/dev/null || true
+
+# A holder that never releases: the drop gives up after the wait bound and
+# says so loudly — the wake eligibility is uncertain, and the stop tells the
+# operator to run it again. The wait bound is driven down for the test.
+printf 'homefield\n' >"$state/route-watcher/sleep-running"
+mkdir -p "$state/route-watcher/.sleep-running.lock"
+printf 'pid=%s\nstarted=%s\n' "$$" "$CLOCK_EPOCH" >"$state/route-watcher/.sleep-running.lock/owner"
+hf "${stop_env[@]}" GH_RUNNERS="$runner_rows" HOMEFIELD_SLEEP_RUNNING_LOCK_WAIT=0.2 -- stop
+record "stop under a holder that never releases: the drop gives up loudly, the line stays" \
+  "0/yes/yes" "$rc/$(sleep_running_has homefield)/$(has "$err" 'may start it again')"
+rm -rf "${state:?}/route-watcher/.sleep-running.lock"
+
+# A lock whose writer was killed between the mkdir and the owner write has
+# no owner to check: it is stolen after the wait, not left forever.
+printf 'homefield\n' >"$state/route-watcher/sleep-running"
+mkdir -p "$state/route-watcher/.sleep-running.lock"
+hf "${stop_env[@]}" GH_RUNNERS="$runner_rows" -- stop
+record "stop under an ownerless lock: the lock is stolen, the line still goes" "0/0/no" \
+  "$rc/$(sleep_running_lines)/$([ -d "$state/route-watcher/.sleep-running.lock" ] && echo yes || echo no)"
 
 printf 'auto_route=0\n' >"$state/homefield.state"
 printf 'homefield-ci acme/api\n' >"$state/routing"
@@ -1104,43 +1188,160 @@ record "route-watch sleep, jobs queued: the repo is flipped to hosted, the VM is
   "$rc/$(grep -q 'variable set CI_RUNNER --repo github.com/acme/api --body hosted' "$calls" && echo yes || echo no)/$(grep -q '^limactl stop' "$calls" && echo yes || echo no)/$(has "$out" 'VM homefield: Stopped')"
 record "...the flipped repo waits in autoflip" "homefield-ci acme/api github.com" "$(cat "$state/autoflip" 2>/dev/null)"
 record "...the run is recorded" "sleep/ok" "$(watcher_state_value last_mode)/$(watcher_state_value last_result)"
+record "...the running VM is recorded for the wake side" "yes" "$(sleep_running_has homefield)"
 
 printf 'homefield-ci acme/api\n' >"$state/routing"
-rm -f "$state/autoflip"
+rm -f "$state/autoflip" "$state/route-watcher/sleep-running"
 hf "${sleep_env[@]}" JOB=yes -- route-watch sleep
 record "route-watch sleep, a job running: skipped, the records are untouched, exit 0" "0/0/yes" \
   "$rc/$(grep -c 'variable set' "$calls" || true)/$(has "$out" 'a job is running')"
 record "...nothing waits in autoflip" "0" "$([ -f "$state/autoflip" ] && wc -l <"$state/autoflip" | tr -d ' ' || echo 0)"
+record "...the busy VM is still recorded for the wake side (it was running)" "yes" "$(sleep_running_has homefield)"
 
 printf 'homefield-ci acme/api\n' >"$state/routing"
-rm -f "$state/autoflip"
+rm -f "$state/autoflip" "$state/route-watcher/sleep-running"
 hf "${sleep_env[@]}" PGREP_FAIL=1 -- route-watch sleep
 record "route-watch sleep, the VM cannot be asked: fail safe, nothing flips, exit 1" "1/0/yes" \
   "$rc/$(grep -c 'variable set' "$calls" || true)/$(has "$err" 'could not ask whether a job is running')"
 record "...the routing record is untouched" "homefield-ci acme/api" "$(cat "$state/routing")"
 record "...the failed run is recorded" "sleep/failed" "$(watcher_state_value last_mode)/$(watcher_state_value last_result)"
+record "...the VM is still recorded for the wake side (the pre-pass proved it running)" "yes" "$(sleep_running_has homefield)"
+
+# A runner identity the pre-pass cannot read poisons the flip (a runner that
+# may still be online must not lose its jobs), but every Running status was
+# proven first: the record is still written, so a failed identity read after
+# a consumed record cannot strand the VMs that were running.
+printf 'homefield-ci acme/api\n' >"$state/routing"
+rm -f "$state/autoflip" "$state/route-watcher/sleep-running"
+hf LIMA_STATUS=Running REG=0 SETTING_OUT="" JOB=no -- route-watch sleep
+record "route-watch sleep, a runner identity cannot be read: the flip fails safe, exit 1" "1/0/yes" \
+  "$rc/$(grep -c 'variable set' "$calls" || true)/$(has "$err" "could not read VM homefield's runner identity")"
+record "...the failed run is recorded" "sleep/failed" "$(watcher_state_value last_mode)/$(watcher_state_value last_result)"
+record "...the VM is still recorded for the wake side (its Running status was proven)" "yes" "$(sleep_running_has homefield)"
+record "...nothing waits in autoflip" "0" "$([ -f "$state/autoflip" ] && wc -l <"$state/autoflip" | tr -d ' ' || echo 0)"
+
+# A guest that hangs in its identity read: the agent's sleep budget kills
+# the whole sleep run before the pass finishes. The record is stored after
+# the statuses are proven and before any guest is contacted, so the killed
+# run leaves it on disk — the next wake starts what was running.
+printf 'homefield-ci acme/api\n' >"$state/routing"
+rm -f "$state/autoflip" "$state/route-watcher/sleep-running"
+hf LIMA_STATUS=Running REG=0 SETTING_OUT="$settings" JOB=no IDENTITY_KILL=1 -- route-watch sleep
+record "route-watch sleep, a guest hangs in its identity read: the killed run's record is already on disk" "137/yes" \
+  "$rc/$(sleep_running_has homefield)"
+record "...nothing was flipped" "0" "$(grep -c 'variable set' "$calls" || true)"
+
+# A stop that completed between the pre-pass's status read and the record
+# store: the store re-proves each recorded VM under the lock, so the stale
+# snapshot does not put the stopped VM's line back.
+printf 'homefield-ci acme/api\n' >"$state/routing"
+rm -f "$state/autoflip" "$state/route-watcher/sleep-running"
+hf LIMA_STATUS=Running REG=0 SETTING_OUT="$settings" SVC_NAME='actions.runner.acme.test.service' JOB=no STOP_MIDPASS=1 -- route-watch sleep
+record "route-watch sleep, a stop lands mid-pass: the store does not resurrect the stopped VM's line" "0/0/yes" \
+  "$rc/$(grep -c 'variable set' "$calls" || true)/$(has "$out" 'nothing to flip')"
+record "...the run is recorded ok, the stopped VM is not in the record" "sleep/ok/0" \
+  "$(watcher_state_value last_mode)/$(watcher_state_value last_result)/$(sleep_running_lines)"
+
+# The same mid-pass stop with the line already in the record: the merge must
+# not carry it back either. A line the snapshot carried is the re-prove's to
+# decide — dropped here, because the stop's drop removes it after this store
+# — and merging it back would open a window in which a wake that reads the
+# record without the lock starts the VM the stop is putting down.
+printf 'homefield\n' >"$state/route-watcher/sleep-running"
+hf LIMA_STATUS=Running REG=0 SETTING_OUT="$settings" SVC_NAME='actions.runner.acme.test.service' JOB=no STOP_MIDPASS=1 -- route-watch sleep
+record "route-watch sleep, a stop lands mid-pass with the line already recorded: the store does not merge it back" "0/0" \
+  "$rc/$(sleep_running_lines)"
+
+# A Lima that cannot be asked at the re-prove keeps the VM's line: the
+# phase-1 proof that it was Running stands — only a confirmed Stopped (or a
+# VM gone) loses its line there.
+printf 'homefield-ci acme/api\n' >"$state/routing"
+rm -f "$state/autoflip" "$state/route-watcher/sleep-running"
+hf LIMA_STATUS=Running REG=0 SETTING_OUT="$settings" SVC_NAME='actions.runner.acme.test.service' JOB=no RECHECK_FAIL=1 -- route-watch sleep
+record "route-watch sleep, the re-prove cannot ask Lima: the proven line stays, the run fails" "1/yes" \
+  "$rc/$(sleep_running_has homefield)"
+record "...nothing was flipped" "0" "$(grep -c 'variable set' "$calls" || true)"
+
+# A wake that failed to start the VM — or one the Mac slept again before it
+# reached — leaves the VM Stopped with its line still in the record: the next
+# sleep must not delete it, or the next wake refuses to restart a VM nobody
+# stopped. An explicit stop is what invalidates the line, and a stop drops it
+# under the record's lock.
+printf 'homefield\n' >"$state/route-watcher/sleep-running"
+hf LIMA_STATUS=Stopped -- route-watch sleep
+record "route-watch sleep, a VM still down from a wake that failed: its pending line survives the sleep" "0/yes" \
+  "$rc/$(sleep_running_has homefield)"
+
+# A recorded VM Lima no longer lists is gone: its stale line goes with it,
+# so the wake side does not wait for a VM that does not exist.
+printf 'gone\n' >"$state/route-watcher/sleep-running"
+hf -- route-watch sleep
+record "route-watch sleep, a recorded VM Lima no longer lists: its stale line goes" "0/0" \
+  "$rc/$(sleep_running_lines)"
+
+# A Lima that cannot be asked about a pending line keeps it: the line was
+# earned by an earlier proven sleep — the same fail-safe direction as the
+# snapshot's re-prove.
+printf 'homefield\n' >"$state/route-watcher/sleep-running"
+hf LIMA_STATUS=Stopped RECHECK_FAIL=1 -- route-watch sleep
+record "route-watch sleep, Lima cannot be asked about a pending line: it stays, the run fails" "1/yes" \
+  "$rc/$(sleep_running_has homefield)"
 
 printf 'auto_route=0\n' >"$state/homefield.state"
 printf 'homefield-ci acme/api\n' >"$state/routing"
+rm -f "$state/route-watcher/sleep-running"
 hf "${sleep_env[@]}" GH_RUNNERS="$runner_rows" -- route-watch sleep
 record "route-watch sleep, auto_route=0: the VM's routing is left alone" "0/0" \
   "$rc/$(grep -c 'variable set' "$calls" || true)"
+record "...the fallback-off VM is not recorded for the wake side" "0" "$(sleep_running_lines)"
 printf 'auto_route=1\n' >"$state/homefield.state"
 
 # wake: the VM is down (it does not survive sleep cleanly), one repo waits in
-# autoflip, GitHub lists the runner online once it is up.
+# autoflip, GitHub lists the runner online once it is up, and the sleep side
+# recorded the VM as running.
 printf 'homefield-ci acme/api\n' >"$state/autoflip"
+printf 'homefield\n' >"$state/route-watcher/sleep-running"
 hf LIMA_STATUS=Stopped REG=0 SETTING_OUT="$settings" SVC_NAME='actions.runner.acme.test.service' \
   GH_RUNNERS='42\tonline\tfalse\n' GH_RUNNERS_NAMED="$runner_rows" HOMEFIELD_WATCH_WAKE_WAIT=1 -- route-watch wake
-record "route-watch wake: the VM is started and the pending repo restored, exit 0" "0/yes/yes/0" \
+record "route-watch wake: the VM the sleep recorded as running is started and the pending repo restored, exit 0" "0/yes/yes/0" \
   "$rc/$(grep -q '^limactl start --tty=false homefield' "$calls" && echo yes || echo no)/$(grep -q 'variable set CI_RUNNER --repo github.com/acme/api --body local' "$calls" && echo yes || echo no)/$([ -f "$state/autoflip" ] && wc -l <"$state/autoflip" | tr -d ' ' || echo 0)"
 record "...the repo is recorded as routed local" "homefield-ci acme/api github.com" "$(cat "$state/routing" 2>/dev/null)"
 record "...the run is recorded" "wake/ok" "$(watcher_state_value last_mode)/$(watcher_state_value last_result)"
+record "...the VM's line leaves the sleep record once it is up" "0" "$(sleep_running_lines)"
+
+# A VM the sleep side did not record was not running when the Mac slept —
+# stopped by hand, or scaled dark — and the wake must not start it: every Mac
+# wake would otherwise boot the scale-to-zero fleet and the hand-stopped VMs
+# with zero demand. The tick's demand wake (a dark line) or the operator's
+# start is what brings such a VM back.
+printf 'homefield-ci acme/api\n' >"$state/autoflip"
+rm -f "$state/route-watcher/sleep-running"
+hf LIMA_STATUS=Stopped REG=0 SETTING_OUT="$settings" SVC_NAME='actions.runner.acme.test.service' \
+  GH_RUNNERS='42\tonline\tfalse\n' GH_RUNNERS_NAMED="$runner_rows" HOMEFIELD_WATCH_WAKE_WAIT=1 -- route-watch wake
+record "route-watch wake, a VM that was not running at sleep: not started, entries kept, exit 0" "0/0/yes/yes" \
+  "$rc/$(grep -c '^limactl start' "$calls" || true)/$(grep -q acme/api "$state/autoflip" && echo yes || echo no)/$(has "$out" 'was not running when the Mac slept')"
+
+# ...and a dark VM (a line in the demand scaler's dark record) is not woken
+# by the Mac's wake either: only the tick's demand wake is.
+printf 'homefield-1|https://github.com/org/repo|homefield-ci|1\n' >"$state/route-watcher/scale-dark"
+hf LIMA_STATUS=Stopped REG=0 SETTING_OUT="$settings" -- route-watch wake
+record "route-watch wake, a scaled-dark VM: not started (the dark record's demand wake is what brings it back)" "0/0" \
+  "$rc/$(grep -c '^limactl start' "$calls" || true)"
+rm -f "$state/route-watcher/scale-dark"
+
+# A start that fails keeps the line: the next wake retries the start.
+printf 'homefield\n' >"$state/route-watcher/sleep-running"
+printf 'homefield-ci acme/api\n' >"$state/autoflip"
+hf LIMA_STATUS=Stopped START_FAIL=1 REG=0 SETTING_OUT="$settings" -- route-watch wake
+record "route-watch wake, the start fails: exit 1, the line stays for the next wake" "1/yes/yes" \
+  "$rc/$(grep -q acme/api "$state/autoflip" && echo yes || echo no)/$(sleep_running_has homefield)"
 
 printf 'homefield-ci acme/api\n' >"$state/autoflip"
+printf 'homefield\n' >"$state/route-watcher/sleep-running"
 hf LIMA_STATUS=Running REG=0 SETTING_OUT="$settings" GH_RUNNERS_FAIL=1 HOMEFIELD_WATCH_WAKE_WAIT=1 -- route-watch wake
 record "route-watch wake, GitHub cannot be asked: the entries are kept, exit 1" "1/yes/yes" \
   "$rc/$(grep -q acme/api "$state/autoflip" && echo yes || echo no)/$(has "$err" 'not online after')"
+record "...the already-running VM's line still leaves the sleep record" "0" "$(sleep_running_lines)"
 record "...the failed run is recorded" "wake/failed" "$(watcher_state_value last_mode)/$(watcher_state_value last_result)"
 
 printf 'auto_route=0\n' >"$state/homefield.state"
@@ -1167,6 +1368,8 @@ hf LIMA_ROWS='homefield Running\nsecond Running\n' LIMA_HOME="$lima" SETTINGS_DI
   -- route-watch sleep
 record "sleep on a two-VM Mac sharing a label: both repos flip (each runner would keep the other's served)" "0/yes/yes" \
   "$rc/$(grep -q 'variable set CI_RUNNER --repo github.com/acme/api --body hosted' "$calls" && echo yes || echo no)/$(grep -q 'variable set CI_RUNNER --repo github.com/acme/web --body hosted' "$calls" && echo yes || echo no)"
+record "...both running VMs are recorded for the wake side" "yes/yes" \
+  "$(sleep_running_has homefield)/$(sleep_running_has second)"
 
 # A runner name is only excluded within its own registration scope: a Mac
 # with runners for two organizations must not let one org's local runner name
@@ -1183,6 +1386,10 @@ record "sleep does not exclude another scope's runner: the remote namesake keeps
   "$rc/$(grep -c 'variable set' "$calls" || true)/$([ -f "$state/autoflip" ] && wc -l <"$state/autoflip" | tr -d ' ' || echo 0)"
 
 # A stopped VM is not asked and not flipped: its runner is not taking jobs.
+# Its line from the earlier sleep stays, though: the VM is still down from a
+# wake that failed (or one the Mac slept again before it reached), and the
+# next wake must retry the start — an explicit stop is what would have
+# removed the line under the record's lock.
 printf 'homefield-ci acme/api\n' >"$state/routing"
 rm -f "$state/autoflip" "$state/second.state"
 hf LIMA_ROWS='homefield Running\nsecond Stopped\n' LIMA_HOME="$lima" SETTINGS_DIR="$work/settings" \
@@ -1190,6 +1397,8 @@ hf LIMA_ROWS='homefield Running\nsecond Stopped\n' LIMA_HOME="$lima" SETTINGS_DI
 record "sleep skips a Stopped VM: it is not asked and its records stay" "0/no" \
   "$rc/$(grep -q 'second-mac' "$calls" && echo yes || echo no)"
 record "...the Running VM still flips" "homefield-ci acme/api github.com" "$(cat "$state/autoflip" 2>/dev/null)"
+record "...the Running VM is recorded, and the stopped VM keeps its pending line for the next wake" "yes/yes" \
+  "$(sleep_running_has homefield)/$(sleep_running_has second)"
 
 # A VM literally named route-watcher: its own state file (route-watcher.state)
 # must survive a watcher run, because the watcher's records live in their own
@@ -1291,6 +1500,8 @@ record "...the route watcher LaunchAgent is installed and loaded" "yes/yes" \
   "$([ -f "$work/home/Library/LaunchAgents/com.homefield.route-watcher.plist" ] && echo yes || echo no)/$(grep -q 'launchctl load -w' "$calls" && echo yes || echo no)"
 record "...the agent logs to the state directory" "yes" \
   "$(grep -q 'route-watcher/log' "$work/home/Library/LaunchAgents/com.homefield.route-watcher.plist" && echo yes || echo no)"
+record "...the plist re-resolves python3 at every start (it survives python3 moving)" "yes" \
+  "$(grep -q 'command -v python3' "$work/home/Library/LaunchAgents/com.homefield.route-watcher.plist" && echo yes || echo no)"
 # The operator's tuning at install time reaches the agent: launchd does not
 # inherit a shell's environment, so every HOMEFIELD_WATCH_* the docs document
 # must be baked into the plist's own environment block.
@@ -1815,6 +2026,153 @@ PYEOF
 )"
   record "the watcher's tick launcher declares its globals and runs the tick" \
     "tick-ok" "$wl_out"
+
+  # SIGTERM kills the detached children: the wake recovery and the scaler
+  # tick run in sessions of their own, so the agent's death does not reach
+  # them — unloading the agent would otherwise leave them flipping
+  # repositories for their whole budget. A stub HOMEFIELD that sleeps stands
+  # in for the runs: the RunAtLoad wake and (with a short interval) the
+  # first tick both execute it, and the agent's SIGTERM must take both down.
+  rw_stub="$work/rw-stub.sh"
+  cat >"$rw_stub" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$\$" >>"$work/rw-stub.pids"
+sleep 300
+EOF
+  chmod +x "$rw_stub"
+  : >"$work/rw-stub.pids"
+  rw_main="$work/rw-main.py"
+  cat >"$rw_main" <<EOF
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("rw", "$ROOT/bin/route-watcher.py")
+rw = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(rw)
+rw.HOMEFIELD = "$rw_stub"
+sys.exit(rw.main())
+EOF
+  HOMEFIELD_STATE_DIR="$state" HOMEFIELD_SCALE_INTERVAL=0.5 HOMEFIELD_SCALE_TICK_BUDGET=10 \
+    python3 "$rw_main" &
+  rw_pid=$!
+  r=no
+  for _ in $(seq 1 50); do
+    [ "$(wc -l <"$work/rw-stub.pids" | tr -d ' ')" -ge 2 ] && { r=yes; break; }
+    sleep 0.1
+  done
+  record "the agent's SIGTERM test: the wake child and the tick child are both running" "yes" "$r"
+  kill -TERM "$rw_pid"
+  wait "$rw_pid"
+  rw_rc=$?
+  r=yes
+  for _ in $(seq 1 50); do
+    alive=0
+    while read -r p; do
+      [ -n "$p" ] && kill -0 "$p" 2>/dev/null && alive=1
+    done <"$work/rw-stub.pids"
+    [ "$alive" = 0 ] && break
+    sleep 0.1
+    [ "$_" = 50 ] && r=no
+  done
+  record "SIGTERM: the agent exits and its detached children die with it" "0/yes" "$rw_rc/$r"
+
+  # The scaler's loop is parked across the sleep-side flip: with the gate
+  # cleared (the WillSleep side's doing) no tick runs, however short the
+  # interval; setting the gate (the wake's doing) starts them again. The
+  # tick's HOMEFIELD is a stub that exits at once, so nothing is left behind.
+  gate_marker="$work/rw-gate-marker"
+  gate_stub="$work/rw-gate-stub.sh"
+  cat >"$gate_stub" <<EOF
+#!/usr/bin/env bash
+: >"$gate_marker"
+EOF
+  chmod +x "$gate_stub"
+  rm -f "$gate_marker"
+  rw_gate="$work/rw-gate.py"
+  cat >"$rw_gate" <<EOF
+import importlib.util, os, sys, threading, time
+spec = importlib.util.spec_from_file_location("rw", "$ROOT/bin/route-watcher.py")
+rw = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(rw)
+rw.HOMEFIELD = "$gate_stub"
+rw.SCALE_INTERVAL = 0.2
+rw.scale_gate.clear()
+threading.Thread(target=rw._scale_loop, daemon=True).start()
+time.sleep(1.5)
+paused = not os.path.exists("$gate_marker")
+rw.scale_gate.set()
+time.sleep(1.0)
+resumed = os.path.exists("$gate_marker")
+print("%s/%s" % ("yes" if paused else "no", "yes" if resumed else "no"))
+EOF
+  gate_res="$(HOMEFIELD_STATE_DIR="$state" python3 "$rw_gate" 2>&1)"
+  record "the scaler's loop is parked while the gate is cleared and runs once it is set" \
+    "yes/yes" "$gate_res"
+
+  # kill_tree on a run that already exited: only a reap, never a signal —
+  # the group id may belong to someone else by now.
+  rw_kt="$work/rw-kt.py"
+  cat >"$rw_kt" <<EOF
+import importlib.util, subprocess, sys
+spec = importlib.util.spec_from_file_location("rw", "$ROOT/bin/route-watcher.py")
+rw = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(rw)
+p = subprocess.Popen([sys.executable, "-c", "pass"])
+p.wait()
+rw.kill_tree(p)
+print("ok")
+EOF
+  kt_res="$(HOMEFIELD_STATE_DIR="$state" python3 "$rw_kt" 2>&1)"
+  record "kill_tree on an exited run: a reap, not a signal" "ok" "$kt_res"
+
+  # An older run's exit must not clear a newer run's process handle: the
+  # clear is guarded by an identity check, so replacing the global (a newer
+  # run publishing) survives the older thread's exit, for the wake recovery
+  # and the scaler tick both.
+  rw_ident="$work/rw-ident.py"
+  cat >"$rw_ident" <<EOF
+import importlib.util, os, subprocess, sys, threading, time
+spec = importlib.util.spec_from_file_location("rw", "$ROOT/bin/route-watcher.py")
+rw = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(rw)
+rw.HOMEFIELD = "$rw_stub"
+long_stub = "$rw_stub"
+new_proc = subprocess.Popen([long_stub], start_new_session=True)
+try:
+    # the wake run: an older thread, superseded by a newer publication
+    t = threading.Thread(target=rw._wake_run, args=(0,))
+    t.start()
+    old = None
+    for _ in range(100):
+        with rw.state_lock:
+            if rw.wake_proc is not None:
+                old = rw.wake_proc
+                break
+        time.sleep(0.05)
+    with rw.state_lock:
+        rw.wake_proc = new_proc
+    os.killpg(os.getpgid(old.pid), 9)
+    t.join(timeout=10)
+    wake_kept = rw.wake_proc is new_proc
+    # the scaler tick: the same shape
+    t = threading.Thread(target=rw.run_scale_tick)
+    t.start()
+    old = None
+    for _ in range(100):
+        with rw.state_lock:
+            if rw.scale_proc is not None:
+                old = rw.scale_proc
+                break
+        time.sleep(0.05)
+    with rw.state_lock:
+        rw.scale_proc = new_proc
+    os.killpg(os.getpgid(old.pid), 9)
+    t.join(timeout=10)
+    scale_kept = rw.scale_proc is new_proc
+    print("%s/%s" % ("yes" if wake_kept else "no", "yes" if scale_kept else "no"))
+finally:
+    os.killpg(os.getpgid(new_proc.pid), 9)
+EOF
+  ident_res="$(HOMEFIELD_STATE_DIR="$state" python3 "$rw_ident" 2>&1)"
+  record "an older run's exit does not clear a newer run's process handle" "yes/yes" "$ident_res"
 fi
 
 summary

@@ -1742,6 +1742,15 @@ stop_single() {
   [ -n "$VM_STATUS" ] || die "no VM ${INSTANCE}; nothing to stop"
   if [ "$VM_STATUS" != "Running" ]; then
     echo "VM ${INSTANCE}: already ${VM_STATUS}, nothing to stop"
+    # An explicit stop of a down VM is the same decision as a stop of a
+    # running one: its line in the watcher's sleep-running record goes, so
+    # the Mac's next wake does not start it again. A wake start that failed
+    # leaves the VM Stopped with its line still in the record — the operator
+    # stopping it by hand is what says it stays down. A drop that could not
+    # get the record's lock is loud, not silent (see the stop below).
+    if ! route_watcher_sleep_running_drop "$INSTANCE"; then
+      echo "homefield: could not update the watcher's sleep record for ${INSTANCE}; the Mac's next wake may start it again — run the stop again" >&2
+    fi
     return 0
   fi
   # A live job would be cancelled by the stop, so it is refused; a VM that
@@ -1772,6 +1781,18 @@ stop_single() {
   limactl stop "$INSTANCE" </dev/null ||
     die "could not stop VM ${INSTANCE} (Lima failed; docs/runbook.md, \"Failure modes\")"
   echo "VM ${INSTANCE}: Stopped"
+  # The stop was the operator's (or the scaler's) explicit decision that this
+  # VM stays down: its line in the watcher's sleep-running record goes, so
+  # the Mac's next wake does not start it again. Every stop path runs through
+  # here — a plain stop, --route-hosted, `fleet stop`, and the demand
+  # scaler's scale-to-zero (whose dark line is the wake-on-demand source that
+  # may bring the VM back). A stop that failed never gets here, and a VM
+  # with no line is already without one. A drop that could not get the
+  # record's lock is loud, not silent: the wake eligibility is then
+  # uncertain, and the operator should run the stop again.
+  if ! route_watcher_sleep_running_drop "$INSTANCE"; then
+    echo "homefield: could not update the watcher's sleep record for ${INSTANCE}; the Mac's next wake may start it again — run the stop again" >&2
+  fi
   return "$fallback_rc"
 }
 

@@ -17,10 +17,15 @@
 #                      runners. A VM with a job running — or one that cannot
 #                      be asked whether it has — is skipped, its records left
 #                      alone.
-#   route-watch wake   the Mac woke up or logged in: every VM with auto_route
-#                      on is started if it is not running, waited for until
-#                      its runner is listed online, and the repositories a
-#                      flip sent to hosted come back to local.
+#   route-watch wake   the Mac woke up or logged in: every VM the sleep side
+#                      recorded as running (auto_route on) is started if it
+#                      is not running, waited for until its runner is listed
+#                      online, and the repositories a flip sent to hosted
+#                      come back to local. A VM the user stopped by hand, or
+#                      one the demand scaler put dark, was not running at
+#                      sleep and stays down — a stop's own paths bring it
+#                      back (the explicit start, or the tick's wake on
+#                      demand), not the Mac's next wake.
 #
 # Both sides only touch VMs whose own auto_route is on: the watcher covers
 # every HomeField VM on the Mac, but a VM whose automatic fallback is off
@@ -68,6 +73,331 @@ route_watcher_running_write() {
 }
 
 route_watcher_running_clear() { rm -f "$(route_watcher_running_file)"; }
+
+# The sleep side's record of what was running: one instance name per line,
+# the VMs that were Running with the automatic fallback on when the Mac last
+# slept. The wake side starts only these — a VM the user stopped by hand, or
+# one the demand scaler's scale-to-zero put dark, was not running at sleep
+# and must not be woken by the Mac's next wake (a stop's own paths bring a
+# VM back: the explicit start, or the tick's wake on demand for a dark
+# line). The record is rewritten whole by every sleep run's pre-pass — with
+# the previous record's still-pending lines carried over: a VM still Stopped
+# with a valid line is a recovery that has not finished (a wake whose start
+# failed, or one the Mac slept again before it reached), and only a VM gone
+# from Lima's list, or an explicit stop, removes its line. Otherwise a line
+# goes when its VM is up again (the wake side) or stopped again (the stop
+# side), so a wake that runs without an intervening sleep — a LaunchAgent
+# restart — does not start a VM that has since been stopped by hand.
+route_watcher_sleep_running_file() { printf '%s/sleep-running' "$(route_watcher_dir)"; }
+
+# route_watcher_sleep_running_store: SLEEP_RUNNING (one instance name per
+# line, possibly empty) to the record, whole, through a temp file moved over
+# the target — the way the run record and the dark record are written, under
+# the record's lock (a store that overwrites a concurrent drop's result
+# would resurrect the line the drop removed).
+# Called by the multi-VM sleep run's pre-pass, between the status pass and
+# the guest identity reads (a guest that hangs in its read must not erase
+# the record the proven statuses earned), and never by a dispatched child
+# (the parent's pre-pass wrote the whole record already).
+route_watcher_sleep_running_store_transaction() {
+  local f dir lockpid old tmp name saved status verified="" vrc=""
+  f="$(route_watcher_sleep_running_file)"
+  dir="$(dirname "$f")"
+  mkdir -p "$dir" || return 1
+  # The snapshot was taken before this lock was held: a stop that completed
+  # in between has removed its VM's line, and storing the stale snapshot
+  # would put the line back — the next wake would start a VM someone
+  # explicitly stopped. Re-prove each recorded VM under the lock: a VM that
+  # is no longer Running (stopped by hand, or gone from the list) does not
+  # go into the record, but a Lima that cannot be asked at the re-prove
+  # keeps its line — the phase-1 proof stands, the same fail-safe direction
+  # as a pre-pass that cannot ask. A stop that has not stopped its VM yet
+  # removes the line after this store — its drop waits for this same lock.
+  saved="$INSTANCE"
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    INSTANCE="$name"
+    status=""
+    vrc=0
+    status="$(vm_status_of "$name")" || vrc=$?
+    if [ "$vrc" = 2 ]; then
+      # Lima could not be asked at the re-prove: the phase-1 proof that the
+      # VM was Running stands — the same fail-safe direction as a pre-pass
+      # that cannot ask leaves the previous record. Only a confirmed
+      # Stopped (or a VM gone from the list) loses its line here.
+      verified="${verified}${name}"$'\n'
+      continue
+    fi
+    [ "$status" = "Running" ] && verified="${verified}${name}"$'\n'
+  done <<<"$SLEEP_RUNNING"
+  # Lines the previous record holds that the snapshot does not carry: a VM
+  # still Stopped with a valid line is a recovery that has not finished —
+  # a wake whose start failed, or a wake that never reached it before the
+  # Mac slept again. Neither the operator nor the scaler stopped it (an
+  # explicit stop drops the line under this same lock, before this
+  # transaction reads the record or after it releases it), so the line
+  # must survive this store: the next wake retries the start. A VM the
+  # list no longer names is gone, and its line goes with it; a Lima that
+  # cannot be asked keeps the line, the same fail-safe direction as the
+  # snapshot's re-prove above. A line the snapshot did carry is never
+  # merged back: the re-prove above already decided it — kept as Running,
+  # or dropped because a stop landed mid-pass (the stop's drop removes the
+  # line after this store) or the VM is gone — and merging it back would
+  # resurrect a line the stop is about to remove, in a window a wake that
+  # reads the record without the lock could see.
+  old=""
+  if [ -f "$f" ]; then
+    old="$(cat "$f" 2>/dev/null)" || old=""
+  fi
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    if printf '%s' "$SLEEP_RUNNING" | grep -Fxq "$name"; then
+      continue
+    fi
+    if printf '%s' "$verified" | grep -Fxq "$name"; then
+      continue
+    fi
+    INSTANCE="$name"
+    status=""
+    vrc=0
+    status="$(vm_status_of "$name")" || vrc=$?
+    if [ "$vrc" = 2 ] || [ -n "$status" ]; then
+      verified="${verified}${name}"$'\n'
+    fi
+  done <<<"$old"
+  INSTANCE="$saved"
+  SLEEP_RUNNING="$verified"
+  tmp="$(mktemp "$dir/.sleep-running.XXXXXX")" || return 1
+  # The lock must still be mine: a reclamation by another writer could
+  # have replaced it while this transaction ran (the reclamation is
+  # fenced, but the fence's windows are measured in microseconds, not
+  # zero). If it is not mine, the write must not land under another
+  # writer's lock — the transaction gives up and the wrapper retries.
+  lockpid="$(sed -n 's/^pid=//p' "$(route_watcher_sleep_running_lock_dir)/owner" 2>/dev/null)"
+  if [ "$lockpid" != "$$" ]; then
+    rm -f "$tmp"
+    return 1
+  fi
+  printf '%s' "$SLEEP_RUNNING" >"$tmp" || { rm -f "$tmp"; return 1; }
+  mv -f "$tmp" "$f" || { rm -f "$tmp"; return 1; }
+  return 0
+}
+
+route_watcher_sleep_running_store() {
+  local attempt=0 rc
+  while [ "$attempt" -lt 3 ]; do
+    attempt=$((attempt + 1))
+    rc=0
+    route_watcher_sleep_running_with_lock || return 1
+    route_watcher_sleep_running_store_transaction || rc=$?
+    route_watcher_sleep_running_unlock
+    if [ "$rc" -eq 0 ]; then
+      return 0
+    fi
+  done
+  return "$rc"
+}
+
+# route_watcher_sleep_running_lock: the record's writers — the pre-pass's
+# store, the explicit-instance sleep's add, and the stop and wake sides'
+# drop — run one at a time. The record is rewritten whole through a temp
+# file and an atomic rename, but rename alone does not serialize two
+# writers that both read the same record before either replaces it: the
+# last rename would resurrect the line the other removed, and a stopped VM
+# would be started again by the next wake. The lock is a directory (mkdir
+# is atomic); its owner file carries the pid, so a writer killed
+# mid-transaction — the sleep budget kills a whole sleep run — leaves a
+# lock the next writer steals once the owner is gone. The reclamation is
+# fenced twice: it only removes a lock whose owner is still the same dead
+# pid the contender saw, and it removes the directory by renaming it to a
+# unique name, so of two reclaimers only one gets the directory — the
+# other's removal cannot take a replacement lock with it. A live owner is
+# never stolen, however long it holds the lock: the transaction may run
+# Lima reads, and taking a live writer's lock would reintroduce the race
+# the lock exists to prevent. Instead a writer waits a live holder out —
+# by default half a minute, which covers a sleep-side store (the sleep
+# budget kills a sleep run at HOMEFIELD_WATCH_SLEEP_BUDGET, 20 s, before
+# it could hold the lock longer) — and a writer that still cannot get the
+# lock leaves the record as it is, loudly on the stop side. A lock with no
+# owner at all — a writer killed between the mkdir and the owner write —
+# has nothing alive to check and is stolen once it has stayed undescribed
+# for a fraction of a second.
+route_watcher_sleep_running_lock_dir() { printf '%s/.sleep-running.lock' "$(route_watcher_dir)"; }
+
+# The wait for a live holder, in seconds. HOMEFIELD_SLEEP_RUNNING_LOCK_WAIT
+# overrides it (the tests drive it down; nothing else should).
+route_watcher_sleep_running_lock_wait() {
+  case "${HOMEFIELD_SLEEP_RUNNING_LOCK_WAIT:-}" in
+    ''|*[!0-9.]*) echo 30 ;;
+    *) echo "${HOMEFIELD_SLEEP_RUNNING_LOCK_WAIT}" ;;
+  esac
+}
+
+route_watcher_sleep_running_with_lock() {
+  local curpid dir ownerless=0 pid rounds trash waited=0
+  dir="$(route_watcher_sleep_running_lock_dir)"
+  mkdir -p "$(dirname "$dir")" || return 1
+  rounds="$(awk -v w="$(route_watcher_sleep_running_lock_wait)" 'BEGIN { print int(w / 0.05) }')"
+  until mkdir "$dir" 2>/dev/null; do
+    if [ -f "$dir/owner" ]; then
+      pid="$(sed -n 's/^pid=//p' "$dir/owner" 2>/dev/null)"
+      if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+        waited=$((waited + 1))
+        if [ "$waited" -gt "$rounds" ]; then
+          return 1
+        fi
+        sleep 0.05
+        continue
+      fi
+      # The owner is gone: a writer killed mid-transaction. Reclaim the
+      # lock, but only if it is still this same dead owner — another
+      # writer may have reclaimed it first, and this reclamation must not
+      # delete the replacement lock. The reclaim itself is a rename to a
+      # unique name, so of two reclaimers only one gets the directory.
+      curpid="$(sed -n 's/^pid=//p' "$dir/owner" 2>/dev/null)"
+      if [ "$curpid" != "$pid" ]; then
+        continue
+      fi
+      trash="${dir}.stale.$$.$RANDOM.$(date +%s)"
+      if mv "$dir" "$trash" 2>/dev/null; then
+        rm -rf "${trash:?}" 2>/dev/null || true
+      fi
+      continue
+    fi
+    # No owner: a live writer publishes it within the first retry, so a
+    # lock still undescribed after a fraction of a second is a writer
+    # killed between the mkdir and the owner write. Reclaim it the same
+    # way, but only if it is still undescribed.
+    if [ "$ownerless" -le 20 ]; then
+      ownerless=$((ownerless + 1))
+      sleep 0.05
+      continue
+    fi
+    if [ -f "$dir/owner" ]; then
+      continue
+    fi
+    trash="${dir}.stale.$$.$RANDOM.$(date +%s)"
+    if mv "$dir" "$trash" 2>/dev/null; then
+      rm -rf "${trash:?}" 2>/dev/null || true
+    fi
+    continue
+  done
+  printf 'pid=%s\nstarted=%s\n' "$$" "$(date +%s)" >"$dir/owner" 2>/dev/null
+  return 0
+}
+
+# The release: only the owner removes the lock. A transaction that lost
+# its lock to a reclamation (the transactions check, see below) must not
+# take the new owner's lock down with it.
+route_watcher_sleep_running_unlock() {
+  local dir pid
+  dir="$(route_watcher_sleep_running_lock_dir)"
+  pid="$(sed -n 's/^pid=//p' "$dir/owner" 2>/dev/null)"
+  if [ "$pid" = "$$" ]; then
+    rm -rf "${dir:?}" 2>/dev/null || true
+  fi
+  return 0
+}
+
+# route_watcher_sleep_running_has <name>: whether the VM was running when
+# the Mac slept. A read needs no lock: the writers' rename is atomic, so a
+# concurrent read sees the old or the new record, both whole.
+route_watcher_sleep_running_has() {
+  local f
+  f="$(route_watcher_sleep_running_file)"
+  [ -f "$f" ] || return 1
+  grep -Fxq "$1" "$f"
+}
+
+# route_watcher_sleep_running_add <name>: one line for a VM the pre-pass did
+# not see — an explicit `route-watch sleep --instance` runs no pre-pass, so
+# it maintains its own VM's line itself. The record is rewritten whole (the
+# name's line replaced, the rest kept), through a temp file, under the
+# record's lock.
+route_watcher_sleep_running_add_transaction() {
+  local f dir lockpid tmp rc name="$1"
+  f="$(route_watcher_sleep_running_file)"
+  dir="$(dirname "$f")"
+  mkdir -p "$dir" || return 1
+  tmp="$(mktemp "$dir/.sleep-running.XXXXXX")" || return 1
+  rc=0
+  if [ -f "$f" ]; then
+    # `cmd || rc=$?` captures the status without tripping set -e: grep's
+    # "no line kept" answer (1) is normal here, not an error.
+    grep -Fxv "$name" "$f" >"$tmp" || rc=$?
+    if [ "$rc" -gt 1 ]; then
+      rm -f "$tmp"
+      return 1
+    fi
+  else
+    : >"$tmp" || { rm -f "$tmp"; return 1; }
+  fi
+  printf '%s\n' "$name" >>"$tmp" || { rm -f "$tmp"; return 1; }
+  # The lock must still be mine (see the store's transaction).
+  lockpid="$(sed -n 's/^pid=//p' "$(route_watcher_sleep_running_lock_dir)/owner" 2>/dev/null)"
+  if [ "$lockpid" != "$$" ]; then
+    rm -f "$tmp"
+    return 1
+  fi
+  mv -f "$tmp" "$f" || { rm -f "$tmp"; return 1; }
+  return 0
+}
+
+route_watcher_sleep_running_add() {
+  local attempt=0 rc
+  while [ "$attempt" -lt 3 ]; do
+    attempt=$((attempt + 1))
+    rc=0
+    route_watcher_sleep_running_with_lock || return 1
+    route_watcher_sleep_running_add_transaction "$1" || rc=$?
+    route_watcher_sleep_running_unlock
+    if [ "$rc" -eq 0 ]; then
+      return 0
+    fi
+  done
+  return "$rc"
+}
+
+# route_watcher_sleep_running_drop <name>: the VM is up, stopped by hand, or
+# gone; its line goes with it, the record rewritten whole through a temp
+# file, under the record's lock. A missing record is already without the
+# line.
+route_watcher_sleep_running_drop_transaction() {
+  local f dir lockpid tmp rc name="$1"
+  f="$(route_watcher_sleep_running_file)"
+  [ -f "$f" ] || return 0
+  dir="$(dirname "$f")"
+  tmp="$(mktemp "$dir/.sleep-running.XXXXXX")" || return 1
+  rc=0
+  grep -Fxv "$name" "$f" >"$tmp" || rc=$?
+  if [ "$rc" -gt 1 ]; then
+    rm -f "$tmp"
+    return 1
+  fi
+  # The lock must still be mine (see the store's transaction).
+  lockpid="$(sed -n 's/^pid=//p' "$(route_watcher_sleep_running_lock_dir)/owner" 2>/dev/null)"
+  if [ "$lockpid" != "$$" ]; then
+    rm -f "$tmp"
+    return 1
+  fi
+  mv -f "$tmp" "$f" || { rm -f "$tmp"; return 1; }
+  return 0
+}
+
+route_watcher_sleep_running_drop() {
+  local attempt=0 rc
+  while [ "$attempt" -lt 3 ]; do
+    attempt=$((attempt + 1))
+    rc=0
+    route_watcher_sleep_running_with_lock || return 1
+    route_watcher_sleep_running_drop_transaction "$1" || rc=$?
+    route_watcher_sleep_running_unlock
+    if [ "$rc" -eq 0 ]; then
+      return 0
+    fi
+  done
+  return "$rc"
+}
 
 # route_watcher_is_running: whether a watcher run is live — the marker
 # exists, its pid is alive, and the run started within the last half hour
@@ -303,14 +633,34 @@ route_watcher_remove_if_unneeded() {
 # cannot be asked poisons the whole flip — its runner may still be listed
 # online and serving the label — so a failure here flips nothing (fail safe,
 # the same direction as Part 1's).
+#
+# The same pass collects the wake side's record: SLEEP_RUNNING, one name per
+# line, every Running VM whose own automatic fallback is on. A VM whose flip
+# was later skipped (a job was running) is still recorded — it was running
+# when the Mac slept, and the wake side brings it back. A Stopped VM —
+# stopped by hand, or scaled dark — is not: the wake side must not start it.
+# The pass runs in two phases, and the parent stores the record between
+# them: phase one proves every VM's status and collects the record (the
+# record needs only Running and auto_route on), phase two reads the Running
+# VMs' runner identities for the flip's exclusions. The store sits before
+# any guest identity read because a guest can hang in its `limactl shell`
+# until the sleep budget kills the whole run — the VMs' proven Running
+# statuses must already be on disk by then, or the next wake (the previous
+# record having been consumed) would refuse to start them. An identity read
+# that fails returns 2: the flip is poisoned (the exclusions are incomplete
+# and a runner that may still be online must not lose its jobs), but the
+# record is already stored. A failure that leaves a status unproven — the
+# VM list, or Lima not answering about a VM — returns 1 and the previous
+# record stays: it holds the VMs running at the last proven sleep, and
+# nothing newer is known.
 route_watch_collect_runners() {
-  local list name saved status
+  local identity_failed=0 list name running="" saved status
   saved="$INSTANCE"
+  SLEEP_RUNNING=""
   if ! list="$(vm_instances)"; then
     echo "homefield: could not list the VMs; the routed repositories stay as they are" >&2
     return 1
   fi
-  ROUTE_EXCLUDE_RUNNERS=""
   while IFS= read -r name; do
     [ -n "$name" ] || continue
     INSTANCE="$name"
@@ -322,16 +672,32 @@ route_watch_collect_runners() {
       return 1
     fi
     [ "$status" = "Running" ] || continue
+    running="${running}${name}"$'\n'
+    if [ "$(state_get auto_route)" = "1" ]; then
+      SLEEP_RUNNING="${SLEEP_RUNNING}${name}"$'\n'
+    fi
+  done <<<"$list"
+  INSTANCE="$saved"
+  # The record goes to disk here, before any guest is contacted: this is
+  # the last point at which a later hang cannot erase it.
+  if ! route_watcher_sleep_running_store; then
+    echo "homefield: could not write $(route_watcher_sleep_running_file); the wake side will not start VMs it cannot prove were running" >&2
+  fi
+  ROUTE_EXCLUDE_RUNNERS=""
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    INSTANCE="$name"
     load_runner_settings
     if [ -z "$RS_NAME" ] || [ -z "$RS_URL" ]; then
       echo "homefield: could not read VM ${name}'s runner identity; the routed repositories stay as they are (fail safe: a runner that may still be online must not lose its jobs)" >&2
-      INSTANCE="$saved"
-      return 1
+      identity_failed=1
+      continue
     fi
     ROUTE_EXCLUDE_RUNNERS="${ROUTE_EXCLUDE_RUNNERS}${RS_URL}"$'\t'"${RS_NAME}"$'\n'
-  done <<<"$list"
+  done <<<"$running"
   INSTANCE="$saved"
-  return 0
+  [ "$identity_failed" = 0 ] && return 0
+  return 2
 }
 
 # route_watch_sleep_single: one VM's sleep side. The Part 1 flip, without
@@ -343,11 +709,24 @@ route_watch_collect_runners() {
 route_watch_sleep_single() {
   vm_lookup
   [ -n "$VM_STATUS" ] || { log "VM ${INSTANCE}: does not exist; nothing to watch"; return 0; }
-  [ "$VM_STATUS" = "Running" ] || { log "VM ${INSTANCE}: ${VM_STATUS}; its runner is not taking jobs, so there is nothing to flip"; return 0; }
   if [ "$(state_get auto_route)" != "1" ]; then
     log "VM ${INSTANCE}: the automatic fallback is off; leaving its routing alone"
+    # An explicit --instance sleep runs no pre-pass, so it maintains its own
+    # VM's line itself: the fallback is off, the line goes. A dispatched
+    # child must not — the parent's pre-pass wrote the whole record already.
+    if [ "$EXPLICIT_INSTANCE" = 1 ] && [ "${HOMEFIELD_ONE_OF_MANY:-0}" != 1 ]; then
+      route_watcher_sleep_running_drop "$INSTANCE" || true
+    fi
     return 0
   fi
+  if [ "$EXPLICIT_INSTANCE" = 1 ] && [ "${HOMEFIELD_ONE_OF_MANY:-0}" != 1 ]; then
+    if [ "$VM_STATUS" = "Running" ]; then
+      route_watcher_sleep_running_add "$INSTANCE" || true
+    else
+      route_watcher_sleep_running_drop "$INSTANCE" || true
+    fi
+  fi
+  [ "$VM_STATUS" = "Running" ] || { log "VM ${INSTANCE}: ${VM_STATUS}; its runner is not taking jobs, so there is nothing to flip"; return 0; }
   local jrc=0
   job_running || jrc=$?
   case "$jrc" in
@@ -381,25 +760,43 @@ route_watch_sleep_single() {
 }
 
 # route_watch_wake_single: one VM's wake side. Start it if it is not running
-# (the Lima VMs do not survive sleep cleanly), wait for its runner to be
-# listed online — the restore needs GitHub's row for the runner, and
-# restoring while it is still offline would point the repositories at a
-# runner that is not taking jobs — then bring the flipped repositories back
-# to local. The waits are bounded (HOMEFIELD_WATCH_WAKE_WAIT, default 120 s):
-# a VM that does not come back keeps its entries for the next start or the
-# next wake, and the run says so loudly.
+# and the sleep side recorded it as running (the Lima VMs do not survive
+# sleep cleanly), wait for its runner to be listed online — the restore needs
+# GitHub's row for the runner, and restoring while it is still offline would
+# point the repositories at a runner that is not taking jobs — then bring the
+# flipped repositories back to local. A VM the sleep side did not record was
+# not running when the Mac slept — stopped by hand, or scaled dark — and
+# stays down: a stop's own paths bring it back (the explicit start, or the
+# tick's wake on demand for a dark line), not the Mac's next wake. The waits
+# are bounded (HOMEFIELD_WATCH_WAKE_WAIT, default 120 s): a VM that does not
+# come back keeps its entries for the next start or the next wake, and the
+# run says so loudly.
 route_watch_wake_single() {
   vm_lookup
-  [ -n "$VM_STATUS" ] || { log "VM ${INSTANCE}: does not exist; nothing to watch"; return 0; }
+  if [ -z "$VM_STATUS" ]; then
+    log "VM ${INSTANCE}: does not exist; nothing to watch"
+    # Lima answered and named no VM: a stale line would only wait for a VM
+    # that is gone.
+    route_watcher_sleep_running_drop "$INSTANCE" || true
+    return 0
+  fi
   if [ "$(state_get auto_route)" != "1" ]; then
     log "VM ${INSTANCE}: the automatic fallback is off; leaving its routing alone"
     return 0
   fi
   if [ "$VM_STATUS" != "Running" ]; then
-    log "VM ${INSTANCE}: starting it (the Mac woke up or logged in)"
+    if ! route_watcher_sleep_running_has "$INSTANCE"; then
+      log "VM ${INSTANCE}: was not running when the Mac slept (stopped by hand, or scaled dark); not starting it — its pending repositories wait for the next start or a demand wake"
+      return 0
+    fi
+    log "VM ${INSTANCE}: starting it (it was running when the Mac slept)"
     limactl start --tty=false "$INSTANCE" </dev/null ||
       { echo "homefield: could not start VM ${INSTANCE}; its flipped repositories stay hosted until the next start" >&2; return 1; }
   fi
+  # The VM is up: its line in the sleep record goes, so a wake that runs
+  # again before the next sleep — a LaunchAgent restart — does not start a
+  # VM the user has since stopped by hand.
+  route_watcher_sleep_running_drop "$INSTANCE" || true
   # The guest answers only once it is up; a boot that is still settling
   # reads as "could not ask", so the identity read retries before it gives
   # up (30 s in total, on top of the limactl start that already waited).
@@ -465,7 +862,9 @@ cmd_route_watch() {
   # The mode goes with the dispatch: a multi-VM run's per-VM children re-run
   # the command with --instance, and the mode must survive that.
   if [ "$mode" = sleep ] && [ "$EXPLICIT_INSTANCE" = 0 ]; then
-    if ! route_watch_collect_runners; then
+    collect_rc=0
+    route_watch_collect_runners || collect_rc=$?
+    if [ "$collect_rc" != 0 ]; then
       route_watcher_record sleep 1 || true
       if [ "${HOMEFIELD_ONE_OF_MANY:-0}" != 1 ]; then
         route_watcher_running_clear

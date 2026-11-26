@@ -715,7 +715,9 @@ agent also drives the demand scaler of the next section: a second loop runs
 one `homefield fleet watch` tick per interval, and a tick stands down while
 a sleep/wake run is in progress. A sleep notification kills a running tick
 the same way it kills a wake recovery — including one that has just been
-launched, which is cancelled before it can run anything. The spare's
+launched, which is cancelled before it can run anything — and parks the
+loop until the wake, so no fresh tick spawns in the middle of the
+sleep-side flip. The spare's
 install never reloads the agent: an unload would stop the very helper
 supervising the tick mid-install, so a spare's `--auto-route` leaves the
 installed agent as it is (a hand-run `upgrade --auto-route` is what
@@ -736,15 +738,70 @@ with runners for two organizations does not let one org's local runner name
 exclude a same-named remote runner of the other org — that remote runner is
 still there and still serves its repositories.
 
-The wake side starts every VM whose `auto_route` is on if it is not running,
+The wake side starts every VM the sleep side recorded as running — the
+ones whose own `auto_route` was on and that were Running when the Mac slept,
+whether their flip landed or was skipped for a job — if it is not running,
 waits for each runner to be listed online (up to
 `HOMEFIELD_WATCH_WAKE_WAIT` seconds per VM, default 120), and runs the
-start-side restore. A VM that does not come back, and a GitHub that cannot
-be asked, keep their pending entries for the next `start` or the next wake
+start-side restore. A VM that was not running at sleep — stopped by hand, or
+scaled dark by the demand scaler — is not started: the Mac's wake is not
+demand, and booting such a VM would burn a full idle cooldown with no work
+for it. A stop's own paths bring a VM back — the operator's `start`, or the
+tick's wake on demand for a dark line (the scale-to-zero section below) —
+and a stopped VM's pending entries keep waiting for that start. A VM that
+does not come back, and a GitHub that cannot be asked, keep their pending
+entries for the next `start` or the next wake
 and the run says so. A VM with `auto_route` off is never touched by the
 watcher on either side: its routing stays exactly where the operator left
 it, and its pending entries keep waiting for the explicit `start
 --route-local`.
+
+A stop cancels a VM's wake eligibility: every stop path — a plain `stop`,
+`--route-hosted`, `fleet stop`, and the demand scaler's scale-to-zero —
+removes the VM's line from the sleep record, so the Mac's next wake does
+not start a VM someone explicitly put down. A stop of an already-stopped
+VM does the same: a wake start that failed leaves the VM Stopped with its
+line still in the record, and the operator's stop is what says it stays
+down. (The scaler's zero-stop writes
+the dark line that arms the demand wake, the same stop.) The record is
+rewritten whole by every sleep run, with the previous record's
+still-pending lines carried over: a VM still Stopped with a valid line is
+a recovery that has not finished — a wake whose start failed, or one the
+Mac slept again before it reached — and only a VM gone from Lima's list,
+or an explicit stop, removes its line; the next wake retries the start.
+Otherwise a line goes when its VM is up again, so a wake that runs without
+an intervening sleep — a LaunchAgent restart — does not start a VM that
+has since been stopped by hand. The
+record's writers hold a lock while they rewrite it: two overlapping
+writers (a stop racing a wake's line-drop, or two stops) would otherwise
+read the same record before either replaces it, and the last rename
+would resurrect the line the other removed. A lock left behind by a
+killed writer is stolen once its owner is gone — including one whose
+writer died before it could write its owner, stolen once it has stayed
+undescribed through the wait — and a live owner is never stolen,
+however long it holds the lock. The reclamation is fenced: it only
+removes a lock whose owner is still the dead pid the writer saw, and it
+removes the directory by a rename only one contender can win, so two
+reclaimers cannot take each other's replacement lock; a transaction
+whose lock was taken over mid-flight gives up and retries rather than
+writing under another writer's lock. Instead a writer waits a live
+holder out — half a minute by default, which covers a sleep-side store,
+since the sleep budget kills a sleep run before it could hold the lock
+longer — and a writer that still cannot get the lock leaves the record
+as it is, loudly on the stop side: the stop says the wake eligibility is
+uncertain and to run it again. The store re-proves each recorded VM
+under the lock, so a stop that completed between the pre-pass's status
+read and the store is not undone by the stale snapshot; a Lima that
+cannot be asked at the re-prove keeps the line, the phase-1 proof
+standing. A sleep run whose pre-pass cannot read a Running VM's runner
+identity
+still writes the record: the flip fails safe (nothing is flipped), but
+the VMs' Running statuses were proven, and the wake side must not lose
+them. The record is stored after the statuses and before any guest
+identity read, so a guest that hangs in its read — the sleep budget
+killing the whole run — cannot erase it either. Only a pre-pass that
+cannot even prove the statuses — the VM list, or Lima not answering
+about a VM — leaves the previous record.
 
 The watcher is fail-safe in the same direction as the rest of the fallback:
 when a flip cannot be proven, a VM cannot be asked, or a restore cannot
@@ -768,7 +825,12 @@ of its own, because it can wait
 minutes per VM: if the Mac goes back to sleep while a wake recovery is
 still running, the sleep notification kills the recovery and runs the
 sleep-side flip, so the repositories are never left routed to a runner that
-is about to disappear with the Mac.
+is about to disappear with the Mac. Unloading the agent (or the Mac shutting
+down) is a SIGTERM, and the wake recovery and the scaler tick run detached
+in sessions of their own — the agent's death does not reach them — so the
+helper handles SIGTERM by killing both before it exits: without that, an
+unloaded agent would leave a wake recovery or a tick flipping repositories
+for its whole budget (minutes to half an hour) with no agent behind it.
 
 `--no-auto-route`, `uninstall` and `reset` remove the agent when no
 remaining VM on this Mac has the fallback on; while any VM wants it, the

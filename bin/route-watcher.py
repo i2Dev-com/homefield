@@ -16,16 +16,29 @@ the Mac is not held up:
   logged loudly; the repositories it did not reach stay routed local, which
   is the status quo, and the wake side restores the ones it did reach. The
   clock is wall time, so a sleep that interrupts the wait still expires the
-  budget right after the wake.
+  budget right after the wake. The demand scaler's loop is parked across the
+  flip (a WillSleep kills the running tick; the loop stays parked until the
+  wake, so no fresh tick spawns mid-flip).
 - kIOMessageCanSystemSleep: acknowledge (idle sleep is fine; the work
   happens on WillSleep).
+- kIOMessageSystemWillNotSleep: the sleep was cancelled; the scaler's loop
+  runs again.
 - kIOMessageSystemHasPoweredOn: run `route-watch wake` (start the auto-route
-  VMs, wait for the runners to be online, restore), bounded by
-  HOMEFIELD_WATCH_WAKE_BUDGET (default 10 min; the wake path's own waits are
-  bounded per VM, and a stuck one must not keep the agent from the next
-  sleep). It runs in a thread of its own, because it can wait minutes and
-  the run-loop thread must stay free to receive the next sleep notification;
-  a WillSleep kills a running wake recovery before the sleep-side flip.
+  VMs that were running when the Mac slept, wait for the runners to be
+  online, restore), bounded by HOMEFIELD_WATCH_WAKE_BUDGET (default 10 min;
+  the wake path's own waits are bounded per VM, and a stuck one must not
+  keep the agent from the next sleep). It runs in a thread of its own,
+  because it can wait minutes and the run-loop thread must stay free to
+  receive the next sleep notification; a WillSleep kills a running wake
+  recovery before the sleep-side flip.
+
+SIGTERM (launchd unloading the agent, or the Mac shutting down) and SIGINT
+kill the detached wake and tick children before the process exits: they run
+in sessions of their own, so the agent's death does not reach them, and
+without the handler they would keep flipping repositories for an agent that
+is gone. The run loop runs in bounded slices so the handler — a Python-level
+one, which only runs at a bytecode checkpoint of the main thread — gets a
+checkpoint while the Mac is quiet.
 
 At load — login, or launchd restarting the agent — the wake path runs once:
 the agent's RunAtLoad makes a login a wake for this purpose, and a crashed
@@ -114,12 +127,14 @@ IOKit.IONotificationPortGetRunLoopSource.argtypes = [ctypes.c_void_p]
 CF.CFRunLoopGetCurrent.restype = ctypes.c_void_p
 CF.CFRunLoopAddSource.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
 CF.CFRunLoopRun.restype = None
+# The bounded-slice run loop (see main): the mode is a pointer, so its
+# argtypes must be declared — ctypes would pass it as a plain int and
+# truncate it.
+CF.CFRunLoopRunInMode.argtypes = [ctypes.c_void_p, ctypes.c_double, ctypes.c_bool]
+CF.CFRunLoopRunInMode.restype = ctypes.c_int32
 # The default run-loop mode is a CFStringRef constant: the pointer value
 # stored at the symbol, read with in_dll.
 kCFRunLoopDefaultMode = ctypes.c_void_p.in_dll(CF, "kCFRunLoopDefaultMode")
-
-sleep_child = None
-
 
 def log(message):
     print(message, file=sys.stderr, flush=True)
@@ -134,8 +149,12 @@ def kill_tree(proc):
     stale-flip protection must reach the whole tree. The command is started
     in a session of its own (start_new_session), so the group is exactly the
     run's tree; the parent may already be gone, and then the group id is
-    what is still signalled.
+    what is still signalled. A run that has already exited is only reaped:
+    its group id may belong to someone else by now, and signalling it would
+    kill an unrelated process tree.
     """
+    if proc.poll() is not None:
+        return
     try:
         os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
     except (ProcessLookupError, PermissionError):
@@ -203,10 +222,12 @@ def _wake_run(gen):
     global wake_proc
     proc = subprocess.Popen([HOMEFIELD, "route-watch", "wake"], start_new_session=True)
     with state_lock:
-        if gen != wake_generation:
+        if gen != wake_generation or shutting_down:
             # Superseded between our start and this publication: a newer
-            # start_wake took over, or a sleep notification cancelled the
-            # recovery outright. The fresh process must not run.
+            # start_wake took over, a sleep notification cancelled the
+            # recovery outright, or the agent is exiting (the SIGTERM
+            # handler killed what it could see; this fresh process must not
+            # outlive it). The fresh process must not run.
             kill_tree(proc)
             return
         wake_proc = proc
@@ -215,14 +236,18 @@ def _wake_run(gen):
         try:
             proc.wait(timeout=0.5)
             with state_lock:
-                wake_proc = None
+                # Only our own handle goes: a newer run's process must not
+                # be cleared by an older thread's exit.
+                if wake_proc is proc:
+                    wake_proc = None
             return
         except subprocess.TimeoutExpired:
             pass
         if time.time() >= deadline:
             kill_tree(proc)
             with state_lock:
-                wake_proc = None
+                if wake_proc is proc:
+                    wake_proc = None
             log(
                 "route-watch wake did not finish within %ds; killed. Repositories "
                 "it did not reach keep their previous routing; the next wake or "
@@ -279,6 +304,16 @@ def stop_wake():
 scale_proc = None
 scale_generation = 0
 
+# The demand scaler's gate: set while the Mac is awake and the loop's next
+# tick may run, cleared across the sleep-side flip. A WillSleep kills the
+# running tick, but without the gate the loop's next interval would spawn a
+# new one mid-flip — a tick routing repositories while the sleep-side flip
+# is routing them the other way. The HasPoweredOn wake sets the gate again,
+# and so does a WillNotSleep (the sleep was cancelled), so a cancelled sleep
+# does not leave the scaler parked.
+scale_gate = threading.Event()
+scale_gate.set()
+
 
 def stop_scale():
     """Kill a running demand-scaler tick."""
@@ -309,10 +344,12 @@ def run_scale_tick():
         [HOMEFIELD, "fleet", "watch", "--max-ticks", "1"], start_new_session=True
     )
     with state_lock:
-        if gen != scale_generation:
+        if gen != scale_generation or shutting_down:
             # Superseded between our start and this publication: a sleep
-            # notification cancelled the tick outright. The fresh process
-            # must not run.
+            # notification cancelled the tick outright, or the agent is
+            # exiting (the SIGTERM handler killed what it could see; this
+            # fresh process must not outlive it). The fresh process must
+            # not run.
             kill_tree(proc)
             return
         scale_proc = proc
@@ -321,14 +358,18 @@ def run_scale_tick():
         try:
             proc.wait(timeout=0.5)
             with state_lock:
-                scale_proc = None
+                # Only our own handle goes: a newer tick's process must not
+                # be cleared by an older thread's exit.
+                if scale_proc is proc:
+                    scale_proc = None
             return
         except subprocess.TimeoutExpired:
             pass
         if time.time() >= deadline:
             kill_tree(proc)
             with state_lock:
-                scale_proc = None
+                if scale_proc is proc:
+                    scale_proc = None
             log(
                 "fleet watch tick did not finish within %ds; killed. A "
                 "secondary it was half-creating stays behind; the next tick "
@@ -342,7 +383,13 @@ def _scale_loop():
     """The scaler's thread: sleep, tick, repeat, surviving anything one tick
     does — the loop must outlive a tick's failure for the ones after it."""
     while True:
+        scale_gate.wait()
         time.sleep(SCALE_INTERVAL)
+        # The Mac went to sleep mid-interval: the gate is cleared and this
+        # interval's tick must not run into the sleep-side flip (the wake
+        # sets the gate again).
+        if not scale_gate.is_set():
+            continue
         try:
             run_scale_tick()
         except Exception as exc:  # noqa: BLE001 - the loop must survive
@@ -405,14 +452,52 @@ def on_power_event(_refcon, _service, message_type, message_argument):
         # the Mac is going back to sleep — and this thread must stay free to
         # answer this notification: kill it before the flip. The demand
         # scaler's tick goes the same way: a create frozen mid-flight would
-        # resume into the awake world, and the next tick starts over.
+        # resume into the awake world, and the next tick starts over. The
+        # loop is parked with them (the gate): without it, the loop's next
+        # interval would spawn a fresh tick mid-flip, routing repositories
+        # while the flip is routing them the other way.
+        scale_gate.clear()
         stop_scale()
         stop_wake()
         stop_webhook_tick()
         run_route_watch("sleep", SLEEP_BUDGET)
         acknowledge(root_port, message_argument)
+    elif message_type == kIOMessageSystemWillNotSleep:
+        # The sleep was cancelled: the loop's ticks may run again (a no-op
+        # when no WillSleep cleared the gate before this).
+        scale_gate.set()
     elif message_type == kIOMessageSystemHasPoweredOn:
+        scale_gate.set()
         start_wake()
+
+
+# SIGTERM (launchd unloading the agent, or the Mac shutting down) and SIGINT:
+# kill the detached children, then exit. The wake recovery and the scaler
+# tick run in sessions of their own (start_new_session), so the agent's death
+# does not reach them — without this handler they would outlive the agent for
+# their whole budget (a wake recovery runs minutes, a tick up to half an
+# hour), flipping repositories for an agent that is gone.
+#
+# The globals are read without state_lock: the handler runs on the run-loop
+# thread between bytecodes and must not deadlock against a thread holding
+# the lock. A child that has started but not published its process yet sees
+# shutting_down at publication and kills itself instead; the short sleep
+# gives those threads their moment before the process goes away. A missed
+# child is bounded by its budget either way.
+shutting_down = False
+
+
+def _terminate(_signum, _frame):
+    global shutting_down
+    shutting_down = True
+    for proc in (wake_proc, scale_proc):
+        if proc is not None and proc.poll() is None:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except OSError:
+                pass
+    time.sleep(0.25)
+    os._exit(0)
 
 
 # The callback must outlive the registration: a garbage-collected one would
@@ -454,7 +539,21 @@ def main():
     # its own (a tick can take minutes and must never keep the run loop from
     # the next power event).
     threading.Thread(target=_scale_loop, daemon=True).start()
-    CF.CFRunLoopRun()
+    # SIGTERM (the agent is unloaded) and SIGINT kill the detached children
+    # before the process goes; registered here, on the main thread, where
+    # signal.signal is allowed.
+    signal.signal(signal.SIGTERM, _terminate)
+    signal.signal(signal.SIGINT, _terminate)
+    # The run loop in bounded slices, not one unbounded CFRunLoopRun: a
+    # Python-level signal handler runs only at a bytecode checkpoint of the
+    # main thread, and an unbounded run-loop call blocks that thread inside
+    # C until the next power event — the agent would ignore launchd's
+    # SIGTERM for as long as nothing happens. Half a second is far below the
+    # sleep budget's granularity and costs one wakeup per slice; a power
+    # event is still delivered the moment it fires (the source is in this
+    # run loop, in this mode).
+    while True:
+        CF.CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.5, False)
     return 0
 
 
