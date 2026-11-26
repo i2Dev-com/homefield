@@ -313,12 +313,12 @@ guest_stage_dir() { [ -z "${STUB_STAGE_FAIL:-}" ] || return 1; printf '/tmp/stag
 guest_unstage() { echo "unstage:$1"; }
 limactl() { echo "limactl:$*"; }
 guest_stdin() { cat >/dev/null; return "${STUB_GUEST_RC:-0}"; }
-caller() {
+stage_caller() {
   local stage=/sentinel rc=0
   run_provision "" || rc=$?
   echo "rc=$rc"
 }
-caller
+stage_caller
 echo "after-caller"
 echo "trap:[$(trap -p RETURN)]"
 EOF

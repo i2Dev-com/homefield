@@ -20,8 +20,9 @@ fail, such as a new guard in the routing expression, bumps the minor version
   caller with its own `stage` variable it removed that directory in the guest
   instead. Every bash, not only macOS's 3.2, behaves this way. A failure in
   the preset hook copy dies, and an exit fires no `RETURN` trap, so it left a
-  `/tmp/homefield-stage-*` directory in the guest; every way out now removes
-  it. The hook copy also stops clearing a caller's `set -f`.
+  `/tmp/homefield-stage-*` directory in the guest; every failure path now
+  removes it (a run killed mid-copy can still leave one, which is private to
+  the login user and harmless). The hook copy also stops clearing a caller's `set -f`.
 - Fixed: the sleep/wake watcher's wake side started every VM whose automatic
   fallback was on, whether or not it was running when the Mac slept — every
   Mac wake, login, reboot, or LaunchAgent restart booted the scale-to-zero

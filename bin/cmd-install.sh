@@ -644,7 +644,10 @@ copy_preset_hooks() {
   local f base stage have removed="" names="" had_f=0
   # Every way out removes the stage first: unstage_die, never a RETURN trap
   # (#327).
-  stage="$(guest_stage_dir)"
+  # Checked, as in run_provision: with set -e off an empty $stage would aim
+  # the copies and the root install at the guest's / (guest_stage_dir has
+  # said why).
+  stage="$(guest_stage_dir)" || exit 1
   # The manifest from the last copy names what this VM's provision.d got from
   # presets: a hook the current set no longer ships is removed, so a retired
   # hook does not keep running as root on every provision run (#188). A
