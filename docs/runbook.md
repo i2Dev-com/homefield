@@ -773,11 +773,13 @@ read the same record before either replaces it, and the last rename
 would resurrect the line the other removed. A lock left behind by a
 killed writer is stolen once its owner is gone — including one whose
 writer died before it could write its owner, stolen once it has stayed
-undescribed through the wait — and the store re-proves each recorded VM
+undescribed through the wait — and a live owner is never stolen,
+however long it holds the lock. The store re-proves each recorded VM
 under the lock, so a stop that completed between the pre-pass's status
-read and the store is not undone by the stale snapshot. A live holder is
-waited for, and a writer that cannot get the lock in a few seconds leaves
-the record as it is. A
+read and the store is not undone by the stale snapshot; a Lima that
+cannot be asked at the re-prove keeps the line, the phase-1 proof
+standing. A live holder is waited for, and a writer that cannot get the
+lock in a few seconds leaves the record as it is. A
 sleep run whose pre-pass cannot read a Running VM's runner identity
 still writes the record: the flip fails safe (nothing is flipped), but
 the VMs' Running statuses were proven, and the wake side must not lose

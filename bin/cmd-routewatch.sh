@@ -104,15 +104,26 @@ route_watcher_sleep_running_store_transaction() {
   # in between has removed its VM's line, and storing the stale snapshot
   # would put the line back — the next wake would start a VM someone
   # explicitly stopped. Re-prove each recorded VM under the lock: a VM that
-  # is no longer Running (stopped by hand, or gone) does not go into the
-  # record. A stop that has not stopped its VM yet removes the line after
-  # this store — its drop waits for this same lock.
+  # is no longer Running (stopped by hand, or gone from the list) does not
+  # go into the record, but a Lima that cannot be asked at the re-prove
+  # keeps its line — the phase-1 proof stands, the same fail-safe direction
+  # as a pre-pass that cannot ask. A stop that has not stopped its VM yet
+  # removes the line after this store — its drop waits for this same lock.
   saved="$INSTANCE"
   while IFS= read -r name; do
     [ -n "$name" ] || continue
     INSTANCE="$name"
     status=""
-    status="$(vm_status_of "$name")" || status=""
+    vrc=0
+    status="$(vm_status_of "$name")" || vrc=$?
+    if [ "$vrc" = 2 ]; then
+      # Lima could not be asked at the re-prove: the phase-1 proof that the
+      # VM was Running stands — the same fail-safe direction as a pre-pass
+      # that cannot ask leaves the previous record. Only a confirmed
+      # Stopped (or a VM gone from the list) loses its line here.
+      verified="${verified}${name}"$'\n'
+      continue
+    fi
     [ "$status" = "Running" ] && verified="${verified}${name}"$'\n'
   done <<<"$SLEEP_RUNNING"
   INSTANCE="$saved"
@@ -138,36 +149,43 @@ route_watcher_sleep_running_store() {
 # writers that both read the same record before either replaces it: the
 # last rename would resurrect the line the other removed, and a stopped VM
 # would be started again by the next wake. The lock is a directory (mkdir
-# is atomic); its owner file carries the pid and the start time, so a
-# writer killed mid-transaction — the sleep budget kills a whole sleep run
-# — leaves a lock the next writer steals once its owner is gone or older
-# than any live transaction (a transaction is a grep and a rename). A
-# holder that is merely slow is waited for, briefly.
+# is atomic); its owner file carries the pid, so a writer killed
+# mid-transaction — the sleep budget kills a whole sleep run — leaves a
+# lock the next writer steals once the owner is gone. A live owner is
+# never stolen, however long it holds the lock: the transaction may run
+# Lima reads, and taking a live writer's lock would reintroduce the race
+# the lock exists to prevent. A holder that is merely slow is waited for,
+# briefly, and a writer that cannot get the lock leaves the record as it
+# is. A lock with no owner at all — a writer killed between the mkdir and
+# the owner write — has nothing alive to check and is stolen once it has
+# stayed undescribed through the wait.
 route_watcher_sleep_running_lock_dir() { printf '%s/.sleep-running.lock' "$(route_watcher_dir)"; }
 
 route_watcher_sleep_running_with_lock() {
-  local age dir pid started waited=0
+  local dir pid waited=0
   dir="$(route_watcher_sleep_running_lock_dir)"
   mkdir -p "$(dirname "$dir")" || return 1
   until mkdir "$dir" 2>/dev/null; do
     if [ -f "$dir/owner" ]; then
       pid="$(sed -n 's/^pid=//p' "$dir/owner" 2>/dev/null)"
-      started="$(sed -n 's/^started=//p' "$dir/owner" 2>/dev/null)"
-      age=0
-      [ -n "$started" ] && age=$(( $(date +%s) - started ))
-      if { [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; } || [ "$age" -gt 5 ]; then
-        rm -rf "${dir:?}" 2>/dev/null || true
+      if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+        waited=$((waited + 1))
+        if [ "$waited" -gt 50 ]; then
+          return 1
+        fi
+        sleep 0.05
         continue
       fi
+      rm -rf "${dir:?}" 2>/dev/null || true
+      continue
     fi
     waited=$((waited + 1))
     if [ "$waited" -gt 50 ]; then
       # A lock that stayed undescribed for the whole wait has no owner to
       # check: its writer was killed between the mkdir and the owner write
       # (a live writer publishes its owner within the first retry). It is
-      # stolen; a lock with a live owner is left alone and the writer
-      # gives up, leaving the record as it is.
-      if [ ! -f "$dir/owner" ] && rm -rf "${dir:?}" 2>/dev/null; then
+      # stolen.
+      if rm -rf "${dir:?}" 2>/dev/null; then
         continue
       fi
       return 1

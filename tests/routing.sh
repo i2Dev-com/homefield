@@ -806,6 +806,11 @@ case "$1" in
       # STOP_MIDPASS: the VM answers Running for the pre-pass's own reads,
       # then Stopped from the record store's re-prove on — a stop that
       # completed between the pre-pass's status read and the store.
+      # RECHECK_FAIL: Lima cannot be asked from the re-prove on.
+      if [ -n "${RECHECK_FAIL:-}" ] && [ "$(grep -c '^limactl list' "$CALLS")" -gt 2 ]; then
+        echo "limactl: could not list" >&2
+        exit 1
+      fi
       if [ -n "${STOP_MIDPASS:-}" ] && [ "$(grep -c '^limactl list' "$CALLS")" -gt 2 ]; then
         echo "homefield Stopped"
       else
@@ -1077,14 +1082,14 @@ record "...and its line leaves the sleep record" "0" "$(sleep_running_lines)"
 dead_pid=; ( : ) & dead_pid=$!; wait "$dead_pid"
 printf 'homefield\n' >"$state/route-watcher/sleep-running"
 mkdir -p "$state/route-watcher/.sleep-running.lock"
-printf 'pid=%s\nstarted=%s\n' "$dead_pid" "$(( $(date +%s) - 60 ))" >"$state/route-watcher/.sleep-running.lock/owner"
+printf 'pid=%s\nstarted=%s\n' "$dead_pid" "$(( CLOCK_EPOCH - 60 ))" >"$state/route-watcher/.sleep-running.lock/owner"
 hf "${stop_env[@]}" GH_RUNNERS="$runner_rows" -- stop
 record "stop under a dead writer's lock: the lock is stolen, the line still goes" "0/0/no" \
   "$rc/$(sleep_running_lines)/$([ -d "$state/route-watcher/.sleep-running.lock" ] && echo yes || echo no)"
 
 printf 'homefield\n' >"$state/route-watcher/sleep-running"
 mkdir -p "$state/route-watcher/.sleep-running.lock"
-printf 'pid=%s\nstarted=%s\n' "$$" "$(date +%s)" >"$state/route-watcher/.sleep-running.lock/owner"
+printf 'pid=%s\nstarted=%s\n' "$$" "$CLOCK_EPOCH" >"$state/route-watcher/.sleep-running.lock/owner"
 hf "${stop_env[@]}" GH_RUNNERS="$runner_rows" -- stop
 record "stop under a live writer's lock: the drop defers, the line stays for the next wake" \
   "0/yes" "$rc/$(sleep_running_has homefield)"
@@ -1098,8 +1103,6 @@ mkdir -p "$state/route-watcher/.sleep-running.lock"
 hf "${stop_env[@]}" GH_RUNNERS="$runner_rows" -- stop
 record "stop under an ownerless lock: the lock is stolen, the line still goes" "0/0/no" \
   "$rc/$(sleep_running_lines)/$([ -d "$state/route-watcher/.sleep-running.lock" ] && echo yes || echo no)"
-
-printf 'auto_route=0\n' >"$state/homefield.state"
 
 printf 'auto_route=0\n' >"$state/homefield.state"
 printf 'homefield-ci acme/api\n' >"$state/routing"
@@ -1226,6 +1229,16 @@ record "route-watch sleep, a stop lands mid-pass: the store does not resurrect t
   "$rc/$(grep -c 'variable set' "$calls" || true)/$(has "$out" 'nothing to flip')"
 record "...the run is recorded ok, the stopped VM is not in the record" "sleep/ok/0" \
   "$(watcher_state_value last_mode)/$(watcher_state_value last_result)/$(sleep_running_lines)"
+
+# A Lima that cannot be asked at the re-prove keeps the VM's line: the
+# phase-1 proof that it was Running stands — only a confirmed Stopped (or a
+# VM gone) loses its line there.
+printf 'homefield-ci acme/api\n' >"$state/routing"
+rm -f "$state/autoflip" "$state/route-watcher/sleep-running"
+hf LIMA_STATUS=Running REG=0 SETTING_OUT="$settings" SVC_NAME='actions.runner.acme.test.service' JOB=no RECHECK_FAIL=1 -- route-watch sleep
+record "route-watch sleep, the re-prove cannot ask Lima: the proven line stays, the run fails" "1/yes" \
+  "$rc/$(sleep_running_has homefield)"
+record "...nothing was flipped" "0" "$(grep -c 'variable set' "$calls" || true)"
 
 printf 'auto_route=0\n' >"$state/homefield.state"
 printf 'homefield-ci acme/api\n' >"$state/routing"
