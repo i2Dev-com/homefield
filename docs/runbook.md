@@ -715,7 +715,9 @@ agent also drives the demand scaler of the next section: a second loop runs
 one `homefield fleet watch` tick per interval, and a tick stands down while
 a sleep/wake run is in progress. A sleep notification kills a running tick
 the same way it kills a wake recovery — including one that has just been
-launched, which is cancelled before it can run anything. The spare's
+launched, which is cancelled before it can run anything — and parks the
+loop until the wake, so no fresh tick spawns in the middle of the
+sleep-side flip. The spare's
 install never reloads the agent: an unload would stop the very helper
 supervising the tick mid-install, so a spare's `--auto-route` leaves the
 installed agent as it is (a hand-run `upgrade --auto-route` is what
@@ -736,15 +738,32 @@ with runners for two organizations does not let one org's local runner name
 exclude a same-named remote runner of the other org — that remote runner is
 still there and still serves its repositories.
 
-The wake side starts every VM whose `auto_route` is on if it is not running,
+The wake side starts every VM the sleep side recorded as running — the
+ones whose own `auto_route` was on and that were Running when the Mac slept,
+whether their flip landed or was skipped for a job — if it is not running,
 waits for each runner to be listed online (up to
 `HOMEFIELD_WATCH_WAKE_WAIT` seconds per VM, default 120), and runs the
-start-side restore. A VM that does not come back, and a GitHub that cannot
-be asked, keep their pending entries for the next `start` or the next wake
+start-side restore. A VM that was not running at sleep — stopped by hand, or
+scaled dark by the demand scaler — is not started: the Mac's wake is not
+demand, and booting such a VM would burn a full idle cooldown with no work
+for it. A stop's own paths bring a VM back — the operator's `start`, or the
+tick's wake on demand for a dark line (the scale-to-zero section below) —
+and a stopped VM's pending entries keep waiting for that start. A VM that
+does not come back, and a GitHub that cannot be asked, keep their pending
+entries for the next `start` or the next wake
 and the run says so. A VM with `auto_route` off is never touched by the
 watcher on either side: its routing stays exactly where the operator left
 it, and its pending entries keep waiting for the explicit `start
 --route-local`.
+
+A stop cancels a VM's wake eligibility: every stop path — a plain `stop`,
+`--route-hosted`, `fleet stop`, and the demand scaler's scale-to-zero —
+removes the VM's line from the sleep record, so the Mac's next wake does
+not start a VM someone explicitly put down. (The scaler's zero-stop writes
+the dark line that arms the demand wake, the same stop.) The record is
+rewritten whole by every sleep run, and a line goes when its VM is up
+again, so a wake that runs without an intervening sleep — a LaunchAgent
+restart — does not start a VM that has since been stopped by hand.
 
 The watcher is fail-safe in the same direction as the rest of the fallback:
 when a flip cannot be proven, a VM cannot be asked, or a restore cannot
@@ -768,7 +787,12 @@ of its own, because it can wait
 minutes per VM: if the Mac goes back to sleep while a wake recovery is
 still running, the sleep notification kills the recovery and runs the
 sleep-side flip, so the repositories are never left routed to a runner that
-is about to disappear with the Mac.
+is about to disappear with the Mac. Unloading the agent (or the Mac shutting
+down) is a SIGTERM, and the wake recovery and the scaler tick run detached
+in sessions of their own — the agent's death does not reach them — so the
+helper handles SIGTERM by killing both before it exits: without that, an
+unloaded agent would leave a wake recovery or a tick flipping repositories
+for its whole budget (minutes to half an hour) with no agent behind it.
 
 `--no-auto-route`, `uninstall` and `reset` remove the agent when no
 remaining VM on this Mac has the fallback on; while any VM wants it, the

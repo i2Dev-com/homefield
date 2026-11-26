@@ -17,10 +17,15 @@
 #                      runners. A VM with a job running — or one that cannot
 #                      be asked whether it has — is skipped, its records left
 #                      alone.
-#   route-watch wake   the Mac woke up or logged in: every VM with auto_route
-#                      on is started if it is not running, waited for until
-#                      its runner is listed online, and the repositories a
-#                      flip sent to hosted come back to local.
+#   route-watch wake   the Mac woke up or logged in: every VM the sleep side
+#                      recorded as running (auto_route on) is started if it
+#                      is not running, waited for until its runner is listed
+#                      online, and the repositories a flip sent to hosted
+#                      come back to local. A VM the user stopped by hand, or
+#                      one the demand scaler put dark, was not running at
+#                      sleep and stays down — a stop's own paths bring it
+#                      back (the explicit start, or the tick's wake on
+#                      demand), not the Mac's next wake.
 #
 # Both sides only touch VMs whose own auto_route is on: the watcher covers
 # every HomeField VM on the Mac, but a VM whose automatic fallback is off
@@ -68,6 +73,88 @@ route_watcher_running_write() {
 }
 
 route_watcher_running_clear() { rm -f "$(route_watcher_running_file)"; }
+
+# The sleep side's record of what was running: one instance name per line,
+# the VMs that were Running with the automatic fallback on when the Mac last
+# slept. The wake side starts only these — a VM the user stopped by hand, or
+# one the demand scaler's scale-to-zero put dark, was not running at sleep
+# and must not be woken by the Mac's next wake (a stop's own paths bring a
+# VM back: the explicit start, or the tick's wake on demand for a dark
+# line). The record is rewritten whole by every sleep run's pre-pass, and a
+# line goes when its VM is up again (the wake side) or stopped again (the
+# stop side), so a wake that runs without an intervening sleep — a LaunchAgent
+# restart — does not start a VM that has since been stopped by hand.
+route_watcher_sleep_running_file() { printf '%s/sleep-running' "$(route_watcher_dir)"; }
+
+# route_watcher_sleep_running_store: SLEEP_RUNNING (one instance name per
+# line, possibly empty) to the record, whole, through a temp file moved over
+# the target — the way the run record and the dark record are written.
+# Called by the multi-VM sleep run's parent after its pre-pass, and never by
+# a dispatched child (the parent's pre-pass wrote the whole record already).
+route_watcher_sleep_running_store() {
+  local f dir tmp
+  f="$(route_watcher_sleep_running_file)"
+  dir="$(dirname "$f")"
+  mkdir -p "$dir" || return 1
+  tmp="$(mktemp "$dir/.sleep-running.XXXXXX")" || return 1
+  printf '%s' "$SLEEP_RUNNING" >"$tmp" || { rm -f "$tmp"; return 1; }
+  mv -f "$tmp" "$f" || { rm -f "$tmp"; return 1; }
+}
+
+# route_watcher_sleep_running_has <name>: whether the VM was running when
+# the Mac slept.
+route_watcher_sleep_running_has() {
+  local f
+  f="$(route_watcher_sleep_running_file)"
+  [ -f "$f" ] || return 1
+  grep -Fxq "$1" "$f"
+}
+
+# route_watcher_sleep_running_add <name>: one line for a VM the pre-pass did
+# not see — an explicit `route-watch sleep --instance` runs no pre-pass, so
+# it maintains its own VM's line itself. The record is rewritten whole (the
+# name's line replaced, the rest kept), through a temp file.
+route_watcher_sleep_running_add() {
+  local f dir tmp rc name="$1"
+  f="$(route_watcher_sleep_running_file)"
+  dir="$(dirname "$f")"
+  mkdir -p "$dir" || return 1
+  tmp="$(mktemp "$dir/.sleep-running.XXXXXX")" || return 1
+  rc=0
+  if [ -f "$f" ]; then
+    # `cmd || rc=$?` captures the status without tripping set -e: grep's
+    # "no line kept" answer (1) is normal here, not an error.
+    grep -Fxv "$name" "$f" >"$tmp" || rc=$?
+    if [ "$rc" -gt 1 ]; then
+      rm -f "$tmp"
+      return 1
+    fi
+  else
+    : >"$tmp" || { rm -f "$tmp"; return 1; }
+  fi
+  printf '%s\n' "$name" >>"$tmp" || { rm -f "$tmp"; return 1; }
+  mv -f "$tmp" "$f" || { rm -f "$tmp"; return 1; }
+  return 0
+}
+
+# route_watcher_sleep_running_drop <name>: the VM is up, stopped by hand, or
+# gone; its line goes with it, the record rewritten whole through a temp
+# file. A missing record is already without the line.
+route_watcher_sleep_running_drop() {
+  local f dir tmp rc name="$1"
+  f="$(route_watcher_sleep_running_file)"
+  [ -f "$f" ] || return 0
+  dir="$(dirname "$f")"
+  tmp="$(mktemp "$dir/.sleep-running.XXXXXX")" || return 1
+  rc=0
+  grep -Fxv "$name" "$f" >"$tmp" || rc=$?
+  if [ "$rc" -gt 1 ]; then
+    rm -f "$tmp"
+    return 1
+  fi
+  mv -f "$tmp" "$f" || { rm -f "$tmp"; return 1; }
+  return 0
+}
 
 # route_watcher_is_running: whether a watcher run is live — the marker
 # exists, its pid is alive, and the run started within the last half hour
@@ -303,9 +390,19 @@ route_watcher_remove_if_unneeded() {
 # cannot be asked poisons the whole flip — its runner may still be listed
 # online and serving the label — so a failure here flips nothing (fail safe,
 # the same direction as Part 1's).
+#
+# The same pass collects the wake side's record: SLEEP_RUNNING, one name per
+# line, every Running VM whose own automatic fallback is on. A VM whose flip
+# was later skipped (a job was running) is still recorded — it was running
+# when the Mac slept, and the wake side brings it back. A Stopped VM —
+# stopped by hand, or scaled dark — is not: the wake side must not start it.
+# The parent writes the record whole (route_watcher_sleep_running_store)
+# after this pass succeeds; a failed pass leaves the previous record, whose
+# VMs were running at the last proven sleep.
 route_watch_collect_runners() {
   local list name saved status
   saved="$INSTANCE"
+  SLEEP_RUNNING=""
   if ! list="$(vm_instances)"; then
     echo "homefield: could not list the VMs; the routed repositories stay as they are" >&2
     return 1
@@ -329,6 +426,9 @@ route_watch_collect_runners() {
       return 1
     fi
     ROUTE_EXCLUDE_RUNNERS="${ROUTE_EXCLUDE_RUNNERS}${RS_URL}"$'\t'"${RS_NAME}"$'\n'
+    if [ "$(state_get auto_route)" = "1" ]; then
+      SLEEP_RUNNING="${SLEEP_RUNNING}${name}"$'\n'
+    fi
   done <<<"$list"
   INSTANCE="$saved"
   return 0
@@ -343,11 +443,24 @@ route_watch_collect_runners() {
 route_watch_sleep_single() {
   vm_lookup
   [ -n "$VM_STATUS" ] || { log "VM ${INSTANCE}: does not exist; nothing to watch"; return 0; }
-  [ "$VM_STATUS" = "Running" ] || { log "VM ${INSTANCE}: ${VM_STATUS}; its runner is not taking jobs, so there is nothing to flip"; return 0; }
   if [ "$(state_get auto_route)" != "1" ]; then
     log "VM ${INSTANCE}: the automatic fallback is off; leaving its routing alone"
+    # An explicit --instance sleep runs no pre-pass, so it maintains its own
+    # VM's line itself: the fallback is off, the line goes. A dispatched
+    # child must not — the parent's pre-pass wrote the whole record already.
+    if [ "$EXPLICIT_INSTANCE" = 1 ] && [ "${HOMEFIELD_ONE_OF_MANY:-0}" != 1 ]; then
+      route_watcher_sleep_running_drop "$INSTANCE" || true
+    fi
     return 0
   fi
+  if [ "$EXPLICIT_INSTANCE" = 1 ] && [ "${HOMEFIELD_ONE_OF_MANY:-0}" != 1 ]; then
+    if [ "$VM_STATUS" = "Running" ]; then
+      route_watcher_sleep_running_add "$INSTANCE" || true
+    else
+      route_watcher_sleep_running_drop "$INSTANCE" || true
+    fi
+  fi
+  [ "$VM_STATUS" = "Running" ] || { log "VM ${INSTANCE}: ${VM_STATUS}; its runner is not taking jobs, so there is nothing to flip"; return 0; }
   local jrc=0
   job_running || jrc=$?
   case "$jrc" in
@@ -381,25 +494,43 @@ route_watch_sleep_single() {
 }
 
 # route_watch_wake_single: one VM's wake side. Start it if it is not running
-# (the Lima VMs do not survive sleep cleanly), wait for its runner to be
-# listed online — the restore needs GitHub's row for the runner, and
-# restoring while it is still offline would point the repositories at a
-# runner that is not taking jobs — then bring the flipped repositories back
-# to local. The waits are bounded (HOMEFIELD_WATCH_WAKE_WAIT, default 120 s):
-# a VM that does not come back keeps its entries for the next start or the
-# next wake, and the run says so loudly.
+# and the sleep side recorded it as running (the Lima VMs do not survive
+# sleep cleanly), wait for its runner to be listed online — the restore needs
+# GitHub's row for the runner, and restoring while it is still offline would
+# point the repositories at a runner that is not taking jobs — then bring the
+# flipped repositories back to local. A VM the sleep side did not record was
+# not running when the Mac slept — stopped by hand, or scaled dark — and
+# stays down: a stop's own paths bring it back (the explicit start, or the
+# tick's wake on demand for a dark line), not the Mac's next wake. The waits
+# are bounded (HOMEFIELD_WATCH_WAKE_WAIT, default 120 s): a VM that does not
+# come back keeps its entries for the next start or the next wake, and the
+# run says so loudly.
 route_watch_wake_single() {
   vm_lookup
-  [ -n "$VM_STATUS" ] || { log "VM ${INSTANCE}: does not exist; nothing to watch"; return 0; }
+  if [ -z "$VM_STATUS" ]; then
+    log "VM ${INSTANCE}: does not exist; nothing to watch"
+    # Lima answered and named no VM: a stale line would only wait for a VM
+    # that is gone.
+    route_watcher_sleep_running_drop "$INSTANCE" || true
+    return 0
+  fi
   if [ "$(state_get auto_route)" != "1" ]; then
     log "VM ${INSTANCE}: the automatic fallback is off; leaving its routing alone"
     return 0
   fi
   if [ "$VM_STATUS" != "Running" ]; then
-    log "VM ${INSTANCE}: starting it (the Mac woke up or logged in)"
+    if ! route_watcher_sleep_running_has "$INSTANCE"; then
+      log "VM ${INSTANCE}: was not running when the Mac slept (stopped by hand, or scaled dark); not starting it — its pending repositories wait for the next start or a demand wake"
+      return 0
+    fi
+    log "VM ${INSTANCE}: starting it (it was running when the Mac slept)"
     limactl start --tty=false "$INSTANCE" </dev/null ||
       { echo "homefield: could not start VM ${INSTANCE}; its flipped repositories stay hosted until the next start" >&2; return 1; }
   fi
+  # The VM is up: its line in the sleep record goes, so a wake that runs
+  # again before the next sleep — a LaunchAgent restart — does not start a
+  # VM the user has since stopped by hand.
+  route_watcher_sleep_running_drop "$INSTANCE" || true
   # The guest answers only once it is up; a boot that is still settling
   # reads as "could not ask", so the identity read retries before it gives
   # up (30 s in total, on top of the limactl start that already waited).
@@ -473,6 +604,15 @@ cmd_route_watch() {
       return 1
     fi
     export ROUTE_EXCLUDE_RUNNERS
+    # The wake side's record of what was running: written once, here, from
+    # the same pass the exclusions came from, before the dispatch (a
+    # dispatched child must not write — the record is the whole pre-sleep
+    # set, not one VM's). A write that fails is loud but not fatal: the
+    # flip still runs, and the wake side starts nothing it cannot prove was
+    # running, which is the fail-safe direction.
+    if ! route_watcher_sleep_running_store; then
+      echo "homefield: could not write $(route_watcher_sleep_running_file); the wake side will not start VMs it cannot prove were running" >&2
+    fi
   fi
   vm_dispatch "route-watch" "route_watch_${mode}_single" "$mode" || rc=1
   route_watcher_record "$mode" "$rc" || rc=1

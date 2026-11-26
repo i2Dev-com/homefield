@@ -11,6 +11,41 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ## Unreleased
 
+- Fixed: the sleep/wake watcher's wake side started every VM whose automatic
+  fallback was on, whether or not it was running when the Mac slept — every
+  Mac wake, login, reboot, or LaunchAgent restart booted the scale-to-zero
+  fleet the demand scaler had put dark (defeating `HOMEFIELD_SCALE_ZERO=1`)
+  and every VM a hand `stop` had put down, burning full idle cooldowns with
+  zero demand (#326). The sleep side now records the VMs that were running
+  (a `sleep-running` line per VM, in the watcher's state directory), and the
+  wake side starts only those: a VM that was not running at sleep stays down
+  — a stop's own paths bring it back, the operator's `start` or the tick's
+  wake on demand for a dark line — and a stop of any kind (plain,
+  `--route-hosted`, `fleet stop`, the scaler's zero-stop) cancels the VM's
+  wake eligibility by dropping its line. The record is rewritten whole by
+  every sleep run and a line goes when its VM is up again, so a wake that
+  runs without an intervening sleep (a LaunchAgent restart) does not start a
+  VM that has since been stopped by hand.
+
+- Fixed: three races in the route-watcher agent itself (#326). The agent
+  handled no SIGTERM, so unloading the LaunchAgent (or shutting the Mac
+  down) left its detached wake recovery and scaler tick running for their
+  whole budgets — minutes to half an hour of flipping repositories with no
+  agent behind it; the agent now kills both on SIGTERM and SIGINT, and its
+  run loop runs in bounded slices so the handler (a Python-level one, which
+  only runs at a bytecode checkpoint of the main thread) gets a checkpoint
+  while the Mac is quiet — an unbounded `CFRunLoopRun` would have kept the
+  handler unreachable until the next power event. The scaler's loop is now
+  parked across the sleep-side flip (a WillSleep kills the running tick but
+  the loop's next interval could spawn a fresh one mid-flip, routing
+  repositories while the flip was routing them the other way); the wake
+  sets the gate again, and a cancelled sleep (WillNotSleep) does too. And
+  the tick threads cleared the shared process handles without an identity
+  check, so an older run's exit could clear a newer run's handle and leave
+  it unknowable to a later kill; `kill_tree` signalled the process group of
+  a run that had already exited, whose group id could belong to someone
+  else by now.
+
 - Fixed: four bugs in the route command and the automatic fallback's host
   and validation handling (#325). `route_stop_fallback` compared every
   routing record's host against a hardcoded `github.com` while the stop

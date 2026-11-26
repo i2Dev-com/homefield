@@ -1772,6 +1772,14 @@ stop_single() {
   limactl stop "$INSTANCE" </dev/null ||
     die "could not stop VM ${INSTANCE} (Lima failed; docs/runbook.md, \"Failure modes\")"
   echo "VM ${INSTANCE}: Stopped"
+  # The stop was the operator's (or the scaler's) explicit decision that this
+  # VM stays down: its line in the watcher's sleep-running record goes, so
+  # the Mac's next wake does not start it again. Every stop path runs through
+  # here — a plain stop, --route-hosted, `fleet stop`, and the demand
+  # scaler's scale-to-zero (whose dark line is the wake-on-demand source that
+  # may bring the VM back). A stop that failed never gets here, and a VM
+  # with no line is already without one.
+  route_watcher_sleep_running_drop "$INSTANCE" || true
   return "$fallback_rc"
 }
 
