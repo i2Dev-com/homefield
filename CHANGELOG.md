@@ -25,7 +25,10 @@ fail, such as a new guard in the routing expression, bumps the minor version
   wake eligibility by dropping its line. The record is rewritten whole by
   every sleep run and a line goes when its VM is up again, so a wake that
   runs without an intervening sleep (a LaunchAgent restart) does not start a
-  VM that has since been stopped by hand.
+  VM that has since been stopped by hand. A sleep run whose pre-pass cannot
+  read a Running VM's runner identity still stores the record (the flip
+  fails safe, but the VMs' Running statuses were proven); only a pre-pass
+  that cannot prove the statuses at all leaves the previous record.
 
 - Fixed: three races in the route-watcher agent itself (#326). The agent
   handled no SIGTERM, so unloading the LaunchAgent (or shutting the Mac

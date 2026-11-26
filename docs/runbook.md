@@ -763,7 +763,12 @@ not start a VM someone explicitly put down. (The scaler's zero-stop writes
 the dark line that arms the demand wake, the same stop.) The record is
 rewritten whole by every sleep run, and a line goes when its VM is up
 again, so a wake that runs without an intervening sleep — a LaunchAgent
-restart — does not start a VM that has since been stopped by hand.
+restart — does not start a VM that has since been stopped by hand. A
+sleep run whose pre-pass cannot read a Running VM's runner identity
+still writes the record: the flip fails safe (nothing is flipped), but
+the VMs' Running statuses were proven, and the wake side must not lose
+them. Only a pre-pass that cannot even prove the statuses — the VM list,
+or Lima not answering about a VM — leaves the previous record.
 
 The watcher is fail-safe in the same direction as the rest of the fallback:
 when a flip cannot be proven, a VM cannot be asked, or a restore cannot

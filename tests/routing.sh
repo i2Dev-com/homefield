@@ -1136,6 +1136,19 @@ record "...the routing record is untouched" "homefield-ci acme/api" "$(cat "$sta
 record "...the failed run is recorded" "sleep/failed" "$(watcher_state_value last_mode)/$(watcher_state_value last_result)"
 record "...the VM is still recorded for the wake side (the pre-pass proved it running)" "yes" "$(sleep_running_has homefield)"
 
+# A runner identity the pre-pass cannot read poisons the flip (a runner that
+# may still be online must not lose its jobs), but every Running status was
+# proven first: the record is still written, so a failed identity read after
+# a consumed record cannot strand the VMs that were running.
+printf 'homefield-ci acme/api\n' >"$state/routing"
+rm -f "$state/autoflip" "$state/route-watcher/sleep-running"
+hf LIMA_STATUS=Running REG=0 SETTING_OUT="" JOB=no -- route-watch sleep
+record "route-watch sleep, a runner identity cannot be read: the flip fails safe, exit 1" "1/0/yes" \
+  "$rc/$(grep -c 'variable set' "$calls" || true)/$(has "$err" "could not read VM homefield's runner identity")"
+record "...the failed run is recorded" "sleep/failed" "$(watcher_state_value last_mode)/$(watcher_state_value last_result)"
+record "...the VM is still recorded for the wake side (its Running status was proven)" "yes" "$(sleep_running_has homefield)"
+record "...nothing waits in autoflip" "0" "$([ -f "$state/autoflip" ] && wc -l <"$state/autoflip" | tr -d ' ' || echo 0)"
+
 printf 'auto_route=0\n' >"$state/homefield.state"
 printf 'homefield-ci acme/api\n' >"$state/routing"
 rm -f "$state/route-watcher/sleep-running"
@@ -1978,6 +1991,7 @@ import importlib.util, os, subprocess, sys, threading, time
 spec = importlib.util.spec_from_file_location("rw", "$ROOT/bin/route-watcher.py")
 rw = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(rw)
+rw.HOMEFIELD = "$rw_stub"
 long_stub = "$rw_stub"
 new_proc = subprocess.Popen([long_stub], start_new_session=True)
 try:
