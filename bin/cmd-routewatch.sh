@@ -80,9 +80,13 @@ route_watcher_running_clear() { rm -f "$(route_watcher_running_file)"; }
 # one the demand scaler's scale-to-zero put dark, was not running at sleep
 # and must not be woken by the Mac's next wake (a stop's own paths bring a
 # VM back: the explicit start, or the tick's wake on demand for a dark
-# line). The record is rewritten whole by every sleep run's pre-pass, and a
-# line goes when its VM is up again (the wake side) or stopped again (the
-# stop side), so a wake that runs without an intervening sleep — a LaunchAgent
+# line). The record is rewritten whole by every sleep run's pre-pass — with
+# the previous record's still-pending lines carried over: a VM still Stopped
+# with a valid line is a recovery that has not finished (a wake whose start
+# failed, or one the Mac slept again before it reached), and only a VM gone
+# from Lima's list, or an explicit stop, removes its line. Otherwise a line
+# goes when its VM is up again (the wake side) or stopped again (the stop
+# side), so a wake that runs without an intervening sleep — a LaunchAgent
 # restart — does not start a VM that has since been stopped by hand.
 route_watcher_sleep_running_file() { printf '%s/sleep-running' "$(route_watcher_dir)"; }
 
@@ -96,7 +100,7 @@ route_watcher_sleep_running_file() { printf '%s/sleep-running' "$(route_watcher_
 # the record the proven statuses earned), and never by a dispatched child
 # (the parent's pre-pass wrote the whole record already).
 route_watcher_sleep_running_store_transaction() {
-  local f dir lockpid tmp name saved status verified=""
+  local f dir lockpid old tmp name saved status verified="" vrc=""
   f="$(route_watcher_sleep_running_file)"
   dir="$(dirname "$f")"
   mkdir -p "$dir" || return 1
@@ -126,6 +130,33 @@ route_watcher_sleep_running_store_transaction() {
     fi
     [ "$status" = "Running" ] && verified="${verified}${name}"$'\n'
   done <<<"$SLEEP_RUNNING"
+  # Lines the previous record holds that the snapshot does not carry: a VM
+  # still Stopped with a valid line is a recovery that has not finished —
+  # a wake whose start failed, or a wake that never reached it before the
+  # Mac slept again. Neither the operator nor the scaler stopped it (an
+  # explicit stop drops the line under this same lock, before this
+  # transaction reads the record or after it releases it), so the line
+  # must survive this store: the next wake retries the start. A VM the
+  # list no longer names is gone, and its line goes with it; a Lima that
+  # cannot be asked keeps the line, the same fail-safe direction as the
+  # snapshot's re-prove above.
+  old=""
+  if [ -f "$f" ]; then
+    old="$(cat "$f" 2>/dev/null)" || old=""
+  fi
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    if printf '%s' "$verified" | grep -Fxq "$name"; then
+      continue
+    fi
+    INSTANCE="$name"
+    status=""
+    vrc=0
+    status="$(vm_status_of "$name")" || vrc=$?
+    if [ "$vrc" = 2 ] || [ -n "$status" ]; then
+      verified="${verified}${name}"$'\n'
+    fi
+  done <<<"$old"
   INSTANCE="$saved"
   SLEEP_RUNNING="$verified"
   tmp="$(mktemp "$dir/.sleep-running.XXXXXX")" || return 1

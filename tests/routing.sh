@@ -1252,6 +1252,31 @@ record "route-watch sleep, the re-prove cannot ask Lima: the proven line stays, 
   "$rc/$(sleep_running_has homefield)"
 record "...nothing was flipped" "0" "$(grep -c 'variable set' "$calls" || true)"
 
+# A wake that failed to start the VM — or one the Mac slept again before it
+# reached — leaves the VM Stopped with its line still in the record: the next
+# sleep must not delete it, or the next wake refuses to restart a VM nobody
+# stopped. An explicit stop is what invalidates the line, and a stop drops it
+# under the record's lock.
+printf 'homefield\n' >"$state/route-watcher/sleep-running"
+hf LIMA_STATUS=Stopped -- route-watch sleep
+record "route-watch sleep, a VM still down from a wake that failed: its pending line survives the sleep" "0/yes" \
+  "$rc/$(sleep_running_has homefield)"
+
+# A recorded VM Lima no longer lists is gone: its stale line goes with it,
+# so the wake side does not wait for a VM that does not exist.
+printf 'gone\n' >"$state/route-watcher/sleep-running"
+hf -- route-watch sleep
+record "route-watch sleep, a recorded VM Lima no longer lists: its stale line goes" "0/0" \
+  "$rc/$(sleep_running_lines)"
+
+# A Lima that cannot be asked about a pending line keeps it: the line was
+# earned by an earlier proven sleep — the same fail-safe direction as the
+# snapshot's re-prove.
+printf 'homefield\n' >"$state/route-watcher/sleep-running"
+hf LIMA_STATUS=Stopped RECHECK_FAIL=1 -- route-watch sleep
+record "route-watch sleep, Lima cannot be asked about a pending line: it stays, the run fails" "1/yes" \
+  "$rc/$(sleep_running_has homefield)"
+
 printf 'auto_route=0\n' >"$state/homefield.state"
 printf 'homefield-ci acme/api\n' >"$state/routing"
 rm -f "$state/route-watcher/sleep-running"
@@ -1351,6 +1376,10 @@ record "sleep does not exclude another scope's runner: the remote namesake keeps
   "$rc/$(grep -c 'variable set' "$calls" || true)/$([ -f "$state/autoflip" ] && wc -l <"$state/autoflip" | tr -d ' ' || echo 0)"
 
 # A stopped VM is not asked and not flipped: its runner is not taking jobs.
+# Its line from the earlier sleep stays, though: the VM is still down from a
+# wake that failed (or one the Mac slept again before it reached), and the
+# next wake must retry the start — an explicit stop is what would have
+# removed the line under the record's lock.
 printf 'homefield-ci acme/api\n' >"$state/routing"
 rm -f "$state/autoflip" "$state/second.state"
 hf LIMA_ROWS='homefield Running\nsecond Stopped\n' LIMA_HOME="$lima" SETTINGS_DIR="$work/settings" \
@@ -1358,7 +1387,7 @@ hf LIMA_ROWS='homefield Running\nsecond Stopped\n' LIMA_HOME="$lima" SETTINGS_DI
 record "sleep skips a Stopped VM: it is not asked and its records stay" "0/no" \
   "$rc/$(grep -q 'second-mac' "$calls" && echo yes || echo no)"
 record "...the Running VM still flips" "homefield-ci acme/api github.com" "$(cat "$state/autoflip" 2>/dev/null)"
-record "...only the Running VM is recorded for the wake side" "yes/no" \
+record "...the Running VM is recorded, and the stopped VM keeps its pending line for the next wake" "yes/yes" \
   "$(sleep_running_has homefield)/$(sleep_running_has second)"
 
 # A VM literally named route-watcher: its own state file (route-watcher.state)

@@ -25,7 +25,12 @@ fail, such as a new guard in the routing expression, bumps the minor version
   wake eligibility by dropping its line — a stop of an already-stopped VM
   (a wake start that failed leaves the VM Stopped with its line still in
   the record) drops it too. The record is rewritten whole by
-  every sleep run and a line goes when its VM is up again, so a wake that
+  every sleep run, with the previous record's still-pending lines carried
+  over: a VM still Stopped with a valid line is a recovery that has not
+  finished (a wake whose start failed, or one the Mac slept again before it
+  reached), and only a VM gone from Lima's list, or an explicit stop,
+  removes its line — the next wake retries the start. Otherwise a line goes
+  when its VM is up again, so a wake that
   runs without an intervening sleep (a LaunchAgent restart) does not start a
   VM that has since been stopped by hand. The record's writers (the sleep
   pre-pass's store, the explicit-instance sleep's add, the stop and wake

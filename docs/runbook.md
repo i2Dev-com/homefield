@@ -764,9 +764,14 @@ VM does the same: a wake start that failed leaves the VM Stopped with its
 line still in the record, and the operator's stop is what says it stays
 down. (The scaler's zero-stop writes
 the dark line that arms the demand wake, the same stop.) The record is
-rewritten whole by every sleep run, and a line goes when its VM is up
-again, so a wake that runs without an intervening sleep — a LaunchAgent
-restart — does not start a VM that has since been stopped by hand. The
+rewritten whole by every sleep run, with the previous record's
+still-pending lines carried over: a VM still Stopped with a valid line is
+a recovery that has not finished — a wake whose start failed, or one the
+Mac slept again before it reached — and only a VM gone from Lima's list,
+or an explicit stop, removes its line; the next wake retries the start.
+Otherwise a line goes when its VM is up again, so a wake that runs without
+an intervening sleep — a LaunchAgent restart — does not start a VM that
+has since been stopped by hand. The
 record's writers hold a lock while they rewrite it: two overlapping
 writers (a stop racing a wake's line-drop, or two stops) would otherwise
 read the same record before either replaces it, and the last rename
@@ -785,7 +790,11 @@ since the sleep budget kills a sleep run before it could hold the lock
 longer — and a writer that still cannot get the lock leaves the record
 as it is, loudly on the stop side: the stop says the wake eligibility is
 uncertain and to run it again. The store re-proves each recorded VM
-sleep run whose pre-pass cannot read a Running VM's runner identity
+under the lock, so a stop that completed between the pre-pass's status
+read and the store is not undone by the stale snapshot; a Lima that
+cannot be asked at the re-prove keeps the line, the phase-1 proof
+standing. A sleep run whose pre-pass cannot read a Running VM's runner
+identity
 still writes the record: the flip fails safe (nothing is flipped), but
 the VMs' Running statuses were proven, and the wake side must not lose
 them. The record is stored after the statuses and before any guest
