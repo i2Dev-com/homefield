@@ -1242,6 +1242,16 @@ record "route-watch sleep, a stop lands mid-pass: the store does not resurrect t
 record "...the run is recorded ok, the stopped VM is not in the record" "sleep/ok/0" \
   "$(watcher_state_value last_mode)/$(watcher_state_value last_result)/$(sleep_running_lines)"
 
+# The same mid-pass stop with the line already in the record: the merge must
+# not carry it back either. A line the snapshot carried is the re-prove's to
+# decide — dropped here, because the stop's drop removes it after this store
+# — and merging it back would open a window in which a wake that reads the
+# record without the lock starts the VM the stop is putting down.
+printf 'homefield\n' >"$state/route-watcher/sleep-running"
+hf LIMA_STATUS=Running REG=0 SETTING_OUT="$settings" SVC_NAME='actions.runner.acme.test.service' JOB=no STOP_MIDPASS=1 -- route-watch sleep
+record "route-watch sleep, a stop lands mid-pass with the line already recorded: the store does not merge it back" "0/0" \
+  "$rc/$(sleep_running_lines)"
+
 # A Lima that cannot be asked at the re-prove keeps the VM's line: the
 # phase-1 proof that it was Running stands — only a confirmed Stopped (or a
 # VM gone) loses its line there.

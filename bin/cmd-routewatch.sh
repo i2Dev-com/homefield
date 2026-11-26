@@ -139,13 +139,21 @@ route_watcher_sleep_running_store_transaction() {
   # must survive this store: the next wake retries the start. A VM the
   # list no longer names is gone, and its line goes with it; a Lima that
   # cannot be asked keeps the line, the same fail-safe direction as the
-  # snapshot's re-prove above.
+  # snapshot's re-prove above. A line the snapshot did carry is never
+  # merged back: the re-prove above already decided it — kept as Running,
+  # or dropped because a stop landed mid-pass (the stop's drop removes the
+  # line after this store) or the VM is gone — and merging it back would
+  # resurrect a line the stop is about to remove, in a window a wake that
+  # reads the record without the lock could see.
   old=""
   if [ -f "$f" ]; then
     old="$(cat "$f" 2>/dev/null)" || old=""
   fi
   while IFS= read -r name; do
     [ -n "$name" ] || continue
+    if printf '%s' "$SLEEP_RUNNING" | grep -Fxq "$name"; then
+      continue
+    fi
     if printf '%s' "$verified" | grep -Fxq "$name"; then
       continue
     fi
