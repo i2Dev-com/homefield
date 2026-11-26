@@ -870,7 +870,9 @@ unstage_die() {
 run_provision() {
   local input="$1" stage rc=0
   shift
-  stage="$(guest_stage_dir)"
+  # Checked: set -e is off under a caller's `if !`, and an empty $stage would
+  # aim the copies at the guest's / (guest_stage_dir has said why).
+  stage="$(guest_stage_dir)" || return $?
   # The guest helpers provision.sh installs from its own directory (vm/guest/).
   # The uninstall path stages provision.sh alone and runs ensure-service, which
   # needs none of them. The stage is removed on every way out, and the status

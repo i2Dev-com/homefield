@@ -309,9 +309,9 @@ cat >"$STAGE_HARNESS" <<'EOF'
 set -euo pipefail
 HOMEFIELD_SOURCE_ONLY=1
 . "$REPO_ROOT/bin/homefield"
-guest_stage_dir() { printf '/tmp/stage-own'; }
+guest_stage_dir() { [ -z "${STUB_STAGE_FAIL:-}" ] || return 1; printf '/tmp/stage-own'; }
 guest_unstage() { echo "unstage:$1"; }
-limactl() { return 0; }
+limactl() { echo "limactl:$*"; }
 guest_stdin() { cat >/dev/null; return "${STUB_GUEST_RC:-0}"; }
 caller() {
   local stage=/sentinel rc=0
@@ -330,6 +330,13 @@ for stage_rc in 42 0; do
     "1/0/yes/yes/no/yes" \
     "$(printf '%s\n' "$stage_out" | grep -c '^unstage:/tmp/stage-own$')/$(printf '%s\n' "$stage_out" | grep -c '^unstage:/sentinel$')/$(has "$stage_out" "rc=$stage_rc")/$(has "$stage_out" "after-caller")/$(has "$stage_out" "unbound variable")/$(has "$stage_out" "trap:[]")"
 done
+# No stage directory: nothing is copied (an empty $stage would aim the copy at
+# the guest's /), even where the caller's `if !` turns set -e off.
+stage_out="$(env -i HOME="$WORK/home" PATH="$STUBS" REPO_ROOT="$REPO_ROOT" \
+  HOMEFIELD_STATE_DIR="$WORK/state" STUB_STAGE_FAIL=1 \
+  bash "$STAGE_HARNESS" 2>&1 </dev/null)"
+record "real run_provision: no stage directory, nothing copied, nonzero" "no/yes" \
+  "$(has "$stage_out" "limactl:copy")/$(has "$stage_out" "rc=1")"
 
 # 9. provision.sh re_register restores previous registration on config.sh failure
 REREG_WORK="$TMP/rereg"
