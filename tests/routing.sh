@@ -835,6 +835,14 @@ case "$1" in
       python3)
         # SETTINGS_DIR: per-VM settings for a multi-VM Mac; otherwise the one
         # SETTING_OUT every VM answers with.
+        # IDENTITY_KILL: the guest hangs in its identity read and the agent's
+        # sleep budget kills the whole run — simulated by killing the run
+        # from its marker pid, the way the budget would.
+        if [ -n "${IDENTITY_KILL:-}" ]; then
+          pid="$(sed -n 's/^pid=//p' "$HOMEFIELD_STATE_DIR/route-watcher/running" 2>/dev/null)"
+          [ -n "$pid" ] && kill -9 "$pid" 2>/dev/null
+          exit 99
+        fi
         if [ -n "${SETTINGS_DIR:-}" ] && [ -f "$SETTINGS_DIR/$vm" ]; then cat "$SETTINGS_DIR/$vm"
         else printf '%b' "${SETTING_OUT-}"
         fi ;;
@@ -1157,6 +1165,17 @@ record "route-watch sleep, a runner identity cannot be read: the flip fails safe
 record "...the failed run is recorded" "sleep/failed" "$(watcher_state_value last_mode)/$(watcher_state_value last_result)"
 record "...the VM is still recorded for the wake side (its Running status was proven)" "yes" "$(sleep_running_has homefield)"
 record "...nothing waits in autoflip" "0" "$([ -f "$state/autoflip" ] && wc -l <"$state/autoflip" | tr -d ' ' || echo 0)"
+
+# A guest that hangs in its identity read: the agent's sleep budget kills
+# the whole sleep run before the pass finishes. The record is stored after
+# the statuses are proven and before any guest is contacted, so the killed
+# run leaves it on disk — the next wake starts what was running.
+printf 'homefield-ci acme/api\n' >"$state/routing"
+rm -f "$state/autoflip" "$state/route-watcher/sleep-running"
+hf LIMA_STATUS=Running REG=0 SETTING_OUT="$settings" JOB=no IDENTITY_KILL=1 -- route-watch sleep
+record "route-watch sleep, a guest hangs in its identity read: the killed run's record is already on disk" "137/yes" \
+  "$rc/$(sleep_running_has homefield)"
+record "...nothing was flipped" "0" "$(grep -c 'variable set' "$calls" || true)"
 
 printf 'auto_route=0\n' >"$state/homefield.state"
 printf 'homefield-ci acme/api\n' >"$state/routing"

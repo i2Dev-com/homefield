@@ -29,8 +29,11 @@ fail, such as a new guard in the routing expression, bumps the minor version
   runs without an intervening sleep (a LaunchAgent restart) does not start a
   VM that has since been stopped by hand. A sleep run whose pre-pass cannot
   read a Running VM's runner identity still stores the record (the flip
-  fails safe, but the VMs' Running statuses were proven); only a pre-pass
-  that cannot prove the statuses at all leaves the previous record.
+  fails safe, but the VMs' Running statuses were proven); the record is
+  stored after the statuses and before any guest identity is read, so a
+  guest that hangs in its read — the sleep budget killing the whole run —
+  cannot erase it either. Only a pre-pass that cannot prove the statuses at
+  all leaves the previous record.
 
 - Fixed: three races in the route-watcher agent itself (#326). The agent
   handled no SIGTERM, so unloading the LaunchAgent (or shutting the Mac

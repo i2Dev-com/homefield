@@ -89,8 +89,10 @@ route_watcher_sleep_running_file() { printf '%s/sleep-running' "$(route_watcher_
 # route_watcher_sleep_running_store: SLEEP_RUNNING (one instance name per
 # line, possibly empty) to the record, whole, through a temp file moved over
 # the target — the way the run record and the dark record are written.
-# Called by the multi-VM sleep run's parent after its pre-pass, and never by
-# a dispatched child (the parent's pre-pass wrote the whole record already).
+# Called by the multi-VM sleep run's pre-pass, between the status pass and
+# the guest identity reads (a guest that hangs in its read must not erase
+# the record the proven statuses earned), and never by a dispatched child
+# (the parent's pre-pass wrote the whole record already).
 route_watcher_sleep_running_store() {
   local f dir tmp
   f="$(route_watcher_sleep_running_file)"
@@ -396,26 +398,28 @@ route_watcher_remove_if_unneeded() {
 # was later skipped (a job was running) is still recorded — it was running
 # when the Mac slept, and the wake side brings it back. A Stopped VM —
 # stopped by hand, or scaled dark — is not: the wake side must not start it.
-# The parent writes the record whole (route_watcher_sleep_running_store) from
-# this pass, before the dispatch (a dispatched child must not write — the
-# record is the whole pre-sleep set, not one VM's). The record needs only
-# what this pass proves: Running and auto_route on. An identity read that
-# fails still leaves every status proven, so the pass returns 2 and the
-# record is stored anyway — the flip is poisoned (the exclusions are
-# incomplete and a runner that may still be online must not lose its jobs),
-# but the wake side must not lose the VMs that were running. A failure that
-# leaves a status unproven — the VM list, or Lima not answering about a VM —
-# returns 1 and the previous record stays: it holds the VMs running at the
-# last proven sleep, and nothing newer is known.
+# The pass runs in two phases, and the parent stores the record between
+# them: phase one proves every VM's status and collects the record (the
+# record needs only Running and auto_route on), phase two reads the Running
+# VMs' runner identities for the flip's exclusions. The store sits before
+# any guest identity read because a guest can hang in its `limactl shell`
+# until the sleep budget kills the whole run — the VMs' proven Running
+# statuses must already be on disk by then, or the next wake (the previous
+# record having been consumed) would refuse to start them. An identity read
+# that fails returns 2: the flip is poisoned (the exclusions are incomplete
+# and a runner that may still be online must not lose its jobs), but the
+# record is already stored. A failure that leaves a status unproven — the
+# VM list, or Lima not answering about a VM — returns 1 and the previous
+# record stays: it holds the VMs running at the last proven sleep, and
+# nothing newer is known.
 route_watch_collect_runners() {
-  local list name saved status identity_failed=0
+  local identity_failed=0 list name running="" saved status
   saved="$INSTANCE"
   SLEEP_RUNNING=""
   if ! list="$(vm_instances)"; then
     echo "homefield: could not list the VMs; the routed repositories stay as they are" >&2
     return 1
   fi
-  ROUTE_EXCLUDE_RUNNERS=""
   while IFS= read -r name; do
     [ -n "$name" ] || continue
     INSTANCE="$name"
@@ -427,9 +431,21 @@ route_watch_collect_runners() {
       return 1
     fi
     [ "$status" = "Running" ] || continue
+    running="${running}${name}"$'\n'
     if [ "$(state_get auto_route)" = "1" ]; then
       SLEEP_RUNNING="${SLEEP_RUNNING}${name}"$'\n'
     fi
+  done <<<"$list"
+  INSTANCE="$saved"
+  # The record goes to disk here, before any guest is contacted: this is
+  # the last point at which a later hang cannot erase it.
+  if ! route_watcher_sleep_running_store; then
+    echo "homefield: could not write $(route_watcher_sleep_running_file); the wake side will not start VMs it cannot prove were running" >&2
+  fi
+  ROUTE_EXCLUDE_RUNNERS=""
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    INSTANCE="$name"
     load_runner_settings
     if [ -z "$RS_NAME" ] || [ -z "$RS_URL" ]; then
       echo "homefield: could not read VM ${name}'s runner identity; the routed repositories stay as they are (fail safe: a runner that may still be online must not lose its jobs)" >&2
@@ -437,7 +453,7 @@ route_watch_collect_runners() {
       continue
     fi
     ROUTE_EXCLUDE_RUNNERS="${ROUTE_EXCLUDE_RUNNERS}${RS_URL}"$'\t'"${RS_NAME}"$'\n'
-  done <<<"$list"
+  done <<<"$running"
   INSTANCE="$saved"
   [ "$identity_failed" = 0 ] && return 0
   return 2
@@ -607,15 +623,6 @@ cmd_route_watch() {
   if [ "$mode" = sleep ] && [ "$EXPLICIT_INSTANCE" = 0 ]; then
     collect_rc=0
     route_watch_collect_runners || collect_rc=$?
-    if [ "$collect_rc" = 2 ]; then
-      # The statuses are all proven but an identity read failed: the flip is
-      # poisoned (route_watch_collect_runners said so), yet the record of
-      # what was running is complete — store it, so the wake side still
-      # starts the VMs that were running when the Mac slept.
-      if ! route_watcher_sleep_running_store; then
-        echo "homefield: could not write $(route_watcher_sleep_running_file); the wake side will not start VMs it cannot prove were running" >&2
-      fi
-    fi
     if [ "$collect_rc" != 0 ]; then
       route_watcher_record sleep 1 || true
       if [ "${HOMEFIELD_ONE_OF_MANY:-0}" != 1 ]; then
@@ -624,15 +631,6 @@ cmd_route_watch() {
       return 1
     fi
     export ROUTE_EXCLUDE_RUNNERS
-    # The wake side's record of what was running: written once, here, from
-    # the same pass the exclusions came from, before the dispatch (a
-    # dispatched child must not write — the record is the whole pre-sleep
-    # set, not one VM's). A write that fails is loud but not fatal: the
-    # flip still runs, and the wake side starts nothing it cannot prove was
-    # running, which is the fail-safe direction.
-    if ! route_watcher_sleep_running_store; then
-      echo "homefield: could not write $(route_watcher_sleep_running_file); the wake side will not start VMs it cannot prove were running" >&2
-    fi
   fi
   vm_dispatch "route-watch" "route_watch_${mode}_single" "$mode" || rc=1
   route_watcher_record "$mode" "$rc" || rc=1
