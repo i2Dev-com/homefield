@@ -771,9 +771,13 @@ record's writers hold a lock while they rewrite it: two overlapping
 writers (a stop racing a wake's line-drop, or two stops) would otherwise
 read the same record before either replaces it, and the last rename
 would resurrect the line the other removed. A lock left behind by a
-killed writer is stolen once its owner is gone; a live holder is waited
-for, and a writer that cannot get the lock in a few seconds leaves the
-record as it is. A
+killed writer is stolen once its owner is gone — including one whose
+writer died before it could write its owner, stolen once it has stayed
+undescribed through the wait — and the store re-proves each recorded VM
+under the lock, so a stop that completed between the pre-pass's status
+read and the store is not undone by the stale snapshot. A live holder is
+waited for, and a writer that cannot get the lock in a few seconds leaves
+the record as it is. A
 sleep run whose pre-pass cannot read a Running VM's runner identity
 still writes the record: the flip fails safe (nothing is flipped), but
 the VMs' Running statuses were proven, and the wake side must not lose

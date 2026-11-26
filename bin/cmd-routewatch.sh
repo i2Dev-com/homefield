@@ -96,10 +96,27 @@ route_watcher_sleep_running_file() { printf '%s/sleep-running' "$(route_watcher_
 # the record the proven statuses earned), and never by a dispatched child
 # (the parent's pre-pass wrote the whole record already).
 route_watcher_sleep_running_store_transaction() {
-  local f dir tmp
+  local f dir tmp name saved status verified=""
   f="$(route_watcher_sleep_running_file)"
   dir="$(dirname "$f")"
   mkdir -p "$dir" || return 1
+  # The snapshot was taken before this lock was held: a stop that completed
+  # in between has removed its VM's line, and storing the stale snapshot
+  # would put the line back — the next wake would start a VM someone
+  # explicitly stopped. Re-prove each recorded VM under the lock: a VM that
+  # is no longer Running (stopped by hand, or gone) does not go into the
+  # record. A stop that has not stopped its VM yet removes the line after
+  # this store — its drop waits for this same lock.
+  saved="$INSTANCE"
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    INSTANCE="$name"
+    status=""
+    status="$(vm_status_of "$name")" || status=""
+    [ "$status" = "Running" ] && verified="${verified}${name}"$'\n'
+  done <<<"$SLEEP_RUNNING"
+  INSTANCE="$saved"
+  SLEEP_RUNNING="$verified"
   tmp="$(mktemp "$dir/.sleep-running.XXXXXX")" || return 1
   printf '%s' "$SLEEP_RUNNING" >"$tmp" || { rm -f "$tmp"; return 1; }
   mv -f "$tmp" "$f" || { rm -f "$tmp"; return 1; }
@@ -144,7 +161,17 @@ route_watcher_sleep_running_with_lock() {
       fi
     fi
     waited=$((waited + 1))
-    [ "$waited" -gt 50 ] && return 1
+    if [ "$waited" -gt 50 ]; then
+      # A lock that stayed undescribed for the whole wait has no owner to
+      # check: its writer was killed between the mkdir and the owner write
+      # (a live writer publishes its owner within the first retry). It is
+      # stolen; a lock with a live owner is left alone and the writer
+      # gives up, leaving the record as it is.
+      if [ ! -f "$dir/owner" ] && rm -rf "${dir:?}" 2>/dev/null; then
+        continue
+      fi
+      return 1
+    fi
     sleep 0.05
   done
   printf 'pid=%s\nstarted=%s\n' "$$" "$(date +%s)" >"$dir/owner" 2>/dev/null

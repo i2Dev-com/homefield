@@ -32,7 +32,12 @@ fail, such as a new guard in the routing expression, bumps the minor version
   sides' drop) hold a lock while they rewrite it: atomic rename alone does
   not stop two overlapping writers from reading the same record before
   either replaces it, and the last rename would resurrect a line the other
-  removed. A lock left by a killed writer is stolen once its owner is gone. A sleep run whose pre-pass cannot
+  removed. A lock left behind by a killed writer is stolen once its owner
+  is gone — including a lock whose writer died before it could write its
+  owner, which is stolen once it has stayed undescribed through the wait.
+  The store also re-proves each recorded VM under the lock: a stop that
+  completed between the pre-pass's status read and the store must not be
+  undone by the stale snapshot putting the stopped VM's line back. A sleep run whose pre-pass cannot
   read a Running VM's runner identity still stores the record (the flip
   fails safe, but the VMs' Running statuses were proven); the record is
   stored after the statuses and before any guest identity is read, so a

@@ -802,7 +802,15 @@ case "$1" in
   list)
     # LIMA_ROWS: a multi-VM Mac (the watcher's fleet tests); otherwise one VM.
     if [ -n "${LIMA_ROWS:-}" ]; then printf '%b' "$LIMA_ROWS"
-    else [ -z "${LIMA_STATUS:-}" ] || echo "homefield ${LIMA_STATUS}"
+    else
+      # STOP_MIDPASS: the VM answers Running for the pre-pass's own reads,
+      # then Stopped from the record store's re-prove on — a stop that
+      # completed between the pre-pass's status read and the store.
+      if [ -n "${STOP_MIDPASS:-}" ] && [ "$(grep -c '^limactl list' "$CALLS")" -gt 2 ]; then
+        echo "homefield Stopped"
+      else
+        [ -z "${LIMA_STATUS:-}" ] || echo "homefield ${LIMA_STATUS}"
+      fi
     fi ;;
   start) [ -z "${START_FAIL:-}" ] || { echo "limactl: could not start" >&2; exit 1; } ;;
   stop) [ -z "${STOP_FAIL:-}" ] || { echo "limactl: could not stop" >&2; exit 1; } ;;
@@ -1083,6 +1091,16 @@ record "stop under a live writer's lock: the drop defers, the line stays for the
 # the holder (this test) releases the lock
 rm -rf "${state:?}/route-watcher/.sleep-running.lock"
 
+# A lock whose writer was killed between the mkdir and the owner write has
+# no owner to check: it is stolen after the wait, not left forever.
+printf 'homefield\n' >"$state/route-watcher/sleep-running"
+mkdir -p "$state/route-watcher/.sleep-running.lock"
+hf "${stop_env[@]}" GH_RUNNERS="$runner_rows" -- stop
+record "stop under an ownerless lock: the lock is stolen, the line still goes" "0/0/no" \
+  "$rc/$(sleep_running_lines)/$([ -d "$state/route-watcher/.sleep-running.lock" ] && echo yes || echo no)"
+
+printf 'auto_route=0\n' >"$state/homefield.state"
+
 printf 'auto_route=0\n' >"$state/homefield.state"
 printf 'homefield-ci acme/api\n' >"$state/routing"
 hf "${stop_env[@]}" GH_RUNNERS="$runner_rows" -- stop
@@ -1197,6 +1215,17 @@ hf LIMA_STATUS=Running REG=0 SETTING_OUT="$settings" JOB=no IDENTITY_KILL=1 -- r
 record "route-watch sleep, a guest hangs in its identity read: the killed run's record is already on disk" "137/yes" \
   "$rc/$(sleep_running_has homefield)"
 record "...nothing was flipped" "0" "$(grep -c 'variable set' "$calls" || true)"
+
+# A stop that completed between the pre-pass's status read and the record
+# store: the store re-proves each recorded VM under the lock, so the stale
+# snapshot does not put the stopped VM's line back.
+printf 'homefield-ci acme/api\n' >"$state/routing"
+rm -f "$state/autoflip" "$state/route-watcher/sleep-running"
+hf LIMA_STATUS=Running REG=0 SETTING_OUT="$settings" SVC_NAME='actions.runner.acme.test.service' JOB=no STOP_MIDPASS=1 -- route-watch sleep
+record "route-watch sleep, a stop lands mid-pass: the store does not resurrect the stopped VM's line" "0/0/yes" \
+  "$rc/$(grep -c 'variable set' "$calls" || true)/$(has "$out" 'nothing to flip')"
+record "...the run is recorded ok, the stopped VM is not in the record" "sleep/ok/0" \
+  "$(watcher_state_value last_mode)/$(watcher_state_value last_result)/$(sleep_running_lines)"
 
 printf 'auto_route=0\n' >"$state/homefield.state"
 printf 'homefield-ci acme/api\n' >"$state/routing"
