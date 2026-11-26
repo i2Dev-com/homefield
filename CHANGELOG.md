@@ -35,7 +35,12 @@ fail, such as a new guard in the routing expression, bumps the minor version
   removed. A lock left behind by a killed writer is stolen once its owner
   is gone — including a lock whose writer died before it could write its
   owner, which is stolen once it has stayed undescribed through the wait —
-  and a live owner is never stolen, however long it holds the lock. The
+  and a live owner is never stolen, however long it holds the lock — a
+  writer waits a live holder out (half a minute by default, which covers a
+  sleep-side store: the sleep budget kills a sleep run before it could
+  hold the lock longer), and a writer that still cannot get the lock
+  leaves the record as it is, loudly on the stop side (the stop says the
+  wake eligibility is uncertain and to run it again). The
   store also re-proves each recorded VM under the lock: a stop that
   completed between the pre-pass's status read and the store must not be
   undone by the stale snapshot putting the stopped VM's line back, while a

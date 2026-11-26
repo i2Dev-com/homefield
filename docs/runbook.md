@@ -774,7 +774,12 @@ would resurrect the line the other removed. A lock left behind by a
 killed writer is stolen once its owner is gone — including one whose
 writer died before it could write its owner, stolen once it has stayed
 undescribed through the wait — and a live owner is never stolen,
-however long it holds the lock. The store re-proves each recorded VM
+however long it holds the lock. Instead a writer waits a live holder
+out — half a minute by default, which covers a sleep-side store, since
+the sleep budget kills a sleep run before it could hold the lock
+longer — and a writer that still cannot get the lock leaves the record
+as it is, loudly on the stop side: the stop says the wake eligibility is
+uncertain and to run it again. The store re-proves each recorded VM
 under the lock, so a stop that completed between the pre-pass's status
 read and the store is not undone by the stale snapshot; a Lima that
 cannot be asked at the re-prove keeps the line, the phase-1 proof

@@ -154,41 +154,52 @@ route_watcher_sleep_running_store() {
 # lock the next writer steals once the owner is gone. A live owner is
 # never stolen, however long it holds the lock: the transaction may run
 # Lima reads, and taking a live writer's lock would reintroduce the race
-# the lock exists to prevent. A holder that is merely slow is waited for,
-# briefly, and a writer that cannot get the lock leaves the record as it
-# is. A lock with no owner at all — a writer killed between the mkdir and
-# the owner write — has nothing alive to check and is stolen once it has
-# stayed undescribed through the wait.
+# the lock exists to prevent. Instead a writer waits a live holder out —
+# by default half a minute, which covers a sleep-side store (the sleep
+# budget kills a sleep run at HOMEFIELD_WATCH_SLEEP_BUDGET, 20 s, before
+# it could hold the lock longer) — and a writer that still cannot get the
+# lock leaves the record as it is, loudly on the stop side. A lock with no
+# owner at all — a writer killed between the mkdir and the owner write —
+# has nothing alive to check and is stolen once it has stayed undescribed
+# for a fraction of a second.
 route_watcher_sleep_running_lock_dir() { printf '%s/.sleep-running.lock' "$(route_watcher_dir)"; }
 
+# The wait for a live holder, in seconds. HOMEFIELD_SLEEP_RUNNING_LOCK_WAIT
+# overrides it (the tests drive it down; nothing else should).
+route_watcher_sleep_running_lock_wait() {
+  case "${HOMEFIELD_SLEEP_RUNNING_LOCK_WAIT:-}" in
+    ''|*[!0-9.]*) echo 30 ;;
+    *) echo "${HOMEFIELD_SLEEP_RUNNING_LOCK_WAIT}" ;;
+  esac
+}
+
 route_watcher_sleep_running_with_lock() {
-  local dir pid waited=0
+  local dir ownerless=0 pid rounds waited=0
   dir="$(route_watcher_sleep_running_lock_dir)"
   mkdir -p "$(dirname "$dir")" || return 1
+  rounds="$(awk -v w="$(route_watcher_sleep_running_lock_wait)" 'BEGIN { print int(w / 0.05) }')"
   until mkdir "$dir" 2>/dev/null; do
     if [ -f "$dir/owner" ]; then
       pid="$(sed -n 's/^pid=//p' "$dir/owner" 2>/dev/null)"
       if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
         waited=$((waited + 1))
-        if [ "$waited" -gt 50 ]; then
+        if [ "$waited" -gt "$rounds" ]; then
           return 1
         fi
         sleep 0.05
         continue
       fi
-      rm -rf "${dir:?}" 2>/dev/null || true
+      # The owner is gone: a writer killed mid-transaction. Steal.
+      rm -rf "${dir:?}" 2>/dev/null || return 1
       continue
     fi
-    waited=$((waited + 1))
-    if [ "$waited" -gt 50 ]; then
-      # A lock that stayed undescribed for the whole wait has no owner to
-      # check: its writer was killed between the mkdir and the owner write
-      # (a live writer publishes its owner within the first retry). It is
-      # stolen.
-      if rm -rf "${dir:?}" 2>/dev/null; then
-        continue
-      fi
-      return 1
+    # No owner: a live writer publishes it within the first retry, so a
+    # lock still undescribed after a fraction of a second is a writer
+    # killed between the mkdir and the owner write. Steal it.
+    ownerless=$((ownerless + 1))
+    if [ "$ownerless" -gt 20 ]; then
+      rm -rf "${dir:?}" 2>/dev/null || return 1
+      continue
     fi
     sleep 0.05
   done

@@ -1089,11 +1089,23 @@ record "stop under a dead writer's lock: the lock is stolen, the line still goes
 
 printf 'homefield\n' >"$state/route-watcher/sleep-running"
 mkdir -p "$state/route-watcher/.sleep-running.lock"
-printf 'pid=%s\nstarted=%s\n' "$$" "$CLOCK_EPOCH" >"$state/route-watcher/.sleep-running.lock/owner"
+( sleep 1; rm -rf "${state:?}/route-watcher/.sleep-running.lock" ) &
+holder_pid=$!
+printf 'pid=%s\nstarted=%s\n' "$holder_pid" "$CLOCK_EPOCH" >"$state/route-watcher/.sleep-running.lock/owner"
 hf "${stop_env[@]}" GH_RUNNERS="$runner_rows" -- stop
-record "stop under a live writer's lock: the drop defers, the line stays for the next wake" \
-  "0/yes" "$rc/$(sleep_running_has homefield)"
-# the holder (this test) releases the lock
+record "stop under a live holder that releases: the drop waits it out, the line still goes" "0/0" \
+  "$rc/$(sleep_running_lines)"
+wait "$holder_pid" 2>/dev/null || true
+
+# A holder that never releases: the drop gives up after the wait bound and
+# says so loudly — the wake eligibility is uncertain, and the stop tells the
+# operator to run it again. The wait bound is driven down for the test.
+printf 'homefield\n' >"$state/route-watcher/sleep-running"
+mkdir -p "$state/route-watcher/.sleep-running.lock"
+printf 'pid=%s\nstarted=%s\n' "$$" "$CLOCK_EPOCH" >"$state/route-watcher/.sleep-running.lock/owner"
+hf "${stop_env[@]}" GH_RUNNERS="$runner_rows" HOMEFIELD_SLEEP_RUNNING_LOCK_WAIT=0.2 -- stop
+record "stop under a holder that never releases: the drop gives up loudly, the line stays" \
+  "0/yes/yes" "$rc/$(sleep_running_has homefield)/$(has "$err" 'may start it again')"
 rm -rf "${state:?}/route-watcher/.sleep-running.lock"
 
 # A lock whose writer was killed between the mkdir and the owner write has
