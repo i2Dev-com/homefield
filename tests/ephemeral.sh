@@ -32,11 +32,16 @@ cat >"$STUBS/limactl" <<'EOF'
 case "${1:-}" in
   --version) echo "limactl version 2.3.0" ;;
   list)
-    # STUB_VM_GONE=1: the working VM is not listed (it is gone). STUB_BASE_PRESENT=1:
-    # the reset base VM (homefield-base) is listed, stopped. STUB_EXTRA_ROWS:
-    # extra Lima rows (other HomeField VMs on this Mac).
-    [ "${STUB_VM_GONE:-0}" = "1" ] || echo "homefield Running"
+    # STUB_VM_GONE=1: the working VM is not listed (it is gone). STUB_VM_STOPPED=1:
+    # the working VM is listed Stopped. STUB_BASE_PRESENT=1: the reset base VM
+    # (homefield-base) is listed, stopped; STUB_BASE_RUNNING=1: listed running
+    # (a base a hand started). STUB_EXTRA_ROWS: extra Lima rows (other
+    # HomeField VMs on this Mac).
+    if [ "${STUB_VM_GONE:-0}" = "1" ]; then :;
+    elif [ "${STUB_VM_STOPPED:-0}" = "1" ]; then echo "homefield Stopped";
+    else echo "homefield Running"; fi
     [ "${STUB_BASE_PRESENT:-0}" = "1" ] && echo "homefield-base Stopped"
+    [ "${STUB_BASE_RUNNING:-0}" = "1" ] && echo "homefield-base Running"
     [ -n "${STUB_EXTRA_ROWS:-}" ] && printf '%b\n' "$STUB_EXTRA_ROWS"
     exit 0
     ;;
@@ -109,7 +114,10 @@ runner_setting() {
 }
 wait_online() { echo "wait_online:$*" >>"$CALLS"; }
 warm_vm() { WARM_STATE="warm"; WARM_DETAIL=""; }
-is_job_running() { return "${STUB_JOB_RC:-1}"; }
+# job_running (not is_job_running): the watch loop asks it directly, so a VM
+# that cannot be asked (2) is a warning there, not a die; the real
+# is_job_running still wraps it for the commands.
+job_running() { return "${STUB_JOB_RC:-1}"; }
 is_registered() { return 1; }
 # ran_jobs: whether the VM's runner has a _work directory (it has run jobs).
 # 1 = fresh, the default: a VM the registration token may go into. 0 = it has
@@ -134,7 +142,9 @@ hrun() {
     STUB_SVC_RC="${STUB_SVC_RC:-0}" \
     STUB_RAN_JOBS="${STUB_RAN_JOBS:-1}" \
     STUB_VM_GONE="${STUB_VM_GONE:-0}" \
+    STUB_VM_STOPPED="${STUB_VM_STOPPED:-0}" \
     STUB_BASE_PRESENT="${STUB_BASE_PRESENT:-0}" \
+    STUB_BASE_RUNNING="${STUB_BASE_RUNNING:-0}" \
     STUB_STOP_FAIL="${STUB_STOP_FAIL:-0}" \
     STUB_DELETE_FAIL="${STUB_DELETE_FAIL:-0}" \
     STUB_CLONE_FAIL="${STUB_CLONE_FAIL:-0}" \
@@ -571,7 +581,7 @@ env -i HOME="$WORK/home" PATH="$STUBS" REPO_ROOT="$REPO_ROOT" CALLS="$CALLS" HOM
   . "$REPO_ROOT/bin/homefield"
   vm_instances() { printf "custom-eph\n"; }
   vm_status() { echo Running; }
-  is_job_running() { return 1; }
+  job_running() { return 1; }
   runner_service_state() { return 1; }
   re_register_single() { echo "rereg:$INSTANCE" >>"$CALLS"; }
   cmd_re_register --watch --interval 0 --max-cycles 1
@@ -729,9 +739,18 @@ calls="$(cat "$CALLS")"; st_body="$(cat "$WORK/state/homefield.state")"
 record "VM gone with reset_vm=1: cloned from the base (no stop/delete), re-registered" "0/yes/no/no/yes/no" \
   "$rc/$(has "$calls" "limactl:clone --start=false homefield-base homefield")/$(has "$calls" "limactl:stop homefield")/$(has "$calls" "limactl:delete -f homefield")/$(has "$calls" "cmd=re-register")/$(has "$st_body" "ephemeral_error=reset")"
 
-# 26. the VM is gone and there is no base: die naming the install
+# 26b. the VM is gone and there is no base: die naming both, and the install
 STUB_VM_GONE=1 STUB_JOB_RC=1 hrun cmd_re_register
-record "VM gone with reset_vm=1 and no base: dies naming install" "nonzero/yes" \
+record "VM gone with reset_vm=1 and no base: dies naming the base and install" "nonzero/yes" \
+  "$(nonzero "$rc")/$(has "$out" "no VM homefield and no reset base VM homefield-base; run bin/homefield install --ephemeral")"
+
+# 26c. the VM is gone with the reset off: dies naming the install, and the
+# base is never queried (a stale RESET_BASE from another VM in a multi-VM
+# watch must not be asked about here)
+printf 'ephemeral=1\nephemeral_url=https://github.com/acme\nephemeral_name=test-mac-homefield\nreset_vm=0\n' >"$WORK/state/homefield.state"
+STUB_VM_GONE=1 STUB_BASE_PRESENT=1 STUB_JOB_RC=1 hrun cmd_re_register
+calls="$(cat "$CALLS")"
+record "VM gone with the reset off: dies naming install" "nonzero/yes" \
   "$(nonzero "$rc")/$(has "$out" "no VM homefield; run bin/homefield install --ephemeral")"
 
 # 27. the command's --reset-vm/--no-reset-vm override the saved switch
@@ -860,5 +879,162 @@ st_out="$(env -i HOME="$WORK/home" PATH="$STUBS" REPO_ROOT="$REPO_ROOT" HOMEFIEL
 ' 2>&1)"
 record "status renders the reset state and its error" "yes/yes/yes" \
   "$(has "$st_out" "vm reset: on (each re-register clones a fresh VM from homefield-base)")/$(has "$st_out" "vm reset: ERROR (could not stop the VM to reset it)")/$(has "$st_out" "mode: ephemeral")"
+
+# 31. --watch with a Stopped VM: the old loop ran the job probe on it, which
+# dies on a VM that cannot be asked, and the watch ended on the spot. The
+# loop now waits for the VM to run (#328).
+rm -rf "$WORK/state"/*
+printf 'ephemeral=1\nephemeral_url=https://github.com/acme\nephemeral_name=test-mac-homefield\nreset_vm=1\n' >"$WORK/state/homefield.state"
+mkbase
+STUB_VM_STOPPED=1 STUB_BASE_PRESENT=1 STUB_JOB_RC=1 STUB_SVC_RC=0 \
+  hrun cmd_re_register --watch --interval 0 --max-cycles 2
+calls="$(cat "$CALLS")"
+record "--watch with a Stopped VM: waits, does not re-register, survives both cycles" "0/no/2" \
+  "$rc/$(has "$calls" "cmd=re-register")/$(printf '%s\n' "$out" | grep -c 'is Stopped; waiting for it to run')"
+
+# 32. --watch with a VM it cannot ask: the job probe returns 2, and the old
+# loop's is_job_running turned that into a die that ended the watch. It is a
+# warning now, and the next cycle retries (#328).
+STUB_VM_STOPPED=0 STUB_JOB_RC=2 hrun cmd_re_register --watch --interval 0 --max-cycles 2
+record "--watch with a VM that cannot be asked: warns, survives both cycles" "0/2/no" \
+  "$rc/$(printf '%s\n' "$out" | grep -c 'could not ask VM homefield whether a job is running')/$(has "$calls" "cmd=re-register")"
+
+# 33. --watch survives a die inside re_register_single: a failed token fetch
+# used to exit the whole watch daemon (die exits, and `||` does not catch an
+# exit). The subshell keeps the loop alive (#328).
+rm -rf "$WORK/state"/*
+printf 'ephemeral=1\nephemeral_url=https://github.com/acme\nephemeral_name=test-mac-homefield\nreset_vm=1\n' >"$WORK/state/homefield.state"
+mkbase
+STUB_TOKEN_FAIL=1 STUB_BASE_PRESENT=1 STUB_JOB_RC=1 STUB_SVC_RC=1 \
+  hrun cmd_re_register --watch --interval 0 --max-cycles 2
+calls="$(cat "$CALLS")"
+record "--watch survives a failed token fetch: warns, the next cycle retries" "0/2/2" \
+  "$rc/$(printf '%s\n' "$out" | grep -c 'could not fetch registration token')/$(grep -c 'limactl:stop homefield$' "$CALLS")"
+
+# 34. the recovery clone stops a base a hand started first: a clone refuses a
+# running source, and the old recovery path cloned without stopping (#328).
+rm -rf "$WORK/state"/*
+printf 'ephemeral=1\nephemeral_url=https://github.com/acme\nephemeral_name=test-mac-homefield\nreset_vm=1\n' >"$WORK/state/homefield.state"
+mkbase
+STUB_VM_GONE=1 STUB_BASE_RUNNING=1 STUB_JOB_RC=1 hrun cmd_re_register
+calls="$(cat "$CALLS")"
+record "VM gone with a running base: the base is stopped, then cloned" "0/yes/yes/yes" \
+  "$rc/$(has "$calls" "limactl:stop homefield-base")/$(has "$calls" "limactl:clone --start=false homefield-base homefield")/$(has "$calls" "cmd=re-register")"
+
+# 35. upgrade with the reset on upgrades the base too: a plain `upgrade` on a
+# reset VM used to leave <instance>-base on the old packages, so the next
+# reset cloned a VM without the upgrade and wiped it (#328).
+rm -rf "$WORK/state"/*
+printf 'ephemeral=1\nreset_vm=1\n' >"$WORK/state/homefield.state"
+mkbase
+STUB_BASE_PRESENT=1 uprun cmd_upgrade
+calls="$(cat "$CALLS")"
+record "plain upgrade on a reset VM: the base gets the same upgrade (prepare-only)" "0/yes/yes" \
+  "$rc/$(has "$calls" "run_provision:RUNNER_PREPARE_ONLY=1")/$(has "$calls" "limactl:stop homefield-base")"
+
+# 35b. the working VM is provisioned before the base, and the base is not
+# re-registered
+rm -rf "$WORK/state"/*
+printf 'ephemeral=1\nreset_vm=1\n' >"$WORK/state/homefield.state"
+mkbase
+STUB_BASE_PRESENT=1 uprun cmd_upgrade --packages "xvfb"
+calls="$(cat "$CALLS")"
+wp_line="$(grep -n 'run_provision:' "$CALLS" | cut -d: -f1 | head -1)"
+bp_line="$(grep -n 'run_provision:RUNNER_PREPARE_ONLY=1' "$CALLS" | cut -d: -f1 | head -1)"
+record "...the working VM is provisioned before the base, and the base is not re-registered" "yes/no" \
+  "$([ -n "$wp_line" ] && [ -n "$bp_line" ] && [ "$wp_line" -lt "$bp_line" ] && echo yes || echo no)/$(has "$calls" "cmd=re-register")"
+
+# 35c. upgrade --reset-vm with a base: the switch turning on still upgrades
+# the base (the early check validates it, the tail upgrades it)
+rm -rf "$WORK/state"/*
+printf 'ephemeral=1\n' >"$WORK/state/homefield.state"
+mkbase
+STUB_BASE_PRESENT=1 uprun cmd_upgrade --reset-vm
+calls="$(cat "$CALLS")"; st_body="$(cat "$WORK/state/homefield.state")"
+record "upgrade --reset-vm: reset_vm=1 saved and the base upgraded" "0/yes/yes/yes" \
+  "$rc/$(has "$st_body" "reset_vm=1")/$(has "$calls" "run_provision:RUNNER_PREPARE_ONLY=1")/$(has "$calls" "limactl:stop homefield-base")"
+
+# 35d. the base is missing with the reset on: the upgrade refuses to leave
+# the reset silently broken (the next reset would clone nothing, or a stale
+# base if one reappears)
+rm -rf "$WORK/state"/*
+printf 'ephemeral=1\nreset_vm=1\n' >"$WORK/state/homefield.state"
+uprun cmd_upgrade
+record "upgrade on a reset VM with no base: refuses, naming the base" "nonzero/yes" \
+  "$(nonzero "$rc")/$(has "$out" "no reset base VM homefield-base")"
+
+# 35e. --no-reset-vm still turns the reset off without touching a base
+rm -rf "$WORK/state"/*
+printf 'ephemeral=1\nreset_vm=1\nreset_error=could not stop the VM to reset it\n' >"$WORK/state/homefield.state"
+uprun cmd_upgrade --no-reset-vm
+st_body="$(cat "$WORK/state/homefield.state")"; calls="$(cat "$CALLS")"
+record "upgrade --no-reset-vm: reset_vm=0, the error cleared, no base upgrade" "0/yes/yes/no" \
+  "$rc/$(has "$st_body" "reset_vm=0")/$(grep -qx 'reset_error=' "$WORK/state/homefield.state" && echo yes || echo no)/$(has "$calls" "RUNNER_PREPARE_ONLY=1")"
+
+# 36. provision.sh re_register's EXIT trap chains the run's own on_exit
+# instead of replacing it: the run's temp files and on_failure survive the
+# re-register (#328).
+CHAIN_WORK="$TMP/rereg-chain"
+mkdir -p "$CHAIN_WORK/runner"
+printf '{"agentName":"old-runner"}\n' >"$CHAIN_WORK/runner/.runner"
+printf 'actions.runner.test.service\n' >"$CHAIN_WORK/runner/.service"
+chain_calls="$CHAIN_WORK/calls.log"
+: >"$chain_calls"
+# shellcheck disable=SC2016  # inner bash -c expands its own vars
+chain_out="$(env -i \
+  PATH="$STUBS" \
+  RUNNER_HOME="$CHAIN_WORK/runner" \
+  RUNNER_URL="https://github.com/acme" \
+  RUNNER_TOKEN="tok-chain" \
+  RUNNER_NAME="test-runner" \
+  RUNNER_LABELS="self-hosted,linux,arm64,homefield-ci" \
+  RUNNER_GROUP="" \
+  RUNNER_USER="runner" \
+  job_cleanup="0" \
+  REREG_CALLS="$chain_calls" \
+  /bin/bash -c '
+    set -euo pipefail
+    pgrep() { return 1; }
+    systemctl() { return 0; }
+    on_exit() { echo "on_exit:$?" >>"$REREG_CALLS"; }
+    runner_config() { return 1; }
+    ensure_service() { echo "ensure_service:$*" >>"$REREG_CALLS"; return 0; }
+    . "$1"
+    re_register
+  ' _ "$REREG_FN" 2>&1)" || true
+chain_log="$(cat "$chain_calls")"
+record "provision.sh re_register EXIT trap: the run's on_exit runs, then the restore" "yes/yes/yes" \
+  "$(has "$chain_log" "on_exit:1")/$(has "$chain_log" "ensure_service:--start")/$(has "$chain_out" "restored previous state")"
+
+# 37. a failed .env install no longer leaks the helper's temp file: the file
+# is removed on the failure way out, not only on success (#328).
+LEAK_WORK="$TMP/rereg-leak"
+mkdir -p "$LEAK_WORK/runner" "$LEAK_WORK/tmp"
+leak_rc=0
+# shellcheck disable=SC2016  # inner bash -c expands its own vars
+env -i \
+  PATH="$STUBS" \
+  TMPDIR="$LEAK_WORK/tmp" \
+  RUNNER_HOME="$LEAK_WORK/runner" \
+  RUNNER_URL="https://github.com/acme" \
+  RUNNER_TOKEN="tok-leak" \
+  RUNNER_NAME="test-runner" \
+  RUNNER_LABELS="self-hosted,linux,arm64,homefield-ci" \
+  RUNNER_GROUP="" \
+  RUNNER_USER="runner" \
+  job_cleanup="0" \
+  /bin/bash -c '
+    set -euo pipefail
+    pgrep() { return 1; }
+    systemctl() { return 0; }
+    runner_config() { : >"$RUNNER_HOME/.runner"; return 0; }
+    ensure_service() { printf "actions.runner.test.service\n" >"$RUNNER_HOME/.service"; return 0; }
+    install() { return 1; }
+    . "$1"
+    re_register
+  ' _ "$REREG_FN" >/dev/null 2>&1 || leak_rc=$?
+leaked="$(ls -A "$LEAK_WORK/tmp" | wc -l | tr -d ' ')"
+record "provision.sh re_register: a failed .env install fails visibly and leaves no temp file" "nonzero/0" \
+  "$(nonzero "$leak_rc")/$leaked"
 
 summary

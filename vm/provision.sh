@@ -382,6 +382,37 @@ re_register_restore() {
   REREG_BACKUP_DIR=""
 }
 
+# re_register_env_line <line> <add|drop>: makes the runner's .env carry
+# <line> (add) or not carry it (drop), through a temp file removed on every
+# way out — including a failed install, which under set -e would otherwise
+# exit between the mktemp and the rm and leave the file behind (the leak the
+# EXIT trap could not clean, because the file was never in tmp_files).
+re_register_env_line() {
+  local line="$1" want="$2" env_new="" present=0
+  if grep -qx "$line" "$RUNNER_HOME/.env" 2>/dev/null; then
+    present=1
+  fi
+  if [ "$want" = add ] && [ "$present" = 1 ]; then
+    return 0
+  fi
+  if [ "$want" = drop ] && [ "$present" = 0 ]; then
+    return 0
+  fi
+  env_new="$(mktemp)" || return 1
+  if [ -f "$RUNNER_HOME/.env" ]; then
+    grep -v "^${line%%=*}=" "$RUNNER_HOME/.env" >"$env_new" || [ $? = 1 ]
+  fi
+  if [ "$want" = add ]; then
+    printf '%s\n' "$line" >>"$env_new"
+  fi
+  if install -o "$RUNNER_USER" -g "$RUNNER_USER" -m 644 "$env_new" "$RUNNER_HOME/.env"; then
+    rm -f "$env_new"
+    return 0
+  fi
+  rm -f "$env_new"
+  return 1
+}
+
 re_register() {
   [ -n "$RUNNER_URL" ] || { echo "provision.sh: re-register needs RUNNER_URL" >&2; return 1; }
   [ -n "$RUNNER_TOKEN" ] || { echo "provision.sh: re-register needs RUNNER_TOKEN on stdin" >&2; return 1; }
@@ -400,7 +431,17 @@ re_register() {
       [ "$f" != ".runner" ] || REREG_HAD_REG=1
     fi
   done
-  trap re_register_restore EXIT
+  # The re-register's own EXIT trap, chained onto the run's: on_exit runs
+  # first, so its $? is the script's exit status, and the run's temp files
+  # and on_failure survive the re-register; the restore follows. The check
+  # is here at set time, not in the trap, so on_exit stays the trap's first
+  # command. A standalone re_register (the tests call it without the run
+  # around it) has no on_exit; the trap is the restore alone there.
+  if [ "$(type -t on_exit)" = "function" ]; then
+    trap 'on_exit; re_register_restore' EXIT
+  else
+    trap re_register_restore EXIT
+  fi
 
   if [ -f "$RUNNER_HOME/.service" ]; then
     old_svc="$(cat "$RUNNER_HOME/.service" 2>/dev/null)" || true
@@ -411,6 +452,14 @@ re_register() {
     (cd "$RUNNER_HOME" && ./svc.sh uninstall) >/dev/null 2>&1 || true
   fi
 
+  # A run that died after config.sh but before the service was verified
+  # listening leaves the marker behind: the registration exists (on disk and
+  # at GitHub), so the next re-register reuses it and retries the service
+  # instead of re-running config.sh, which would fail on the runner's
+  # already-taken name. The marker is not what wedges a VM: only a fresh
+  # clone from the base reaches provisioning again (an in-place re-register
+  # is refused, #289), and a clone starts without it. On success the marker
+  # is removed below.
   if [ -f "$RUNNER_HOME/.re-register-pending" ] && [ -f "$RUNNER_HOME/.runner" ]; then
     REREG_CONFIG_DONE=1
     RUNNER_TOKEN=""
@@ -444,16 +493,8 @@ re_register() {
     return 1
   fi
   local hook_line="ACTIONS_RUNNER_HOOK_JOB_STARTED=/usr/local/sbin/homefield-job-started.sh"
-  if ! grep -qx "$hook_line" "$RUNNER_HOME/.env" 2>/dev/null; then
-    local env_new=""
-    env_new="$(mktemp)"
-    if [ -f "$RUNNER_HOME/.env" ]; then
-      grep -v '^ACTIONS_RUNNER_HOOK_JOB_STARTED=' "$RUNNER_HOME/.env" >"$env_new" || [ $? = 1 ]
-    fi
-    echo "$hook_line" >>"$env_new"
-    install -o "$RUNNER_USER" -g "$RUNNER_USER" -m 644 "$env_new" "$RUNNER_HOME/.env"
-    rm -f "$env_new"
-  fi
+  re_register_env_line "$hook_line" add ||
+    { echo "provision.sh: could not add the job-started hook line to the runner's .env" >&2; return 1; }
   # The job-completed hook line follows the switch (RUNNER_JOB_CLEANUP, or
   # the value the run that set it saved): =1 re-adds a line a hand edit lost,
   # =0 takes it back out. The scripts themselves were installed by the run
@@ -462,24 +503,11 @@ re_register() {
   # the changed .env.
   hook_line="ACTIONS_RUNNER_HOOK_JOB_COMPLETED=/usr/local/sbin/homefield-job-cleanup.sh"
   if [ "$job_cleanup" = "1" ]; then
-    if ! grep -qx "$hook_line" "$RUNNER_HOME/.env" 2>/dev/null; then
-      local env_new=""
-      env_new="$(mktemp)"
-      if [ -f "$RUNNER_HOME/.env" ]; then
-        grep -v '^ACTIONS_RUNNER_HOOK_JOB_COMPLETED=' "$RUNNER_HOME/.env" >"$env_new" || [ $? = 1 ]
-      fi
-      echo "$hook_line" >>"$env_new"
-      install -o "$RUNNER_USER" -g "$RUNNER_USER" -m 644 "$env_new" "$RUNNER_HOME/.env"
-      rm -f "$env_new"
-    fi
+    re_register_env_line "$hook_line" add ||
+      { echo "provision.sh: could not add the job-completed hook line to the runner's .env" >&2; return 1; }
   else
-    if grep -qx "$hook_line" "$RUNNER_HOME/.env" 2>/dev/null; then
-      local env_new=""
-      env_new="$(mktemp)"
-      grep -v '^ACTIONS_RUNNER_HOOK_JOB_COMPLETED=' "$RUNNER_HOME/.env" >"$env_new" || [ $? = 1 ]
-      install -o "$RUNNER_USER" -g "$RUNNER_USER" -m 644 "$env_new" "$RUNNER_HOME/.env"
-      rm -f "$env_new"
-    fi
+    re_register_env_line "$hook_line" drop ||
+      { echo "provision.sh: could not remove the job-completed hook line from the runner's .env" >&2; return 1; }
   fi
   if [ -n "${RUNNER_JOB_CLEANUP+set}" ]; then
     printf '%s\n' "$job_cleanup" >"$CONFIG_DIR/job-cleanup"
@@ -499,9 +527,17 @@ re_register() {
   if [ "$ready" != "1" ] || { ! systemctl is-active --quiet "$svc_unit" && [ "$(systemctl show -p Result --value "$svc_unit" 2>/dev/null || true)" != "success" ]; }; then
     systemctl stop "$svc_unit" 2>/dev/null || true
     echo "provision.sh: re-registered runner did not start listening for jobs" >&2
+    echo "provision.sh: the registration stays (the marker keeps the next attempt reusing it); if the service never comes up, remove the runner on the runners page and delete $RUNNER_HOME/.re-register-pending to force a fresh registration" >&2
     return 1
   fi
-  trap - EXIT
+  # Back to the run's own EXIT trap: the re-register's restore is done (the
+  # backup is removed below), and the run's temp files must still be cleaned
+  # on the way out.
+  if [ "$(type -t on_exit)" = "function" ]; then
+    trap on_exit EXIT
+  else
+    trap - EXIT
+  fi
   rm -f "$RUNNER_HOME/.re-register-pending"
   rm -rf "$REREG_BACKUP_DIR"
   REREG_BACKUP_DIR=""

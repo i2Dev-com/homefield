@@ -11,6 +11,45 @@ fail, such as a new guard in the routing expression, bumps the minor version
 
 ## Unreleased
 
+- Fixed: `re-register --watch` no longer dies on the first VM that cannot be
+  probed (#328). A Stopped (or suspended) VM was asked whether a job was
+  running, the probe died on a VM that cannot be asked, and `die` exits — so
+  one VM a hand had stopped, or one that was momentarily unreachable, ended
+  the watch for every ephemeral runner on the Mac. A VM that is not Running
+  is now waited on until it runs, a VM that cannot be asked is a warning and
+  a retry on the next cycle, and a re-register attempt that fails inside a
+  cycle — including one that dies midway, such as on a failed token fetch —
+  is a warning too: the loop moves on to the next VM and the next cycle
+  instead of ending.
+- Fixed: the re-register's recovery clone stops a base VM a hand started
+  before cloning from it (#328). `limactl clone` refuses a running source,
+  so a VM that was gone with its base running could never be recovered — the
+  clone failed every cycle. The reset cycle already stopped a running base;
+  the recovery path does now too, and a base that cannot be stopped is
+  recorded in `ephemeral_error` for `status` and retried on the next cycle.
+  The recovery path also no longer queries the base when the reset is off
+  (it died there with a confusing message about a VM it had no business
+  asking about, and a stale base name from another VM in a multi-VM watch
+  could be the one queried).
+- Fixed: `upgrade` on a `--reset-vm` runner upgrades the base VM with the
+  working VM (#328, deciding what #297 left open). Every re-register with the
+  reset on clones a fresh VM from the base, so a base left on the old
+  packages meant the next reset wiped the upgrade — new packages, preset
+  hooks and the runner version included. The base is started, provisioned
+  prepare-only (the mode that built it, with the same packages, hooks and
+  job-cleanup switch the working VM got), and stopped again for the next
+  clone. A missing or foreign base makes `upgrade` refuse instead of leaving
+  the reset silently broken: rebuild the base, or pass `--no-reset-vm` to
+  drop the reset.
+- Fixed: a re-register no longer drops the provision run's own EXIT cleanup
+  or leaks its `.env` temp files (#328). The re-register replaced the run's
+  EXIT trap with its own restore, so the run's temp files and any
+  `on_failure` an earlier step armed were lost on the way out; the trap now
+  chains both (the run's `on_exit` first, so its `$?` is still the script's
+  exit status, then the restore). The three `.env` hook-line edits shared one
+  helper whose temp file is removed on the failure way out too — a failed
+  `install` used to exit between the `mktemp` and the `rm` and leave the file
+  behind in the guest.
 - Fixed: provisioning (`install`, `upgrade`, `re-register`) and the preset
   hook copy no longer use a `RETURN` trap to remove their guest staging
   directory (#327). A failed copy or provision step returned without
