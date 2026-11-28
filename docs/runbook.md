@@ -426,7 +426,12 @@ reports the `reset_error`, retried on the next cycle; a clone that fails after
 the delete leaves the VM gone with `ephemeral_error` recorded, a one-shot
 `re-register` exits nonzero, and the `--watch` loop stays alive — its next
 cycle (or a manual `re-register`) clones the VM back from the base; recovery
-is exactly what the base is for. Only a base that install marked as a reset
+is exactly what the base is for. The `--watch` loop itself is hard to kill
+([#328]): a VM that is Stopped (or otherwise not Running) is waited on until
+it runs, a VM that cannot be asked whether a job is running is a warning and
+a retry on the next cycle, and a re-register attempt that fails inside a
+cycle — including one that dies midway, such as on a failed token fetch — is
+a warning; the loop moves on to the next VM and the next cycle. Only a base that install marked as a reset
 base is ever replaced: an ordinary runner named `<instance>-base` is refused,
 never deleted. `start`/`stop`/`status`/`fleet` and
 the watch loop never touch the base VM (`vm_instances` skips it; use
@@ -437,12 +442,22 @@ the watch loop never touch the base VM (`vm_instances` skips it; use
 reported with the hand command (`limactl delete -f <instance>-base`). When the
 runner VM is already gone — a base a previous reset could not delete, or one a
 failed re-register clone left behind — `reset` removes the orphaned base on
-its own, so a retry cleans it up. The base
-is never upgraded, by decision ([#297]): clones get OS updates through the
-in-guest maintenance, but a change to the VM's own settings (CPU, memory, disk)
-or a provisioning change needs the base rebuilt, which means uninstall and
-install again with `--reset-vm` — one command each way, since the uninstall
-takes the base with it.
+its own, so a retry cleans it up.
+
+**Upgrading a `--reset-vm` runner.** `homefield upgrade` upgrades the base
+with the working VM: the base is started, provisioned prepare-only (the mode
+that built it, with the same packages, hooks and job-cleanup switch the
+working VM got), and stopped again for the next clone — so the next reset
+clones a VM that carries the upgrade instead of wiping it ([#328], deciding
+the question [#297] left open). Rebuilding the base from the working VM, as
+install does, is not possible here: the working VM is registered, and a clone
+of a registered VM inherits its registration, which is why install clones
+before it registers. A change to the VM's own settings (CPU, memory, disk)
+still needs uninstall and install again with `--reset-vm` — one command each
+way, since the uninstall takes the base with it. A missing or foreign base
+makes `upgrade` refuse (the working VM is upgraded, but the reset would be
+silently broken): rebuild the base, or pass `--no-reset-vm` to drop the
+reset.
 
 ## What the VM has, compared with a hosted runner
 
